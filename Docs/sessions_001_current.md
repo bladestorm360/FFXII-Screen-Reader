@@ -459,3 +459,46 @@ Fix: per-slot try/catch around `Interceptor.attach`. On failure, increment `skip
 
 **No C++ changes** — WH_KEYBOARD_LL doesn't go through the Phyre vtable; `InputTracker` is independent of the interception bug.
 
+## Session — 2026-07-02 — TITLE MENU SPEAKING (shipped + committed) + 2 follow-ups
+
+**KEYWORDS:** title menu, TitleReader, baked sprites, title_logo.tm2, cellTable, FUN_003939b0, FUN_00393950, FUN_00247510 0x8000, atlas row, New Game/Load Game/Trial Mode/Credits/Exit, st2e codec, section-3 help_menu, initial commit 8999c5c, press-start false-fire, initial-focus announce
+
+**MILESTONE — title menu now speaks in-game (user-verified).** Deep offline RE (many
+agents) + one confirming Frida dump, then C++ port. Committed as the repo's initial commit
+`8999c5c`. Full architecture in `Docs/GameArchitecture.md` (Title Command Menu section) and
+`..\FFXII-Decompile\notes\title_menu_labels.md`; memory `project_title_screen_located.md` +
+`project_menu_text_st2e_codec.md` current.
+
+**Key findings (corrected several wrong turns, all before shipping):**
+- Title command menu = `DAT_02aee4c8` / handler `FUN_003939b0` (RVA 0x2739B0); NOT the in-game
+  `FUN_00241d40` system, NOT the logo object `DAT_02aee4c0`.
+- Option labels are **baked sprite glyph-art** in `title_logo.tm2` (no game text string). Read by
+  the focused cell's atlas row: `cellTable[focusIndex].y / 70` → {0 New Game,1 Load Game,2 Trial
+  Mode,3 Credits,4 Press-Start(prompt),5 Exit}. cellTable cached from `FUN_00393950`; focus index
+  from `FUN_003939b0`'s 0xc/0x8000 notify packet (val@0x10). Index-agnostic (index 4→y350→Exit).
+- `0xd3d` (once thought to be the options) is HELP text (`help_menu.bin` entry 389 = "Display
+  On-Screen Keyboard"); per-option help IS readable pipeline text (`FUN_002f9860` id 0xd44/0xd45).
+- Full text pipeline validated (`st2e` + custom codec, `tools/st2e_decode.py`); the game is a
+  dynamic text-render game — title is the lone baked-sprite anomaly. In-game menus use readable text.
+- Runtime image base = **0x120000** (confirmed live), so RVA = Ghidra-abs − 0x120000.
+- New module `src/ui/title_reader.cpp`; wired in `dllmain.cpp`; stale registry RVA fixed in
+  `menu_observer.cpp` (0x216EA60→0x1F6EA60).
+
+**FOLLOW-UPS FOR NEXT SESSION (user feedback 2026-07-02; do NOT implemented yet):**
+1. **Remove the "Press Start" announcement.** `HookedLogo` (on `FUN_00394070` msg 0x10) fires FAR
+   too early, and TZA has **no press-start prompt** that requires input — it's a legacy signal we
+   don't need. Action: drop the press-start announcement (and likely the whole logo hook), OR
+   repurpose it strictly as a "title screen appeared" trigger for follow-up #2.
+2. **Announce the INITIALLY-focused option when the title menu appears.** Currently `OnTitleFocus`
+   only speaks on focus CHANGE, so the first option isn't announced until the user moves the
+   cursor. Action: when the command menu opens + is ready (cursor set + `cellTable` cached — e.g.
+   `FUN_003939b0` case 2 build, or the first `FUN_00393950` draw where `g_cellTable != null`),
+   read the current focus once (compute index from W_LIST cursor `f4+f2`, or the initial index at
+   `window+0xc0`) → `cellTable[idx].y/70` → label → speak once. Watch ordering: the build-time
+   0x8000 may fire before the first draw caches `cellTable`, which is why the initial option is
+   currently missed. NOTE: don't add debouncing beyond the existing `g_lastRow` state-change
+   edge-trigger without asking.
+
+**Next major area:** in-game menus (Party/Status/Config/Items/Equip) via the readable `st2e`
+pipeline (`FUN_002f9860`/`FUN_002b49f0` + validated codec) — should be simpler than the title's sprites.
+
