@@ -1,0 +1,33 @@
+# Machine-specific files (each contributor keeps their own)
+CLAUDE.md
+build_and_deploy.bat
+.claude/
+
+# Build output (CMake generated)
+/build/
+
+# Release packages
+/Releases/
+
+# RE artifacts (NOT in this repo — see ../FFXII-Decompile/)
+# (kept here in case scripts are ever co-located accidentally)
+/Docs/Scripts/
+
+# ff12-module-loader: reference-only clone (BSD-2, NOT used in build) with its own
+# .git — exclude the whole tree so it isn't committed as a broken embedded gitlink.
+# (Add it as a proper submodule later if it's ever needed in-repo.)
+/third_party/ff12-module-loader/
+
+# C++ build artifacts (in case any land outside /build/)
+*.obj
+*.o
+*.lib
+*.dll
+*.pdb
+*.exp
+*.ilk
+
+# Windows
+NUL
+Thumbs.db
+desktop.ini

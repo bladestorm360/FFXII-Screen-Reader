@@ -1,0 +1,211 @@
+# FFXII-Screen-Reader — Feature Plan
+
+Status: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` blocked
+
+## Phase 0: Scaffolding (no game interaction)
+
+- [x] Project directory tree
+- [x] CMakeLists.txt (dinput8.dll output, MinHook static lib, no SDL3)
+- [x] build_and_deploy.bat (deploys to game x64\)
+- [x] .gitignore
+- [x] CLAUDE.md (house rules)
+- [x] README.md (with ELF compatibility caveat)
+- [x] Docs templates (plan.md, debug.md, GameArchitecture.md, GhidraReference.md, FridaScripts.md)
+- [x] Vendor MinHook (copied from DQ7R local under include/MinHook/)
+- [x] Clone FF12 External File Loader source (REFERENCE ONLY; not used in build)
+- [x] Obtain DrummerIX Cheat Engine table (FFXII_TZA.CT under FFXII-Decompile/notes/)
+- [x] dllmain.cpp + dinput8_proxy.cpp + dinput8.def (standalone dinput8 proxy)
+- [x] logger.cpp/h (port from DQ7R)
+- [x] speech.cpp/h (Tolk wrapper, silent fallback when Tolk absent)
+- [x] Tolk.dll + nvdaControllerClient64.dll deployed in game x64\ (user-managed, not vendored)
+- [x] First successful build — `dinput8.dll` produced in `build\bin\Release\` (2026-05-05)
+- [x] First successful deploy — `dinput8.dll` copied to game's `x64\` folder
+- [ ] First successful launch (mod announces via Tolk; log file created) — pending user game-launch test
+
+## Phase 1: Reverse Engineering Bootstrap
+
+### Ghidra setup
+
+- [x] Ghidra 12 install verified, GHIDRA_HEADLESS_MAXMEM=8G
+- [x] Author `import_analyze_decompile.java` (single-shot pipeline)
+- [x] Author `dump_strings.java` (FFXII keyword set)
+- [x] Author `recover_rtti.java`
+- [x] Author `dump_imports.java`
+- [x] Author `seed_from_drummer_ix.java` (script ready; needs `drummer_ix_seed.csv` data)
+- [x] Author `find_phyre_signatures.java`
+- [x] Author `xref_locale_strings.java`
+- [x] Author `find_damage_candidates.java`
+- [x] Author `export_function_index.java`
+- [x] Author `disable_buggy_analyzers.java` (no-op placeholder)
+- [x] Author `find_ebp_interpreter.java` (locate .ebp interpreter + dispatch table — EBP2 magic xrefs, fnptr-array scan, name-keyed vs index-keyed canary probe). Pending user run.
+- [x] Author `run_ghidra.bat` launcher (menu-driven)
+- [x] User ran `import_analyze_decompile` end-to-end (2026-05-05)
+  - 33,105 functions decompiled to `output/decompile/*.c` (90 MB)
+  - Project DB: 190 MB at `projects/FFXII.rep`
+- [ ] User runs targeted scripts; output archived to FFXII-Decompile/output/
+- [ ] RTTI confirmation reported (present? stripped? partial?)
+
+### Frida setup
+
+**Priority (Phase 3-5):**
+- [x] Author `probe_locale.js` — hooks `GetUserDefaultLangID` and walks caller stack
+- [x] Author `probe_player_struct.js` — DrummerIX `PermStatusBitsAOB` resolves active char struct; dumps offset table for HP/MP/position field discovery
+- [x] Author `probe_input_keyboard.js` — hooks Phyre keyboard vtable slots at RVA 0x1B92430
+- [x] Author `probe_text_capture.js` — finds menu-label strings + watchpoints to capture readers
+
+**Deferred (Phase 7+ combat log):**
+- [x] Author `probe_pause_global.js` — find time-scale / pause flag (pending CANDIDATES from Ghidra)
+- [x] Author `probe_party_hp.js` — find HP write-site (pending PartyManager RVA)
+- [x] Author `probe_damage_event.js` — find canonical damage event funnel
+- [ ] Author `probe_entity_list.js` — needs Phyre::PHierarchy::POctreeWorld layout
+
+- [x] Author `run_frida.bat` launcher
+- [ ] User runs priority probes; findings archived to FFXII-Decompile/notes/
+
+### DrummerIX seed translation
+
+- [ ] User translates DrummerIX CE table absolute addresses → RVAs
+- [ ] Seed `drummer_ix_seed.csv` checked in
+- [ ] Default `mod_config.ini.template` populated with seed RVAs
+
+## Phase 2: Core plumbing
+
+- [ ] core/logger.cpp/h (port from DQ7R)
+- [ ] core/memory.cpp/h (AOB scanner + byte-validator + RVA self-heal)
+- [ ] core/config.cpp/h (self-healing INI; user_settings.ini split)
+- [ ] core/hooks.cpp/h (MinHook wrapper)
+- [ ] core/events.cpp/h (event bus)
+- [ ] core/phyre_types.cpp/h (PhyreEngine type defs as discovered)
+- [ ] speech/speech.cpp/h (Tolk wrapper, silent fallback if Tolk absent)
+- [ ] speech/locale.cpp/h (locale auto-detection from RAM)
+- [ ] speech/phrasebook.cpp/h (12-locale dictionary, ~50 entries)
+- [ ] input/keyboard_hook.cpp/h (WH_KEYBOARD_LL)
+- [ ] input/hotkeys.cpp/h (modal state machine)
+- [ ] F1 mute toggle works
+- [ ] Self-healing config writeback proven on at least 3 RVAs
+
+## Phase 3: Title + main menu (REQUIRED before user can start the game)
+
+User cannot start a New Game without these — this is the first playable gate.
+
+**Validation gates (must close before Phase 3 implementation — see `Docs/RiskAudit.md`):**
+- [ ] G3.1: cursor-singleton write function found (xref to 0x1E61248)
+- [ ] G3.2: PTextObject CPU staging confirmed (decompile setText)
+- [ ] G3.3: ≥2 more menu state machines identified by string-cluster xref
+- [ ] G3.4: at least one of (a) interpreter found, (b) fsmenu_* native impls resolvable
+
+**Phase 3 features:**
+- [ ] Title screen reading (New Game, Continue, Config menus)
+- [ ] Main menu navigation
+- [ ] Configuration menu navigation (controls, sound, language, etc.)
+- [ ] Save/Load menu navigation
+
+## Phase 4: Pathfinding & field navigation (intro of game is all-walking)
+
+The opening hours of FFXII are walking around Rabanastre. Without
+pathfinding the user can't reach an NPC to talk to one — so this phase
+must precede interactive dialogue. Cutscene / auto-narrative text reading
+can land in parallel under Phase 5 (it's passive — no walking required).
+
+**Validation gates (CROW-FLIES + path-validation scope, see `Docs/RiskAudit.md`):**
+- [x] G4.1: BattleUnit struct base + position offsets (DrummerIX seed)
+- [x] G4.3: Map name lookup (mod ships parsed planmapname.bin)
+- [x] G4.6: walkability — Bullet RTTI'd, no NavMesh needed
+- [ ] G4.2: current-area name (hook PTextObject area banner)
+- [ ] G4.4: entity enumeration via setfieldsign hook + CharacterOrderedObject walk
+- [ ] G4.7: player yaw offset in BattleUnit struct (one grep)
+- [ ] G4.8: btDiscreteDynamicsWorld active ptr + player capsule field (two greps)
+- [~] G4.5: AUTO-WALK — DEFERRED to v1.x optional
+
+**Phase 4 features:**
+- [ ] Player character position read
+- [ ] Compass / facing direction
+- [ ] Area name announcement on map transition
+- [ ] Entity list (NPCs, exits, save points, shops)
+- [ ] Hotkey cycling through entity list (`[` / `]`)
+- [ ] Distance + direction announcement
+- [ ] Basic pathfinding via `Phyre::PHierarchy::POctreeWorld`
+- [ ] Auto-walk to selected entity
+- [ ] Map menu reading
+- [ ] Locale detection finalized via `GetUserDefaultLangID` hook
+- [ ] Phrasebook live across all 12 locales
+
+## Phase 5: Dialogue & cutscene text auto-read
+
+Passive cutscene text and interactive NPC dialogue likely share the same
+engine text-display function — one hook covers both. The cutscene path
+can be tested early (no pathfinding needed; the intro auto-plays); the
+NPC-trigger path needs Phase 4 first.
+
+**Validation gates (see `Docs/RiskAudit.md`):**
+- [ ] G5.1: .msb loader function via filename xref → in-RAM message table RVA
+- [ ] G5.2: `setmeswincaptionid` native impl found (string-anchor xref)
+- [ ] G5.3: PTextObject CPU staging confirmed (shared with G3.2)
+
+**Phase 5 features:**
+- [ ] Text display function hook (cutscenes + NPC dialogue)
+- [ ] Multi-page advance detection
+- [ ] Speaker name detection
+- [ ] Subtitle / battle-quote detection
+- [ ] Verify across all 12 locales (templates from phrasebook are mod-emitted; game text is read from RAM)
+
+## Phase 6: In-game menus (priority subset)
+
+- [ ] Items menu
+- [ ] Equip menu
+- [ ] Save menu (in-game)
+- [ ] License menu
+- [ ] Magic & Tech menu
+
+## Phase 7: Combat log (real-time battle reading)
+
+**FFXII is not narrative** — synthesize messages from event hooks. See
+`memory/project_combat_log_design.md` for the message template list.
+
+**Validation gates (see `Docs/RiskAudit.md`):**
+- [ ] G7.1: DamageMod AOB resolves to a single funnel function
+- [ ] G7.2: pause global RVA (or fallback to menu-active flag)
+- [ ] G7.3: HP-write monitor design (delta sign for damage vs heal)
+- [ ] G7.4: KO transition (HP=0 + is_active=0xFF)
+
+**Phase 7 features:**
+- [ ] Modal keyboard hook (input/keyboard_hook.cpp)
+- [ ] Pause-game integration (hook menu-pause path or time-scale global)
+- [ ] 50-event continuous-FIFO ring buffer (battle/combat_log.cpp)
+- [ ] Log open/close UI (F4 open, Escape close, arrows / PgUp / PgDn nav)
+- [ ] Damage event capture (Frida-prototype DrummerIX `DamageModAOB` first)
+- [ ] Combo aggregation (~750ms window for same actor+target+type)
+- [ ] Heal event capture
+- [ ] KO event capture
+- [ ] Status apply event capture (DrummerIX `StatusEffectAOB`)
+- [ ] Critical / element / weakness flag annotations
+- [ ] Combat-log message templates added to phrasebook (12 locales)
+- [ ] Critical-event auto-speech: party-member KO
+- [ ] Critical-event auto-speech: party member <20% HP
+- [ ] User test: smoke flow (enter battle, take hits, open log, scroll, close)
+- [ ] User test: continuous FIFO across battle boundary verified
+
+## Phase 8: Remaining menus
+
+- [ ] Bestiary (deferred until v1.x — complex)
+- [ ] Clan Primer
+
+## Phase 9: Polish & v1 release
+
+- [ ] Locale QA across all 12 locales
+- [ ] README finalization (incl. Tolk-supply instructions)
+- [ ] License decision
+- [ ] V1 release zip
+
+## v2 (deferred)
+
+- [ ] Gambit editor accessibility
+- [ ] License Board grid navigation
+- [ ] World map / fast travel
+- [ ] Hunts (marks)
+- [ ] Bazaar combinations
+
+---
+
+See `debug.md` for tried-and-failed approaches and solved problems, and
+`GameArchitecture.md` for the RVA / offset / struct registry.
