@@ -27,7 +27,6 @@ namespace {
 // RVAs into FFXII_TZA.exe (abs = RVA + 0x120000). Validated live 2026-07-02.
 constexpr uint32_t RVA_TITLE_HANDLER = 0x2739B0;  // FUN_003939b0(window, packet)
 constexpr uint32_t RVA_ROW_DECORATE  = 0x273950;  // FUN_00393950(a, drawCtx, c, cellIndex)
-constexpr uint32_t RVA_LOGO_HANDLER  = 0x274070;  // FUN_00394070(logoObj, packet)
 
 // Notify-packet layout (built by FUN_00247510): category@0, msg@8, val@0x10.
 constexpr uint32_t PKT_CAT = 0x00;
@@ -36,12 +35,10 @@ constexpr uint32_t PKT_VAL = 0x10;
 constexpr uint32_t CAT_INIT   = 0x1;    // window init (new menu session)
 constexpr uint32_t CAT_NOTIFY = 0xc;    // input notify; msg@8 carries 0x8000/0x8001/...
 constexpr uint64_t MSG_FOCUS  = 0x8000; // cursor moved to item N (val = index)
-// Logo handler messages (its switch scrutinee is at packet+0).
-constexpr uint32_t MSG_LOGO_READY   = 0x10;  // press-start prompt visible
-constexpr uint32_t MSG_LOGO_DESTROY = 0x12;
 
 // Struct offsets (all validated live).
 constexpr uint32_t OFF_WINDOW_LIST    = 0xC8;  // window -> W_LIST (list widget)
+constexpr uint32_t OFF_WINDOW_SELIDX  = 0xC0;  // window -> starting selected-index byte (handler case 1; Deep-C 2026-07-03)
 constexpr uint32_t OFF_LIST_COUNT     = 0xE8;  // W_LIST -> u16 item count
 constexpr uint32_t OFF_DRAWCTX_A      = 0x10;  // FUN_00393950 param_2 (+0x10) -> A; *A -> disp
 constexpr uint32_t OFF_DISP_CELLTABLE = 0x20;  // disp -> cellTable ptr
@@ -59,7 +56,7 @@ const wchar_t* AtlasRowLabel(int row) {
         case 1: return L"Load Game";
         case 2: return L"Trial Mode";
         case 3: return L"Credits";
-        case 4: return L"Press Start";   // press-⊗-to-start prompt cell (not a selectable row)
+        case 4: return nullptr;          // prompt cell (y≈280) — never a selectable focus row
         case 5: return L"Exit";
         default: return nullptr;
     }
@@ -80,15 +77,14 @@ void* PtrAt(void* base, uint32_t off) {
 
 std::atomic<void*> g_cellTable{nullptr};   // title list's shared cell node cell-table
 std::atomic<int>   g_lastRow{-1};          // last atlas row spoken (edge-trigger)
-std::atomic<bool>  g_pressStartSaid{false};
+std::atomic<void*> g_titleWindow{nullptr}; // live command window (for initial-focus replay)
+std::atomic<int>   g_pendingIndex{-1};     // starting focus index to announce once cellTable is cached
 bool g_initialized = false;
 
 typedef uintptr_t (*Pfn_TitleHandler)(void*, void*);
 typedef int       (*Pfn_RowDecorate)(void*, void*, void*, int);
-typedef uintptr_t (*Pfn_LogoHandler)(void*, void*);
 Pfn_TitleHandler s_origTitle = nullptr;
 Pfn_RowDecorate  s_origRow   = nullptr;
-Pfn_LogoHandler  s_origLogo  = nullptr;
 
 // Map focus index -> the focused cell's baked label and speak it (on change).
 void OnTitleFocus(void* window, int index) {
@@ -126,10 +122,23 @@ uintptr_t HookedTitle(void* window, void* packet) {
             uint64_t msg = 0, val = 0;
             if (SafeRead(reinterpret_cast<char*>(packet) + PKT_MSG, &msg) && msg == MSG_FOCUS &&
                 SafeRead(reinterpret_cast<char*>(packet) + PKT_VAL, &val)) {
-                OnTitleFocus(window, static_cast<int>(static_cast<int64_t>(val)));
+                int idx = static_cast<int>(static_cast<int64_t>(val));
+                g_titleWindow.store(window);
+                g_pendingIndex.store(idx);
+                OnTitleFocus(window, idx);
             }
         } else if (cat == CAT_INIT) {
-            g_lastRow.store(-1);  // new menu session -> re-announce the first focused option
+            // New command-menu session. The starting selection is stored at window+0xC0
+            // (Deep-C, 2026-07-03). The initial 0x8000 fires on open BEFORE the first
+            // row-draw caches g_cellTable, so OnTitleFocus early-returns; stash the
+            // starting index + window so HookedRow can replay the announce once the cell
+            // table is ready — announcing the initial option without a cursor move.
+            g_lastRow.store(-1);
+            g_titleWindow.store(window);
+            uint8_t sel = 0;
+            g_pendingIndex.store(
+                SafeRead(reinterpret_cast<char*>(window) + OFF_WINDOW_SELIDX, &sel)
+                    ? static_cast<int>(sel) : 0);
         }
     }
     return ret;
@@ -142,20 +151,15 @@ int HookedRow(void* a, void* drawCtx, void* c, int cellIndex) {
     void* dispHolder = PtrAt(drawCtx, OFF_DRAWCTX_A);
     void* disp = PtrAt(dispHolder, 0);
     void* cellTable = PtrAt(disp, OFF_DISP_CELLTABLE);
-    if (cellTable) g_cellTable.store(cellTable);
-    return ret;
-}
-
-uintptr_t HookedLogo(void* logoObj, void* packet) {
-    uintptr_t ret = s_origLogo ? s_origLogo(logoObj, packet) : 0;
-    uint32_t msg = 0;
-    if (SafeRead(reinterpret_cast<char*>(packet) + PKT_CAT, &msg)) {
-        if (msg == MSG_LOGO_READY) {
-            if (!g_pressStartSaid.exchange(true)) {
-                Speech::Output(L"Press Start", /*interrupt=*/true);
-            }
-        } else if (msg == MSG_LOGO_DESTROY) {
-            g_pressStartSaid.store(false);
+    if (cellTable) {
+        g_cellTable.store(cellTable);
+        // Initial-focus announce: on a fresh session g_lastRow == -1 and the initial
+        // 0x8000 already fired (before the cell table existed), so replay it now that the
+        // labels are readable. OnTitleFocus's edge-trigger guarantees it speaks once.
+        if (g_lastRow.load() == -1) {
+            void* win = g_titleWindow.load();
+            int idx = g_pendingIndex.load();
+            if (win && idx >= 0) OnTitleFocus(win, idx);
         }
     }
     return ret;
@@ -173,10 +177,9 @@ bool Init() {
     bool ok = true;
     ok &= Hooks::InstallTyped(RVA_ROW_DECORATE,  &HookedRow,   &s_origRow);
     ok &= Hooks::InstallTyped(RVA_TITLE_HANDLER, &HookedTitle, &s_origTitle);
-    ok &= Hooks::InstallTyped(RVA_LOGO_HANDLER,  &HookedLogo,  &s_origLogo);
     g_initialized = true;
     Log::Write("TITLE", ok
-        ? "TitleReader initialized (title menu: 0x8000 focus -> cellTable sprite-catalog labels)."
+        ? "TitleReader initialized (0x8000 focus + window+0xC0 initial-focus replay; no press-start)."
         : "TitleReader: one or more hooks failed to install — see Hooks log.");
     return ok;
 }
@@ -185,8 +188,9 @@ void Shutdown() {
     if (!g_initialized) return;
     Hooks::Uninstall(RVA_TITLE_HANDLER);
     Hooks::Uninstall(RVA_ROW_DECORATE);
-    Hooks::Uninstall(RVA_LOGO_HANDLER);
     g_cellTable.store(nullptr);
+    g_titleWindow.store(nullptr);
+    g_pendingIndex.store(-1);
     g_initialized = false;
     Log::Write("TITLE", "TitleReader shut down");
 }

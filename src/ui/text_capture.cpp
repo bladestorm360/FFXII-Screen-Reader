@@ -1,196 +1,184 @@
 #include "ui/text_capture.h"
+#include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/logger.h"
 
 #include <Windows.h>
-#include <intrin.h>
-#include <cstdint>
-#include <cstring>
-#include <deque>
+#include <array>
+#include <cstdio>
 #include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace {
 
-// Top text-entry candidate from MenuArchitecture.md. Wrapper cluster spans
-// RVA 0x5F650-0x5FD30; this is the entry point most likely to carry a
-// source-text pointer in its args. If Stream A G-A3 finds a different
-// wrapper carries the strings, add it here.
-constexpr uint32_t RVA_TEXT_ENTRY = 0x5FA10;
+// The three UI-text draw functions + the universal list painter + the id->string
+// resolver (abs = RVA + 0x120000).
+constexpr uint32_t RVA_TEXT_IMM  = 0x190280;  // FUN_002b0280(struct)   immediate glyph sink
+constexpr uint32_t RVA_TEXT_OBJ1 = 0x18BEC0;  // FUN_002abec0(obj)      object/scene draw
+constexpr uint32_t RVA_TEXT_OBJ2 = 0x18BF20;  // FUN_002abf20(obj)      object/scene draw
+constexpr uint32_t RVA_PAINTER   = 0x1B28E0;  // FUN_002d28e0(p1,p2,subwidget) list painter
+constexpr uint32_t RVA_RESOLVE   = 0x1D9860;  // FUN_002f9860(id) -> codec byte* (localized string)
 
-// Ring buffer cap. 256 events is plenty: a menu shows ~5-30 text strings
-// per frame; we want a few seconds of history.
-constexpr size_t RING_MAX = 256;
+constexpr uint32_t OFF_CODEC_STR = 0x28;      // imm text struct -> codec byte*
+constexpr uint32_t OFF_SUB_OWNER = 0xC8;      // subwidget -> owner (== the 0x8000 focus owner)
+constexpr uint32_t OFF_SUB_CB    = 0x120;     // subwidget -> per-item cell callback (== subwidget[0x24])
 
-// Max chars to decode from a source-text pointer. Menu options are short;
-// 256 is generous.
-constexpr size_t MAX_DECODE_CHARS = 256;
+constexpr size_t   RING_MAX = 256;
+constexpr size_t   OWNER_MAP_CAP = 64;        // bound owner-map growth over a session
+
+// Per-item cell callback: (context, rowDrawCtx, &geom, itemIndex) -> visible flag.
+typedef int64_t     (*Pfn_Cell)(void*, int64_t, void*, int64_t);
+typedef void        (*Pfn_Painter)(void*, int64_t, void*);
+typedef void        (*Pfn_TextDraw)(void*);
+typedef const uint8_t* (*Pfn_Resolve)(int);
+
+Pfn_TextDraw s_origImm  = nullptr;
+Pfn_TextDraw s_origObj1 = nullptr;
+Pfn_TextDraw s_origObj2 = nullptr;
+Pfn_Painter  s_origPainter = nullptr;
+Pfn_Resolve  s_origResolve = nullptr;
 
 std::mutex g_mutex;
-std::deque<TextCapture::TextEvent> g_ring;
-uint32_t g_frameCounter = 0;
+
+// Diagnostic ring (framing text = every non-list draw; newest overwrites oldest).
+struct RingEntry { bool imm; std::wstring text; };
+std::array<RingEntry, RING_MAX> g_ring;
+size_t g_head = 0, g_count = 0;
+
+// Live owner -> (index -> row fields), rebuilt each paint. Keyed by owner so a
+// pop-up drawn over a menu can't clobber the menu's rows.
+std::unordered_map<void*, std::unordered_map<int, std::vector<std::wstring>>> g_itemsByOwner;
+void* g_paintOwner = nullptr;     // owner of the paint in progress
+int   g_curIdx = -1;              // item index being painted right now (sticky), -1 = none
+bool  g_intercepting = false;     // re-entrancy guard for the painter swap
+Pfn_Cell g_realCb = nullptr;      // the menu's real cell callback (during interception)
+
+// Localized UI strings captured from FUN_002f9860 (id -> decoded), for pop-up
+// button labels (ids 1000/1001). Persists for the session.
+std::unordered_map<int, std::wstring> g_idCache;
+
+TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
+
 bool g_initialized = false;
 
-// FUN_0017fa10 signature is uncertain at design time. Per the decompile dig:
-//   "callers use pattern FUN_0017fa10(param_1[0x17], 0x44, 1)"
-// That looks like (font_state*, int_id, int_flag) — possibly a property set,
-// not a source-text submit. The probe_text_wrappers.js Frida script (G-A3)
-// confirms which wrapper actually carries the strings. Until then, this
-// detour reads args[0..3] defensively and tries to decode each as a string
-// pointer; whichever decodes is what gets captured.
-typedef void (*Pfn_TextEntry)(void* a0, void* a1, void* a2, void* a3);
-Pfn_TextEntry s_origTextEntry = nullptr;
-
-// "Mostly printable" heuristic — avoids capturing garbage pointers that
-// happen to dereference to high-entropy memory.
-bool IsMostlyPrintable(const wchar_t* s, size_t maxChars) {
-    if (!s) return false;
-    size_t printable = 0;
-    size_t total = 0;
-    for (size_t i = 0; i < maxChars && s[i] != 0; i++) {
-        total++;
-        wchar_t c = s[i];
-        if ((c >= 0x20 && c <= 0xFFFD) && c != 0xFFFE && c != 0xFFFF) {
-            printable++;
-        }
+std::wstring JoinFields(const std::vector<std::wstring>& fields) {
+    std::wstring out;
+    for (const auto& f : fields) {
+        if (f.empty()) continue;
+        if (!out.empty()) out += L": ";
+        out += f;
     }
-    if (total == 0) return false;
-    return (printable * 100) / total >= 80;
+    return out;
 }
 
-bool IsMostlyPrintableAscii(const char* s, size_t maxChars) {
-    if (!s) return false;
-    size_t printable = 0;
-    size_t total = 0;
-    for (size_t i = 0; i < maxChars && s[i] != 0; i++) {
-        total++;
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        if (c >= 0x20 && c <= 0x7E) printable++;
-        else if (c == '\t' || c == '\n' || c == '\r') printable++;
-    }
-    if (total == 0) return false;
-    return (printable * 100) / total >= 80;
-}
-
-// Read up to maxChars wchars, stopping at null. Tolerates unreadable
-// memory (SEH around the loop).
-size_t SafeReadWide(const wchar_t* p, wchar_t* out, size_t maxChars) {
-    if (!p || !out) return 0;
-    size_t n = 0;
+// ---- SEH-guarded raw reads/writes (object-free so they can use __try) --------
+bool ReadStrPtr(void* structPtr, const uint8_t** out) {
+    if (!structPtr) return false;
     __try {
-        for (; n < maxChars; n++) {
-            wchar_t c = p[n];
-            out[n] = c;
-            if (c == 0) break;
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-    if (n < maxChars) out[n] = 0;
-    else out[maxChars - 1] = 0;
-    return n;
+        *out = *reinterpret_cast<const uint8_t* const*>(
+            reinterpret_cast<const char*>(structPtr) + OFF_CODEC_STR);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-
-size_t SafeReadAscii(const char* p, char* out, size_t maxChars) {
-    if (!p || !out) return 0;
-    size_t n = 0;
+bool ReadSubwidget(void* sub, void** ownerOut, void*** slotOut, void** cbOut) {
     __try {
-        for (; n < maxChars; n++) {
-            char c = p[n];
-            out[n] = c;
-            if (c == 0) break;
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-    if (n < maxChars) out[n] = 0;
-    else out[maxChars - 1] = 0;
-    return n;
+        *ownerOut = *reinterpret_cast<void* const*>(reinterpret_cast<char*>(sub) + OFF_SUB_OWNER);
+        void** slot = reinterpret_cast<void**>(reinterpret_cast<char*>(sub) + OFF_SUB_CB);
+        *slotOut = slot;
+        *cbOut = *slot;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool WriteSlot(void** slot, void* val) {
+    __try { *slot = val; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
-// Try to decode the pointer as a string. Returns empty if it doesn't look
-// like text. UTF-16 LE is the game-wide convention; ASCII is fallback.
-std::wstring DecodePtr(void* p) {
-    if (!p) return {};
-    uintptr_t addr = reinterpret_cast<uintptr_t>(p);
-    // Filter obvious non-pointers: < 0x10000 is virtually always not a valid
-    // text address.
-    if (addr < 0x10000) return {};
+// ---- codec capture -----------------------------------------------------------
+// listCapable: only the immediate glyph sink (FUN_002b0280) draws list-row
+// labels; object draws are always framing (never attributed to an item).
+void Capture(void* structPtr, bool listCapable) {
+    const uint8_t* strp = nullptr;
+    if (!ReadStrPtr(structPtr, &strp) || !strp) return;
+    std::wstring text = GameText::Decode(strp);
+    if (!GameText::IsMostlyPrintable(text)) return;
 
-    // UTF-16 LE attempt.
+    std::lock_guard<std::mutex> lk(g_mutex);
+    if (listCapable && g_curIdx >= 0 && g_paintOwner) {
+        g_itemsByOwner[g_paintOwner][g_curIdx].push_back(std::move(text));  // list row: read on focus
+    } else {
+        g_ring[g_head] = RingEntry{ listCapable, std::move(text) };          // framing (diagnostics)
+        g_head = (g_head + 1) % RING_MAX;
+        if (g_count < RING_MAX) ++g_count;
+    }
+}
+
+void HookImm(void* p1)  { Capture(p1, /*listCapable=*/true);  if (s_origImm)  s_origImm(p1);  }
+void HookObj1(void* p1) { Capture(p1, /*listCapable=*/false); if (s_origObj1) s_origObj1(p1); }
+void HookObj2(void* p1) { Capture(p1, /*listCapable=*/false); if (s_origObj2) s_origObj2(p1); }
+
+const uint8_t* HookResolve(int id) {
+    const uint8_t* ret = s_origResolve ? s_origResolve(id) : nullptr;
+    if (ret && (id == 1000 || id == 1001)) {
+        std::wstring s = GameText::Decode(ret);               // SEH-guarded inside
+        if (GameText::IsMostlyPrintable(s)) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_idCache[id] = std::move(s);
+        }
+    }
+    return ret;
+}
+
+// ---- per-item interception ---------------------------------------------------
+// Called by the game's painter in place of the real callback (we swapped the
+// pointer). Attributes this row's draws to `index`, then runs the real callback.
+int64_t CellWrapper(void* ctx, int64_t rowDrawCtx, void* geom, int64_t indexArg) {
+    int index = static_cast<int>(indexArg);
     {
-        wchar_t buf[MAX_DECODE_CHARS];
-        size_t n = SafeReadWide(reinterpret_cast<const wchar_t*>(p), buf, MAX_DECODE_CHARS);
-        if (n > 0 && IsMostlyPrintable(buf, MAX_DECODE_CHARS)) {
-            buf[MAX_DECODE_CHARS - 1] = 0;
-            return std::wstring(buf);
-        }
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_curIdx = index;              // sticky: stays set through the post-callback glyph draw
+        if (g_paintOwner) g_itemsByOwner[g_paintOwner][index].clear();  // fresh for this paint
     }
-    // ASCII attempt.
+    Pfn_Cell real = g_realCb;          // read outside the lock (single game thread)
+    return real ? real(ctx, rowDrawCtx, geom, indexArg) : 0;
+}
+
+// Runs after the full paint: reset state, then notify the reader that `owner`'s
+// item map is now populated (drives the menu-entry focus replay).
+void FinishPaint(void* owner) {
     {
-        char buf[MAX_DECODE_CHARS];
-        size_t n = SafeReadAscii(reinterpret_cast<const char*>(p), buf, MAX_DECODE_CHARS);
-        if (n > 0 && IsMostlyPrintableAscii(buf, MAX_DECODE_CHARS)) {
-            buf[MAX_DECODE_CHARS - 1] = 0;
-            // Widen to wstring for uniform downstream handling.
-            std::wstring w;
-            w.reserve(n);
-            for (size_t i = 0; i < n && buf[i] != 0; i++) {
-                w.push_back(static_cast<wchar_t>(static_cast<unsigned char>(buf[i])));
-            }
-            return w;
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_curIdx = -1;
+        g_intercepting = false;
+        if (g_itemsByOwner.size() > OWNER_MAP_CAP) {
+            auto keep = g_itemsByOwner.find(owner);
+            std::unordered_map<int, std::vector<std::wstring>> saved;
+            if (keep != g_itemsByOwner.end()) saved = std::move(keep->second);
+            g_itemsByOwner.clear();
+            if (!saved.empty()) g_itemsByOwner[owner] = std::move(saved);
         }
     }
-    return {};
+    if (g_paintedCb) g_paintedCb(owner);
 }
 
-void PushEvent(uint32_t callerRva, void* p) {
-    std::wstring decoded = DecodePtr(p);
-    if (decoded.empty()) return;
-
-    TextCapture::TextEvent ev;
-    ev.timestampMs = GetTickCount64();
-    ev.frameId = g_frameCounter;
-    ev.callerRva = callerRva;
-    ev.text = std::move(decoded);
-
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_ring.size() >= RING_MAX) g_ring.pop_front();
-    g_ring.push_back(std::move(ev));
-}
-
-uint32_t GetCallerRva(void* returnAddr) {
-    HMODULE h = GetModuleHandleA(nullptr);
-    uintptr_t base = reinterpret_cast<uintptr_t>(h);
-    uintptr_t ret = reinterpret_cast<uintptr_t>(returnAddr);
-    if (ret <= base) return 0;
-    return static_cast<uint32_t>(ret - base);
-}
-
-// Detour: call original first, then try to capture any string arg.
-// Signature is conservative — we read args by frame pointer below since the
-// actual count/types are uncertain. Win64 ABI: RCX/RDX/R8/R9 are first 4.
-void __fastcall HookedTextEntry(void* a0, void* a1, void* a2, void* a3) {
-    // Capture return address BEFORE calling original (which would overwrite).
-    void* returnAddr = _ReturnAddress();
-
-    // Call original first. If we crash in capture below, the game already
-    // got its work done.
-    if (s_origTextEntry) {
-        s_origTextEntry(a0, a1, a2, a3);
+void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
+    void* owner = nullptr; void** slot = nullptr; void* realCb = nullptr;
+    bool intercept = false;
+    if (subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (!g_intercepting) {
+            g_intercepting = true;
+            g_realCb = reinterpret_cast<Pfn_Cell>(realCb);
+            g_paintOwner = owner;
+            intercept = true;
+        }
     }
-
-    g_frameCounter++;
-
-    uint32_t callerRva = GetCallerRva(returnAddr);
-
-    // Try every arg as a potential string pointer. Cheap — only writes
-    // to the ring if a decode succeeds.
-    PushEvent(callerRva, a0);
-    PushEvent(callerRva, a1);
-    PushEvent(callerRva, a2);
-    PushEvent(callerRva, a3);
+    if (intercept) WriteSlot(slot, reinterpret_cast<void*>(&CellWrapper));  // swap in our wrapper
+    if (s_origPainter) s_origPainter(param_1, param_2, subwidget);
+    if (intercept) {
+        WriteSlot(slot, realCb);   // restore the game's callback
+        FinishPaint(owner);
+    }
 }
 
 } // namespace
@@ -198,77 +186,78 @@ void __fastcall HookedTextEntry(void* a0, void* a1, void* a2, void* a3) {
 namespace TextCapture {
 
 bool Init() {
-    if (g_initialized) {
-        Log::Write("TEXT", "TextCapture::Init called twice — ignoring");
-        return true;
-    }
-
-    bool ok = Hooks::InstallTyped(RVA_TEXT_ENTRY, &HookedTextEntry, &s_origTextEntry);
-    if (!ok) {
-        Log::Write("TEXT", "Failed to install text-entry hook at RVA 0x5FA10 — "
-                           "TextCapture remains dormant. MenuReader will not have text.");
-        return false;
-    }
+    if (g_initialized) return true;
+    bool ok = true;
+    ok &= Hooks::InstallTyped(RVA_TEXT_IMM,  &HookImm,       &s_origImm);
+    ok &= Hooks::InstallTyped(RVA_TEXT_OBJ1, &HookObj1,      &s_origObj1);
+    ok &= Hooks::InstallTyped(RVA_TEXT_OBJ2, &HookObj2,      &s_origObj2);
+    ok &= Hooks::InstallTyped(RVA_PAINTER,   &HookedPainter, &s_origPainter);
+    ok &= Hooks::InstallTyped(RVA_RESOLVE,   &HookResolve,   &s_origResolve);
     g_initialized = true;
-    Log::Write("TEXT", "TextCapture installed (FUN_0017fa10 @ RVA 0x5FA10). "
-                       "If Frida G-A3 identifies a different wrapper as the text "
-                       "carrier, add its RVA here.");
-    return true;
+    Log::Write("TEXT", ok
+        ? "TextCapture initialized (codec draws + FUN_002d28e0 per-item index map + id-string cache)."
+        : "TextCapture: one or more hooks failed to install — see Hooks log.");
+    return ok;
 }
 
 void Shutdown() {
     if (!g_initialized) return;
-    Hooks::Uninstall(RVA_TEXT_ENTRY);
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        g_ring.clear();
-    }
+    Hooks::Uninstall(RVA_RESOLVE);
+    Hooks::Uninstall(RVA_PAINTER);
+    Hooks::Uninstall(RVA_TEXT_IMM);
+    Hooks::Uninstall(RVA_TEXT_OBJ1);
+    Hooks::Uninstall(RVA_TEXT_OBJ2);
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_head = 0; g_count = 0; g_itemsByOwner.clear(); g_idCache.clear();
+    g_paintOwner = nullptr; g_curIdx = -1; g_intercepting = false;
     g_initialized = false;
     Log::Write("TEXT", "TextCapture shut down");
 }
 
-std::vector<TextEvent> RecentEvents(void* /*menuObj*/, uint64_t sinceTimestampMs,
-                                    size_t maxEvents) {
-    // Phase B keeps text events menu-agnostic — we haven't wired up the
-    // wrapper -> menu_obj attribution yet. menuObj is accepted for API
-    // stability; will be used once we know which wrapper arg carries the
-    // owning menu pointer (Stream A G-A3 informs this).
-    std::vector<TextEvent> out;
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_ring.empty()) return out;
-
-    // Walk newest-to-oldest; collect events at-or-after sinceTimestamp, up to
-    // maxEvents; then reverse to chronological.
-    out.reserve((std::min)(g_ring.size(), maxEvents));
-    for (auto it = g_ring.rbegin(); it != g_ring.rend(); ++it) {
-        if (it->timestampMs < sinceTimestampMs) break;
-        out.push_back(*it);
-        if (out.size() >= maxEvents) break;
-    }
-    std::reverse(out.begin(), out.end());
-    return out;
+std::wstring FocusedItemText(void* owner, int index) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    auto o = g_itemsByOwner.find(owner);
+    if (o == g_itemsByOwner.end()) return std::wstring();
+    auto it = o->second.find(index);
+    if (it == o->second.end()) return std::wstring();
+    return JoinFields(it->second);
 }
 
+std::wstring StringById(int id) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    auto it = g_idCache.find(id);
+    return it != g_idCache.end() ? it->second : std::wstring();
+}
+
+void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
+
 void DumpRingToLog(const char* reason) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    char header[160];
-    snprintf(header, sizeof(header), "Ring dump (%s); %zu events",
-             reason ? reason : "no-reason", g_ring.size());
-    Log::Write("TEXT", header);
-    int idx = 0;
-    for (const auto& ev : g_ring) {
-        // Convert wide to UTF-8 lossy for the log.
-        char utf8[512] = {};
-        if (!ev.text.empty()) {
-            WideCharToMultiByte(CP_UTF8, 0, ev.text.c_str(), (int)ev.text.size(),
-                                utf8, sizeof(utf8) - 1, nullptr, nullptr);
-        }
-        char line[768];
-        snprintf(line, sizeof(line),
-                 "  [%d] t=%llums frame=%u caller=0x%X text=\"%s\"",
-                 idx++, (unsigned long long)ev.timestampMs, ev.frameId,
-                 ev.callerRva, utf8);
+    std::lock_guard<std::mutex> lk(g_mutex);
+    size_t items = 0;
+    auto o = g_itemsByOwner.find(g_paintOwner);
+    if (o != g_itemsByOwner.end()) items = o->second.size();
+    char hdr[176];
+    snprintf(hdr, sizeof(hdr), "dump (%s): %zu framing strings, paintOwner=%p %zu item slots",
+             reason ? reason : "", g_count, g_paintOwner, items);
+    Log::Write("TEXT", hdr);
+    for (size_t k = 0; k < g_count; ++k) {
+        size_t idx = (g_head + RING_MAX - g_count + k) % RING_MAX;
+        const RingEntry& e = g_ring[idx];
+        char utf8[400] = {};
+        WideCharToMultiByte(CP_UTF8, 0, e.text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+        char line[512];
+        snprintf(line, sizeof(line), "  framing[%s] \"%s\"", e.imm ? "imm" : "obj", utf8);
         Log::Write("TEXT", line);
+    }
+    if (o != g_itemsByOwner.end()) {
+        for (const auto& kv : o->second) {
+            std::wstring joined = JoinFields(kv.second);
+            char utf8[400] = {};
+            WideCharToMultiByte(CP_UTF8, 0, joined.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+            char line[512];
+            snprintf(line, sizeof(line), "  item[%d] \"%s\"", kv.first, utf8);
+            Log::Write("TEXT", line);
+        }
     }
 }
 

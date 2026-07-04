@@ -2,39 +2,41 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
-// Captures source-text strings the game submits to the text-wrapper cluster
-// (RVA 0x5F650-0x5FD30). The whole point of this layer is to NEVER name an
-// option in code — MenuReader queries this for "what did the game draw" and
-// speaks the bytes verbatim. No option-name table lives here or anywhere.
+// Captures the codec text the game rasterizes, so the reader speaks the game's
+// OWN strings verbatim — no option-name table lives here or anywhere.
+//
+// The reader must speak the item the cursor is ACTUALLY on, not the Nth string
+// on screen. Every list menu paints its rows through the universal painter
+// `FUN_002d28e0`, which calls a per-menu cell callback (`subwidget+0x120`) with
+// the ABSOLUTE item index — the same index the `0x8000` focus signal carries.
+// We intercept that callback so each drawn string is attributed to its true
+// item index, producing a clean `owner -> index -> text` map of only the real
+// list-row labels (values, help footers, and stale text are NOT list-row draws,
+// so they land in a separate diagnostic ring instead).
 namespace TextCapture {
 
-struct TextEvent {
-    uint64_t timestampMs;       // wall-clock ms (GetTickCount64)
-    uint32_t frameId;           // game frame id (best-effort: ++counter per hook fire)
-    uint32_t callerRva;         // wrapper-caller's RVA; useful for diagnostics
-    std::wstring text;          // decoded text (UTF-16 LE / ASCII auto-detected)
-};
-
-// Install hooks on known/candidate text-wrapper RVAs. Currently hooks
-// FUN_0017fa10 (RVA 0x5FA10) — the top candidate. Additional wrappers can
-// be added once Stream A G-A3 identifies them.
 bool Init();
 void Shutdown();
 
-// Most-recent N text events captured for the given menu-object pointer,
-// optionally constrained to events at or after `sinceTimestampMs`. Returns
-// events in chronological order (oldest first).
-//
-// `menuObj == nullptr` returns all menu-agnostic events (useful while the
-// menu↔text association is not yet established).
-std::vector<TextEvent> RecentEvents(void* menuObj,
-                                    uint64_t sinceTimestampMs = 0,
-                                    size_t maxEvents = 32);
+// Text of the list row at `index` in the menu owned by `owner`, built live from
+// the per-item paint callback. A row's captured fields are joined. Empty if
+// `owner` isn't a menu we've painted or the row wasn't drawn (scrolled off).
+std::wstring FocusedItemText(void* owner, int index);
 
-// Diagnostic: dump the current ring contents to the log (used when
-// MenuReader fails to resolve focus text).
+// Localized UI string for a text id, captured passively from the game's own
+// resolver `FUN_002f9860` (e.g. pop-up "Yes"/"No" = ids 1000/1001). Empty until
+// the game has drawn that id at least once this session.
+std::wstring StringById(int id);
+
+// Fired (game thread) right after the painter finishes drawing `owner`'s rows,
+// i.e. when `owner`'s item map is freshly populated. The reader uses this to
+// replay a focus announce whose first `0x8000` arrived before the paint (the
+// menu-entry "no item text" case).
+typedef void (*MenuPaintedCallback)(void* owner);
+void SetMenuPaintedCallback(MenuPaintedCallback cb);
+
+// Diagnostic: dump the framing ring + the per-owner item map to the log.
 void DumpRingToLog(const char* reason);
 
 } // namespace TextCapture

@@ -116,6 +116,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH: {
+            TitleReader::Shutdown();
             MenuReader::Shutdown();
             TextCapture::Shutdown();
             MenuObserver::Shutdown();

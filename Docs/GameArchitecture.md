@@ -108,6 +108,57 @@ Mode/Credits/**Exit** (note index 4→y350→row5→Exit; the `y=280` "Press Sta
 prompt, not a command row). Per-option HELP text IS readable pipeline text via `FUN_002f9860`
 (id `0xd44`/`0xd45`/`0xd3d`). Details: `..\FFXII-Decompile\notes\title_menu_labels.md`.
 
+## Universal Menu & Text Reading — static spec (2026-07-03)
+
+Offline decompile mining for the universal reader (menus, pop-ups, panels, prompts,
+dialogue, battle text). Full detail + evidence line numbers:
+`..\FFXII-Decompile\notes\text_pipeline_menu_dialogue_spec.md`. RVA = Ghidra-abs − 0x120000.
+
+**Universal focus signal (title + in-game menus):** `FUN_00247510` (RVA `0x127510`) —
+`FUN_00247510(owner, msg, index)`; msg `0x8000`=focus move (index=param_3), `0x8001`=confirm.
+One hook here, filtered on `0x8000`, is the universal list-menu focus signal.
+
+**Focus INDEX** (computed on sub-widget `w = *(menu_obj+0xc8)`):
+`index = (i16[w+0xf4] + i16[w+0xf2]) * u8[w+0xec] + i8[w+0xee] + i8[w+0xed]`;
+`item_count = u16[w+0xe8]`. Sub-widget ctor `FUN_002d14e0` (0x1B14E0), mover `FUN_002d1db0`
+(0x1B1DB0). **2-choice pop-ups** (`menu_obj+0xc8==0`, `+0x3c4` bit0) emit `0x8100`=Yes /
+`0x8101`=No / `0x8102`=Cancel instead of an index.
+
+**Menu registry** `DAT_0208ea60` (RVA `0x1F6EA60` — the correct value; `0x216EA60` is stale
+and appears nowhere in the decompile). Controller `FUN_00241d40` (`0x121D40`). Factory
+`FUN_00241c90` (`0x121C90`) → `FUN_002465f0` (`0x1265F0`). The **title confirm pop-up**
+`FUN_00394380` (`0x274380`) builds through this factory ⇒ it's a normal registry menu the
+universal reader reads for free; Yes/No ids `0x3e8`/`0x3e9`, footer help `0x4b42`.
+
+**Text capture hooks** (codec text, NOT UTF-16):
+- PRIMARY `FUN_002b3050` (RVA `0x18B050`) — read **param_2 (RDX) = codec `byte*` PRE-call**;
+  28 callers; covers menus, item/ability names+descriptions, panels/prompts, battle-UI text.
+- FALLBACK `FUN_002af340` (RVA `0x18F340`) — param_2 codec `byte*` PRE-call (universal but
+  fires multiple measure passes → needs dedup).
+- SAFETY NET `FUN_002f9860` (RVA `0x1D9860`) — id→leaf resolver; read **RETURN (RAX) POST-call**.
+  st2e section table `DAT_02ec3d80` (`0x2DA3D80`), record table `DAT_02f973c0` (`0x2D973C0`).
+- Names/desc record `FUN_0035d330` (`0x23D330`) → `&DAT_022ca520`. Codec = `tools/st2e_decode.py`.
+
+**Dialogue (message-window) — separate back-end, NOT `FUN_002f9860`** (`.msb` names are
+PS2-legacy, absent from the PC port). Field-dialogue resolver `FUN_00377870` (RVA `0x257870`)
+from per-map pack `DAT_02add0f8` (`0x298D0F8`), loader `FUN_00378540` (`0x258540`). One
+message-window class (0x179E0 B), 3 singletons: field-talk `DAT_02b47760`/handler `FUN_003cb650`
+(`0x2AB650`), system `DAT_0209e5c0`/`FUN_002b7590` (`0x197590`), log `DAT_0209e5f0`/`FUN_002ba700`
+(`0x19A700`). Fields: body id `+0x179D0`, flags `+0x179D2` (0x2000=open, 0x80=page-done),
+type `+0x179D8`, decoded-text buffer `+0x1B0 + ((flags>>2)&1)*0xBC10`. Open=handler case 1,
+advance=case 0x20, draw=case 0x12. **Speaker/caption field: none found (UNCERTAIN**; candidate
+attribute `FUN_00254380` `0x134380`).
+
+**Battle text:** `battle_message.bin` is an st2e section (via `FUN_002f9860`); names via
+`FUN_002b58b0` (`0x1958B0`). **Flying damage numbers are a per-digit sprite HUD, NOT codec
+text** (blitter `FUN_0028aaa0` `0x16AAA0`) — the text hook will not catch them (combat-log
+scope, deferred).
+
+**Runtime-only / to confirm in Phase B:** which text hook covers dialogue vs. needs the
+message-window path; st2e section-loader RVA (see `find_text_backends.java`) + boot-zeroed
+section→file binding; dialogue speaker id source; confirm-pop-up prompt id; new-game settings
+creation fn (script-driven, ids 0xd44/0xd45); decoded-buffer format at msgwin `+0x1B0`.
+
 ## Navigation Data Tables — DECODED 2026-05-07
 
 `tools/survey_data.py` decoded FFXII's text encoding (offset cipher: bytes

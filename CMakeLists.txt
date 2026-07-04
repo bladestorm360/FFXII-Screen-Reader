@@ -28,6 +28,7 @@ add_library(${PROJECT_NAME} SHARED
     src/proxy/dinput8_proxy.cpp
     src/core/logger.cpp
     src/core/hooks.cpp
+    src/core/game_text.cpp
     src/speech/speech.cpp
     src/input/input_tracker.cpp
     src/ui/menu_observer.cpp
