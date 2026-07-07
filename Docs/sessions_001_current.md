@@ -175,7 +175,7 @@ folder.
 - Confirm `dinput8.dll` lands in `<game>\x64\` and the game still launches with input working.
 - Confirm Tolk announces "FFXII screen reader loaded".
 
-## Session — 2026-05-07 — Data feasibility survey (go/no-go before menu work)
+## Session 6 — 2026-05-07 — Data feasibility survey (go/no-go before menu work)
 
 **KEYWORDS:** feasibility, planmapname, npcdic, mapjumpgroup, text encoding,
 offset cipher, dbg symbols, navigation labels, mapjump API, FFX comparison
@@ -222,7 +222,7 @@ FFXII does not have the same problem.
    60-second walk in Rabanastre.
 5. DrummerIX CE-table -> RVA seed CSV (already on the plan).
 
-## Session — 2026-05-07 — find_ebp_interpreter.java authored
+## Session 7 — 2026-05-07 — find_ebp_interpreter.java authored
 
 **KEYWORDS:** ebp interpreter, dispatch table, EBP2 magic, fnptr arrays,
 name-keyed vs index-keyed, ghidra script
@@ -259,7 +259,7 @@ function pointers in one structure.
   segmentation likely matches the four largest runs). Write a follow-up
   script that applies labels by index.
 
-## Session — 2026-05-11 — Title-screen text-detection: Phase A audit + Phase B/C authoring
+## Session 8 — 2026-05-11 — Title-screen text-detection: Phase A audit + Phase B/C authoring
 
 **KEYWORDS:** title-screen text-detection PTextObject PUtilityText DynGeoFontTextInstance probe_text_draw find_text_draw_path G3.2 phase-A-audit
 
@@ -311,7 +311,7 @@ Worked from plan `~/.claude/plans/as-i-recall-we-re-drifting-platypus.md`. Goal:
 
 **Open question for Phase E:** if `probe_text_draw` captures strings but `find_text_draw_path` CSV's top-ranked candidates have `n_string_params == 0`, the source string is held on the instance/context object (field walk wins) rather than as a direct parameter. Either result is informative — we re-rank candidates and move forward.
 
-## Session — 2026-05-11 — Menu architecture lockdown (in-game menu pipeline + cursor renderer + menu registry)
+## Session 9 — 2026-05-11 — Menu architecture lockdown (in-game menu pipeline + cursor renderer + menu registry)
 
 **KEYWORDS:** menu-architecture cursor-renderer FUN_00241d40 FUN_00241a50 DAT_0228ea60 menu-registry pointer-indirection-bug probe_cursor_focus-no-fire MenuArchitecture.md title-menu-not-here
 
@@ -345,7 +345,7 @@ User pivoted scope: **lock in menu architecture before further probes.** Phase 1
 
 **RETRACTION later in same session (2026-05-11):** Claim (2) — "title menu uses a separate path" — was unsupported. User called out the same mistake pattern from FFX: assuming title is structurally different without proving it. The architectural argument is load-bearing: Square would not reinvent the menu system for one screen. The `fsttl_*` script symbols are most likely action callbacks (what happens when an option is selected), not the menu implementation itself. Updated MenuArchitecture.md to mark title-menu status as UNCONFIRMED and queue the cheapest empirical test as the first move next session: read `DAT_0228ea60` slots while on title screen. Non-null slot → title is in this architecture. Only if all 3 slots null does the `.ebp` interpreter hunt become necessary.
 
-## Session — 2026-05-20 — Title-menu vocalization + universal menu reader (Frida probes + C++ scaffolding)
+## Session 10 — 2026-05-20 — Title-menu vocalization + universal menu reader (Frida probes + C++ scaffolding)
 
 **KEYWORDS:** title-menu universal-menu-reader FUN_00241d40 FUN_002a6190 text-wrapper-cluster probe_title_controllers probe_text_wrappers probe_focus_change Hooks::Install MenuObserver TextCapture MenuReader no-hardcoding no-fabricated-labels build-clean dinput8-deployed
 
@@ -390,7 +390,7 @@ C++ scaffolding (deployed in this session as part of `dinput8.dll`):
 - `MenuObserver` registers per-controller focus-change callback for the FIRST observation of any new menu_obj. That means opening a menu speaks the default-focused option (correct behavior for accessibility), but it also means re-entering a menu after switching characters speaks the option again (acceptable; user can correct via "speak less").
 - `kDetours[4]` cap — if we ever need >4 controllers, the template-thunk array grows.
 
-## Session — 2026-05-20b — Input correlation rewrite (probes + menu_reader gate)
+## Session 11 — 2026-05-20 — Input correlation rewrite (probes + menu_reader gate)
 
 **KEYWORDS:** input-correlation Phyre-keyboard-vtable WH_KEYBOARD_LL InputTracker probe_title_controllers-v2 probe_text_wrappers-v2 probe_focus_change-v2 menu_reader-input-gate animation-noise-filter title-screen-not-idle
 
@@ -426,7 +426,7 @@ C++ scaffolding:
 
 **Next step (same as before, but probes now produce usable signal):** user runs `probe_menu_registry.js` first; if title not handled by FUN_00241d40 then `probe_title_controllers.js` v2; if no candidate fits then `probe_text_wrappers.js` v2 to find the unknown controller's per-frame draw caller.
 
-## Session — 2026-05-20c — Frida directory cleanup + input-correlator try/catch fix
+## Session 12 — 2026-05-20 — Frida directory cleanup + input-correlator try/catch fix
 
 **KEYWORDS:** archive probe-cleanup input-correlator-skip-bad-slot uninterceptable-vtable-slot Interceptor.attach-per-slot-try-catch frida-directory-pruning
 
@@ -459,7 +459,7 @@ Fix: per-slot try/catch around `Interceptor.attach`. On failure, increment `skip
 
 **No C++ changes** — WH_KEYBOARD_LL doesn't go through the Phyre vtable; `InputTracker` is independent of the interception bug.
 
-## Session — 2026-07-02 — TITLE MENU SPEAKING (shipped + committed) + 2 follow-ups
+## Session 13 — 2026-07-02 — TITLE MENU SPEAKING (shipped + committed) + 2 follow-ups
 
 **KEYWORDS:** title menu, TitleReader, baked sprites, title_logo.tm2, cellTable, FUN_003939b0, FUN_00393950, FUN_00247510 0x8000, atlas row, New Game/Load Game/Trial Mode/Credits/Exit, st2e codec, section-3 help_menu, initial commit 8999c5c, press-start false-fire, initial-focus announce
 
@@ -502,7 +502,7 @@ agents) + one confirming Frida dump, then C++ port. Committed as the repo's init
 **Next major area:** in-game menus (Party/Status/Config/Items/Equip) via the readable `st2e`
 pipeline (`FUN_002f9860`/`FUN_002b49f0` + validated codec) — should be simpler than the title's sprites.
 
-## Session — 2026-07-03 — Universal text/menu/dialogue RE (offline-first, deep), title fix C1 built, dialogue text CRACKED
+## Session 14 — 2026-07-03 — Universal text/menu/dialogue RE (offline-first, deep), title fix C1 built, dialogue text CRACKED
 
 **KEYWORDS:** offline-first, confidence-gates, FUN_002b3050 text hook, FUN_00247510 universal focus,
 FUN_00241d40 registry 0x1F6EA60, focus-index-formula sub-widget, title 1b window+0xC0, FUN_002b0280-is-combat-numbers,
@@ -571,7 +571,7 @@ Plan file: `~/.claude/plans/status-check-the-session-eventual-clover.md`.
 screen; finish `.ebp` message parser (dialogue id→text + runtime id confirm); build Stage-1 text-capture +
 pop-up/settings/prompt readers; then Stage-2 dialogue reader.
 
-## Session — 2026-07-04 — Menu reader round 2: pop-up Yes/No SHIPPED; settings values attempted, WRONG class
+## Session 15 — 2026-07-04 — Menu reader round 2: pop-up Yes/No SHIPPED; settings values attempted, WRONG class
 
 **KEYWORDS:** menu_reader round2, pop-up buttons WORKING, FUN_002f9860 idCache id=1000/1001 Yes/No, confirm
 body +0x1B0, per-owner item map, initial-focus replay OnMenuPainted, FUN_002d28e0 painter CellWrapper,
@@ -622,7 +622,7 @@ whether it routes elsewhere (no `0x8000` was observed on toggle).
 but inert on this menu, harmless — decodes nothing so speaks nothing, no wrong speech). Stopped here for the
 day at user request. Plan file: `~/.claude/plans/status-check-the-session-eventual-clover.md`.
 
-## Session — 2026-07-07 — Config-menu VALUES + `o`-key tooltips SHIPPED (offline controller ID was WRONG; the probe caught it)
+## Session 16 — 2026-07-07 — [menu-reader] Config-menu VALUES + `o`-key tooltips SHIPPED (offline controller ID was WRONG; the probe caught it)
 
 **KEYWORDS:** config values WORKING, new-game/config controller = **FUN_0023fbe0 (0x11FBE0)** NOT FUN_0023ce10,
 offline-0.98-was-wrong-probe-corrected-it, row array `ctrl+0xE8` stride 0x18, focus index = 0x8000 val,
