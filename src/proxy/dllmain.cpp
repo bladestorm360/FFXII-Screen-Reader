@@ -8,6 +8,7 @@
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
 #include "ui/message_reader.h"
+#include "navigation/navigation.h"
 
 #include <Windows.h>
 #include <Psapi.h>
@@ -77,6 +78,10 @@ static void DeferredInitImpl() {
         // Dialogue + message-panel text reader (NPC dialogue, cutscene captions, item/
         // treasure/battle-system panels). Independent of the menu hooks above.
         MessageReader::Init();
+        // Field navigation (Phase 4). M0: read-only leader/physics chain self-
+        // diagnostic on the `\` key. Installs the map-load ctx-capture hook only —
+        // no interpreter/action hooks (announce-only, non-interfering).
+        Navigation::Init();
     } else {
         Log::Write("INIT", "MinHook init failed — menu reading disabled this session");
     }
@@ -121,6 +126,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH: {
+            Navigation::Shutdown();
             MessageReader::Shutdown();
             TitleReader::Shutdown();
             MenuReader::Shutdown();

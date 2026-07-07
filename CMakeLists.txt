@@ -36,6 +36,14 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/menu_reader.cpp
     src/ui/title_reader.cpp
     src/ui/message_reader.cpp
+    src/navigation/navigation.cpp
+    src/navigation/player_state.cpp
+    src/navigation/bullet_query.cpp
+    src/navigation/nav_hooks.cpp
+    src/navigation/nav_common.cpp
+    src/navigation/entity_list.cpp
+    src/navigation/nav_commands.cpp
+    src/navigation/path_directions.cpp
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

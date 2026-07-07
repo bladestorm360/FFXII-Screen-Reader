@@ -591,4 +591,185 @@ delta here.
 
 ---
 
-**Last updated:** Phase 0 scaffolding (no game interaction yet).
+## Pathfinder / Field Navigation (Phase 4) — RE 2026-07-06
+
+RVA = Ghidra-abs − 0x120000. Confidence + validation state noted; anything <0.98 is
+**Frida-pending** and must NOT enter C++ until confirmed.
+
+### CALLACT action-binding table (RE-0) — CONFIRMED ~0.98 (read firsthand)
+- Interpreter `FUN_0025e4c0` (RVA `0x13E4C0`) CALLACT case → dispatcher
+  `FUN_002621d0` (RVA `0x1421D0`): `selector=idx>>12`, `slot=idx&0xFFF`; enter/exec/poll
+  triad; nonzero exec return suspends as coroutine.
+- Resolvers `FUN_003dc240/270/2a0` (RVA `0x2BC240/270/2A0`): `table=(&DAT_02b57ef0)[sel];
+  if(slot<table[0]) return *(entry + slot*0x20 + K)`; count@+0x00, enter@+0x08,
+  exec@+0x10, poll@+0x20.
+- Registration `FUN_003dc2d0` (RVA `0x2BC2D0`): real tables at selectors 0/3/5/7 →
+  `DAT_01eed700`/`01f281b0`/`01f29418`/`01f29440` (RVA `0x1DCD700`/`1E081B0`/`1E09418`/
+  `1E09440`); counts **1496/147/1/104**. `DAT_02b57ef0` (RVA `0x2A37EF0`) is
+  runtime-populated (zeros in image) — read the module tables directly.
+- Dump: `FFXII-Decompile/output/action_binding_tables.txt` (script
+  `ghidra/dump_action_binding_tables.java`). VM glue: arg-fetch `FUN_00267e10`,
+  value-return `FUN_0026b4e0`; getters call the latter. NAMING of slots is unresolved
+  (no static name table; needs .dbg-ordinal↔slot alignment — see plan Track 1).
+
+### Player position + facing (RE-1) — struct layout CONFIRMED 0.97; runtime handle Frida-pending
+- `Phyre::PPhysics::PPhysicsCharacterControllerBullet` size `0x190`; base
+  `PPhysicsCharacterControllerBase` size `0x130`. Reflection registrar
+  `FUN_006949a0` (RVA `0x5749A0`).
+- Base fields: `m_startPosition@0x08` (spawn, NOT live), `m_targetNode@0xC8` (`PNode*`),
+  `m_targetWorldMatrix@0xD0` (`PWorldMatrix*`), `m_world@0xD8`, `m_rotate@0xE0` (float,
+  yaw candidate 0.55), `m_right@0xE4`, `m_forward@0xE8`, `m_velocity@0xEC`,
+  `m_isOnGround@0x105`.
+- **Live position** = translation of the 4x4 at `*(controller+0xD0)`
+  (`PWorldMatrix.m_matrix@0x00`); translation likely `+0x30/0x34/0x38` (**0.6 — VERIFY**).
+  Alt path `controller+0xC8 → PNode+0x18 → PWorldMatrix+0x00`.
+- Manager `PPhysicsWorld+0x50` = `m_characterControllers` list (`m_next@0x00`), 0.95.
+- **LEADER ANCHOR (STATIC, ≥0.98, verified 2026-07-07):** current player-controlled
+  character scene handle = **`DAT_022c7fe0` (RVA `0x21A7FE0`)**, returned by universal
+  accessor **`FUN_003590d0` (RVA `0x2390D0`)** (~250 callers). Resolve:
+  **`FUN_003588b0(handle)` (RVA `0x2388B0`)** = generation-checked handle table → scene
+  object → **`+0x30`** (`FUN_00263e30`, RVA `0x143E30`) → char component (valid `*comp&8`).
+  Field-active gate **`DAT_02089340 & 0x10`**. Source-of-truth: party mgr `*DAT_02ebf190`
+  (RVA `0x2D9F190`), leader index `mgr+0x5aa4`, control index `mgr+0x5ad5`; leader-change
+  refresh `FUN_00326500` promotes the handle + retargets camera (⇒ field leader, not menu).
+  Remaining pin: char component → position field (its controller `+0xD0`/`+0x30`, or a
+  direct matrix) — confirm live. Corollary: leader→controller `+0xD8` = `PPhysicsWorld`
+  (RE-4 context) → `+0x60` = raycast world, so this anchor closes RE-4's handle too.
+- **CORRECTION — camera globals are STALE for our build:** `CameraLookAtPointPtr`/
+  `CameraPositionPtr` (community RVA `0x20955F0`/`E0`) do NOT exist here (0 occurrences,
+  verified). Community RVAs may target a different build — validate each before use.
+
+### Bullet walkability (RE-4) — CONFIRMED ~0.95 (verified firsthand); runtime handle Frida-pending
+- `btCollisionWorld::rayTest` = **`FUN_0083fc70` (RVA `0x71FC70`)**, vtable slot 6, called
+  via world vtable offset `0x30`. (`0x71DE00` is `debugDrawWorld`, NOT rayTest.)
+  `convexSweepTest` RVA `0x71B780` (slot 5). Vtables: `PTR_FUN_01cce610` (btCollisionWorld)
+  / `PTR_FUN_01ccf5e0` (btDiscreteDynamicsWorld).
+- **Active world = `*(physicsContext + 0x60)`** (no static global). Built by `FUN_006a0310`
+  (RVA `0x580310`, stores at `:57`); stepped by `FUN_0069f070` (RVA `0x57F070`, vtable
+  slot `0xa0`). Root singleton `DAT_02e4aff0` (RVA `0x2D2AFF0`) holds shared
+  dispatcher/broadphase only.
+- **Ready-made ray cast:** `FUN_006a1a70` (RVA `0x581A70`) `(context, from*, to*, out*,
+  filterGroup)` — reads world at `context+0x60`, builds `ClosestRayResultCallback`
+  (vtable `PTR_FUN_00d7ab10`), calls rayTest, writes hit point+normal to `out`. btVector3
+  = 16 B `{x,y,z,pad}` by pointer. Call this directly with a cached context.
+- **Runtime handle (G4.8):** hook `FUN_006a0310` (map-load, once) or `FUN_0069f070` to
+  capture `context`; world null on title/between maps — guard.
+
+### C++ M0 self-diagnostic (2026-07-07) — implemented in `src/navigation/`
+Straight-to-C++ exception (user-approved): the leader/physics chain is confirmed **in-mod
+via a logged read-only dump** (`\` key) instead of a standalone Frida probe. Firsthand
+decompile facts wired into `src/navigation/nav_rva.h` + `player_state.cpp`:
+- **RVA CORRECTION:** field-active gate `DAT_02089340` → RVA **`0x1F69340`** (= abs
+  `0x2089340` − `0x120000`). The pathfinder plan's table listed `0x2089340` un-converted —
+  do NOT use that. Read as a byte, `& 0x10`. (`DAT_022c7fe0`→`0x21A7FE0` and
+  `*DAT_02ebf190`→`0x2D9F190` were already correct.)
+- **Handle-table resolve (replicated inline, memory-only)** from `FUN_003588b0` +
+  `FUN_00263ff0`: `handle` is a **uint** (not a ptr); `selector=(h>>0x10)&0xf` (must be <5),
+  `slot=h&0xFFFF`, `generation=(h>>0x14)&0x7FF`. Table = `&DAT_02098e10` (RVA **`0x1F78E10`**)
+  `+ selector*0x288` (`0x51`×8). Table fields: guard@+0x00 (≠0), entries(int*)@+0x08,
+  active-bit@+0x10 (`&1`), capacity@+0x20. Object ptr = `*(entries + 0x08 + slot*8)`; count
+  at `entries+0x00`. Generation check: `*(u16*)(obj+0x16) == generation` else stale.
+  Scene obj → char component = `*(sceneObj+0x30)`, valid when `*(u32*)comp & 0x08`.
+- **Game's own consumer chain = `FUN_00317e60`** (leader→component, gated on
+  `DAT_02089340 & 0x10`). ⚠️ It also does `*comp |= 0x100000000` — a WRITE the mod must
+  **never** replicate (announce-only / read-only).
+- **Unpinned hop (what M0 discovers):** component→controller→matrix is NOT a plain getter —
+  `FUN_0033c9b0(comp+0x80)` *constructs* a transform. M0 dumps the component tree and flags
+  any pointer field whose `+0xD8 == cached physics ctx` (definitive controller anchor) and/or
+  whose `*(+0xD0)+0x30/34/38` reads as world coords. Result feeds `PlayerState::ReadPlayerPos/
+  Yaw` (currently stubbed `false` until the offset is recorded here).
+- **ctx capture:** hook on `FUN_006a0310` caches its RCX arg (the physics context) →
+  `BulletQuery`; `FUN_006a1a70(ctx,...)` reads world at `ctx+0x60` (guarded before every call).
+
+### Full C++ implementation (Session 22) — canonical addresses
+The M0 "dump-and-hunt" was retired: position/yaw are STATIC (no controller), and classification/names
+are OFFLINE master data. Implemented in `src/navigation/`.
+- **Player pos** = `*(sceneObj+0xB8)` floats `+0/+4/+8` (engine getter `FUN_00265020`; guarded by type
+  nibble `(*(u8)(sceneObj+3)>>5)∈{1,3}`). **Yaw** = `atan2(fwd.x,fwd.z)`, fwd = `comp+0x100/+0x108`
+  (`comp=*(sceneObj+0x30)`, valid `*(u32)comp & 8`). Controller `+0xD0` matrix was only a *writer*.
+- **Field-actor pool** (enumeration): base ptr `DAT_0208e688` (RVA `0x1F6E688`), stride `0xF50`, count
+  `DAT_0208e6a0` (`0x1F6E6A0`). Per actor: pos `+0xE0/+0xE4/+0xE8`, yaw `+0x160`, def `*(actor+0x698)`,
+  `sceneObj *(actor+0x10)`; def: kind `*(s8)(def+5)` (0=NPC,1=gimmick), id `*(u16)(def+4)`.
+- **Object name (master data, live/localized):** `ctx = FUN_0035d380(1, defId)` (RVA `0x23D380`) → codec
+  string at `ctx+0x08` (NPC) / `ctx+0x10` (gimmick) → `GameText::Decode`. Classifier = npcdic def id:
+  **469=Save Crystal, 466=Gate Crystal, 435–465=area gate crystals, 434=Treasure**. Bank resolver
+  `FUN_002f9860` (`0x1D9860`); empty sentinel `DAT_01ceb638` (`0x1BCB638`). Track-1 naming formula:
+  selector-0 slot = `mapctrl.dbg_index − 5140`.
+- **Area name:** `FUN_003778b0()` (RVA `0x2578B0`, current area, no arg) → decode. (`getmapid`
+  `FUN_002e9890`/`FUN_00348100`; `mapjumpgroup*` = story-flag tables, NOT exit geometry.)
+- **World scale = METERS** (offline, definitive): Bullet default gravity `-10` (`FUN_00854980` `0x734980`);
+  char-controller defaults `FUN_00690fc0` (RVA `0x570FC0`): `m_height 0.8`, `m_radius 0.6` (~2 m humanoid),
+  `m_velocity 10`, `jumpHeight 1.5`, self-gravity `-19.6`; collision margin `0.04`. ⇒ units-per-step
+  **0.75**, grid cell **~0.5**.
+- **Obstacle guidance:** `BulletQuery::HorizontalClear` (one ray) + a ≤4-ray fan → "clear"/"blocked, bear X".
+  Full A* occupancy grid deferred (thousands of rays would race the physics step → needs game-thread run).
+
+### Keyboard input capture (Session 23) — the game grabs the keyboard exclusively
+**FFXII acquires the keyboard via DirectInput in EXCLUSIVE mode**, which installs a swallowing low-level
+keyboard hook: `WH_KEYBOARD_LL` hooks (the mod's hotkeys) AND NVDA's own commands are starved (only a few
+unbound keys like Tab/Space leak through). Tolk *speech* still works (it's an API call, not a keypress).
+**Solution that works — ride the game's own DirectInput poll (not a mode change):** the `dinput8.dll` proxy
+patches `IDirectInput8::CreateDevice` (COM vtable **index 3**) to identify the keyboard device
+(`GUID_SysKeyboard`), then patches that device's `IDirectInputDevice8::GetDeviceState` (**index 9**). Each
+frame the game polls the 256-byte DIK scan-code buffer; our hook reads the *same* buffer and feeds the mod's
+hotkeys (`InputTracker::FeedDInputKeyboard`) — edge-detected, dispatched on rising edges. Exclusivity is
+irrelevant and the game's behavior is unchanged. (Forcing the keyboard non-exclusive via `SetCooperativeLevel`
+was tried and did NOT work; reverted.) NVDA's own key commands remain blocked under the game's grab — separate
+issue; the mod doesn't depend on them. Full game keybindings + mod keys: `Docs/Controls.md`.
+
+---
+
+## Message / Dialogue / Panel Text (2026-07-07) — decompile-exhausted, ≥0.98; Frida-pending
+
+Full spec + evidence: `..\FFXII-Decompile\notes\message_text_readpoints_spec.md`. Four distinct
+surfaces; two readable, two are baked assets (not readable via codec).
+
+**A. NPC dialogue + in-engine cutscene captions — message window `e5f0`.**
+- `DAT_0209e5f0` (RVA `0x1F7E5F0`, pointer global) = primary live dialogue surface (all openers
+  drive it; owns `mini_face_c` portrait). `e5c0` redundant twin; `b47760` chrome. None is a backlog.
+- Page obj: `page = DAT_0209e5f0 + 0x1B0 + ((*(u16*)(root+0x179d2)>>2)&1)*0xBC10`. Page proc
+  `FUN_002baf80` (RVA `0x19AF80`); builder `FUN_002b9d30` (RVA `0x199D30`). msgId = `*(short*)(page+0x138)`.
+- **Body text:** observe `FUN_003c02b0(msgId,out)` (RVA `0x2A02B0`) → `*(out+8)` = codec ptr;
+  `*(u16*)(out+2)&0xff` = speaker attr. No game call. (Body is glyph-nodes at `page+0xBBC0` — no
+  memory-only string.)
+- **Speaker name (memory-only):** nameplate `DAT_02b62d78` (RVA `0x2962D78`, ptr global):
+  `*(char**)( *(void**)( *(void**)(DAT_02b62d78+0x60) ) + 0x18 )` = rendered caption (draw chain
+  ends `FUN_002dd680:40`→`FUN_002b0280`). Visibility gate `(*(u32*)(DAT_02b62d78+0x40) & 0x405)==5`
+  (FUN_00245e60 draw gate) — read the name only when visible, else a stale name can persist.
+
+**B. Item / treasure / battle-system / yes-no confirm — one memory-only buffer.**
+- Hook `FUN_0057c480` (RVA `0x45C480`), message==1 (surface birth); text = `param_1(surface)+0x1B0`
+  (0x400-byte codec buffer, written once by `FUN_00254f30`). No global needed — the surface is the
+  hook's `param_1`. (Also reachable as `*(*(DAT_0209ac30 RVA 0x1F7AC30, ptr→&DAT_0209ac60)+0x328)`.)
+- **Classify by surface fields (the ≥0.98 gate; cmd id `+0xdf8` DISCARDED — battle-global, not per-surface):**
+  `surface[0x636]` = choice count, `surface[0x630] & 0x8` = passive-text flag.
+  count==0 && passive → INFO (item/treasure/battle-system, producer `FUN_002ce370`) = SPEAK.
+  count==2 → yes/no confirm (`FUN_002cdf20`, choices via `FUN_0057c320`→`FUN_0057c140` at `+0x5b0/+0x5b8`).
+  count≥2 other → multi-choice (`FUN_00566680`). Confirm/choice classes are a DIFFERENT window class than
+  the menu-registry confirms `FUN_00241d40` (distinct obj[0]) → muted in the reader, not double-spoken.
+
+**C. Guided-tutorial banners + on-screen telop text ("TUTORIAL / Try using … to adjust the viewing angle").**
+Live-CONFIRMED in play-test (Session 19). The game's on-screen **telop overlay**, a THIRD surface distinct from A/B,
+the help-bar (`FUN_00291d80`) and the Handbook image viewer. Content setter **`FUN_002e16b0(ctx, slot, textPtr, _)`
+(RVA `0x1C16B0`)** — `param_3` = full `HEADER\x02BODY` codec string (0x02→newline), once per set (null = clear).
+Downstream: `FUN_002a35b0` (0x1835b0) → `FUN_002a3250` (0x183250, caption/body split); header ptr `DAT_0209c988`
+(RVA `0x1F7C988`); fed by script natives `FUN_00348df0`/`FUN_0034ada0`/`FUN_0050eab0`. Hooked in `message_reader`
+(decode+speak). **Follow-up:** button-icon inserts (0x0f escapes = ↑←↓→ glyphs) currently decode to nothing → map
+0x0f button selectors to names so key prompts read.
+
+**NOT readable (baked assets — discarded):** pre-rendered FMV movie subtitles (movie-embedded
+glyph runs; the "Subtitles" toggle gates this, `DAT_0209be80+0x10f68` bit0xc → `FUN_00550510` →
+overlay `DAT_02ca8f38`); tutorial panels (Handbook images `menuhandbook_tutorialNNN.dat`). Battle
+multi-line detail builder `FUN_00293310` family (unresolved `.rdata` dispatch) — header line still
+captured by B. Target-select window `DAT_0209be80`/`FUN_00552250` = battle targeting UI, out of scope.
+
+**SHIPPED in C++** (Session 18): `src/ui/message_reader.{cpp,h}` hooks the three functions above via
+`Hooks::InstallTyped`; reads memory-only + SEH-guarded (`src/core/mem_read.h`); `r` = re-read last line.
+Built + deployed, pending integrated play-test. Optional aid: `..\FFXII-Decompile\frida\probe_message_text.js`.
+
+---
+
+**Last updated:** 2026-07-07 (Session 18) — Message/dialogue/panel reader SHIPPED in C++
+(`message_reader`): e5f0 dialogue body+speaker; `FUN_0057c480+0x1B0` panel gated by `surface[0x636]`/
+`[0x630]` (INFO spoken, confirms muted); `r` re-read. Built/deployed, play-test pending.
+Prior: 2026-07-07 (S17) message-text read-points decompile-exhausted; 2026-07-06 Pathfinder RE.

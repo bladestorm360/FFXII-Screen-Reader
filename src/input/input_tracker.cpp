@@ -12,6 +12,13 @@ namespace {
 // message loop, so speech never runs inside the low-level hook callback.
 constexpr UINT WM_DESCRIBE = WM_APP + 1;
 constexpr UINT WM_REREAD   = WM_APP + 2;
+constexpr UINT WM_NAVKEY   = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
+constexpr UINT WM_DIAG     = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
+
+// Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
+// working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
+constexpr bool DIAG_KEYS = false;
+std::atomic<int> g_diagCount{0};
 
 std::atomic<uint64_t> g_lastInputMs{0};
 HHOOK   g_hook = nullptr;
@@ -21,6 +28,15 @@ std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore au
 std::atomic<bool> g_tDown{false};      // edge-detect for the 't' key (ignore auto-repeat)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
+InputTracker::NavKeyCallback g_navKeyCb = nullptr;
+
+// Navigation keys (edge-detected independently so auto-repeat is suppressed).
+constexpr DWORD kNavVks[4] = { VK_OEM_5 /*\*/, VK_OEM_4 /*[*/, VK_OEM_6 /*]*/, VK_OEM_3 /*`*/ };
+std::atomic<bool> g_navDown[4]{};
+int NavIdx(DWORD vk) {
+    for (int i = 0; i < 4; ++i) if (kNavVks[i] == vk) return i;
+    return -1;
+}
 
 bool GameIsForeground() {
     HWND fg = GetForegroundWindow();
@@ -30,6 +46,34 @@ bool GameIsForeground() {
     return pid == GetCurrentProcessId();
 }
 
+// ---- DirectInput keyboard path (primary; fed by the dinput8 proxy) ----------
+// Once the game's GetDeviceState feed is active, it OWNS key dispatch; the LL hook
+// (which the game starves anyway) drops to diagnostics only, so keys never double-fire.
+std::atomic<bool> g_dinputActive{false};
+
+// DIK scan codes (dinput.h) for the mod's keys.
+constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x1B,
+              DIK_GRAVE = 0x29, DIK_BACKSLASH = 0x2B, DIK_LSHIFT = 0x2A, DIK_RSHIFT = 0x36,
+              DIK_MINUS = 0x0C, DIK_EQUALS = 0x0D, DIK_SEMICOLON = 0x27, DIK_APOSTROPHE = 0x28;
+
+// Extra hotkeys beyond the 4 original nav keys: - = ; '  (standalone, no Shift).
+std::atomic<bool> g_extraDown[4]{};
+std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
+
+// Edge-detect one key from the per-frame DIK state and post its action (on the
+// input thread) on the rising edge. `down` is this frame's state.
+void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav, bool shift) {
+    if (down) {
+        if (!downFlag.exchange(true) && GameIsForeground()) {
+            if (isNav)              PostThreadMessageW(g_threadId, WM_NAVKEY, (WPARAM)vk, (LPARAM)(shift ? 1 : 0));
+            else if (vk == 'O')     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
+            else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
+        }
+    } else {
+        downFlag.store(false);
+    }
+}
+
 // Low-level keyboard hook. Runs on the input thread (below) while it pumps
 // messages. MUST stay fast: it only stamps the timestamp and posts a message.
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -37,17 +81,36 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         const KBDLLHOOKSTRUCT* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
             g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
-            if (kb && kb->vkCode == 'O') {   // 'o' = describe (i/j/k/l are alt arrow keys)
-                // Edge-triggered (skip auto-repeat) + only when the game is focused.
-                if (!g_oDown.exchange(true) && GameIsForeground())
-                    PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
-            } else if (kb && kb->vkCode == 'T') {   // 't' = re-read last spoken line
-                if (!g_tDown.exchange(true) && GameIsForeground())
-                    PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
+            if (DIAG_KEYS && kb && g_diagCount.fetch_add(1) < 80) {
+                // Fires FIRST, before any gate — proves the hook sees the key.
+                PostThreadMessageW(g_threadId, WM_DIAG, static_cast<WPARAM>(kb->vkCode),
+                                   static_cast<LPARAM>(GameIsForeground() ? 1 : 0));
+            }
+            // Dispatch via the LL hook ONLY while the DirectInput feed isn't active
+            // (the game starves this hook; DInput is the real path).
+            if (!g_dinputActive.load(std::memory_order_relaxed)) {
+                if (kb && kb->vkCode == 'O') {   // 'o' = describe
+                    if (!g_oDown.exchange(true) && GameIsForeground())
+                        PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
+                } else if (kb && kb->vkCode == 'T') {   // 't' = re-read
+                    if (!g_tDown.exchange(true) && GameIsForeground())
+                        PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
+                } else if (kb) {
+                    int ni = NavIdx(kb->vkCode);        // nav keys: \ [ ] `
+                    if (ni >= 0 && !g_navDown[ni].exchange(true) && GameIsForeground()) {
+                        bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                        PostThreadMessageW(g_threadId, WM_NAVKEY,
+                                           static_cast<WPARAM>(kb->vkCode),
+                                           static_cast<LPARAM>(shift ? 1 : 0));
+                    }
+                }
             }
         } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
-            if (kb && kb->vkCode == 'O') g_oDown.store(false);
-            else if (kb && kb->vkCode == 'T') g_tDown.store(false);
+            if (!g_dinputActive.load(std::memory_order_relaxed) && kb) {
+                if (kb->vkCode == 'O') g_oDown.store(false);
+                else if (kb->vkCode == 'T') g_tDown.store(false);
+                else { int ni = NavIdx(kb->vkCode); if (ni >= 0) g_navDown[ni].store(false); }
+            }
         }
     }
     return CallNextHookEx(g_hook, nCode, wParam, lParam);
@@ -78,6 +141,14 @@ DWORD WINAPI InputThread(LPVOID) {
         } else if (m.message == WM_REREAD) {
             InputTracker::HotkeyCallback cb = g_rereadCb;
             if (cb) cb();
+        } else if (m.message == WM_NAVKEY) {
+            InputTracker::NavKeyCallback cb = g_navKeyCb;
+            if (cb) cb(static_cast<int>(m.wParam), m.lParam != 0);
+        } else if (m.message == WM_DIAG) {
+            char msg[96];
+            snprintf(msg, sizeof(msg), "LL keydown vk=0x%02X fg=%d",
+                     static_cast<unsigned>(m.wParam), static_cast<int>(m.lParam));
+            Log::Write("INPUT-DIAG", msg);
         } else {
             TranslateMessage(&m);
             DispatchMessageW(&m);
@@ -123,6 +194,43 @@ void Shutdown() {
 
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
+void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
+
+void FeedDInputKeyboard(const unsigned char* dik) {
+    if (!dik || !g_threadId) return;
+    if (!g_dinputActive.exchange(true))
+        Log::Write("INPUT", "DirectInput keyboard feed active — hotkeys via the game's own poll");
+
+    // Stamp the "recent input" time on ANY key's rising edge (the menu reader gates
+    // animation false-positives on this) — NOT on every per-frame poll.
+    static unsigned char lastDik[256] = {};
+    bool anyRising = false;
+    for (int i = 0; i < 256; ++i) {
+        if ((dik[i] & 0x80) && !(lastDik[i] & 0x80)) {
+            anyRising = true;
+            // Only [ (0x1A) and ] (0x1B), capped — confirms the game reports the [ key.
+            if (DIAG_KEYS && (i == 0x1A || i == 0x1B) && g_bracketDiag.fetch_add(1) < 20) {
+                char m[32];
+                snprintf(m, sizeof(m), "DIK 0x%02X down (%s)", i, i == 0x1A ? "[" : "]");
+                Log::Write("INPUT-DIAG", m);
+            }
+        }
+        lastDik[i] = dik[i];
+    }
+    if (anyRising) g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
+
+    // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
+    DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false, false);
+    DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false, false);
+    DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true,  false);  // \  describe
+    DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true,  false);  // [  prev object
+    DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true,  false);  // ]  next object
+    DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true,  false);  // `  rescan
+    DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true,  false);  // -  prev category
+    DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true,  false);  // =  next category
+    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  facing
+    DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true,  false);  // '  diagnostic
+}
 
 uint64_t LastInputTimestampMs() {
     return g_lastInputMs.load(std::memory_order_relaxed);

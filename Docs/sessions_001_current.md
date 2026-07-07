@@ -670,3 +670,393 @@ Graphics/Controls value-on-change beyond the `FUN_0017db90` hook.
 GameArchitecture.md once that lands. Commit **f52e4b8** = the core config-value + `o`-key work (7 src files;
 GameArchitecture.md deliberately NOT staged); the Graphics on-change hook (`FUN_0017db90`) is a follow-up commit.
 
+---
+---
+
+# ══════════ NEW SESSION BOUNDARY ══════════
+# Everything ABOVE this line is the Config-menu (Phase-6 menus) work — C++ SHIPPED, commit f52e4b8.
+# Everything BELOW is a SEPARATE session: Phase-4 PATHFINDER reverse-engineering only.
+# No source files were touched and NOTHING was committed below. No overlap in files or scope.
+# ═══════════════════════════════════════════
+
+## Session 20 — 2026-07-07 (PATHFINDER — distinct from the Config-menu session above) — Phase-4 field-navigation RE: gates advanced, leader anchor + walkability located (RE only, NO C++, NO commit)
+
+<!-- Numbered retroactively (was a date-only header = the log-numbering BUG). Chronologically this
+     pathfinder RE session predates the message-text Sessions 17-19 above; it takes number 20 (the
+     next free integer at repair time) rather than reordering the file. Session 21 (M0 C++) is the
+     newest entry, appended at the end. -->
+
+
+**KEYWORDS:** PATHFINDER Phase-4 RE-ONLY (no src change, no commit); planned announce-only nav (movement:
+never auto-move — user chose; G4.5 auto-walk DROPPED), turn-by-turn #1 on keypress, non-interference with
+gambit system by construction (read-only, never invoke CALLACT / never touch task pool), keybinds `\`=crow-
+flies+next-turn, `[`/`]`=destinations, Shift+`[`/`]`=categories; categories FFXII-confirmed only (Exit/NPC/
+Treasure/Save Crystal/Gate Crystal/Enemy/Interactable-FieldSign); EVENT category CONFIRMED-NEGATIVE (no
+enumerable event-position getter; only `seteventwakerect` setter, unlabelable — parked v1.x RE-5).
+**CALLACT action-binding table LOCATED+dumped:** interp FUN_0025e4c0 (0x13E4C0) -> dispatcher FUN_002621d0
+(0x1421D0) sel=idx>>12 slot=idx&0xFFF, enter@+0x08/exec@+0x10/poll@+0x20 stride 0x20 count@+0; reg FUN_003dc2d0
+installs tables at selectors 0/3/5/7 = DAT_01eed700/01f281b0/01f29418/01f29440 (counts 1496/147/1/104);
+DAT_02b57ef0 (0x2A37EF0) runtime-populated (read module tables directly). Ghidra script
+`FFXII-Decompile/ghidra/dump_action_binding_tables.java` (user ran it) -> `output/action_binding_tables.txt`.
+**Action NAMING (Track 1, NON-OPTIONAL, OPEN):** `tools/name_action_slots.py` classifier — handlers are VM glue
+(argfetch FUN_00267e10, value-return FUN_0026b4e0; getters call VALRET; real logic in callees). Behavioral
+anchoring alone TOO NOISY (position-triple false positives); no parallel name table (only FUN_003dc2d0 refs
+tables). FULL naming needs precise `.dbg` action sub-table parse (fix `parse_dbg.py` heuristic) ->
+ordinal<->slot alignment, behavioral anchors as validation. Fingerprints in `notes/action_slot_fingerprints.csv`.
+**RE-1 player pos/facing (struct 0.97):** PPhysicsCharacterControllerBase size 0x130 (Bullet subclass 0x190);
+pos = translation of 4x4 at controller+0xD0 (m_targetWorldMatrix, PWorldMatrix.m_matrix@0) at matrix
++0x30/34/38 (0.97, corroborated by lookAtWorldMatrix); yaw m_rotate@0xE0 (0.55) or matrix basis; manager
+PPhysicsWorld+0x50 list (m_next@0). Reflection registrar FUN_006949a0 (0x5749A0).
+**RE-4 walkability (0.95, verified):** rayTest = **FUN_0083fc70 (0x71FC70)** vtable slot 6, via world vtable
+**+0x30** — CORRECTION: 0x71DE00 is debugDrawWorld NOT rayTest; convexSweepTest 0x71B780; ready-made cast
+**FUN_006a1a70 (0x581A70)** (ClosestRayResultCallback vtable PTR_FUN_00d7ab10, btVector3=16B{x,y,z,pad});
+world = *(context+0x60); built by FUN_006a0310 (0x580310), stepped FUN_0069f070 (0x57F070) slot 0xa0.
+**Physics-world chain-up EXHAUSTED (earned Tier-C):** NO static anchor — up-trace dead-ends at FUN_00698c80
+(0x578C80), zero xrefs in the 1.5M-line corpus (engine-registered cluster callback); only static physics
+global DAT_02e4aff0 (0x2D2AFF0) holds shared dispatcher/broadphase, never a world.
+**LEADER ANCHOR FOUND + VERIFIED (STATIC, >=0.98):** current player-controlled char scene handle =
+**DAT_022c7fe0 (0x21A7FE0)** returned by universal accessor **FUN_003590d0 (0x2390D0)** (~250 callers);
+resolve **FUN_003588b0 (0x2388B0)** = generation-checked handle table -> scene obj -> **+0x30** (FUN_00263e30
+0x143E30) = char component (valid *comp&8); field-active gate **DAT_02089340 & 0x10**; source-of-truth party
+mgr *DAT_02ebf190 (0x2D9F190), leaderIdx byte mgr+0x5aa4, ctrlIdx mgr+0x5ad5; leader-change refresh FUN_00326500
+promotes handle + retargets camera => FIELD leader (not menu). Corollary MASTER KEY: leader->controller+0xD8 =
+PPhysicsWorld (=RE-4 context) -> +0x60 = Bullet world, so ONE anchor closes RE-1 AND RE-4.
+**CORRECTIONS:** camera globals CameraLookAt/PositionPtr (community RVA 0x20955F0/E0) STALE/ABSENT in our build
+(0 occurrences verified) — community RVAs need per-build validation ([[feedback_validate_community_rvas]]).
+**Gate status:** G4.3/G4.6 done; RE-0 done; RE-1/RE-4 STATIC done; G4.1/G4.7/G4.8 offsets derived (Frida-pending);
+G4.5 auto-walk DROPPED. Full detail in `Docs/GameArchitecture.md` "Pathfinder / Field Navigation (Phase 4)"
+section + plan file `~/.claude/plans/start-planning-the-pathfinder-proud-noodle.md`.
+
+**What this session did (all RE / planning; no mod code):** wrote the full pathfinder plan (announce-only,
+turn-by-turn via A* on a Bullet-raycast occupancy grid, DQ7R idiom port); located + verified the CALLACT
+action-binding table and dumped it; built the action-naming classifier; resolved the player-position struct
+chain, the Bullet raycast path, and — per the user's "exhaust static before Frida" doctrine — traced BOTH
+runtime handles to conclusion: the physics world has NO static anchor (earned Tier-C), but the FIELD LEADER
+DOES (DAT_022c7fe0), and it is the master key that also yields the world. Every load-bearing claim was read
+firsthand in the decompile (not taken from subagents).
+
+**═══ PICK-UP POINT for next session (do these, in order) ═══**
+1. **Pin the ONE remaining static hop:** char component (`sceneObj+0x30`) -> its position field. Decompile a
+   leader-position consumer — the camera-follow, or any `FUN_003590d0` caller that reads the character's world
+   matrix — to find `component -> controller` (or a direct matrix on the component), chaining to the confirmed
+   `controller+0xD0 -> matrix+0x30`. That makes the WHOLE leader->position chain static. (In FUN_00317e60 the
+   component's sub-object at `comp+0x80` is passed to FUN_0033c9b0 — a lead to follow.)
+2. **Author the confirmation-only Frida probes** (Claude authors; USER runs — never Claude): 
+   - `confirm_player_pos.js` — read `DAT_022c7fe0` -> FUN_003588b0 -> +0x30 -> walk to position; verify it
+     tracks the on-screen leader while walking N/S/E/W; confirm yaw (m_rotate vs matrix basis). Closes G4.1/G4.7.
+   - `confirm_bullet_ray.js` — from leader->controller+0xD8 = PPhysicsWorld -> +0x60 = world (or hook
+     FUN_006a0310 at map-load); call FUN_006a1a70 for a downward (floor) + wall ray. Closes G4.8.
+   Frida-first / prototype-before-C++; pick Frida OR C++, never both.
+3. **Track 1 (name ALL action slots — NON-OPTIONAL, still open):** do the `.dbg` action-order alignment
+   (fix `parse_dbg.py` sub-table split -> ordered actions per controller; align to native slots via the
+   behavioral anchors) -> `notes/action_slot_names.csv`. Essential targets: `getmapjump*byindex` (exits),
+   `setfieldsign` (labels). Validate >=5 anchors + spot-check >=10 before any use.
+4. **Only after each gate hits 0.98 AND Frida-confirms:** begin `src/navigation` C++ (nav_common ->
+   player_state (leader-anchor backend) -> bullet_query -> entity_* -> occupancy_grid/astar/path_directions ->
+   nav_commands/nav_hooks). Announce-only, on-keypress, non-interfering.
+
+**Hygiene / boundary:** NO src files changed, NO commit this session. New artifacts (all under
+`FFXII-Decompile/`): `ghidra/dump_action_binding_tables.java`, `tools/name_action_slots.py`,
+`output/action_binding_tables.txt`, `notes/action_slot_fingerprints.csv`, `notes/action_slot_anchor_candidates.txt`.
+`Docs/GameArchitecture.md` gained the "Pathfinder / Field Navigation (Phase 4)" section (this is the
+"uncommitted pathfinding work" the config-menu session flagged above — it is now populated but still uncommitted).
+The config-menu session's RVAs remain in ITS KEYWORDS block; folding those into GameArchitecture.md is a
+separate follow-up owned by that work, not this one.
+
+---
+---
+
+# ══════════ NEW SESSION BOUNDARY ══════════
+# Below is a SEPARATE track: MESSAGE/DIALOGUE/PANEL TEXT reverse-engineering. RE + one Frida
+# confirmation probe only. No src files changed, NOTHING committed. No overlap with the pathfinder
+# or config-menu work above.
+# ═══════════════════════════════════════════
+
+## Session 17 — 2026-07-07 — [message-text] Dialogue/panel text RE (decompile-exhausted, ≥0.98) + confirmation probe authored (RE only, NO C++, NO commit)
+
+**KEYWORDS:** DIALOGUE/PANEL TEXT RE (no src change, no commit); goal = read NPC dialogue + in-engine
+cutscene captions + text panels (item/treasure/battle-system/yes-no confirm); **decompile-exhausted first,
+every read-point scored 0–1, anything <0.98 DISCARDED (not probe-deferred)** per user directive; Frida =
+confirmation-only. **Four surfaces, not one.**
+**A. Dialogue = message window e5f0 `DAT_0209e5f0` (0x1F7E5F0, ptr global)** — CERTIFIED primary (all
+openers FUN_0028e660/630/690 → builder FUN_002b9d30 (0x199D30); owns `mini_face_c` portrait); e5c0
+`DAT_0209e5c0` = redundant mode-3 twin (NOT hooked); b47760 `DAT_02b47760` = chrome; NONE is a backlog
+(refutes old text_pipeline_menu_dialogue_spec §5). page = `DAT_0209e5f0 + 0x1B0 + ((*(u16*)(root+0x179d2)>>2)&1)*0xBC10`;
+page proc **FUN_002baf80 (0x19AF80)**; msgId `*(short*)(page+0x138)`. **Body text (0.98):** NO memory-only
+string (body = glyph-node list `page+0xBBC0`); OBSERVE resolver **FUN_003c02b0 (0x2A02B0)** → `*(out+8)`=codec
+body ptr, `*(out+2)&0xff`=speaker attr (no game call). **Speaker name (0.98, memory-only):** nameplate
+**DAT_02b62d78 (0x2962D78, ptr global)** → `*( *( *(DAT_02b62d78+0x60) ) + 0x18 )` = rendered caption
+(draw chain sealed to FUN_002dd680:40→FUN_002b0280).
+**B. Item/treasure/battle-system/yes-no confirm = ONE memory-only buffer:** `DAT_0209ac30 (0x1F7AC30, ptr
+global → &DAT_0209ac60)`; `surface = *(*(DAT_0209ac30)+0x328)`; `text = surface+0x1B0` (0x400-byte codec
+buffer, written once by FUN_00254f30). Trigger: hook **FUN_0057c480 (0x45C480)** msg==1 (read `param_1+0x1B0`);
+classify via cmd `*(*(DAT_0209ac30)+0xdf8)` (0x4b3–0x4bc loot/steal/reward). Producers FUN_002ce370 (item/
+loot/battle-system) / FUN_002cdf20 (confirms) / FUN_00566680 funnel here. Field-chest "obtained X" reuses it (0.90).
+**DISCARD (<0.98 / baked assets):** FMV movie subtitles = movie-embedded glyph runs, NOT codec, not RAM-readable
+(0.88) — the in-game "Subtitles" toggle gates THIS (`DAT_0209be80+0x10f68` bit0xc → FUN_00550510 → overlay
+DAT_02ca8f38); tutorial panels = Handbook images `menuhandbook_tutorialNNN.dat` (0.9); battle multi-line detail
+builder FUN_00293310 family = unresolved .rdata dispatch (header line still captured by B); target-select window
+DAT_0209be80/FUN_00552250 = battle targeting UI (out of scope). Menu help/desc bar (FUN_00291d80 →
+DAT_0209be80+0x8fa0+0x10d0) ALREADY hooked by text_capture.
+**RVA-hygiene:** old notes had RVA typos (spec §4 called FUN_002b3050 "0x18B050"; correct 0x193050) — every RVA
+here recomputed as abs−0x120000 from the FUN name; DAT_0209ac30 confirmed a POINTER global (`002800f0.c:9`
+`DAT_0209ac30=&DAT_0209ac60`), not a struct base. **The old FUN_002b0280-is-just-combat-numbers claim is wrong:
+it is the shared codec rasterizer; but per the no-debounce rule we do NOT hook it (per-frame) — we hook the
+once-per-line semantic points above.**
+
+**What this session did (all RE + one probe; no mod code, no commit):** ran six parallel decompile-only agents
+(singleton disambiguation, dialogue text+speaker chain, panel+subtitle paths, then a second round: e5f0 coverage
+map, memory-only read point + speaker-caption seal, e5c0/FMV/config, then battle+item read point, system+tutorial
+locate, speaker seal). Verified every load-bearing line firsthand (`002b9d30.c`, `0057c480.c`, `002800f0.c`,
+`002baf80.c`). Authored the confirmation-only probe **`frida/probe_message_text.js`** (hooks FUN_003c02b0 +
+FUN_002baf80 + FUN_0057c480; decodes with the game_text codec; console-budget split; page-geometry cross-check;
+emits `\xNN` for unmapped codec bytes to watch the 0x6C–0x83 gap). Full spec archived in
+`FFXII-Decompile/notes/message_text_readpoints_spec.md`; RVAs folded into `Docs/GameArchitecture.md`
+("Message / Dialogue / Panel Text").
+
+**═══ PICK-UP POINT for next session ═══**
+1. **USER runs `probe_message_text.js`** (run_frida.bat auto-lists it) — talk to an NPC, pick up an item/open a
+   chest, trigger a battle system line + a Yes/No confirm. CONFIRM: `[dialog]` shows `"Speaker": "body"`; `[geom]`
+   match=true; `[panel]` decodes item/battle/confirm text; note any `\xNN` unmapped codec bytes. Report the log.
+2. **Only after the probe confirms + explicit go-ahead:** port Phase C → new `src/ui/message_reader.{cpp,h}`
+   (hooks 1–3; edge-trigger on msgId / surface-birth — NOT a debounce; auto-speak interrupt + `r`=re-read-last;
+   reuse GameText::Decode/Hooks/Speech; wire into DeferredInitImpl after MenuReader::Init). Plan file:
+   `~/.claude/plans/before-we-pick-back-sparkling-quokka.md`.
+
+**Hygiene / boundary:** NO src files changed, NO commit this session. New artifacts (all under
+`FFXII-Decompile/`): `frida/probe_message_text.js`, `notes/message_text_readpoints_spec.md`. `Docs/GameArchitecture.md`
+gained the "Message / Dialogue / Panel Text" section (still uncommitted, alongside the pre-existing uncommitted
+pathfinder section).
+
+---
+
+## Session 18 — 2026-07-07 — [message-text] Dialogue + message-panel reader SHIPPED in C++ (straight-to-C++ exception; builds + deploys)
+
+**KEYWORDS:** MESSAGE-TEXT C++ SHIPPED (built + deployed, NOT yet play-tested); **user-authorized exception to
+Frida-first** (dialogue + pathfinding mutually block isolated testing → validate together in an integrated
+new-game playthrough; probe_message_text.js kept as optional aid only). New module **`src/ui/message_reader.{cpp,h}`**
++ shared **`src/core/mem_read.h`** (SEH read helpers extracted from menu_reader, now used by both — menu_reader's
+`FUN_00241d40` confirm path untouched). Three hooks (all via Hooks::InstallTyped, edge-triggered = state tracking
+NOT debounce): **FUN_003c02b0 (0x2A02B0)** observe → cache body ptr `out+8` + attr `out+2` by msgId; **FUN_002baf80
+(0x19AF80)** page proc → on `page+0x138` msgId edge (per-page map) speak cached body prefixed with speaker;
+**FUN_0057c480 (0x45C480)** panel → case1 read `surface+0x1B0`. **Speaker** = nameplate **DAT_02b62d78 (0x2962D78,
+ptr global)** `*(*(*(np+0x60))+0x18)`, gated on visibility `(*(u32*)(np+0x40) & 0x405)==5` so a stale name is never
+spoken (best-effort; tune the flag if play-test shows missing/wrong speakers). **Panel classify gate (directive 2/3):**
+`surface[0x636]`=choice count, `surface[0x630]&0x8`=passive flag → count==0 && passive = INFO (item/treasure/battle-
+system) AUTO-SPOKEN; count!=0 = yes/no confirm (FUN_002cdf20) / multi-choice (FUN_00566680) = **preserved read-point,
+classified + logged, but MUTED** (`kSpeakSurfaceConfirms=false`). This surface's confirms are a DIFFERENT class than the
+already-working title/new-game confirms (`FUN_00241d40`, distinct obj[0], never alias) — so muting = no regression, no
+double-speak, and the read-point is saved per user request in case in-game pop-ups use this path. **`r` = re-read last
+line** (new InputTracker WM_REREAD + SetRereadCallback, mirrors the `o` path; edge-detected 'R'). Auto-speak
+interrupt=true; last line stashed under a mutex (game thread writes, input thread reads). All reads memory-only +
+SEH-guarded; only the dialogue body uses observe (no game calls). Wired into DeferredInitImpl after MenuReader::Init;
+added to CMakeLists. **Build + deploy CLEAN** (only the 4 touched files recompiled). No commit (user hasn't asked).
+
+**OUT OF SCOPE (proven unreadable, documented):** FMV movie subtitles (movie-embedded glyph runs; the "Subtitles"
+toggle gates these — in-engine captions ARE covered via e5f0); tutorial panel bodies (Handbook IMAGES
+`menuhandbook_tutorialNNN.dat` — bodies byte-identical across 9 langs = fixed-canvas textures; no text bank exists;
+OCR-only). Readable-later (not this push): Handbook category titles / Clan-Primer labels via st2e.
+
+**═══ PICK-UP / TEST POINT ═══**
+1. **Integrated new-game play-test** (dialogue + pathfinding together): NPC dialogue + in-engine cutscene captions
+   speak with speaker as they advance; `r` repeats last line; item pickup / opened chest + a battle system line speak
+   (INFO); title/new-game yes/no still behaves as before (no double-speak). Check
+   `x64\FFXII-Screen-Reader-Latest.log` MSGTEXT lines: per-line reads; muted-confirm surfaces logged-with-class but
+   silent; watch for `\x`-style unmapped codec bytes (→ extend game_text 0x6C–0x83) and any wrong/stale speaker
+   (→ tune the +0x40 visibility gate).
+2. After play-test confirms: mark `Docs/plan.md` Phase-5 dialogue items complete; commit; consider enabling the
+   muted confirm path if an in-game pop-up on the FUN_0057c480 surface is found uncovered.
+
+**Hygiene:** New/changed src: `src/ui/message_reader.{cpp,h}` (new), `src/core/mem_read.h` (new),
+`src/ui/menu_reader.cpp` (helpers → mem_read.h), `src/input/input_tracker.{cpp,h}` (`r` key), `src/proxy/dllmain.cpp`
+(init wiring), `CMakeLists.txt`. RE artifacts (from Session 17, under FFXII-Decompile): `frida/probe_message_text.js`,
+`notes/message_text_readpoints_spec.md`. No commit this session.
+
+---
+
+## Session 19 — 2026-07-07 — [message-text] Play-test: tutorial TELOP surface found + hooked + CONFIRMED reading; r→t; diagnostics (COMMITTED)
+
+**KEYWORDS:** play-test of the Session-18 C++ reader. **Findings from the mod log** (all 3 message hooks installed
+cleanly, menus read fine, ZERO message reads at the first interactive screen): the opening is FMV (movie-subtitle
+path, not RAM-readable, expected silent) and the first on-screen text is a guided-TUTORIAL banner ("TUTORIAL / Try
+using [↑←↓→] to adjust the viewing angle") that is a THIRD surface my dialogue/panel hooks don't cover.
+**Fixes this session:**
+1. **Re-read key `r` → `t`** — `r` collides with a game function; our repeat-last-text key moved to `t`
+   (`input_tracker.cpp` vkCode 'R'→'T', `g_rDown`→`g_tDown`). (User: this was a key-conflict fix, NOT movement.)
+2. **File-only diagnostics** in `message_reader.cpp`: first-fire markers per hook (`diag: resolver/… fired`) + a
+   per-line `diag: dlg page line msgId=… havePending=…` trace, so the log shows which surfaces fire vs. capture misses.
+3. **TUTORIAL/TELOP surface located + hooked (the guided-tutorial banner):** it's the game's on-screen "telop"
+   overlay, **`FUN_002e16b0(ctx, slot, textPtr, _)` (RVA 0x1C16B0)** — `param_3` = full `HEADER\x02BODY` codec
+   string (0x02→newline), once per set/clear. Content chain: `FUN_002e16b0`→`FUN_002a35b0`(0x1835b0)→
+   `FUN_002a3250`(0x183250, splits caption/body); header ptr `DAT_0209c988` (0x1F7C988); fed by script display
+   natives `FUN_00348df0`/`FUN_0034ada0`/`FUN_0050eab0`. **Confirmed DISTINCT** from e5f0 dialogue, `FUN_0057c480`
+   panel, help-bar `FUN_00291d80`, and the Handbook image viewer. Host chain ~0.97; "prologue banner routes here"
+   was ~0.85 offline → **the live play-test CONFIRMED it: the tutorial banner now vocalizes ("works perfectly").**
+   Hooked in `message_reader` (RVA_TELOP), decode+speak, first-fire diag.
+   **Known follow-up:** button-icon inserts (0x0f escapes = the ↑←↓→ glyphs) decode to nothing, so key/button
+   names are dropped for now ("Try using to adjust…") — map the 0x0f button selectors → names next.
+**Still pending fuller test** (needs movement, which is the PATHFINDER track's job, deferred by user): NPC dialogue
+body + item/battle panels — hooks installed + diagnostic-instrumented; will confirm when gameplay is reachable.
+
+**Sequencing (user):** text panels vocalizing first (tutorial ✓; dialogue/panels instrumented) → THEN pathfinding
++ player movement.
+
+**Commit:** src only — `src/core/mem_read.h`, `src/ui/message_reader.{cpp,h}` (new), `src/ui/menu_reader.cpp`,
+`src/input/input_tracker.{cpp,h}`, `src/proxy/dllmain.cpp`, `CMakeLists.txt`. **`Docs/GameArchitecture.md` +
+`Docs/sessions_001_current.md` deliberately NOT staged** — they also hold the pathfinder track's uncommitted RE
+sections (per the no-cross-track-commit rule); they'll be committed with/after the pathfinder work. RE artifacts
+(FFXII-Decompile) are a separate archive, not this repo.
+
+
+---
+---
+
+# ══════════ NEW SESSION BOUNDARY ══════════
+# PATHFINDER track resumes (continues Session 20). This is the first C++ for field navigation.
+# Straight-to-C++ exception, user-approved. src/navigation created; NOT committed this session.
+# ═══════════════════════════════════════════
+
+## Session 21 — 2026-07-07 — [PATHFINDER] Phase-4 M0: straight-to-C++ leader/physics chain self-diagnostic SHIPPED (builds + deploys, uncommitted); RVA correction; announce-only nav scaffolding
+
+**KEYWORDS:** PATHFINDER M0 STRAIGHT-TO-C++ (user override of Frida-first, session-18-style — chosen via
+AskUserQuestion; risk acknowledged); `src/navigation/` created = `navigation.{h,cpp}` (module entry + M0 dump),
+`player_state.{h,cpp}` (leader chain), `bullet_query.{h,cpp}` (rayTest wrapper), `nav_hooks.{h,cpp}` (ctx
+capture), `nav_rva.h` (all confirmed RVAs/offsets), `nav_types.h` (FVec3). Announce-only, event-driven,
+SEH-guarded, NO gambit/action hooks. **M0 = read-only logged self-diagnostic on the `\` key** — bakes the
+Frida-confirm the user skipped INTO the mod (mod log is a sanctioned read) so unconfirmed offsets + the
+runtime-only world ptr are pinned in-game before any behavior builds on them.
+**RVA CORRECTION (caught during impl):** field-active gate `DAT_02089340` → RVA **`0x1F69340`** (abs−0x120000);
+the pathfinder plan table listed `0x2089340` un-converted. Handle-table base `DAT_02098e10` → RVA `0x1F78E10`.
+**Leader resolve replicated INLINE (memory-only)** from `FUN_003588b0`+`FUN_00263ff0` (no game-fn call): handle
+is a **uint** (sel=`>>0x10&0xf`<5, slot=`&0xFFFF`, gen=`>>0x14&0x7FF`); table=base+sel*0x288; entries@+0x08,
+active@+0x10&1, cap@+0x20; obj=`*(entries+0x08+slot*8)`; gen check `*(u16)(obj+0x16)`; component=`*(sceneObj+0x30)`
+valid `*comp&8`. Game consumer = `FUN_00317e60` — ⚠️ it does `*comp|=0x100000000` (a WRITE) which we do NOT copy.
+**ctx capture:** hook `FUN_006a0310` caches RCX (physics ctx) → `BulletQuery`; `FUN_006a1a70(ctx,from,to,out8,0xF)`
+reads world at `ctx+0x60`, guarded before every call. Infra: `mem_read.h` +`SafeReadF32`/`SafeReadU64`;
+`input_tracker` +`NavKeyCallback`(vk,shift) + edge-detected `\ [ ] ` ` (VK_OEM_5/4/6/3) + Shift via GetAsyncKeyState
+(observe/passthrough, no swallow yet); `dllmain` wires `Navigation::Init/Shutdown`; `CMakeLists` +4 sources.
+
+**What this session did:** wrote + built + deployed M0 (clean compile, all 4 nav sources link into `dinput8.dll`;
+deployed via build_and_deploy.bat). Read firsthand the load-bearing decompiles: `FUN_00317e60` (leader→component
+chain + field-active gate + the write-to-avoid), `FUN_003588b0`/`FUN_00263ff0` (handle table), `FUN_00263e30`
+(sceneObj+0x30), `FUN_006a1a70` (ray wrapper ABI + null-world garbage-return), `FUN_006a0310` (world builder /
+ctx), `FUN_0033c9b0` (comp+0x80 is a transform CONSTRUCTOR, not a getter — so component→controller is genuinely
+unpinned, which is exactly what M0 discovers). `PlayerState::ReadPlayerPos/ReadPlayerYaw` intentionally return
+false until M0's log pins the offset. GameArchitecture.md gained an "M0 self-diagnostic" subsection + the RVA
+correction.
+
+**═══ PICK-UP POINT (do these, in order) ═══**
+1. **USER runs the in-game M0 test:** load a save on a field map (e.g. Rabanastre); press **`\`** (backslash).
+   Speech confirms state ("Nav dump logged, world ready" / "No field" / "No leader"). Then walk a few steps
+   N, press `\`; walk E, press `\`; etc. (5–6 dumps while moving).
+2. **CLAUDE reads the log** `FFXII-Screen-Reader-Latest.log` (tag `NAV-DIAG`) and pins:
+   (a) handle/sceneObj/component resolve non-null + `valid=1`; (b) the CONTROLLER — a `CAND ... +D8 ==CTX` line
+   (definitive) and/or a `COORD` line whose `m(30/34/38)` floats track the on-screen movement between dumps;
+   (c) yaw — `+E0yaw` vs the matrix basis (dump shows both). Diff dumps to confirm which floats are position.
+3. **Record** the pinned `component→controller` offset + position/yaw offsets in `GameArchitecture.md`; implement
+   `PlayerState::ReadPlayerPos/ReadPlayerYaw`; flip **G4.1/G4.7/G4.8** to confirmed. → then **M1 (compass/facing)**:
+   port `nav_common` math, wire the facing key + `\`'s crow-flies half.
+
+**Hygiene / boundary:** NOTHING committed this session. New/changed (uncommitted): `src/navigation/*` (7 files),
+`src/core/mem_read.h`, `src/input/input_tracker.{h,cpp}`, `src/proxy/dllmain.cpp`, `CMakeLists.txt`,
+`Docs/GameArchitecture.md`, `Docs/sessions_001_current.md`. No cross-track files touched. The message-text track's
+prior uncommitted doc sections remain untouched.
+
+---
+---
+
+## Session 22 — 2026-07-07 — [PATHFINDER] Full announce-only field-nav SHIPPED in C++ (master-data labels, meters-calibrated); deployed, one confirmation pass pending
+
+**KEYWORDS:** PATHFINDER Phase-4 FULL C++ (decompile-exhausted first per user, THEN port, runtime=confirm only).
+`src/navigation/` complete: `nav_common` (cardinal 8-pt compass on X/Z + egocentric-optional + steps/elevation),
+`player_state` (pos `sceneObj+0xB8`, yaw matrix-fwd `comp+0x100`), `entity_list`/`entity_scan` (walks actor pool
+`DAT_0208e688` stride 0xF50 count `DAT_0208e6a0`; per-actor pos +0xE0/E4/E8, yaw +0x160, def=*(+0x698),
+kind=*(def+5), id=*(u16)(def+4)), `nav_commands`, `nav_hooks` (ctx capture on `FUN_006a0310`), `bullet_query`
+(`FUN_006a1a70` + `HorizontalClear`), `path_directions`, `nav_rva.h`, `nav_types.h`. Hotkeys: `\`=describe
+(name+cardinal bearing+distance +obstacle hint), Shift+`\`=facing, `[`/`]`=cycle nearest-first, Shift+`[`/`]`=category,
+`` ` ``=rescan+area, Shift+`` ` ``=diagnostic.
+**MASTER DATA (offline, all maps, no per-map dumps — DQ7R model, per user):** object NAME = the game's own
+localized text via `ctx=FUN_0035d380(1, defId)` (RVA 0x23D380) -> name codec* at `ctx+0x08` (NPC) / `ctx+0x10`
+(gimmick) -> `GameText::Decode`. Classifier = npcdic def id (def 469=Save Crystal, 466=Gate Crystal, 435-465=31
+area gate crystals, 434=Treasure). Area name = `FUN_003778b0()` (RVA 0x2578B0, current-area, no arg) -> decode.
+`FUN_002f9860` (0x1D9860) is the bank resolver used internally. Empty sentinel `DAT_01ceb638` (RVA 0x1BCB638).
+`mapjumpgroup*` are FLAG tables NOT exits (corrected); walking-exit dest names need per-map EBP (deferred).
+**WORLD SCALE (offline, definitive): METERS.** Bullet default gravity -10 (`FUN_00854980`), char controller defaults
+(`FUN_00690fc0` RVA 0x570FC0): m_height 0.8 + m_radius 0.6 => ~2 m humanoid, jump 1.5, self-grav -19.6, collision
+margin 0.04. => units-per-step 0.75, grid cell ~0.5. (Caught + fixed a 30.0 placeholder = 40x off.)
+**LAYER 3 = SAFE obstacle guidance (not full A*):** `\` casts <=5 rays toward the selection -> "Path clear" /
+"Blocked, bear <cardinal>". Full A* occupancy grid deferred (thousands of rays would race the physics step;
+needs game-thread execution) -- `path_directions` (leg aggregation) already built for it.
+
+**What this session did:** exhausted the decompile FIRST (6 deep RE passes: position/yaw static chain, actor-pool
+enumeration, Track-1 API RVAs via `slot=mapctrl.dbg_idx-5140`, master-data classification+names, and world-unit
+scale), THEN ported the full announce-only nav to C++. RVA correction carried from M0: field-active `DAT_02089340`
+= RVA 0x1F69340. Handle resolve replicated inline memory-only (`FUN_003588b0`+`FUN_00263ff0`). Reused
+`GameText::Decode` + the `FUN_002f9860` resolver `text_capture.cpp` already calls. Builds clean; deployed via
+build_and_deploy.bat (game closed). Localization: game text auto-localizes (live resolver); the mod's own words
+(compass/"steps"/"Facing") are English literals for now (English tester) -- FFXII TZA does ship ~11 text locales
+(per-locale npcdic sizes differ); the new-game EN/JP toggle is VOICE, not text.
+
+**═══ PICK-UP / one confirmation pass (USER runs; fresh tutorial restart) ═══**
+1. Start a NEW game (fresh map load fires the `FUN_006a0310` ctx hook so obstacle rays have a world).
+2. Nav keys: `` ` `` -> "<area>. N objects"; `[`/`]` cycle -> hear names + bearing + distance; `\` -> re-describe +
+   obstacle hint; Shift+`\` -> facing. `Shift+`` ` `` -> diagnostic dump to log.
+3. CLAUDE reads `FFXII-Screen-Reader-Latest.log` (tag NAV-DIAG): confirm (a) `def 469 "Save Crystal"` resolves live
+   (verifies the def+4->objid hop), (b) the compass matches N/E/S/W facing + yaw sign vs `FUN_004686d0`, (c)
+   raw coords make 0.75 m/step feel right (tune if not). Then flip G4.1/G4.7/G4.8/G4.4.
+4. Follow-ups: full A* turn-by-turn (game-thread grid), walking-exit destination names (per-map EBP), egocentric
+   direction mode, mod-word phrasebook if non-English support wanted.
+
+**Hygiene:** uncommitted. New: `src/navigation/*` (16 files) + edits to `src/core/mem_read.h`,
+`src/input/input_tracker.{h,cpp}`, `src/proxy/dllmain.cpp`, `CMakeLists.txt`, `Docs/GameArchitecture.md`,
+`Docs/sessions_001_current.md`, plan `~/.claude/plans/find-our-last-pathfinding-composed-pinwheel.md`. No
+cross-track files. RE artifacts stay in the FFXII-Decompile archive.
+
+---
+---
+
+## Session 23 — 2026-07-07 — [PATHFINDER] Input hijack SOLVED (DirectInput GetDeviceState) + hotkeys working; pathfinder partially up; 2 known bugs logged; COMMITTED
+
+**KEYWORDS:** PATHFINDER input-capture fix. FFXII acquires the keyboard via **DirectInput (exclusive)**,
+which installs a swallowing low-level hook that starves OS-level keyboard hooks (WH_KEYBOARD_LL) AND NVDA's
+own commands — mod hotkeys were 100% dead (probe caught only Tab/Space leaking). **SOLUTION (works):** ride the
+game's OWN input path — the dinput8 proxy patches `IDirectInput8::CreateDevice` (vtable idx 3) to identify the
+keyboard device and patch `IDirectInputDevice8::GetDeviceState` (vtable idx 9); each frame we read the same
+256-byte DIK scan-code buffer the game just polled and feed `InputTracker::FeedDInputKeyboard` (DIK 0x18=o,
+0x14=t, 0x1A=[, 0x1B=], 0x2B=\, 0x29=`, 0x0C=-, 0x0D==, 0x27=;, 0x28=', 0x2A/0x36=shift). Exclusivity now
+irrelevant; game behavior unchanged. Reverted an earlier attempt to FORCE the keyboard non-exclusive (didn't
+work + would alter game behavior). LL hook kept for the recent-input timestamp only (gated off once DInput feed
+active, via `g_dinputActive`).
+**KEY SCHEME (all STANDALONE — no Shift, because game binds Left Shift = Toggle Walk/Run):** `\`=describe,
+`[`=prev object, `]`=next object, `-`=prev category, `=`=next category, `` ` ``=rescan+area, `;`=facing,
+`'`=diagnostic dump. All confirmed working in-game. (`[`'s earlier "not working" was transient stale-state from
+the LL-hook-only builds; the DIK log confirms the game reports 0x1A fine.)
+**FULL game keybindings captured -> `Docs/Controls.md`** (WASD move, arrows camera, IJKL/numpad cursor, Space/
+Enter confirm, C cancel, F battle menu, R party menu, 1/2/3 speed/lockon/target, Left Ctrl escape, Esc pause,
+M map, F1-3 game speed, Left Shift walk/run). NONE conflict with the mod's keys.
+**Pathfinder status: PARTIALLY WORKING.** Position read, actor-pool enumeration, crow-flies bearing+distance,
+and the obstacle hint all function (`rescan: 2 field objects`; spoken "N steps <dir>"). Two bugs remain.
+
+**═══ KNOWN BUGS (fix next session) ═══**
+1. **Compass N/S axis FLIPPED.** Walking NORTH toward an object is spoken as SOUTH (distance decreases
+   correctly as you approach — so `hypotf` is right — but the cardinal LABEL is inverted on N/S; E/W apparently
+   OK). Root: the Z-axis sign in the bearing convention. `nav_common::BearingDeg` uses `atan2(dx, dz)` with
+   +Z=North; FFXII's north is the opposite Z sense. **Fix: negate dz (and `fwd.z` for facing) in `BearingDeg`
+   + `CardinalOfHeading`** (`nav_common.cpp`); re-verify E/W against the minimap. Affects crow-flies, `;`
+   facing, egocentric.
+2. **Object NAMES all resolve to "Object" (resolver failing) -> so classification also fails.**
+   `ResolveObjectName` (`FUN_0035d380(1, defId)` -> ctx+0x08 (NPC) / ctx+0x10 (gimmick) -> `GameText::Decode`)
+   returns empty, so `entity_list` falls back to the `CategoryWord` "Object", and `ClassifyByName` (keyword on
+   the resolved name) can't categorize. Likely the **MEDIUM-confidence hop**: `*(u16)(actor.def+0x4)` may not be
+   the objid `FUN_0035d380` expects (category-nibbled objid vs raw npcdic index — flagged by the name-recipe RE
+   agent), or the ctx+0x08/0x10 field / type param is off. **Fix: on a field map WITH the 2 objects present,
+   press `'` (entity diag) to log their def ids + kinds, then match to npcdic / re-trace `FUN_0035d380` to
+   correct the objid mapping.** (The `'` dump captured this session was pressed too early — 0 objects, pos
+   unavailable — so no def ids were recorded.)
+
+**Files this session:** `src/proxy/dinput8_proxy.cpp` (CreateDevice + GetDeviceState vtable hooks),
+`src/input/input_tracker.{h,cpp}` (`FeedDInputKeyboard`, DIK dispatch, standalone keys, diag OFF),
+`src/navigation/nav_commands.{h,cpp}` + `navigation.cpp` (new key map), `Docs/Controls.md` (new). Plus the full
+Session-20/21/22 pathfinder src (all navigation modules) — first pathfinder COMMIT.
+**Pickup:** (1) `'` diag on a populated field -> def ids; (2) fix name resolver (objid mapping); (3) fix compass
+N/S (negate Z); (4) then full A* turn-by-turn (game-thread grid).

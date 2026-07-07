@@ -51,6 +51,20 @@ inline bool SafeReadU32(void* base, uint32_t off, uint32_t* out) {
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+inline bool SafeReadU64(void* base, uint32_t off, uint64_t* out) {
+    if (!base) return false;
+    __try { *out = *reinterpret_cast<uint64_t*>(reinterpret_cast<char*>(base) + off); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// Read a 32-bit float at base+off. Used by the navigation module for the player
+// world-matrix translation (matrix+0x30/0x34/0x38) and yaw fields — all floats.
+inline bool SafeReadF32(void* base, uint32_t off, float* out) {
+    if (!base) return false;
+    __try { *out = *reinterpret_cast<float*>(reinterpret_cast<char*>(base) + off); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 // Read an int at address `p` (no offset). Returns false on fault.
 inline bool SafeReadInt(void* p, int* out) {
     if (!p) return false;
