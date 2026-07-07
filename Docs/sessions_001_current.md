@@ -622,3 +622,51 @@ whether it routes elsewhere (no `0x8000` was observed on toggle).
 but inert on this menu, harmless — decodes nothing so speaks nothing, no wrong speech). Stopped here for the
 day at user request. Plan file: `~/.claude/plans/status-check-the-session-eventual-clover.md`.
 
+## Session — 2026-07-07 — Config-menu VALUES + `o`-key tooltips SHIPPED (offline controller ID was WRONG; the probe caught it)
+
+**KEYWORDS:** config values WORKING, new-game/config controller = **FUN_0023fbe0 (0x11FBE0)** NOT FUN_0023ce10,
+offline-0.98-was-wrong-probe-corrected-it, row array `ctrl+0xE8` stride 0x18, focus index = 0x8000 val,
+value-row classes by FUN_0023ed80 type switch: enum FUN_0023e770(1/2/8)/FUN_0023d6b0(3), slider FUN_0023ebe0(6);
+highlighted-option label at `child+0x18` (children `*(row+0x60)`, base `row+0xd0`, sel bit `child+8&1`);
+E770 sel index `row+0xd0`, cells inline `row+0xd8+i*8`, label `*(*(*(cell+0x60)+8)+0x18)`; slider gauge
+`*(*(row+0x60))+0x18` val / `+0x1c` max -> number (% if range>100); Graphics ctrl **FUN_0023bd40 (0x11BD40)**
+rows `+0x4E0`, value rows FUN_0023b330(slider)/FUN_0023b6f0(enum, fmt buf `row+0xCC`); Controls ctrl
+**FUN_0023ce10 (0x11CE10)** rows `+0xD8`, key-binding rows FUN_0023c5c0 (0x11C5C0) — VALUES DEFERRED;
+on-change: main FUN_00240750 (0x120750), Graphics FUN_0017db90 (0x5DB90); tooltip FUN_00291d80 (0x171D80);
+`o` key describe; WH_KEYBOARD_LL was DEAD (init thread exits + no msg loop) -> dedicated msg-loop thread;
+1-frame settle defer; IsActiveConfig via DAT_0208e6d8 (0x1F6E6D8)/DAT_0208e6d0 (0x1F6E6D0); codec 0xa4='+';
+startup announce now log-only; commit f52e4b8.
+
+Solved the 2026-07-04 blocker (settings values). Did the RE **offline first** per house rules, then confirmed
+with **one Frida probe** (`frida/probe_newgame_config.js`) — and the probe **corrected a wrong offline
+conclusion**: agents had "definitively (0.98)" identified the controller as `FUN_0023ce10` because it's the sole
+builder of `FUN_0023db40`; the probe's `[paint]` line showed the live controller is **`FUN_0023fbe0`** (its
+value rows are `FUN_0023e770/d6b0`, not db40). Lesson: even a high-confidence offline ID of a script-opened
+menu must be probe-confirmed. `FUN_0023ce10`/`FUN_0023db40` turned out to be the **Controls** sub-screen, and
+`FUN_0023bd40` the **Graphics** sub-screen (both reached from `FUN_0023fbe0`'s 0x8001 cases 0x21/0x20).
+
+**Shipped (all memory-only reads + universal-write hooks; no game-function calls, no menu-specific interception):**
+- **Values on focus** for enums (On/Off, Normal/Inverted, x2/x4, English…), audio + Graphics **sliders as
+  numbers**, and Graphics enums (GPU name, "1920 x 1080", "MSAA 4x"…). Dispatched by row `obj[0]` class.
+- **Values on change:** main screen via `FUN_00240750` (new value from arg), Graphics via `FUN_0017db90`
+  (marks the row; announced on the next settled paint, since the display buffer refreshes on draw).
+- **`o`-key tooltip** — reads the focused item's help/description captured from `FUN_00291d80`, gated to the
+  current focus generation so a stale description is never spoken. Key is `o` (i/j/k/l are alt arrows).
+- **Fixes found along the way:** the `WH_KEYBOARD_LL` hook had never fired (installed on the short-lived init
+  thread with no message loop) — moved to a dedicated message-loop thread, which also revived the input gate;
+  codec `0xa4` -> `+` (New Game+); startup "loaded" announcement muted to log-only.
+- **Safety (per user):** value reads are gated to the ACTIVE menu instance (`IsActiveConfig`, DAT_0208e6d8/d0)
+  so a closed/freed menu's widgets are never dereferenced; a 1-frame settle defer (speak config focus on the
+  next paint) fixes occasional missed reads on fast scroll.
+
+**Deferred (named in commit):** Controls **key-binding values** — the bound-key NAME isn't stored on the row
+(only key codes at `row+0xd0+col*4`; the game resolves the name transiently during draw via
+`FUN_001e0b00`->`FUN_002f9860`). A memory-only read needs widget-tree tracing to the binding cell's leaf; NOT
+done via game calls (user: function like other menus, no main-thread calls) nor a Controls-specific draw hook.
+Graphics/Controls value-on-change beyond the `FUN_0017db90` hook.
+
+**Docs note:** config-menu RVAs/offsets are recorded HERE (this KEYWORDS block) rather than
+`Docs/GameArchitecture.md`, which currently holds uncommitted pathfinding (Phase-4) work — fold them into
+GameArchitecture.md once that lands. Commit **f52e4b8** = the core config-value + `o`-key work (7 src files;
+GameArchitecture.md deliberately NOT staged); the Graphics on-change hook (`FUN_0017db90`) is a follow-up commit.
+

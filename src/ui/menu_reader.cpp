@@ -51,6 +51,8 @@ constexpr uint32_t OFF_CTRL_ROWARR_CTL = 0xD8;  // FUN_0023ce10 row array
 constexpr uint32_t RVA_INST_FBE0 = 0x1F6E6D8;   // DAT_0208e6d8 — active FUN_0023fbe0 instance
 constexpr uint32_t RVA_INST_CE10 = 0x1F6E6D0;   // DAT_0208e6d0 — active FUN_0023ce10 instance
 constexpr uint32_t RVA_STORE_WRITE = 0x120750;  // FUN_00240750(configId, &newValue) — config-store change
+constexpr uint32_t RVA_GFX_WRITE   = 0x5DB90;   // FUN_0017db90(configId, curVal, dir) -> newVal — Graphics change
+constexpr uint32_t OFF_GFX_ROW_CFGID = 0xC0;    // Graphics value row -> config id (int)
 
 constexpr uint32_t OFF_POPUP_BODY  = 0x1B0;   // confirm window -> inline codec body prompt
 constexpr uint32_t OFF_CTRL_ROWARR = 0xE8;    // controller -> row widget at ctrl+0xE8 + N*0x18
@@ -73,12 +75,17 @@ Pfn_Dispatch s_origDispatch = nullptr;
 typedef void (*Pfn_StoreWrite)(uintptr_t, void*);   // FUN_00240750(configId, &newDisplayIdx)
 Pfn_StoreWrite s_origStoreWrite = nullptr;
 
+typedef uint32_t (*Pfn_GfxWrite)(uint32_t, uint32_t, uint32_t);  // FUN_0017db90(configId, curVal, dir)
+Pfn_GfxWrite s_origGfxWrite = nullptr;
+
 std::mutex g_mutex;
 void* g_lastOwner = nullptr;
 int   g_lastIndex = -1;
 std::wstring g_lastText;
 void* g_pendingOwner = nullptr;   // focus whose text wasn't painted yet (menu-entry replay)
 int   g_pendingIndex = -1;
+void* g_valueChangeOwner = nullptr;   // Graphics value change awaiting a settled paint to announce
+int   g_valueChangeIndex = -1;
 bool  g_initialized = false;
 
 void LogLine(const char* prefix, const std::wstring& text) {
@@ -406,17 +413,40 @@ void OnFocus(void* owner, int index, bool fromPaint) {
 // Fired right after the painter fills an owner's item map — replay a menu-entry
 // focus whose text wasn't ready yet.
 void OnMenuPainted(void* owner) {
+    // Focus-pending replay (deferred focus speech, incl. the 1-frame settle).
     void* pend; int idx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         pend = g_pendingOwner; idx = g_pendingIndex;
     }
-    if (owner != pend || idx < 0) return;
+    if (owner == pend && idx >= 0) {
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_pendingOwner = nullptr; g_pendingIndex = -1;
+        }
+        OnFocus(owner, idx, /*fromPaint=*/true);
+    }
+
+    // Graphics value-change replay: announce just the new value once the row's display
+    // text has settled on this draw (FUN_0017db90 marked the change).
+    void* vcOwner; int vcIdx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        g_pendingOwner = nullptr; g_pendingIndex = -1;
+        vcOwner = g_valueChangeOwner; vcIdx = g_valueChangeIndex;
     }
-    OnFocus(owner, idx, /*fromPaint=*/true);
+    if (owner == vcOwner && vcIdx >= 0) {
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_valueChangeOwner = nullptr; g_valueChangeIndex = -1;
+        }
+        if (IsActiveConfig(owner)) {
+            std::wstring val = ConfigRowValue(ConfigRowWidget(owner, vcIdx));
+            if (!val.empty()) {
+                LogLine("  value: ", val);
+                Speech::Output(val, /*interrupt=*/true);
+            }
+        }
+    }
 }
 
 uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
@@ -468,6 +498,32 @@ void HookedStoreWrite(uintptr_t configId, void* pIdx) {
     if (s_origStoreWrite) s_origStoreWrite(configId, pIdx);
 }
 
+// FUN_0017db90(configId, curVal, dir): the Graphics subsystem's value setter, called on
+// left/right in FUN_0023b330/b6f0. The row's display text only refreshes on the next
+// draw, so we mark the change (gated to the focused Graphics row's config id) and
+// announce it from OnMenuPainted once it has settled.
+uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
+    uint32_t newVal = s_origGfxWrite ? s_origGfxWrite(configId, curVal, dir) : 0;
+    void* owner; int idx;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        owner = g_lastOwner;
+        idx   = g_lastIndex;
+    }
+    if (idx >= 0 && IsActiveConfig(owner) && Obj0(owner) == Hooks::ResolveRva(RVA_GFX_CTRL)) {
+        void* row = ConfigRowWidget(owner, idx);
+        int rowCfg = -1;
+        if (IsConfigValueRow(row) &&
+            SafeReadInt(reinterpret_cast<char*>(row) + OFF_GFX_ROW_CFGID, &rowCfg) &&
+            rowCfg == static_cast<int>(configId)) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_valueChangeOwner = owner;
+            g_valueChangeIndex = idx;
+        }
+    }
+    return newVal;
+}
+
 } // namespace
 
 namespace MenuReader {
@@ -481,6 +537,7 @@ bool Init() {
     InputTracker::SetDescribeCallback(&DescribeHotkey);
     bool ok = Hooks::InstallTyped(RVA_DISPATCH,    &HookedDispatch,   &s_origDispatch);
     ok     &= Hooks::InstallTyped(RVA_STORE_WRITE, &HookedStoreWrite, &s_origStoreWrite);
+    ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -493,6 +550,7 @@ void Shutdown() {
     if (!g_initialized) return;
     TextCapture::SetMenuPaintedCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
+    Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);
     Hooks::Uninstall(RVA_DISPATCH);
     g_initialized = false;
