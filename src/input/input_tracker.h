@@ -19,6 +19,11 @@ void Shutdown();
 typedef void (*HotkeyCallback)();
 void SetDescribeCallback(HotkeyCallback cb);
 
+// Callback fired (on the input thread) when the user presses the "re-read last line"
+// key (`t`), while the game window is foregrounded. The message reader registers a
+// handler that repeats the last spoken dialogue/panel line.
+void SetRereadCallback(HotkeyCallback cb);
+
 // Wall-clock milliseconds (GetTickCount64) of the last key-down event.
 // 0 if no event has been observed since Init.
 uint64_t LastInputTimestampMs();

@@ -8,16 +8,19 @@
 
 namespace {
 
-// Deferred-describe message posted from the hook proc to the input thread's own
+// Deferred hotkey messages posted from the hook proc to the input thread's own
 // message loop, so speech never runs inside the low-level hook callback.
 constexpr UINT WM_DESCRIBE = WM_APP + 1;
+constexpr UINT WM_REREAD   = WM_APP + 2;
 
 std::atomic<uint64_t> g_lastInputMs{0};
 HHOOK   g_hook = nullptr;
 HANDLE  g_thread = nullptr;
 DWORD   g_threadId = 0;
 std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore auto-repeat)
+std::atomic<bool> g_tDown{false};      // edge-detect for the 't' key (ignore auto-repeat)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
+InputTracker::HotkeyCallback g_rereadCb = nullptr;
 
 bool GameIsForeground() {
     HWND fg = GetForegroundWindow();
@@ -38,9 +41,13 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 // Edge-triggered (skip auto-repeat) + only when the game is focused.
                 if (!g_oDown.exchange(true) && GameIsForeground())
                     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
+            } else if (kb && kb->vkCode == 'T') {   // 't' = re-read last spoken line
+                if (!g_tDown.exchange(true) && GameIsForeground())
+                    PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
             }
         } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
             if (kb && kb->vkCode == 'O') g_oDown.store(false);
+            else if (kb && kb->vkCode == 'T') g_tDown.store(false);
         }
     }
     return CallNextHookEx(g_hook, nCode, wParam, lParam);
@@ -59,13 +66,17 @@ DWORD WINAPI InputThread(LPVOID) {
     }
     Log::Write("INPUT", "InputTracker installed (WH_KEYBOARD_LL on a dedicated "
                         "message-loop thread). Keyboard only; gamepad does not "
-                        "update the timestamp. 'o' = read focused item's description.");
+                        "update the timestamp. 'o' = read focused item's description; "
+                        "'t' = re-read last spoken line.");
 
     MSG m;
     BOOL r;
     while ((r = GetMessageW(&m, nullptr, 0, 0)) > 0) {
         if (m.message == WM_DESCRIBE) {
             InputTracker::HotkeyCallback cb = g_describeCb;
+            if (cb) cb();
+        } else if (m.message == WM_REREAD) {
+            InputTracker::HotkeyCallback cb = g_rereadCb;
             if (cb) cb();
         } else {
             TranslateMessage(&m);
@@ -111,6 +122,7 @@ void Shutdown() {
 }
 
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
+void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 
 uint64_t LastInputTimestampMs() {
     return g_lastInputMs.load(std::memory_order_relaxed);

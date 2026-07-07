@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/text_capture.cpp
     src/ui/menu_reader.cpp
     src/ui/title_reader.cpp
+    src/ui/message_reader.cpp
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

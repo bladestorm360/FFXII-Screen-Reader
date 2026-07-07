@@ -7,6 +7,7 @@
 #include "ui/text_capture.h"
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
+#include "ui/message_reader.h"
 
 #include <Windows.h>
 #include <Psapi.h>
@@ -73,6 +74,9 @@ static void DeferredInitImpl() {
         MenuReader::Init();
         // Title command menu (baked-sprite menu, separate from the in-game system).
         TitleReader::Init();
+        // Dialogue + message-panel text reader (NPC dialogue, cutscene captions, item/
+        // treasure/battle-system panels). Independent of the menu hooks above.
+        MessageReader::Init();
     } else {
         Log::Write("INIT", "MinHook init failed — menu reading disabled this session");
     }
@@ -117,6 +121,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH: {
+            MessageReader::Shutdown();
             TitleReader::Shutdown();
             MenuReader::Shutdown();
             TextCapture::Shutdown();

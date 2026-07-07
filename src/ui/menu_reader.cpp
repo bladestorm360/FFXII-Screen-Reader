@@ -2,6 +2,7 @@
 #include "ui/text_capture.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
+#include "core/mem_read.h"
 #include "speech/speech.h"
 #include "core/logger.h"
 #include "input/input_tracker.h"
@@ -98,17 +99,12 @@ void LogLine(const char* prefix, const std::wstring& text) {
 }
 
 // ---- SEH-guarded raw reads (game objects can be destructed asynchronously) ---
-bool SafeReadPtr(const void* at, void** out) {
-    if (!at) return false;
-    __try { *out = *reinterpret_cast<void* const*>(at); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-void* PtrAt(void* base, uint32_t off) {
-    if (!base) return nullptr;
-    void* v = nullptr;
-    return SafeReadPtr(reinterpret_cast<char*>(base) + off, &v) ? v : nullptr;
-}
-void* Obj0(void* obj) { return PtrAt(obj, 0); }
+// The guard logic lives once in core/mem_read.h (shared with the message reader).
+using MemRead::SafeReadPtr;
+using MemRead::PtrAt;
+using MemRead::Obj0;
+using MemRead::SafeReadU8;
+using MemRead::SafeReadInt;
 
 bool IsTitleMenu(void* owner) {
     void* titleWin = nullptr;
@@ -175,17 +171,6 @@ void* ConfigRowWidget(void* ctrl, int index) {
     if (cls == Hooks::ResolveRva(RVA_GFX_CTRL))           base = OFF_CTRL_ROWARR_GFX;
     else if (cls == Hooks::ResolveRva(RVA_CONTROLS_CTRL)) base = OFF_CTRL_ROWARR_CTL;
     return PtrAt(ctrl, base + static_cast<uint32_t>(index) * ROW_STRIDE);
-}
-
-bool SafeReadU8(void* base, uint32_t off, uint8_t* out) {
-    if (!base) return false;
-    __try { *out = *reinterpret_cast<uint8_t*>(reinterpret_cast<char*>(base) + off); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-bool SafeReadInt(void* p, int* out) {
-    if (!p) return false;
-    __try { *out = *reinterpret_cast<int*>(p); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
 // Copy the codec label bytes of the option at display index `idx`, per row class.
