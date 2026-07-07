@@ -2,15 +2,22 @@
 
 #include <cstdint>
 
-// Minimal "did the user just press a key" timestamp tracker for gating
-// menu_reader speech. Uses WH_KEYBOARD_LL — fires on every key event
-// regardless of game focus, so we capture even pre-window-activation
-// presses. Keyboard ONLY — gamepad input is a known limitation and is
-// tracked as a separate TODO (see project_menu_reader_scaffolding.md).
+// "Did the user just press a key" timestamp tracker + the mod's on-demand
+// hotkeys. Owns a WH_KEYBOARD_LL hook on a DEDICATED thread that pumps messages
+// (a low-level hook only fires while its installing thread runs a message loop —
+// the previous inline install on the short-lived init thread never fired).
+// Keyboard ONLY — gamepad input is a known limitation (separate TODO).
 namespace InputTracker {
 
 bool Init();
 void Shutdown();
+
+// Callback fired (on the input thread) when the user presses the on-demand
+// "describe / read tooltip" key (`o`; i/j/k/l are alt arrow keys), while the game
+// window is foregrounded. The reader registers a handler that speaks the
+// focused item's description.
+typedef void (*HotkeyCallback)();
+void SetDescribeCallback(HotkeyCallback cb);
 
 // Wall-clock milliseconds (GetTickCount64) of the last key-down event.
 // 0 if no event has been observed since Init.

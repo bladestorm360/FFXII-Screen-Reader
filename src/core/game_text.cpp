@@ -52,6 +52,7 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
             switch (c) {
                 case 0x99: out.push_back(L'!'); break;
                 case 0x9a: out.push_back(L'?'); break;
+                case 0xa4: out.push_back(L'+'); break;   // "New Game+" glyph
                 case 0xa5: out.push_back(L'-'); break;
                 case 0xa7: out.push_back(L','); break;
                 case 0xa8: out.push_back(L'.'); break;

@@ -8,29 +8,45 @@
 
 namespace {
 
-std::atomic<uint64_t> g_lastInputMs{0};
-HHOOK g_hook = nullptr;
+// Deferred-describe message posted from the hook proc to the input thread's own
+// message loop, so speech never runs inside the low-level hook callback.
+constexpr UINT WM_DESCRIBE = WM_APP + 1;
 
-// Called from the kernel-installed low-level keyboard hook thread.
-// MUST be fast: do nothing that can block or call back into mod code.
+std::atomic<uint64_t> g_lastInputMs{0};
+HHOOK   g_hook = nullptr;
+HANDLE  g_thread = nullptr;
+DWORD   g_threadId = 0;
+std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore auto-repeat)
+InputTracker::HotkeyCallback g_describeCb = nullptr;
+
+bool GameIsForeground() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+// Low-level keyboard hook. Runs on the input thread (below) while it pumps
+// messages. MUST stay fast: it only stamps the timestamp and posts a message.
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
+        const KBDLLHOOKSTRUCT* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
             g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
+            if (kb && kb->vkCode == 'O') {   // 'o' = describe (i/j/k/l are alt arrow keys)
+                // Edge-triggered (skip auto-repeat) + only when the game is focused.
+                if (!g_oDown.exchange(true) && GameIsForeground())
+                    PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
+            }
+        } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+            if (kb && kb->vkCode == 'O') g_oDown.store(false);
         }
     }
     return CallNextHookEx(g_hook, nCode, wParam, lParam);
 }
 
-} // namespace
-
-namespace InputTracker {
-
-bool Init() {
-    if (g_hook) {
-        Log::Write("INPUT", "InputTracker::Init called twice — ignoring");
-        return true;
-    }
+DWORD WINAPI InputThread(LPVOID) {
     g_hook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc,
                                GetModuleHandleW(nullptr), 0);
     if (!g_hook) {
@@ -39,20 +55,62 @@ bool Init() {
                  "SetWindowsHookEx(WH_KEYBOARD_LL) failed: GetLastError=%lu",
                  (unsigned long)GetLastError());
         Log::Write("INPUT", msg);
+        return 0;
+    }
+    Log::Write("INPUT", "InputTracker installed (WH_KEYBOARD_LL on a dedicated "
+                        "message-loop thread). Keyboard only; gamepad does not "
+                        "update the timestamp. 'o' = read focused item's description.");
+
+    MSG m;
+    BOOL r;
+    while ((r = GetMessageW(&m, nullptr, 0, 0)) > 0) {
+        if (m.message == WM_DESCRIBE) {
+            InputTracker::HotkeyCallback cb = g_describeCb;
+            if (cb) cb();
+        } else {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+    }
+
+    UnhookWindowsHookEx(g_hook);
+    g_hook = nullptr;
+    Log::Write("INPUT", "InputTracker thread exiting");
+    return 0;
+}
+
+} // namespace
+
+namespace InputTracker {
+
+bool Init() {
+    if (g_thread) {
+        Log::Write("INPUT", "InputTracker::Init called twice — ignoring");
+        return true;
+    }
+    g_thread = CreateThread(nullptr, 0, InputThread, nullptr, 0, &g_threadId);
+    if (!g_thread) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "InputTracker: CreateThread failed: GetLastError=%lu",
+                 (unsigned long)GetLastError());
+        Log::Write("INPUT", msg);
         return false;
     }
-    Log::Write("INPUT", "InputTracker installed (WH_KEYBOARD_LL). "
-                       "Keyboard only; gamepad input does not currently update the timestamp.");
     return true;
 }
 
 void Shutdown() {
-    if (!g_hook) return;
-    UnhookWindowsHookEx(g_hook);
-    g_hook = nullptr;
+    if (!g_thread) return;
+    if (g_threadId) PostThreadMessageW(g_threadId, WM_QUIT, 0, 0);
+    WaitForSingleObject(g_thread, 2000);   // bounded so DLL detach can't hang
+    CloseHandle(g_thread);
+    g_thread = nullptr;
+    g_threadId = 0;
     g_lastInputMs.store(0, std::memory_order_relaxed);
     Log::Write("INPUT", "InputTracker shut down");
 }
+
+void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 
 uint64_t LastInputTimestampMs() {
     return g_lastInputMs.load(std::memory_order_relaxed);

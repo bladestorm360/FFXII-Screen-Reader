@@ -29,6 +29,17 @@ std::wstring FocusedItemText(void* owner, int index);
 // the game has drawn that id at least once this session.
 std::wstring StringById(int id);
 
+// The help/description text currently shown for the focused item, captured from
+// the game's description-bar setter (FUN_00291d80 @ RVA 0x171D80). Bound to the
+// latest focus by a generation counter: returns empty if no description was set
+// for the current focus, so a stale description from a previous item is never
+// returned. Read on demand by the `i` hotkey.
+std::wstring CurrentHelpText();
+
+// Bump the focus generation. The reader calls this on each focus change so a
+// description the game sets during that focus is attributed to it (and only it).
+void NotifyFocusChanged();
+
 // Fired (game thread) right after the painter finishes drawing `owner`'s rows,
 // i.e. when `owner`'s item map is freshly populated. The reader uses this to
 // replay a focus announce whose first `0x8000` arrived before the paint (the

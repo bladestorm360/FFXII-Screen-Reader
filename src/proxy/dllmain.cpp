@@ -52,7 +52,8 @@ static void DeferredInitImpl() {
 
     bool tolkOk = Speech::Init();
     if (tolkOk) {
-        Speech::Output(L"FFXII screen reader loaded", true);
+        // Startup announcement is diagnostic-only (not vocalized) by request.
+        Log::Write("INIT", "Speech available — FFXII screen reader loaded.");
     } else {
         Log::Write("INIT", "Tolk unavailable — mod loaded silently. "
                            "User must place Tolk.dll + nvdaControllerClient64.dll in this folder.");

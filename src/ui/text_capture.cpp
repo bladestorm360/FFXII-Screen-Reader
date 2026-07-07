@@ -19,6 +19,7 @@ constexpr uint32_t RVA_TEXT_OBJ1 = 0x18BEC0;  // FUN_002abec0(obj)      object/s
 constexpr uint32_t RVA_TEXT_OBJ2 = 0x18BF20;  // FUN_002abf20(obj)      object/scene draw
 constexpr uint32_t RVA_PAINTER   = 0x1B28E0;  // FUN_002d28e0(p1,p2,subwidget) list painter
 constexpr uint32_t RVA_RESOLVE   = 0x1D9860;  // FUN_002f9860(id) -> codec byte* (localized string)
+constexpr uint32_t RVA_DESC_SET  = 0x171D80;  // FUN_00291d80(codecText, flag) description-bar setter
 
 constexpr uint32_t OFF_CODEC_STR = 0x28;      // imm text struct -> codec byte*
 constexpr uint32_t OFF_SUB_OWNER = 0xC8;      // subwidget -> owner (== the 0x8000 focus owner)
@@ -32,12 +33,14 @@ typedef int64_t     (*Pfn_Cell)(void*, int64_t, void*, int64_t);
 typedef void        (*Pfn_Painter)(void*, int64_t, void*);
 typedef void        (*Pfn_TextDraw)(void*);
 typedef const uint8_t* (*Pfn_Resolve)(int);
+typedef void        (*Pfn_DescSet)(void*, uintptr_t);
 
 Pfn_TextDraw s_origImm  = nullptr;
 Pfn_TextDraw s_origObj1 = nullptr;
 Pfn_TextDraw s_origObj2 = nullptr;
 Pfn_Painter  s_origPainter = nullptr;
 Pfn_Resolve  s_origResolve = nullptr;
+Pfn_DescSet  s_origDescSet = nullptr;
 
 std::mutex g_mutex;
 
@@ -57,6 +60,12 @@ Pfn_Cell g_realCb = nullptr;      // the menu's real cell callback (during inter
 // Localized UI strings captured from FUN_002f9860 (id -> decoded), for pop-up
 // button labels (ids 1000/1001). Persists for the session.
 std::unordered_map<int, std::wstring> g_idCache;
+
+// Focused-item description (FUN_00291d80), gated to the current focus generation
+// so the `i` hotkey never speaks a previous item's description.
+std::wstring g_helpText;
+uint32_t g_helpGen = 0;
+uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is set for a focus
 
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
@@ -129,6 +138,22 @@ const uint8_t* HookResolve(int id) {
     return ret;
 }
 
+// FUN_00291d80(codecText, flag): the game sets the description-bar text here on
+// each focus — config rows resolve their per-row help id, and the New Game+/- mode
+// buttons feed their descriptions the same way. Cache it, tagged with the current
+// focus generation so the `i` hotkey attributes it to exactly this focus.
+void HookedDesc(void* codecText, uintptr_t flag) {
+    if (codecText) {
+        std::wstring s = GameText::Decode(reinterpret_cast<const uint8_t*>(codecText));  // SEH-guarded inside
+        if (GameText::IsMostlyPrintable(s)) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_helpText = std::move(s);
+            g_helpTextGen = g_helpGen;
+        }
+    }
+    if (s_origDescSet) s_origDescSet(codecText, flag);
+}
+
 // ---- per-item interception ---------------------------------------------------
 // Called by the game's painter in place of the real callback (we swapped the
 // pointer). Attributes this row's draws to `index`, then runs the real callback.
@@ -193,6 +218,7 @@ bool Init() {
     ok &= Hooks::InstallTyped(RVA_TEXT_OBJ2, &HookObj2,      &s_origObj2);
     ok &= Hooks::InstallTyped(RVA_PAINTER,   &HookedPainter, &s_origPainter);
     ok &= Hooks::InstallTyped(RVA_RESOLVE,   &HookResolve,   &s_origResolve);
+    ok &= Hooks::InstallTyped(RVA_DESC_SET,  &HookedDesc,    &s_origDescSet);
     g_initialized = true;
     Log::Write("TEXT", ok
         ? "TextCapture initialized (codec draws + FUN_002d28e0 per-item index map + id-string cache)."
@@ -202,6 +228,7 @@ bool Init() {
 
 void Shutdown() {
     if (!g_initialized) return;
+    Hooks::Uninstall(RVA_DESC_SET);
     Hooks::Uninstall(RVA_RESOLVE);
     Hooks::Uninstall(RVA_PAINTER);
     Hooks::Uninstall(RVA_TEXT_IMM);
@@ -210,6 +237,7 @@ void Shutdown() {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_head = 0; g_count = 0; g_itemsByOwner.clear(); g_idCache.clear();
     g_paintOwner = nullptr; g_curIdx = -1; g_intercepting = false;
+    g_helpText.clear(); g_helpGen = 0; g_helpTextGen = 0xffffffffu;
     g_initialized = false;
     Log::Write("TEXT", "TextCapture shut down");
 }
@@ -227,6 +255,16 @@ std::wstring StringById(int id) {
     std::lock_guard<std::mutex> lk(g_mutex);
     auto it = g_idCache.find(id);
     return it != g_idCache.end() ? it->second : std::wstring();
+}
+
+std::wstring CurrentHelpText() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    return (g_helpTextGen == g_helpGen) ? g_helpText : std::wstring();
+}
+
+void NotifyFocusChanged() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    ++g_helpGen;
 }
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
