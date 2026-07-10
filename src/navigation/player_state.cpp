@@ -1,5 +1,6 @@
 #include "navigation/player_state.h"
 #include "navigation/nav_rva.h"
+#include "navigation/bullet_query.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 
@@ -14,6 +15,30 @@ bool IsFieldActive() {
     uint8_t b = 0;
     if (!SafeReadU8(p, 0, &b)) return false;
     return (b & 0x10) != 0;
+}
+
+bool IsFieldNavSafe() {
+    // Field sim live this session (0x10) — necessary but not sufficient.
+    if (!IsFieldActive()) return false;
+    // Field module started at all (coarse; 1 after first field entry).
+    uint32_t started = 0;
+    if (!SafeReadU32(Hooks::ResolveRva(NavRva::FIELD_ACTIVE2), 0, &started) || started == 0)
+        return false;
+    // Area id valid (0xFFFFFFFF = no area loaded / mid-transition).
+    uint32_t areaId = 0;
+    if (!SafeReadU32(Hooks::ResolveRva(NavRva::AREA_ID), 0, &areaId) || areaId == 0xFFFFFFFF)
+        return false;
+    // Area collision blob loaded (the earliest-cleared reliable "gone" signal).
+    if (!PtrAt(Hooks::ResolveRva(NavRva::AREA_COLLISION), 0)) return false;
+    // Actor pool allocated (belt-and-suspenders; true post-boot).
+    if (!PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0)) return false;
+    // Leader actor ptr present (zeroed at the very start of teardown).
+    if (!PtrAt(Hooks::ResolveRva(NavRva::LEADER_ACTOR_PTR), 0)) return false;
+    // The Bullet world itself is built (lazy; re-checked live every frame).
+    if (!BulletQuery::HasWorld()) return false;
+    // And the leader actually resolves through the handle table.
+    if (!ReadLeaderSceneObject()) return false;
+    return true;
 }
 
 uint32_t ReadLeaderHandle() {
@@ -98,41 +123,42 @@ LeaderChain CaptureLeaderChain() {
     return c;
 }
 
-// Live world position via the engine's own getter (FUN_00265020): the scene
-// object's transform pointer at +0xB8, then the 3 world-position floats. The
-// controller (+0xD0 matrix) was only a writer of this same value — not needed.
-bool ReadPlayerPos(FVec3& out) {
-    void* sceneObj = ReadLeaderSceneObject();
+// Live world position of ANY scene object: the transform node at sceneObj+0xB8, then
+// its first three floats (cached world XYZ). The node is set for EVERY world-present
+// object (categories 1-7, incl. NPCs and static gimmicks/gates); only pure triggers
+// (category 0) have a null node. We read the raw chain and guard ONLY on node != 0 —
+// deliberately NOT replicating the engine getter FUN_00265020's class-nibble gate
+// ((*(u8)(sceneObj+3) >> 5) in {1,3}), which zeroes the result for a gate whose class
+// byte isn't 1/3 (and would drop it from the scan). Memory-only, SEH-guarded.
+bool ReadSceneObjectPos(void* sceneObj, FVec3& out) {
     if (!sceneObj) return false;
 
-    // Match the getter's type-nibble guard: (*(u8)(sceneObj+3) >> 5) in {1,3}.
-    uint8_t typeByte = 0;
-    if (!SafeReadU8(sceneObj, NavRva::SCENEOBJ_TYPE_BYTE, &typeByte)) return false;
-    const uint8_t nib = typeByte >> 5;
-    if (nib != 1 && nib != 3) return false;
-
-    void* xform = PtrAt(sceneObj, NavRva::SCENEOBJ_XFORM_PTR);
-    if (!xform) return false;
+    void* node = PtrAt(sceneObj, NavRva::SCENEOBJ_XFORM_PTR);
+    if (!node) return false;
 
     float x = 0, y = 0, z = 0;
-    if (!SafeReadF32(xform, NavRva::XFORM_POS_X, &x)) return false;
-    if (!SafeReadF32(xform, NavRva::XFORM_POS_Y, &y)) return false;
-    if (!SafeReadF32(xform, NavRva::XFORM_POS_Z, &z)) return false;
+    if (!SafeReadF32(node, NavRva::XFORM_POS_X, &x)) return false;
+    if (!SafeReadF32(node, NavRva::XFORM_POS_Y, &y)) return false;
+    if (!SafeReadF32(node, NavRva::XFORM_POS_Z, &z)) return false;
     out = FVec3{ x, y, z };
     return true;
 }
 
+bool ReadPlayerPos(FVec3& out) {
+    return ReadSceneObjectPos(ReadLeaderSceneObject(), out);
+}
+
 // Facing yaw from the char component's embedded world matrix forward row
-// (comp+0x100). Ground plane is X/Z, so yaw = atan2(fwd.x, fwd.z). Only the
-// egocentric direction mode needs this; the exact sign/zero convention is
-// confirmed against FUN_004686d0 at runtime. Cardinal bearings need no yaw.
+// (comp+0x100). Ground plane is X/Z; game north is -Z, so yaw = atan2(fwd.x,
+// -fwd.z) — same convention as nav_common::BearingDeg, so the `;` facing readout
+// and crow-flies bearings agree. Used by the facing readout + egocentric mode.
 bool ReadPlayerYaw(float& outRadians) {
     void* comp = ReadLeaderComponent();
     if (!comp) return false;
     float fx = 0, fz = 0;
     if (!SafeReadF32(comp, NavRva::COMP_MATRIX_FWD + 0x00, &fx)) return false;
     if (!SafeReadF32(comp, NavRva::COMP_MATRIX_FWD + 0x08, &fz)) return false;
-    outRadians = std::atan2(fx, fz);
+    outRadians = std::atan2(fx, -fz);
     return true;
 }
 

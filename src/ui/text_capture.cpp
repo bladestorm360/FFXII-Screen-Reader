@@ -20,6 +20,14 @@ constexpr uint32_t RVA_TEXT_OBJ2 = 0x18BF20;  // FUN_002abf20(obj)      object/s
 constexpr uint32_t RVA_PAINTER   = 0x1B28E0;  // FUN_002d28e0(p1,p2,subwidget) list painter
 constexpr uint32_t RVA_RESOLVE   = 0x1D9860;  // FUN_002f9860(id) -> codec byte* (localized string)
 constexpr uint32_t RVA_DESC_SET  = 0x171D80;  // FUN_00291d80(codecText, flag) description-bar setter
+// Item/ability/equipment/battle-command DESCRIPTIONS use a different sink than FUN_00291d80: the
+// display notifier FUN_00293170 formats the focused entry's description via FUN_00292b70, which
+// writes the finished codec to (outBuf+8) and returns 1. We hook the formatter and capture that
+// codec — but only while inside FUN_00293170 (the on-highlight display call), so the off-screen
+// width-measurement callers of FUN_00292b70 don't pollute the `o`-key description.
+constexpr uint32_t RVA_ITEMDESC_DISPLAY = 0x173170;  // FUN_00293170 (on-highlight desc display)
+constexpr uint32_t RVA_ITEMDESC_FMT     = 0x172B70;  // FUN_00292b70(outBuf, params) -> outBuf+8 = codec
+constexpr uint32_t OFF_ITEMDESC_TEXT    = 0x08;      // outBuf+8 = formatted description codec
 
 constexpr uint32_t OFF_CODEC_STR = 0x28;      // imm text struct -> codec byte*
 constexpr uint32_t OFF_SUB_OWNER = 0xC8;      // subwidget -> owner (== the 0x8000 focus owner)
@@ -34,6 +42,8 @@ typedef void        (*Pfn_Painter)(void*, int64_t, void*);
 typedef void        (*Pfn_TextDraw)(void*);
 typedef const uint8_t* (*Pfn_Resolve)(int);
 typedef void        (*Pfn_DescSet)(void*, uintptr_t);
+typedef void        (*Pfn_ItemDescDisplay)(int, uint32_t, int, int);  // FUN_00293170
+typedef uint64_t    (*Pfn_ItemDescFmt)(void*, void*);                 // FUN_00292b70(outBuf, params)
 
 Pfn_TextDraw s_origImm  = nullptr;
 Pfn_TextDraw s_origObj1 = nullptr;
@@ -41,6 +51,9 @@ Pfn_TextDraw s_origObj2 = nullptr;
 Pfn_Painter  s_origPainter = nullptr;
 Pfn_Resolve  s_origResolve = nullptr;
 Pfn_DescSet  s_origDescSet = nullptr;
+Pfn_ItemDescDisplay s_origItemDescDisplay = nullptr;
+Pfn_ItemDescFmt     s_origItemDescFmt     = nullptr;
+thread_local bool s_inItemDesc = false;   // true only while inside FUN_00293170 (the display path)
 
 std::mutex g_mutex;
 
@@ -58,7 +71,13 @@ bool  g_intercepting = false;     // re-entrancy guard for the painter swap
 Pfn_Cell g_realCb = nullptr;      // the menu's real cell callback (during interception)
 
 // Localized UI strings captured from FUN_002f9860 (id -> decoded), for pop-up
-// button labels (ids 1000/1001). Persists for the session.
+// button labels (ids 1000/1001) AND the Controls key-binding NAME block. Persists
+// for the session. The key-binding names are the ids FUN_001e0b00 maps DIK codes to:
+// a contiguous block (base 0x46e1 US .. 0x47b1 DE, + per-code offset up to ~0xD1, plus
+// the 0x46dc/0x46dd specials). The Controls value reader can't call the game to resolve
+// a code, so we cache the block as the game draws the focused binding, then look it up.
+constexpr int BIND_ID_LO = 0x46dc;
+constexpr int BIND_ID_HI = 0x4882;
 std::unordered_map<int, std::wstring> g_idCache;
 
 // Focused-item description (FUN_00291d80), gated to the current focus generation
@@ -128,7 +147,7 @@ void HookObj2(void* p1) { Capture(p1, /*listCapable=*/false); if (s_origObj2) s_
 
 const uint8_t* HookResolve(int id) {
     const uint8_t* ret = s_origResolve ? s_origResolve(id) : nullptr;
-    if (ret && (id == 1000 || id == 1001)) {
+    if (ret && (id == 1000 || id == 1001 || (id >= BIND_ID_LO && id <= BIND_ID_HI))) {
         std::wstring s = GameText::Decode(ret);               // SEH-guarded inside
         if (GameText::IsMostlyPrintable(s)) {
             std::lock_guard<std::mutex> lk(g_mutex);
@@ -152,6 +171,33 @@ void HookedDesc(void* codecText, uintptr_t flag) {
         }
     }
     if (s_origDescSet) s_origDescSet(codecText, flag);
+}
+
+// FUN_00293170: the on-highlight item/ability/equipment/command description DISPLAY call. It formats
+// the focused entry's description via FUN_00292b70. We flag "inside display" around it so only that
+// formatter call (not the off-screen width-measurement callers) captures into g_helpText.
+void HookedItemDescDisplay(int p1, uint32_t p2, int p3, int p4) {
+    const bool prev = s_inItemDesc;
+    s_inItemDesc = true;
+    if (s_origItemDescDisplay) s_origItemDescDisplay(p1, p2, p3, p4);
+    s_inItemDesc = prev;
+}
+
+// FUN_00292b70(outBuf, params): the shared description formatter — writes the finished codec to
+// outBuf+8 and returns 1 on success. When invoked from the display path, capture that codec as the
+// focused item's description (for the `o` key), tagged with the current focus generation.
+uint64_t HookedItemDescFmt(void* outBuf, void* params) {
+    uint64_t r = s_origItemDescFmt ? s_origItemDescFmt(outBuf, params) : 0;
+    if (s_inItemDesc && r && outBuf) {
+        const uint8_t* codec = reinterpret_cast<const uint8_t*>(outBuf) + OFF_ITEMDESC_TEXT;
+        std::wstring s = GameText::Decode(codec);   // SEH-guarded inside
+        if (GameText::IsMostlyPrintable(s)) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_helpText = std::move(s);
+            g_helpTextGen = g_helpGen;
+        }
+    }
+    return r;
 }
 
 // ---- per-item interception ---------------------------------------------------
@@ -219,6 +265,8 @@ bool Init() {
     ok &= Hooks::InstallTyped(RVA_PAINTER,   &HookedPainter, &s_origPainter);
     ok &= Hooks::InstallTyped(RVA_RESOLVE,   &HookResolve,   &s_origResolve);
     ok &= Hooks::InstallTyped(RVA_DESC_SET,  &HookedDesc,    &s_origDescSet);
+    ok &= Hooks::InstallTyped(RVA_ITEMDESC_DISPLAY, &HookedItemDescDisplay, &s_origItemDescDisplay);
+    ok &= Hooks::InstallTyped(RVA_ITEMDESC_FMT,     &HookedItemDescFmt,     &s_origItemDescFmt);
     g_initialized = true;
     Log::Write("TEXT", ok
         ? "TextCapture initialized (codec draws + FUN_002d28e0 per-item index map + id-string cache)."
@@ -228,6 +276,8 @@ bool Init() {
 
 void Shutdown() {
     if (!g_initialized) return;
+    Hooks::Uninstall(RVA_ITEMDESC_FMT);
+    Hooks::Uninstall(RVA_ITEMDESC_DISPLAY);
     Hooks::Uninstall(RVA_DESC_SET);
     Hooks::Uninstall(RVA_RESOLVE);
     Hooks::Uninstall(RVA_PAINTER);

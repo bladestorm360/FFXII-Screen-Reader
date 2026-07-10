@@ -7,14 +7,85 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-*(none yet — Phase 0)*
+**KEYWORDS: pathfinder scanner actor pool BtlWork gimmick gate missing enumeration** — Enumerating
+field objects by walking the 32-slot BtlWork actor pool `DAT_0208e688` (RVA 0x1F6E688) finds ONLY
+characters/combatants (NPCs, party). Static field gimmicks — gates, doors, switches, treasure,
+crystals — are NOT in that pool, so a gate the tutorial needs is invisible to the scan (found "2
+objects" = the 2 NPCs only). FIX under Solved: enumerate the scene-object HANDLE TABLE instead.
+
+**KEYWORDS: pathfinder classify def+5 kind NPC object inverted** — Classifying NPC vs object by the
+actor def kind byte `def+0x05` (`(kind==0)?NPC:Object`) mislabels every NPC as "Object". `def+0x05`
+is 0=static-prop / 1=animated-character, and field NPCs are kind **1** — inverted and too weak.
+FIX: classify by npcdic id band + the scene-object interaction flags.
+
+**KEYWORDS: pathfinder route turn-by-turn silent drain FUN_00314020 hook game thread** — Draining
+the game-thread route planner from `FUN_00314020` (0x1F4020, the render step, `mode==0`) leaves `/`
+SILENT: that path sits behind a fixed-timestep accumulator AND an else-branch bypass
+(`FUN_001800e0()!=0` → `FUN_002f1770` directly) that a scripted tutorial holds open, so the drain
+never runs. FIX: drain from `FUN_0022a770` (0x10A770), the no-arg per-field-frame tick.
+
+**KEYWORDS: scene object position 0xB8 FUN_00265020 class nibble guard gate zero** — Reading a scene
+object's world position by replicating engine getter `FUN_00265020` INCLUDING its class-nibble guard
+`(*(u8)(sceneObj+3)>>5) ∈ {1,3}` returns (0,0,0) for a gate whose class byte isn't 1/3 → the object
+is dropped for "no position". FIX: read the raw chain `*(sceneObj+0xB8)+0/4/8`, guard only on the
+transform node != 0 (valid for all world-present categories 1–7).
+
+**KEYWORDS: name resolver FUN_0035d380 party roster model index object** (Session 24) — Resolving a
+field object's name with `FUN_0035d380(1, def+4)` always returns empty ("Object"): it is the
+party/roster resolver fed a model index. FIX: read the name key at `sceneObj+0x102` → npcdic.
 
 ## Solved Problems
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
 
-*(none yet — Phase 0)*
+**KEYWORDS: pathfinder field object enumeration handle table DAT_02098e10 gate NPC gimmick**
+SOLUTION: Enumerate the scene-object HANDLE TABLE `DAT_02098e10` (RVA 0x1F78E10) — the master
+registry the game's own interaction scanner `FUN_0025b820` (0x13B820) walks, holding EVERY live
+field object (NPCs + static gimmicks) from map load. 5 containers × 0x288: active `+0x10&1`; entry
+array `*(base+c*0x288+0x08)`; count `*(int)entries`; object i `*(entries+0x08+i*8)`. Filter
+interactive by `sceneObj+0x1C` flags (`0x400`=talk/NPC, `0x4`=action/gate-door-switch) + npcdic
+band. Position `*(sceneObj+0xB8)+0/4/8`. This is the correct source for a proactive object list.
+
+**KEYWORDS: pathfinder route drain FUN_0022a770 game-thread per-frame tick turn-by-turn** SOLUTION:
+Drain the game-thread route planner from `FUN_0022a770` (RVA 0x10A770), the no-arg per-field-frame
+tick (walking state `DAT_02064ad3==2`, returns u64). Drain unconditionally at entry — no accumulator
+or bypass can hold it silent (unlike FUN_00314020). Match the u64 return.
+
+**KEYWORDS: scene object world position sceneObj 0xB8 transform node universal** SOLUTION: Any scene
+object's world XYZ = `node = *(sceneObj+0xB8); x=node+0, y=node+4, z=node+8` (floats). Works for
+NPCs and static gimmicks alike (categories 1–7). Guard only on `node != 0`; do NOT apply
+FUN_00265020's class-nibble gate.
+
+**KEYWORDS: pathfinder classify npcdic id band interaction flags NPC person object** SOLUTION:
+Classify by npcdic id (`sceneObj+0x102 & 0xbfff`): 433–469 = gimmick band (434 Treasure, 466 Gate
+Crystal, 469 Save Crystal, 468 Urn, 435–459/467 crystals) → sub-type; else scene-object talk flag
+(`+0x1C & 0x400`) → Person; else Object. Locale-independent; the spoken label is always the game's
+own text.
+
+**KEYWORDS: non-live scanner category switch stale count objects-0 ChangeCategoryLocked rescan** SOLUTION:
+Switching nav categories (`-`/`=`) spoke a STALE count (e.g. "Interactables, 0") when the target
+category's actors weren't in the last scan — `ChangeCategoryLocked` (`entity_list.cpp`) counted
+`g_entities` WITHOUT a fresh scan, while every other command (`[`/`]`/`\`/`` ` ``) calls
+`RescanLocked()`. FIX: call `RescanLocked()` at the top of `ChangeCategoryLocked` before counting, so
+the count reflects live actors. This was the last non-live path in the scanner (Session 26).
+
+**KEYWORDS: enemies scanner BtlWork pool DAT_0208e688 def+5 foe polarity Category::Enemy** SOLUTION:
+Enemies are NOT in the scene-object handle table's interactive set (no talk/action flag) — list them
+from the BtlWork combatant pool `DAT_0208e688` (32×0xf50, count `DAT_0208e6a0`): per slot def=`+0x698`
+(null=empty), active `+0x00 & 0x10`, ENEMY = `*(u8)(def+5)==0` (0.85 — verify via the `'` pool dump;
+flip `NavRva::ENEMY_DEF_KIND` if party shows as enemy), name codec* = `+0x18`, position via
+`sceneObj=+0x10`→node+0xB8. `ScanEnemiesLocked` appends them as `Category::Enemy` (Session 26, pending
+in-game polarity confirmation).
+
+**KEYWORDS: in-game menu reading field FUN_002a6190 battle FUN_0055cd40 0x8000 not-index cell-pointer** SOLUTION:
+The "universal" 0x8000 focus reader was silent in-game because `FUN_00247510`/0x8000 is a shared
+transport, not a shared contract. FIELD menu = window class `FUN_002a6190` (0x186190; ALL submenus);
+row text = `0x03`-separated codec buffer at `window+0xF8`, focused row DATA index at `window+0x124`
+(set by the game handler → read AFTER `s_origDispatch`). BATTLE command menu = window class
+`FUN_0055cd40` (0x43CD40; ALL submenus); 0x8000 `val` is a POINTER to the focused 0x38-byte cell, name
+codec* at `cell+0x00`, validity s16 at `cell+0x08` (-1=empty). Handled in `src/ui/ingame_menu_reader.cpp`,
+delegated from `menu_reader`'s single hook (Session 26, pending in-game validation).
 
 ## Mod Architecture
 

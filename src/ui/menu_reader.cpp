@@ -1,5 +1,6 @@
 #include "ui/menu_reader.h"
 #include "ui/text_capture.h"
+#include "ui/ingame_menu_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -30,6 +31,12 @@ namespace {
 constexpr uint32_t RVA_DISPATCH     = 0x127510;   // FUN_00247510(owner, msg, val)
 constexpr uint32_t RVA_TITLE_WINDOW = 0x29CE4C8;  // DAT_02aee4c8 — TitleReader owns the title menu
 constexpr uint32_t RVA_CONFIRM_WND  = 0x121D40;   // FUN_00241d40 — confirm/menu window handler (obj[0])
+// Active-pane isolation: DAT_0208ebc0 holds the window the input pump routes the D-pad to (the
+// focused pane); the `owner` of a 0x8000 IS that pane's controller, so owner == *DAT_0208ebc0
+// means "this pane holds the cursor". FUN_00244830(old,new,flag) sets it (DAT_0208ebc0 = new) and
+// fires just AFTER a pane's entry 0x8000, so we hook it to replay the just-entered focus item.
+constexpr uint32_t RVA_FOCUS_WINDOW = 0x1F6EBC0;  // DAT_0208ebc0 — global input-focus window ptr
+constexpr uint32_t RVA_FOCUS_SET    = 0x124830;   // FUN_00244830(old, new, flag)
 
 // New-game / config screen (probe- + log-confirmed 2026-07-06). Controller =
 // FUN_0023fbe0; the row array is at ctrl+0xE8 (stride 0x18). Value-setting rows come
@@ -45,6 +52,11 @@ constexpr uint32_t RVA_VALROW_DB40 = 0x11DB40;  // FUN_0023db40 — enum value r
 constexpr uint32_t RVA_VALROW_EBE0 = 0x11EBE0;  // FUN_0023ebe0 — slider/gauge value row (numeric)
 constexpr uint32_t RVA_VALROW_B330 = 0x11B330;  // FUN_0023b330 — Graphics slider (gauge child) — numeric
 constexpr uint32_t RVA_VALROW_B6F0 = 0x11B6F0;  // FUN_0023b6f0 — Graphics enum (fmt buf at row+0xCC)
+constexpr uint32_t RVA_VALROW_C5C0 = 0x11C5C0;  // FUN_0023c5c0 — Controls key-binding row (codes only, no name)
+// Controls key-binding row (FUN_0023c5c0): caches DIK key CODES only, not the display name.
+constexpr uint32_t OFF_BINDROW_CODE0  = 0xD0;   // *(u32)(row+0xd0 + col*4) = live key code (col 0 = primary keyboard)
+constexpr uint32_t OFF_BINDROW_REBIND = 0xEC;   // *(u32)(row+0xec) != 0 => mid-rebind ("press a key")
+constexpr int      BIND_ID_REBIND     = 0x46dd; // the game's "press a key" prompt string id
 constexpr uint32_t OFF_CTRL_ROWARR_GFX = 0x4E0; // FUN_0023bd40 row array
 constexpr uint32_t OFF_CTRL_ROWARR_CTL = 0xD8;  // FUN_0023ce10 row array
 // Active-instance globals (set on open, cleared on close) — used to skip reads when a
@@ -79,6 +91,9 @@ Pfn_StoreWrite s_origStoreWrite = nullptr;
 typedef uint32_t (*Pfn_GfxWrite)(uint32_t, uint32_t, uint32_t);  // FUN_0017db90(configId, curVal, dir)
 Pfn_GfxWrite s_origGfxWrite = nullptr;
 
+typedef void (*Pfn_FocusSet)(void*, void*, int);   // FUN_00244830(old, new, flag)
+Pfn_FocusSet s_origFocusSet = nullptr;
+
 std::mutex g_mutex;
 void* g_lastOwner = nullptr;
 int   g_lastIndex = -1;
@@ -87,6 +102,13 @@ void* g_pendingOwner = nullptr;   // focus whose text wasn't painted yet (menu-e
 int   g_pendingIndex = -1;
 void* g_valueChangeOwner = nullptr;   // Graphics value change awaiting a settled paint to announce
 int   g_valueChangeIndex = -1;
+// Last 0x8000 focus, stashed so the FUN_00244830 focus-change hook can replay the entry item
+// once DAT_0208ebc0 flips to the newly-entered pane (the entry 0x8000 fires just before that).
+void* g_stashOwner = nullptr;
+int   g_stashIndex = -1;
+uint32_t g_stashRowOff = 0;
+void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus) pair
+void* g_diagFocus = nullptr;
 bool  g_initialized = false;
 
 void LogLine(const char* prefix, const std::wstring& text) {
@@ -104,6 +126,7 @@ using MemRead::SafeReadPtr;
 using MemRead::PtrAt;
 using MemRead::Obj0;
 using MemRead::SafeReadU8;
+using MemRead::SafeReadU32;
 using MemRead::SafeReadInt;
 
 bool IsTitleMenu(void* owner) {
@@ -128,7 +151,8 @@ bool IsConfigValueRow(void* row) {
            cls == Hooks::ResolveRva(RVA_VALROW_DB40) ||
            cls == Hooks::ResolveRva(RVA_VALROW_EBE0) ||
            cls == Hooks::ResolveRva(RVA_VALROW_B330) ||
-           cls == Hooks::ResolveRva(RVA_VALROW_B6F0);
+           cls == Hooks::ResolveRva(RVA_VALROW_B6F0) ||
+           cls == Hooks::ResolveRva(RVA_VALROW_C5C0);
 }
 
 // True only when `owner` is the CURRENTLY-ACTIVE instance of its config controller.
@@ -279,11 +303,35 @@ std::wstring InlineCodecValue(void* row, uint32_t off) {
     return GameText::IsMostlyPrintable(s) ? s : std::wstring();
 }
 
-// Current value of a config value row: enum option label, slider number, or Graphics
-// formatted string. (Controls key-binding values are a follow-on: the bound-key NAME
-// isn't stored on the row — only the codes are, the game resolves the name transiently
-// at draw — so a memory-only read needs widget-tree tracing. Deferred rather than call
-// game code or hook the Controls-specific cell callback.)
+// Replicate FUN_001e0b00(code): a DIK key code -> localized key-name string id. Pure
+// arithmetic; the base depends on the active keyboard layout, matching the game's own
+// GetKeyboardLayout switch (US default, FR 0x40c, DE 0x407). Keyboard keys are code >= 0x1c.
+int KeyCodeToStringId(int code) {
+    int base = 0x46e1;                                            // US / default
+    uintptr_t lang = reinterpret_cast<uintptr_t>(GetKeyboardLayout(0)) & 0xfff;
+    if (lang == 0x40c)      base = 0x4749;                        // FR
+    else if (lang == 0x407) base = 0x47b1;                        // DE
+    if (code >= 0x1c) return code - 0x1c + base;
+    if (code >= 1)    return code + 0x46dd;
+    return 0x46dc;
+}
+
+// Controls key-binding row (FUN_0023c5c0): the row caches only DIK CODES (col 0 = primary
+// keyboard), never the name — the game resolves the name transiently at draw via
+// FUN_001e0b00(code) -> id -> FUN_002f9860. We replicate the arithmetic and read the NAME
+// from TextCapture's id cache, which the game's own draw of this row just populated (no game
+// call). Keyboard column only; controller bindings are a later pass.
+std::wstring ControlsBindingValue(void* row) {
+    uint32_t rebind = 0;
+    if (SafeReadU32(row, OFF_BINDROW_REBIND, &rebind) && rebind != 0)
+        return TextCapture::StringById(BIND_ID_REBIND);           // "press a key" — the game's own prompt
+    uint32_t code = 0;
+    if (!SafeReadU32(row, OFF_BINDROW_CODE0, &code) || code == 0) return std::wstring();   // unbound
+    return TextCapture::StringById(KeyCodeToStringId(static_cast<int>(code)));
+}
+
+// Current value of a config value row: enum option label, slider number, Graphics formatted
+// string, or Controls key-binding name.
 std::wstring ConfigRowValue(void* row) {
     if (!IsConfigValueRow(row)) return std::wstring();
     void* cls = Obj0(row);
@@ -293,6 +341,7 @@ std::wstring ConfigRowValue(void* row) {
         return ReadSlider(row, &val, &max) ? FormatSlider(val, max) : std::wstring();
     }
     if (cls == Hooks::ResolveRva(RVA_VALROW_B6F0)) return InlineCodecValue(row, 0xCC);   // Graphics enum
+    if (cls == Hooks::ResolveRva(RVA_VALROW_C5C0)) return ControlsBindingValue(row);     // Controls key binding
     return OptionLabel(row, SelectedIndex(row, cls));                     // E770 / D6B0 / DB40 enums
 }
 
@@ -320,6 +369,15 @@ void DescribeHotkey() {
     Speech::Output(desc, /*interrupt=*/true);
 }
 
+// True when `owner` is the window the input pump currently routes the cursor to (DAT_0208ebc0).
+// Companion panes that merely repaint on the same keypress are NOT it, so this isolates the one
+// pane the player is actually in. SEH-guarded; a fault reads as "not focused".
+bool IsFocusedPane(void* owner) {
+    if (!owner) return false;
+    void* fw = nullptr;
+    return SafeReadPtr(Hooks::ResolveRva(RVA_FOCUS_WINDOW), &fw) && owner == fw;
+}
+
 void OnFocus(void* owner, int index, bool fromPaint) {
     if (index < 0) return;
     if (IsTitleMenu(owner)) return;               // TitleReader handles the title command menu
@@ -335,6 +393,13 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     }
 
     const bool isPopup = IsConfirmWindow(owner);
+
+    // Active-pane gate: a plain in-game content pane (not a pop-up, not a config controller)
+    // speaks only when it currently holds the cursor — this is what stops the inventory "mixed"
+    // reading (items/magicks/equipment from several panes at once). Pop-ups and config own focus
+    // and are exempt. Entering a pane is handled by the FUN_00244830 replay, which re-invokes this
+    // (fromPaint) once DAT_0208ebc0 has flipped to the entered pane.
+    if (!isPopup && !IsConfigController(owner) && !IsFocusedPane(owner)) return;
 
     // Build what we'll speak: pop-up button label (code-fixed by index), or the
     // focused row's "name" / "name: value".
@@ -440,7 +505,36 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         // the description it sets (FUN_00291d80) during s_origDispatch is attributed
         // to this focus for the `o` key.
         TextCapture::NotifyFocusChanged();
-        OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val)), /*fromPaint=*/false);
+        const int index = static_cast<int>(static_cast<intptr_t>(val));
+        const uint32_t rowOff = IngameMenuReader::RowChainOff(owner);
+
+        // Stash this focus so the FUN_00244830 focus-change hook can replay the entry item once
+        // DAT_0208ebc0 flips to the entered pane (the entry 0x8000 fires just before that flip,
+        // so it would otherwise be gated out). Also emit a deduped active-pane diagnostic.
+        void* focusWin = nullptr;
+        SafeReadPtr(reinterpret_cast<void*>(Hooks::ResolveRva(RVA_FOCUS_WINDOW)), &focusWin);
+        bool diag;
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_stashOwner = owner; g_stashIndex = index; g_stashRowOff = rowOff;
+            diag = (owner != g_diagOwner || focusWin != g_diagFocus);
+            if (diag) { g_diagOwner = owner; g_diagFocus = focusWin; }
+        }
+        if (diag) {
+            char d[128];
+            snprintf(d, sizeof(d), "pane owner=%p focus=%p focused=%d rowOff=0x%X",
+                     owner, focusWin, owner == focusWin ? 1 : 0, rowOff);
+            Log::Write("READER", d);
+        }
+
+        if (rowOff) {
+            // Row-chain in-game menu (field pause menu + submenus, or the battle command menu):
+            // `val` is the focused row index. Speak only if this pane holds the cursor.
+            if (IsFocusedPane(owner))
+                IngameMenuReader::OnRowChainFocus(owner, rowOff, index);
+        } else {
+            OnFocus(owner, index, /*fromPaint=*/false);   // gates the content path internally
+        }
     } else if (msg == MSG_YES || msg == MSG_NO || msg == MSG_CANCEL) {
         // No-list 2-choice pop-up result path (owner = parent). Logged for now;
         // the tested quit pop-up is the list variant handled via 0x8000 above.
@@ -450,6 +544,23 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         Log::Write("READER", hdr);
     }
     return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
+}
+
+// FUN_00244830(old, new, flag): sets DAT_0208ebc0 = new (the pane gaining the cursor). It fires
+// just AFTER the entered pane's first 0x8000 (which was gated out because the focus pointer hadn't
+// flipped yet), so we replay that stashed focus now that IsFocusedPane(new) is true — this is what
+// makes the first item on entering a submenu speak.
+void HookedFocusSet(void* oldWin, void* newWin, int flag) {
+    if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
+    void* o; int idx; uint32_t rowOff;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        o = g_stashOwner; idx = g_stashIndex; rowOff = g_stashRowOff;
+    }
+    if (o && o == newWin && idx >= 0) {
+        if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
+        else        OnFocus(o, idx, /*fromPaint=*/true);
+    }
 }
 
 // FUN_00240750(configId, &newDisplayIdx): the config store is written when a value
@@ -523,6 +634,8 @@ bool Init() {
     bool ok = Hooks::InstallTyped(RVA_DISPATCH,    &HookedDispatch,   &s_origDispatch);
     ok     &= Hooks::InstallTyped(RVA_STORE_WRITE, &HookedStoreWrite, &s_origStoreWrite);
     ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
+    ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
+    ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -535,6 +648,8 @@ void Shutdown() {
     if (!g_initialized) return;
     TextCapture::SetMenuPaintedCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
+    IngameMenuReader::Shutdown();
+    Hooks::Uninstall(RVA_FOCUS_SET);
     Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);
     Hooks::Uninstall(RVA_DISPATCH);

@@ -717,6 +717,81 @@ irrelevant and the game's behavior is unchanged. (Forcing the keyboard non-exclu
 was tried and did NOT work; reverted.) NVDA's own key commands remain blocked under the game's grab — separate
 issue; the mod doesn't depend on them. Full game keybindings + mod keys: `Docs/Controls.md`.
 
+### Name resolver + Layer-3 turn-by-turn (Session 24, 2026-07-08)
+**Compass frame:** FFXII world **north = -Z**. `nav_common::BearingDeg` = `atan2(dx, -dz)`;
+`ReadPlayerYaw` = `atan2(fx, -fz)`; the entity_list obstacle-probe uses the same (base
+`atan2(dx,-dz)`, offset `p.z - cos(a)*probe`). E/W (dx) not flipped.
+
+**Object name resolver (memory-only; replaces the broken `FUN_0035d380(1,def+4)` party resolver).**
+The game's own `FUN_00263990(sceneObj)` (RVA `0x143990`) reads a name key at **`sceneObj+0x102`**
+(s16), where `sceneObj = *(actor+0x10)`:
+- `idx >= 0` → global **npcdic** dictionary. `npcdic.bin` (`NPC0`) is loaded at boot (resource cat
+  9 / id 0x1f) into **`DAT_02b5e0d8` (RVA `0x2A3E0D8`, holds the blob base)**. Lookup `FUN_003eac10`
+  (RVA `0x2CAC10`): `id &= 0xffffbfff`; `slot = id*2`; if `slot < *(int)(base+8)` then codec ptr =
+  `*(s32)(base + 0xc + slot*4)` (relocated low-mem pointer, sign-extend). Even slot = name, odd = yomi.
+- `idx < 0` → per-map custom string at `*(sceneObj+0xf8)` (set by the map's `fieldsignmes` script).
+- Decode with `GameText::Decode`. Offline-verified via `..\FFXII-Decompile\tools\parse_npcdic.py`
+  (real codec): **469=Save Crystal, 466=Gate Crystal, 434=Treasure, 468=Urn**. Area names =
+  `planmapname.bin` (`PLMN`), `tools/parse_planmapname.py`: 1328=Rabanastre. Runtime reads the game's
+  OWN loaded copy (per-locale); nothing shipped (SE IP).
+
+**Layer-3 turn-by-turn = A* on the GAME THREAD** (`src/navigation/path_planner.{h,cpp}`; key `/`
+= `VK_OEM_2`/DIK `0x35`). Lazy-sampled walkability A* (cell 1 m, ray budget 2000, range 40 m via
+`bullet_query`); output = turn-by-turn legs or **"No path"/"Too far to route"/"Route unavailable"**
+(no crow-flies fallback — that is `\`). **Crash-safety (ported from DQ7R post-mortems):**
+- Drain hooked at **`FUN_00314020` (RVA `0x1F4020`)** — the once-per-frame field sim step (mode 0 =
+  field), at ENTRY (before its teardown driver `FUN_0025bfb0` runs later in the same call). Returns
+  **bool** — match it (a wrong return type clobbers RAX).
+- World-invalidate + **monotonic map-epoch bump** hooked at **`FUN_002695a0` (RVA `0x1495A0`)** — the
+  field-global teardown, at START (before it zeroes the leader ptr / clears 0x10 / frees the world).
+  Returns **void**.
+- Hard gate `PlayerState::IsFieldNavSafe()` — the `0x10` field-live bit is stale-valid on teardown /
+  premature on load, so it is paired with: area collision **`DAT_02b5e0c0` (RVA `0x2A3E0C0`)** ≠ 0,
+  area id **`DAT_02b5e0b8` (RVA `0x2A3E0B8`)** ≠ 0xFFFFFFFF, live `*(ctx+0x60)`, leader
+  **`DAT_0209a1f0` (RVA `0x1F7A1F0`)** ≠ 0, and the leader resolves. A request captured before a
+  transition is un-revivably dropped by the epoch. Map lifecycle: load sets `0x10` early
+  (`FUN_002342f0`) before collision/world ready; teardown clears it late (`FUN_002341c0`) after they
+  are freed — hence the extra liveness terms + the invalidation hook.
+
+### Field-object scanner CORRECTED + drain fix (Session 25, 2026-07-09)
+Runtime test (Reks prologue) exposed three defects; RE of the game's OWN interaction scanner
+(`FUN_0025b820`) fixed them. **Supersedes the actor-pool enumeration and the `FUN_00314020`
+drain above.**
+
+**Enumerate the scene-object HANDLE TABLE, not the BtlWork actor pool.** `DAT_0208e688` holds
+characters/combatants only — it never contained the field gimmicks (the old scan found just the 2
+NPCs, never the iron gate). The registry of EVERY live field object (party, NPCs, and static
+gimmicks: gates/doors/switches/treasure/crystals), populated en-masse at MAP LOAD
+(`FUN_002679f0`/`FUN_0026ce60`) and walked each frame by the interaction scanner `FUN_0025b820`
+(RVA `0x13B820`), is `DAT_02098e10` (RVA `0x1F78E10`), **5 containers × 0x288**:
+- active = `*(u8)(base + c*0x288 + 0x10) & 1`; entry array = `*(void**)(base + c*0x288 + 0x08)`
+- count = `*(int)entries` (== block+0x20); object i = `*(void**)(entries + 0x08 + i*8)` (0 = empty).
+Skip the leader. Gimmicks are NOT proximity-spawned — only the floating Action Icon is proximity-driven.
+
+**Position (universal): `node = *(sceneObj+0xB8); XYZ = node+0x00/+0x04/+0x08` (float).** Valid for
+every world-present object (obj+0x03 low-5 category 1–7; category 0 = pure trigger → node null).
+**Do NOT apply `FUN_00265020`'s class-nibble guard** (`(*(u8)(sceneObj+3)>>5)∈{1,3}`) — it zeroes a
+gate whose class isn't 1/3, dropping it. `PlayerState::ReadSceneObjectPos` now guards only on
+`node != 0`. (Node layout `FUN_00266ad0`: cats 1–7 → transform node at obj+0x120; +0x00 = world pos.)
+
+**Interaction flags @ `sceneObj+0x1C`** (from `FUN_0025b820`/`FUN_0025bad0`/`FUN_0025be50`): bit
+`0x400` = talk target (NPC/person), bit `0x4` = action target (gate/door/switch/item). The game's
+chosen interaction target: container id `DAT_0209a2b4`, object id `DAT_0209a2b8`, min-dist
+`DAT_0209a2b0` (RVA 0x1F7A2B4/B8/B0); leader scene object `DAT_02099d78` (RVA `0x1F79D78`).
+
+**Classify** by the npcdic id band (`sceneObj+0x102 & 0xbfff`): 433–469 = gimmick objects (434
+Treasure, 468 Urn, 466 Gate Crystal, 469 Save Crystal, 435–459/467 crystals) → sub-type; else
+talk-flag → Person; else Object. **`def+0x05` is 0=static/1=animated, NOT an NPC flag** — the old
+`(kind==0)?NPC:Object` mislabeled every NPC (they are kind 1); the pool path is now unused.
+
+**Route drain moved to `FUN_0022a770` (RVA `0x10A770`)** — the no-arg per-field-frame tick
+(walking-state `DAT_02064ad3==2`), returns u64. Replaces `FUN_00314020` (0x1F4020): its `mode==0`
+path hides behind a fixed-timestep accumulator AND an else-branch bypass (`FUN_001800e0()!=0` →
+`FUN_002f1770`) a scripted tutorial holds open → the route request was never drained (silent `/`).
+Teardown hook (`FUN_002695a0`) + `IsFieldNavSafe` gate unchanged. `entity_list` now walks the handle
+table, rescans fresh on every cycle/describe, and `LogDiagnostic` dumps all named/interactive scene
+objects per container (cat byte, flags, npcdic key, name, pos).
+
 ---
 
 ## Message / Dialogue / Panel Text (2026-07-07) — decompile-exhausted, ≥0.98; Frida-pending

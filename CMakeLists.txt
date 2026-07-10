@@ -34,6 +34,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/menu_observer.cpp
     src/ui/text_capture.cpp
     src/ui/menu_reader.cpp
+    src/ui/ingame_menu_reader.cpp
     src/ui/title_reader.cpp
     src/ui/message_reader.cpp
     src/navigation/navigation.cpp
@@ -44,6 +45,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/entity_list.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
+    src/navigation/path_planner.cpp
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

@@ -2,6 +2,8 @@
 #include "navigation/entity_list.h"
 #include "navigation/player_state.h"
 #include "navigation/nav_common.h"
+#include "navigation/path_planner.h"
+#include "navigation/nav_types.h"
 #include "core/logger.h"
 #include "speech/speech.h"
 
@@ -12,6 +14,22 @@
 namespace NavCommands {
 
 namespace {
+
+// `/` — request a turn-by-turn route to the current selection. The actual A* runs on
+// the game thread (crash-safe on transitions); the legs (or "No path") are spoken from
+// there a frame or two later. We only capture the fixed world target here.
+void RouteToCurrent() {
+    FVec3 pos; std::wstring label;
+    if (!EntityList::GetCurrentTarget(pos, label)) {
+        // Front-of-pipeline diagnostic: distinguishes "/ produced no target" from
+        // "/ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
+        Log::Write("NAV-ROUTE", "'/' pressed: GetCurrentTarget returned no target -> \"No target\"");
+        Speech::Output(L"No target");
+        return;
+    }
+    Log::Write("NAV-ROUTE", "'/' pressed: target acquired -> PathPlanner::Request");
+    PathPlanner::Request(pos, label);
+}
 
 void SpeakFacing() {
     float yaw = 0.0f;
@@ -46,6 +64,7 @@ void OnNavKey(int vk, bool /*shift*/) {
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_OEM_1:      SpeakFacing();                    break;  // ;  facing readout
+        case VK_OEM_2:      RouteToCurrent();                 break;  // /  turn-by-turn route
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump
         default:            break;
     }

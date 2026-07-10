@@ -67,6 +67,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `=` | Nav: next category | free |
 | `` ` `` | Nav: rescan + area name | free |
 | `;` | Nav: facing readout | free |
+| `/` | Nav: turn-by-turn route to current selection | free |
 | `'` | Nav: diagnostic dump | free |
 | `F4` | Combat log open (planned) | free (F1–F3 are game speed; F4 unbound) |
 | `Esc` | Combat log close (planned) | game Pause — handled by modal intercept |

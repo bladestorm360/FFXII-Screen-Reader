@@ -37,6 +37,7 @@ constexpr uint32_t RAYCAST_WRAPPER = 0x581A70;
 
 // ---- Handle-table layout (from FUN_003588b0 + FUN_00263ff0) -----------------
 constexpr uint32_t HANDLE_TABLE_STRIDE = 0x288;  // 0x51 * sizeof(uint64)
+constexpr uint32_t HANDLE_TABLE_CONTAINERS = 5;  // 5 map containers (sel 0..4)
 constexpr uint32_t TBL_GUARD_OFF       = 0x00;   // must be non-zero
 constexpr uint32_t TBL_ENTRIES_OFF     = 0x08;   // int* entries (entries[0] = count)
 constexpr uint32_t TBL_ACTIVE_OFF      = 0x10;   // byte; & 1 == active
@@ -45,6 +46,15 @@ constexpr uint32_t ENTRIES_COUNT_OFF   = 0x00;   // int count at entries+0x00
 constexpr uint32_t ENTRIES_SLOT0_OFF   = 0x08;   // object ptr at entries+0x08+slot*8
 constexpr uint32_t OBJ_GENERATION_OFF  = 0x16;   // u16 generation (vs handle bits 20..30)
 
+// ---- Scene-object interactivity flags (from the game's own interaction scanner
+//      FUN_0025b820 / testers FUN_0025bad0 / FUN_0025be50). Every live interactive
+//      field object (NPC, gate, door, switch, treasure, crystal) is reachable through
+//      the handle table above; these flags say what KIND of interaction it offers.
+//      A load-time GATE is an ACTION object (0x1C & 0x4) present from map load. ----
+constexpr uint32_t SCENEOBJ_FLAGS_OFF  = 0x1C;   // u32 flags word on the scene object
+constexpr uint32_t FLAG_TALK           = 0x400;  // talk target (NPC/person)
+constexpr uint32_t FLAG_ACTION         = 0x004;  // action target (gate/door/switch/item)
+
 // ---- Scene object / char component (from FUN_00263e30 / FUN_00317e60) -------
 constexpr uint32_t SCENEOBJ_COMPONENT_OFF = 0x30;  // *(sceneObj+0x30) = char component
 constexpr uint32_t COMPONENT_VALID_MASK   = 0x08;  // (*(uint*)component & 0x08) != 0
@@ -52,12 +62,14 @@ constexpr uint32_t COMPONENT_VALID_MASK   = 0x08;  // (*(uint*)component & 0x08)
 // ---- Physics context / world (from FUN_006a1a70) ----------------------------
 constexpr uint32_t CTX_WORLD_OFF = 0x60;  // *(context+0x60) = live Bullet world
 
-// ---- Live world position + facing (from FUN_00265020 / FUN_00336710) --------
-// The engine getter FUN_00265020 reads the scene object's transform pointer at
-// +0xB8 (guarded by the type nibble), then the 3 world-position floats off it.
-// Position is mirrored into the char component's embedded world matrix @ +0xE0.
-constexpr uint32_t SCENEOBJ_TYPE_BYTE   = 0x03;   // (*(u8)(sceneObj+3) >> 5) must be 1 or 3
-constexpr uint32_t SCENEOBJ_XFORM_PTR   = 0xB8;   // *(sceneObj+0xB8) -> transform
+// ---- Live world position + facing (from FUN_00265020 / FUN_00266ad0) --------
+// The scene object's transform node is at +0xB8; its first 3 floats are the cached
+// world position. The node is set for every world-present object (obj+3 low-5-bit
+// CATEGORY 1-7 incl. static gimmicks/gates); only category 0 (pure triggers) has a
+// null node. We read the raw chain guarded on node != 0 — NOT the engine getter's
+// class-nibble gate (obj+3 >> 5 in {1,3}), which zeroes gates whose class isn't 1/3.
+constexpr uint32_t SCENEOBJ_TYPE_BYTE   = 0x03;   // low5 = category, high3 = class (diagnostic only)
+constexpr uint32_t SCENEOBJ_XFORM_PTR   = 0xB8;   // *(sceneObj+0xB8) -> transform node
 constexpr uint32_t XFORM_POS_X          = 0x00;   // float X (ground)
 constexpr uint32_t XFORM_POS_Y          = 0x04;   // float Y (elevation / up)
 constexpr uint32_t XFORM_POS_Z          = 0x08;   // float Z (ground)
@@ -75,12 +87,30 @@ constexpr uint32_t FIELD_ACTIVE2    = 0x1F69300;  // DAT_02089300 (field/battle-
 constexpr uint32_t ACTOR_STRIDE     = 0xF50;
 // Per-actor offsets:
 constexpr uint32_t ACTOR_SCENEOBJ   = 0x10;   // *(actor+0x10) = scene object (== leader sceneObj for the leader)
+constexpr uint32_t ACTOR_NAME_STR   = 0x18;   // *(codec*)(actor+0x18) = localized combatant name (FUN_002b58b0 result, decode w/ GameText)
+constexpr uint32_t ACTOR_ACTIVE_OFF = 0x00;   // *(u8)(actor+0x00) & ACTOR_ACTIVE_BIT = active / has model
+constexpr uint32_t ACTOR_ACTIVE_BIT = 0x10;
 constexpr uint32_t ACTOR_POS_X      = 0xE0;   // cached world X
 constexpr uint32_t ACTOR_POS_Y      = 0xE4;   // cached world Y (elevation)
 constexpr uint32_t ACTOR_POS_Z      = 0xE8;   // cached world Z
 constexpr uint32_t ACTOR_YAW        = 0x160;  // cached facing yaw (radians)
 constexpr uint32_t ACTOR_DEF_PTR    = 0x698;  // source definition ptr (null => empty slot)
-constexpr uint32_t DEF_KIND_BYTE    = 0x05;   // *(s8)(def+5): 0 = character/NPC, 1 = gimmick
+// *(u8)(def+5) is PLAYER-vs-AI, NOT faction (runtime-disproven 2026-07-09: in the Reks prologue
+// only Reks — the player-controlled leader — is 0; allies AND enemies are 1). Use it only to skip
+// the player-controlled unit. Enemy-vs-ally = the def-attribute bit below.
+constexpr uint32_t DEF_KIND_BYTE     = 0x05;
+constexpr uint8_t  PLAYER_DEF_KIND   = 0;      // def+5 == 0 => player-controlled (the leader) — skip
+// Enemy-vs-ally discriminator: the game's OWN faction test — identical in the damage path
+// (FUN_0030ab40), the HUD builder (FUN_00329220), and the target classifier (FUN_002f8e90) — is
+// the "scene-kind" nibble on the scene object: kind = *(u8)(sceneObj + 0x0e) & 0x0f (accessor
+// FUN_00263c20). kind==3 => ally/party-side; kind in {1,2,7} => enemy; kind==5 => dead/removed.
+// This is what def+5 CANNOT do in the guest/prologue setup (there every non-leader is def+5==1).
+// (def+0x3c/0x64 are status-flag words, NOT faction — the earlier bit-24 test was wrong.)
+constexpr uint32_t SCENEOBJ_KIND_OFF = 0x0E;   // *(u8)(sceneObj+0x0e) & KIND_MASK = scene-kind nibble
+constexpr uint8_t  KIND_MASK         = 0x0F;
+constexpr uint8_t  KIND_ALLY         = 3;      // party-side (guests + AI party)
+constexpr uint8_t  KIND_DEAD         = 5;      // dead/removed — exclude from the scan
+constexpr uint32_t DEF_CHARID        = 0x04;   // def+4 = roster char-id (0-6 party/7-25 guest/27-39 enemy) — diag only
 constexpr uint32_t DEF_ID_U16       = 0x04;   // *(u16)(def+4): entity/definition id
 // Pool (re)fill sites — hook one for a post-transition rescan (event-driven):
 constexpr uint32_t POOL_INIT   = 0x1168D0;  // FUN_002368d0 (pool init / field reset)
@@ -100,15 +130,25 @@ constexpr uint32_t FIELDSIGNMES           = 0x236B70;  // observe-hook target (l
 constexpr uint32_t SETNPCNAME             = 0x22B9A0;  // observe-hook target (NPC name)
 constexpr uint32_t MAPJUMP_ARRAY_LOOKUP   = 0x144B90;  // FUN_00264b90 (exit array base/stride)
 
-// ---- Name resolution (master data, current locale; from FUN_0035d380 / FUN_003778b0)
-// FUN_0035d380(type=1, objid) fills a static name-context and returns it; the codec
-// name string is at ctx+0x08 (NPC) or ctx+0x10 (gimmick). objid = *(u16)(def+4).
-constexpr uint32_t OBJ_NAME_RESOLVE  = 0x23D380;  // FUN_0035d380(1, objid) -> ctx*
-constexpr uint32_t NAMECTX_NPC_OFF   = 0x08;      // ctx+0x08 = NPC/char name codec*
-constexpr uint32_t NAMECTX_GIMMICK_OFF = 0x10;    // ctx+0x10 = gimmick name codec*
+// ---- Name resolution (the game's own master data, read memory-only) ----------
+// Each field object stores its name key on its SCENE OBJECT (*(actor+0x10)) — read
+// by the game's own resolver FUN_00263990(sceneObj): idx = *(s16)(sceneObj+0x102).
+// If idx >= 0 the name is npcdic[idx]; if idx < 0 the name is a per-map custom
+// string pointer at *(sceneObj+0xf8) (set by the map's fieldsignmes script). This
+// replaces the old FUN_0035d380(1, def+4) call, which was the party/roster resolver
+// fed a model index and always failed (-> the "Object" fallback).
+constexpr uint32_t SCENEOBJ_NAME_IDX = 0x102;  // *(s16): >=0 npcdic index, <0 -> use +0xf8
+constexpr uint32_t SCENEOBJ_NAME_STR = 0xf8;   // *(codec*): per-map custom string (when idx<0)
+// npcdic.bin ("NPC0") is loaded once at boot into DAT_02b5e0d8 (resource cat 9/id
+// 0x1f); the global holds the blob base pointer. Lookup (FUN_003eac10): slot = id*2
+// (base name; odd slot = yomi/reading); name codec* = *(s32)(base + 0xc + slot*4).
+constexpr uint32_t NPCDIC_BASE       = 0x2A3E0D8;  // DAT_02b5e0d8 (ptr to npcdic blob)
+constexpr uint32_t NPCDIC_COUNT_OFF  = 0x08;       // *(int)(blob+8) = slot count (name+yomi pairs)
+constexpr uint32_t NPCDIC_TABLE_OFF  = 0x0c;       // s32 offset table at blob+0xc, indexed by slot
+constexpr uint32_t NPCDIC_NAME_MASK  = 0xffffbfff; // idx & this = npcdic id (game masks bit 14)
 // FUN_003778b0() -> current-area name codec string (no args; empty if not loaded).
 constexpr uint32_t CURRENT_AREA_NAME = 0x2578B0;
-// DAT_01ceb638 = the shared empty-string sentinel returned by both name paths.
+// DAT_01ceb638 = the shared empty-string sentinel ("") the name paths return on miss.
 constexpr uint32_t EMPTY_STRING      = 0x1BCB638;
 
 // ---- Gimmick tables (classification; from FUN_0031c2f0) ----------------------
@@ -120,5 +160,32 @@ constexpr uint32_t FIELD_STATE_BLOCK      = 0x2D9F190;  // DAT_02ebf190 (ptr to 
 // the runtime-pinned discriminator — the diagnostic dumps these to pin it.
 constexpr uint32_t FIELDSIGN_CAT_A_OFF    = 0x5A7E;
 constexpr uint32_t FIELDSIGN_CAT_B_OFF    = 0x5A90;
+
+// ---- Field-nav game-thread lifecycle (turn-by-turn A* runs on the game thread) --
+// The route planner casts many walkability rays; doing that on the mod's input thread
+// would race the physics step and read half-loaded/half-freed maps (crash). So the
+// planner runs ON the game thread, drained once per field frame, hard-gated on the
+// map being fully live, and its cached world is invalidated the instant teardown
+// starts. RVAs/globals from the map-lifecycle RE (see GameArchitecture Pathfinder).
+//
+// FUN_0022a770(): the per-field-frame tick — entered exactly once per rendered frame
+// while the game is in the real-time field/walking state (screen-state DAT_02064ad3==2),
+// draining a pending route request at ENTRY (previous frame's fully-settled state).
+// This REPLACES FUN_00314020 (0x1F4020): that render-step's mode==0 path sits behind a
+// fixed-timestep accumulator AND an else-branch bypass (FUN_001800e0()!=0 -> FUN_002f1770
+// directly), so it can stay silent during scripted sequences (the Reks tutorial). 0022a770
+// has no such gate. No args; returns undefined8 (=1) — the hook is return-transparent.
+constexpr uint32_t FIELD_FRAME       = 0x10A770;  // FUN_0022a770 (no args, returns u64)
+// FUN_002695a0(): field-global teardown (single caller, game thread). Hook its START
+// to invalidate the cached physics world + bump the map epoch BEFORE the game zeroes
+// the leader ptr / frees the world / clears the 0x10 bit.
+constexpr uint32_t FIELD_TEARDOWN    = 0x1495A0;  // FUN_002695a0 (returns void)
+// Liveness globals for IsFieldNavSafe(). The FIELD_ACTIVE 0x10 bit alone is NOT safe:
+// it is set early on load (before area collision + world are ready) and cleared late
+// on teardown (after they are freed). These back it up (DAT_02b5e0c0 is the earliest
+// reliable "gone" signal; re-check the live world pointer every frame):
+constexpr uint32_t AREA_ID           = 0x2A3E0B8;  // DAT_02b5e0b8 (u32; 0xFFFFFFFF = no area)
+constexpr uint32_t AREA_COLLISION    = 0x2A3E0C0;  // DAT_02b5e0c0 (ptr; 0 = area collision not loaded)
+constexpr uint32_t LEADER_ACTOR_PTR  = 0x1F7A1F0;  // DAT_0209a1f0 (ptr; leader actor, 0 = torn down)
 
 } // namespace NavRva

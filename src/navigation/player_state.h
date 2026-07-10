@@ -21,6 +21,15 @@ namespace PlayerState {
 // maps — every read below returns false/null when this is false.
 bool IsFieldActive();
 
+// The HARD gate for game-thread pathfinding: true ONLY when the field map is fully
+// loaded and stable — field sim live AND area collision loaded AND a valid area id
+// AND the actor pool + leader resolve AND the Bullet world is built. Stricter than
+// IsFieldActive() because the 0x10 bit is set early on load / cleared late on
+// teardown; this pairs it with the area-collision + live-world pointers so the
+// planner never touches a half-loaded or half-freed map. Call on the game thread
+// before any raycast. SEH-guarded throughout.
+bool IsFieldNavSafe();
+
 // Raw leader handle (DAT_022c7fe0). 0 if none.
 uint32_t ReadLeaderHandle();
 
@@ -52,9 +61,11 @@ struct LeaderChain {
 };
 LeaderChain CaptureLeaderChain();
 
-// ---- Post-M0 (offset pinned by the diagnostic dump) -------------------------
-// Live leader world position / yaw. Disabled until M0 identifies the
-// component->controller->matrix offset; return false meanwhile.
+// ---- Live world position / facing (offset pinned; FUN_00265020 chain) -------
+// World position of ANY scene object (leader, NPC, or static gimmick) via its
+// transform pointer at sceneObj+0xB8. Returns false on any read/guard failure.
+bool ReadSceneObjectPos(void* sceneObj, FVec3& out);
+// Live leader world position / yaw.
 bool ReadPlayerPos(FVec3& out);
 bool ReadPlayerYaw(float& outRadians);
 

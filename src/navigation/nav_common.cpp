@@ -15,9 +15,10 @@ constexpr float kRadToDeg = 180.0f / kPi;
 // steps/s is ~0.75 m, so 1 step = 0.75 world units. Runtime-tunable for feel.
 float g_unitsPerStep = 0.75f;
 
-// Cardinal labels, index 0 = North, clockwise. Bearing convention: 0deg = +Z
-// ("north"), +90deg = +X ("east"). Whether this matches the in-game minimap's
-// north is a runtime-tuning detail (flip the axis/sign here if it doesn't).
+// Cardinal labels, index 0 = North, clockwise. Bearing convention: FFXII's world
+// north is -Z (confirmed in-game: +Z read as South), so 0deg = -Z ("north"),
+// +90deg = +X ("east"). E/W (dx) is not flipped. If a runtime pass shows E/W is
+// also inverted, additionally negate dx here.
 const wchar_t* kCardinal[8] = {
     L"North", L"Northeast", L"East", L"Southeast",
     L"South", L"Southwest", L"West", L"Northwest",
@@ -28,11 +29,11 @@ const wchar_t* kEgo[8] = {
     L"Behind", L"Behind and left", L"Left", L"Ahead and left",
 };
 
-// Bearing in degrees [0,360): 0 = +Z, increasing toward +X.
+// Bearing in degrees [0,360): 0 = -Z (game north), increasing toward +X (east).
 float BearingDeg(const FVec3& from, const FVec3& to) {
     float dx = to.x - from.x;
     float dz = to.z - from.z;
-    float deg = std::atan2(dx, dz) * kRadToDeg;
+    float deg = std::atan2(dx, -dz) * kRadToDeg;
     if (deg < 0.0f) deg += 360.0f;
     return deg;
 }
