@@ -1242,3 +1242,22 @@ N/S (negate Z); (4) then full A* turn-by-turn (game-thread grid).
 2. General feature: **speak the initial focus when a menu screen opens** (applies beyond Status).
 3. Battle targeting vitals (ally Lv/HP, enemy HP%) and field-menu ability targeting (heal/buff → pick ally) — both deferred targeting interfaces.
 4. Char-select column labels: decide source once the values work (draw-path probe with fire counters, or accept baked-glyph read).
+
+## Session 32 — 2026-07-11 — [target-reader] Battle target-selection readout SHIPPED (real path found on DAT_0209be80)
+
+**KEYWORDS:** The Session-28..31 targeting hook (reticle `FUN_005528c0` / `node+0x48` / gate `DAT_02ca8f38`) **NEVER FIRED** — DISPROVEN by live Frida (zero `[tgt]`/`[ret]` lines). It is the free-aim/area-target mode only, NOT the normal Foes/Party/Allies **highlight menu**. Root cause of every failed attempt: target selection is a **SEPARATE object on the battle-HUD context `DAT_0209be80`** (RVA `0x1F7BE80`), **not** the command controller `DAT_0209ac30` (`ctx+0xde0` = the ACTING character, stayed on Reks even while aiming at the enemy — that shipped a wrong "Reks at battle start" readout, now removed). Confirmed by three independent decompile traces converging on the same field + a Frida run. **Current highlighted target handle = `*(int)( *(DAT_0209be80) + 0x9FD8 )`** (nameplate/target-info mgr `0x8fa0+0xac0+0x578`); target selection is active while `*(P+0x10f78) != 0` (single-target selector obj; absent during plain command navigation); the target is committed by `FUN_002be300` (RVA `0x19E300`) which plays the cursor-move beep `FUN_00249c60(1)` only on a real change. Handle decode `FUN_003588b0` (RVA `0x2388B0`, ABS 0x3588B0) = `(list=bits16-19, slot=low16, gen=bits20-30)` — UNRELIABLE to call directly from a hook (returned garbage). So the reader instead: `FUN_002bfd20` (RVA `0x19FD20`, nameplate render) resolves the handle to the real BtlChr and passes it to the vitals builder `FUN_00329220` (RVA `0x209220`); we flag "this render == current target" when `panel+0x288 == *(P+0x9FD8)` and capture `bc` in the nested `FUN_00329220` call. Name = actor pool (`*(actor+0x698)==bc` → `actor+0x18`); **real** HP = `bc+0x48`/`bc+0x24`; faction = scene-kind nibble `*(u8)( *(actor+0x10) + 0x0e ) & 0x0f` (`3`=ally). USER: enemy readout "so close" (worked); ally was mis-classed as enemy (percentage) via the wrong `panel+0x280 & 2` flag → switched to the scene-kind test.
+
+**SHIPPED (built + deployed):**
+- **New `src/ui/battle_target_reader.{h,cpp}`** — two-hook readout (`FUN_002bfd20` marks the current-target render; nested `FUN_00329220` captures the real BtlChr), gated on the selector `+0x10f78`, deduped on target-handle change (covers initial entry). Speech: **enemy** = `"<name>, HP <pct> percent"` (percentage from real cur/max; no MP, no numbers pre-Libra); **ally** = `"<name>, HP <cur> of <max>"`. Reads memory-only, SEH-guarded, game thread, no game calls. Wired into `MenuReader::Init/Shutdown`.
+- **Removed the dead reticle hook** (`FUN_005528c0` / `ReadHoveredTargetName` / `HookedReticle` + its constants) from `ingame_menu_reader.cpp` — it never fired.
+
+**DEFERRED:**
+- **Context-sensitive ally HP↔MP** (MP for MP restoratives, DQ7R-style) — needs an MP restorative to test (only Cure/Thunder in the tutorial). Detect from the aimed action's effect.
+- **Enemy post-Libra numbers** — the real HP-visible/Libra flag is still UNKNOWN (BtlChr status bit `0x10000` was WRONG: read 0 for the un-Libra'd enemy). Enemy stays percentage-only, correct for the whole no-Libra period.
+- **Multi-target sweep** — the tutorial is solo-Reks + one enemy, so the cursor can't move; initial-entry works, sweep verifies once a battle has multiple targets (targetId `+0x9FD8` will change per move).
+- **Party-HUD status bar** (lower-right, all members' HP/MP) — separate feature.
+
+**PICKUP:**
+1. Confirm the **ally** readout in-game (scene-kind fix); confirm no readout during plain command navigation (gate `+0x10f78`).
+2. Multi-target battle: confirm the cursor-move re-announces (targetId `+0x9FD8` changes; beep `FUN_00249c60(1)`).
+3. Stage 3 context-sensitive ally MP when an MP restorative is obtained; find the real enemy HP-visible/Libra flag when Libra is available.

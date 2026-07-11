@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/text_capture.cpp
     src/ui/menu_reader.cpp
     src/ui/ingame_menu_reader.cpp
+    src/ui/battle_target_reader.cpp
     src/ui/title_reader.cpp
     src/ui/message_reader.cpp
     src/navigation/navigation.cpp

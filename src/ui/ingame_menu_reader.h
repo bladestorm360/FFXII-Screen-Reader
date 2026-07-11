@@ -18,12 +18,13 @@
 // FUN_0056f810/0xE0 (sub-panel), FUN_0057b890/0xD0 (equip-type list).
 //
 // menu_reader owns the single FUN_00247510 hook and delegates row-chain owners here. It also
-// owns the battle target-reticle name hook (installed by Init below). All reads are memory-only
-// + SEH-guarded; text is the game's own (decoded via GameText).
+// owns the battle command-draw + status-chooser hooks (installed by Init below). All reads are
+// memory-only + SEH-guarded; text is the game's own (decoded via GameText). (The battle
+// target-selection readout is a separate reader — see battle_target_reader.{h,cpp}.)
 namespace IngameMenuReader {
 
-// Installs the battle target-reticle name hook (FUN_003bfe10). Called from MenuReader::Init;
-// the row-chain focus path needs no install (menu_reader's dispatch hook delegates to it).
+// Installs the battle command-draw + status-chooser hooks. Called from MenuReader::Init; the
+// row-chain focus path needs no install (menu_reader's dispatch hook delegates to it).
 bool Init();
 void Shutdown();
 

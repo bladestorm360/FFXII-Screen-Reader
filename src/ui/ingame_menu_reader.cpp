@@ -77,20 +77,10 @@ constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // chooser category otherwise (Ma
 typedef const uint8_t* (*Pfn_ResolveDef)(uint32_t, uint32_t);  // FUN_0035d330(cat, id)
 typedef const uint8_t* (*Pfn_ResolveItem)(uint32_t);           // FUN_00272cb0(id)
 
-// ---- Battle target selection (menu-style: after picking a command that needs a target) --------
-// Each target node carries the pre-resolved name codec at node+0x48 (set at list build; mirrors
-// Libra "????"). The hovered node follows the cursor at reticle+0x9f40. Pure memory read. Gate to
-// menu-style selection (the target window exists AND mode != 3 = not a passive preview) so it never
-// fires for the field/free-roam auto-target reticle (which never touches DAT_02ca8f38).
-constexpr uint32_t RVA_RETICLE        = 0x4328C0;  // FUN_005528c0 (reticle child handler)
-constexpr uint32_t RVA_TARGET_WIN     = 0x2B88F38; // DAT_02ca8f38 (ptr) — target-select window
-constexpr uint32_t RVA_BATTLE_STATE   = 0x1F7BE80; // DAT_0209be80 (ptr) — battle state
-constexpr uint32_t OFF_TARGET_MODE    = 0x10FA2;   // *(u8)(battleState+0x10fa2) = select mode (3=passive)
-constexpr uint32_t OFF_RETICLE_NODE   = 0x9F40;    // *(reticle+0x9f40) = hovered target node
-constexpr uint32_t OFF_NODE_NAME      = 0x48;      // *(node+0x48) = name codec ptr
-
-typedef uint64_t (*Pfn_Reticle)(void*, void*);
-Pfn_Reticle s_origReticle = nullptr;
+// Battle target-selection readout lives in battle_target_reader.cpp now (hooks the vitals builder
+// FUN_00329220 + the current-target index ctx+0xde0). The old reticle hook (FUN_005528c0) was
+// removed: probing proved it never fires for normal Foes/Party/Allies selection (it is the
+// free-aim/area mode only), which is why targeting was silent.
 
 // ---- Status screen party-member chooser (FIELD menu; the shared "Select a character" grid) -----
 // ⚠️ DEFERRED / NOT WORKING YET (Session 31, 2026-07-11). This reader is SILENT and does not ship a
@@ -131,7 +121,6 @@ void*        g_lastOwner = nullptr;
 std::wstring g_lastText;
 std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (cached from FUN_00276be0)
 std::wstring g_lastBcmdText;               // dedup for the battle command focus (by spoken text)
-void*        g_lastNode = nullptr;         // dedup for the target reticle (announce on hover change)
 void*        g_lastStatusCtrl = nullptr;   // dedup for the Status chooser (announce on (ctrl,slot) change)
 int          g_lastStatusSlot = -1;
 
@@ -192,26 +181,6 @@ bool ReadBcmdDraw(void* panel, int index, int* outCmdId, const uint8_t** outCode
         *outCodec = *reinterpret_cast<const uint8_t* const*>(p + OFF_BCMD_NAME);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
-// Hovered target's name codec during MENU-STYLE selection, or null (not targeting / passive mode /
-// no hover). Memory-only. Returns the node ptr via *outNode for dedup. POD-only under __try.
-const uint8_t* ReadHoveredTargetName(void* reticle, void** outNode) {
-    *outNode = nullptr;
-    if (!reticle) return nullptr;
-    __try {
-        // The target-selection window (DAT_02ca8f38) is created ONLY by the command-targeting flow
-        // (FUN_00550400); the passive free-roam auto-target reticle never touches it. So this single
-        // non-null gate is the menu-vs-freeroam discriminator. (The old `mode != 3` gate was WRONG —
-        // mode 3 is a legitimate in-menu line/locked target shape, not a passive preview, so it was
-        // silencing real selection. Free-roam is already excluded here.)
-        void* win = *reinterpret_cast<void* const*>(Hooks::ResolveRva(RVA_TARGET_WIN));
-        if (!win) return nullptr;                                   // target selector not open
-        void* node = *reinterpret_cast<void* const*>(reinterpret_cast<char*>(reticle) + OFF_RETICLE_NODE);
-        if (!node) return nullptr;
-        *outNode = node;
-        return *reinterpret_cast<const uint8_t* const*>(reinterpret_cast<char*>(node) + OFF_NODE_NAME);
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
 
 // Speak once per (owner, text). Mirrors menu_reader's focus dedup.
@@ -306,28 +275,6 @@ std::wstring BattleCommandName(void* panel, int index, int cmdId) {
     return GameText::IsMostlyPrintable(text) ? text : std::wstring();
 }
 
-// Target reticle handler — on each call read the hovered target and, when it changes, speak its
-// name (node+0x48). Gated to menu-style selection inside ReadHoveredTargetName.
-uint64_t HookedReticle(void* reticle, void* msg) {
-    uint64_t r = s_origReticle ? s_origReticle(reticle, msg) : 0;   // updates reticle+0x9f40 first
-    void* node = nullptr;
-    const uint8_t* codec = ReadHoveredTargetName(reticle, &node);
-    bool changed;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        changed = (node != g_lastNode);
-        g_lastNode = node;
-    }
-    if (node && changed && codec) {
-        std::wstring text = GameText::Decode(codec, 256);
-        if (GameText::IsMostlyPrintable(text)) {
-            LogLine("target:", node, text);
-            Speech::Output(text, /*interrupt=*/true);
-        }
-    }
-    return r;
-}
-
 // Read the highlighted Status-chooser slot's vitals + the active controller (for dedup). Returns
 // false on empty slot / fault. POD-only under __try (decode happens outside). Mirrors FUN_00283e40.
 struct StatusVitals { int charId; int curHP; int maxHP; int curMP; int maxMP; int level; };
@@ -401,16 +348,14 @@ namespace IngameMenuReader {
 
 bool Init() {
     bool ok = Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
-    ok     &= Hooks::InstallTyped(RVA_RETICLE,       &HookedReticle,     &s_origReticle);
     ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
-    Log::Write("INGAME", ok ? "IngameMenuReader: battle command-draw + target-reticle + status-chooser hooks installed"
-                            : "IngameMenuReader: a battle/target/status hook FAILED to install");
+    Log::Write("INGAME", ok ? "IngameMenuReader: battle command-draw + status-chooser hooks installed"
+                            : "IngameMenuReader: a battle/status hook FAILED to install");
     return ok;
 }
 
 void Shutdown() {
     Hooks::Uninstall(RVA_STATUS_CURSOR);
-    Hooks::Uninstall(RVA_RETICLE);
     Hooks::Uninstall(RVA_BCMD_DRAW);
 }
 

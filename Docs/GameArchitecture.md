@@ -870,20 +870,27 @@ it was just an unmapped owner class (showed as `[focus] UNKNOWN owner obj[0]=+0x
 - **NOT** `FUN_002c2320` (that's the FIELD Equipment screen, opened via pause menu `FUN_00281ed0` cmd
   0x4b6). **NOT** `FUN_002b7590`/`DAT_0209e5c0` (that's the message/dialogue framework). Both retracted.
 
-**Battle targeting (menu-style enemy/ally select) — RE-confirmed 0.99.** Window `FUN_00552250`
-(RVA `0x432250`) / reticle child `FUN_005528c0` (RVA `0x4328C0`), global `DAT_02ca8f38` (RVA
-`0x2B88F38`); driven by battle engine `DAT_0209be80` (RVA `0x1F7BE80`, target mode `+0x10fa2`, opened
-via `FUN_0028e690`/`FUN_0028e790`). Hovered target node = `*(reticle+0x9F40)`; **name codec =
-`node+0x48`** (Libra "????" swap built in via `FUN_003bd040`); **faction = `node+0x54`** (ally bit
-`0x10000`, else enemy) from `FUN_003bd480`; candidate set = enemies+allies (`FUN_003c08b0`/`FUN_003c0c50`).
-The passive free-roam auto-target reticle is a SEPARATE object (`DAT_0209be80+0x8FA0`, `FUN_002bdb60`).
-- **Session 31 name fix (USER-CONFIRMED):** the gate is JUST `*(DAT_02ca8f38) != 0` (the target-select
-  window exists only during command targeting → excludes free-roam). The old `*(u8)(DAT_0209be80+0x10fa2)
-  != 3` gate was WRONG and silenced real selection — **mode 3 is a legitimate in-menu line/locked target
-  SHAPE, not a passive preview** (set by `FUN_0027f5d0` for shapes 0xf/2/0x16). Removed.
-- Target VITALS (deferred): id `node+0x39` → actor `FUN_002367a0(id)` (RVA `0x1167A0`, pool `DAT_0208e688`
-  stride 0xF50) → BtlChr `*(u64)(actor+0x698)`; curHP `*(i32)(bc+0x48)`, maxHP `+0x24`, Lv `*(u8)(bc+0x1c2)`;
-  enemy HP% = cur*100/max; ally = `node+0x54 & 0x10000`. See `notes/battle_target_vitals_2026_07_10.md`.
+**Battle targeting (Foes/Party/Allies highlight select) — SHIPPED Session 32.**
+⚠️ The Session-28..31 model (window `FUN_00552250` / reticle `FUN_005528c0` / gate `DAT_02ca8f38`,
+`node+0x48`/`+0x54`, `DAT_0209be80+0x10fa2` mode) is **DISPROVEN** — a live probe showed those NEVER
+fire for normal foe/ally selection; that set is the free-aim/AREA-target mode only. **Do not reuse it
+for the highlight menu.** The reader that hooked it spoke nothing.
+- The highlight target selector is a SEPARATE object on the battle-HUD context `DAT_0209be80`
+  (RVA `0x1F7BE80`, a pointer `P`), **NOT** the command controller `DAT_0209ac30` (whose `+0xde0` is the
+  ACTING character, not the target). **Current highlighted target handle = `*(int)(P + 0x9FD8)`**
+  (nameplate/target-info mgr `0x8fa0+0xac0+0x578`); **active while `*(P + 0x10f78) != 0`** (single-target
+  selector obj — absent during plain command navigation). Committed by `FUN_002be300` (RVA `0x19E300`),
+  which plays the cursor-move SE `FUN_00249c60(1)` only on a real change.
+- Handle decode `FUN_003588b0` (RVA `0x2388B0`) = `(list=bits16-19, slot=low16, gen=bits20-30)` —
+  UNRELIABLE to call directly from a hook (returns garbage). Instead capture the real BtlChr indirectly:
+  the nameplate render `FUN_002bfd20` (RVA `0x19FD20`) resolves the handle and passes the BtlChr to the
+  vitals builder `FUN_00329220` (RVA `0x209220`). The reader hooks BOTH: flag the `FUN_002bfd20` call
+  whose `panel+0x288 == *(P+0x9FD8)` (gate on `+0x10f78`), then grab `bc` in the nested `FUN_00329220`.
+  Name = actor pool (`*(actor+0x698)==bc` → `actor+0x18`); **real** HP `bc+0x48`/`bc+0x24`; faction =
+  scene-kind `*(u8)( *(actor+0x10) + 0x0e ) & 0x0f` (`3`=ally, else enemy). Speech: **enemy** = HP
+  percentage (no Libra HP-visible flag found — BtlChr status bit `0x10000` was WRONG, read 0 for the
+  un-Libra'd enemy); **ally** = HP numbers. Src: `src/ui/battle_target_reader.{h,cpp}`.
+  (The older `notes/battle_target_vitals_2026_07_10.md` id→`FUN_002367a0`→actor path is SUPERSEDED.)
 
 **Field-menu "Select a character" (Status) reader — DEFERRED (Session 31, NOT working).** Chooser
 controller `FUN_00285290` (RVA `0x165290`, POLLED, not a 0x8000 owner); cursor-set `FUN_00285a10(slot)`
@@ -897,7 +904,11 @@ See `notes/status_char_select_labels_2026_07_11.md`.
 
 ---
 
-**Last updated:** 2026-07-11 (Session 31) — Magicks & Technicks two-level sub-lists SHIPPED (chooser
+**Last updated:** 2026-07-11 (Session 32) — Battle target-selection readout SHIPPED: real path is a
+SEPARATE selector on `DAT_0209be80` (`P+0x9FD8` handle, gate `P+0x10f78`), NOT the reticle set
+(DISPROVEN) nor `DAT_0209ac30+0xde0` (acting char). Two-hook reader (`FUN_002bfd20`+`FUN_00329220`),
+name/HP via actor pool, faction via scene-kind; enemy=HP%, ally=HP numbers. `src/ui/battle_target_reader.*`.
+Session 31 — Magicks & Technicks two-level sub-lists SHIPPED (chooser
 `FUN_0027d240`, spell list `FUN_0027ce70`; items `FUN_0027e530`→`FUN_00272cb0`); targeting NAME gate fixed
 (dropped the wrong mode-3 bail); Status field-menu char-select reader DEFERRED (hook doesn't fire on entry).
 Session 30: Battle command menu located (`FUN_0027ad70` via `FUN_00247510` 0x8000) + SHIPPED; targeting

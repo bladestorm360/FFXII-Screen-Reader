@@ -1,6 +1,7 @@
 #include "ui/menu_reader.h"
 #include "ui/text_capture.h"
 #include "ui/ingame_menu_reader.h"
+#include "ui/battle_target_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -640,6 +641,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
+    ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -653,6 +655,7 @@ void Shutdown() {
     TextCapture::SetMenuPaintedCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
     IngameMenuReader::Shutdown();
+    BattleTargetReader::Shutdown();
     Hooks::Uninstall(RVA_FOCUS_SET);
     Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);
