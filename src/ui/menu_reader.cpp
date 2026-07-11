@@ -527,9 +527,13 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             Log::Write("READER", d);
         }
 
-        if (rowOff) {
-            // Row-chain in-game menu (field pause menu + submenus, or the battle command menu):
-            // `val` is the focused row index. Speak only if this pane holds the cursor.
+        if (IngameMenuReader::IsBattleCommandOwner(owner)) {
+            // Battle command menu (Attack / Magicks & Technicks / Items / ...). A SEPARATE system —
+            // NOT gated by the field-menu IsFocusedPane pane isolation. `index` = highlighted command.
+            IngameMenuReader::OnBattleCommandFocus(owner, index);
+        } else if (rowOff) {
+            // Row-chain in-game menu (field pause menu + submenus): `val` is the focused row index.
+            // Speak only if this pane holds the cursor.
             if (IsFocusedPane(owner))
                 IngameMenuReader::OnRowChainFocus(owner, rowOff, index);
         } else {

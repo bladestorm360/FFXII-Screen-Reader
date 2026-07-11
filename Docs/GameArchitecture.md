@@ -844,7 +844,65 @@ Built + deployed, pending integrated play-test. Optional aid: `..\FFXII-Decompil
 
 ---
 
-**Last updated:** 2026-07-07 (Session 18) — Message/dialogue/panel reader SHIPPED in C++
+## Battle Command Menu + Targeting (Session 30, 2026-07-10) — CONFIRMED
+
+**Battle command menu (the seamless-combat ATB list: Attack / Magicks & Technicks / Items / …).**
+It routes cursor moves through the **SAME `FUN_00247510` msg `0x8000`** dispatch the field menu uses —
+it was just an unmapped owner class (showed as `[focus] UNKNOWN owner obj[0]=+0x15ad70`).
+- **Owner (focus target) = the command PANEL, window class `FUN_0027ad70`** (RVA `0x15AD70`). It is
+  built in place inside the container `FUN_002778c0` (RVA `0x1578C0`) at `container+0xf0`, so the
+  `owner` seen at `FUN_00247510` IS the panel (no container hop).
+- Highlighted command id = **`*(u16)(owner + 0x510 + index*8)`** (entries stride 8); count =
+  `*(int)(owner+0x500)`; command type/category = `*(int)(owner+0x4c0)`. `index` = the 0x8000 `val`.
+- **Name:** the top-level per-row draw **`FUN_00276be0`** (RVA `0x156BE0`) resolves each command name
+  into `panel+0x1578` via `FUN_0035d330(0x15, cmdId)` (RVA `0x23D330`) → `FUN_002b58b0(*(rec+0x18),0)`
+  (RVA `0x19B8B0`). Mod caches the DECODED name per cmdId from that draw (memory-only). Verified:
+  0x0=Attack, 0x12="Magicks & Technicks" (codec `0xa0`='&'), 0x3=Items.
+- **Sub-lists (Session 31) — SHIPPED, USER-CONFIRMED.** The mod picks the resolver by the panel's per-row
+  draw callback `*( *(panel+0x1510) + 0x120 )` (exact-match guarded → wrong guess is SILENT, never wrong):
+  - **Items** = draw `FUN_0027e530` (RVA `0x15E530`) → resolver `FUN_00272cb0(id)` (RVA `0x152CB0`) returns
+    the name codec directly. (Earlier "FUN_0027d5c0/cat 2" claim was WRONG — retracted.)
+  - **"Magicks & Technicks" is TWO-LEVEL** (trace: top cmdId 0x12 → `FUN_0027c3d0` returns kind 2 →
+    `FUN_0027e050` case 2 type 8; then category → kind 0xa-0xf → type 0xb): (1) category **chooser** draw
+    `FUN_0027d240` (RVA `0x15D240`), resolver `FUN_0035d330(cat, id)` with `cat = (panel+0x513+row*8 & 4) ?
+    0x18 : 0x15`, name at `panel+0x1578` (not overwritten); (2) spell/technick **list** draw `FUN_0027ce70`
+    (RVA `0x15CE70`), `FUN_0035d330(0x14, id)`, `panel+0x1578` OVERWRITTEN by MP-cost → re-resolve.
+- **NOT** `FUN_002c2320` (that's the FIELD Equipment screen, opened via pause menu `FUN_00281ed0` cmd
+  0x4b6). **NOT** `FUN_002b7590`/`DAT_0209e5c0` (that's the message/dialogue framework). Both retracted.
+
+**Battle targeting (menu-style enemy/ally select) — RE-confirmed 0.99.** Window `FUN_00552250`
+(RVA `0x432250`) / reticle child `FUN_005528c0` (RVA `0x4328C0`), global `DAT_02ca8f38` (RVA
+`0x2B88F38`); driven by battle engine `DAT_0209be80` (RVA `0x1F7BE80`, target mode `+0x10fa2`, opened
+via `FUN_0028e690`/`FUN_0028e790`). Hovered target node = `*(reticle+0x9F40)`; **name codec =
+`node+0x48`** (Libra "????" swap built in via `FUN_003bd040`); **faction = `node+0x54`** (ally bit
+`0x10000`, else enemy) from `FUN_003bd480`; candidate set = enemies+allies (`FUN_003c08b0`/`FUN_003c0c50`).
+The passive free-roam auto-target reticle is a SEPARATE object (`DAT_0209be80+0x8FA0`, `FUN_002bdb60`).
+- **Session 31 name fix (USER-CONFIRMED):** the gate is JUST `*(DAT_02ca8f38) != 0` (the target-select
+  window exists only during command targeting → excludes free-roam). The old `*(u8)(DAT_0209be80+0x10fa2)
+  != 3` gate was WRONG and silenced real selection — **mode 3 is a legitimate in-menu line/locked target
+  SHAPE, not a passive preview** (set by `FUN_0027f5d0` for shapes 0xf/2/0x16). Removed.
+- Target VITALS (deferred): id `node+0x39` → actor `FUN_002367a0(id)` (RVA `0x1167A0`, pool `DAT_0208e688`
+  stride 0xF50) → BtlChr `*(u64)(actor+0x698)`; curHP `*(i32)(bc+0x48)`, maxHP `+0x24`, Lv `*(u8)(bc+0x1c2)`;
+  enemy HP% = cur*100/max; ally = `node+0x54 & 0x10000`. See `notes/battle_target_vitals_2026_07_10.md`.
+
+**Field-menu "Select a character" (Status) reader — DEFERRED (Session 31, NOT working).** Chooser
+controller `FUN_00285290` (RVA `0x165290`, POLLED, not a 0x8000 owner); cursor-set `FUN_00285a10(slot)`
+(RVA `0x165A10`). Per-slot read (mirrors portrait draw `FUN_00283e40`): `ctx = *(DAT_0209ac30)` (RVA
+**`0x1F7AC30`**) → `ctrl = *(ctx+0xf8)` → `portrait = *(ctrl+0xc0+slot*8)` → `block = *(ctx+0xac8 +
+*(int)(portrait+0xc0)*8)`; charId `*(i16)(block+0x60)`, curHP `+0x20`, maxHP `+0x24`, Lv `+0xba`, MP
+`+0x2c/+0x30`; name `FUN_0035d330(2,charId)`. **Blocker:** `FUN_00285a10` does NOT fire for the entry
+highlight (case 1 sets `ctrl+0x117` directly); with a one-character tutorial party it never fires at all →
+silent. Needs a "speak initial focus on menu entry" hook. Labels (LEVEL/HP/MAX/MP/MAX) source unresolved.
+See `notes/status_char_select_labels_2026_07_11.md`.
+
+---
+
+**Last updated:** 2026-07-11 (Session 31) — Magicks & Technicks two-level sub-lists SHIPPED (chooser
+`FUN_0027d240`, spell list `FUN_0027ce70`; items `FUN_0027e530`→`FUN_00272cb0`); targeting NAME gate fixed
+(dropped the wrong mode-3 bail); Status field-menu char-select reader DEFERRED (hook doesn't fire on entry).
+Session 30: Battle command menu located (`FUN_0027ad70` via `FUN_00247510` 0x8000) + SHIPPED; targeting
+`node+0x48`/`+0x54` confirmed; corrected the `FUN_002c2320`=field-Equipment and `FUN_002b7590`=dialogue mislabels.
+Prior: 2026-07-07 (Session 18) — Message/dialogue/panel reader SHIPPED in C++
 (`message_reader`): e5f0 dialogue body+speaker; `FUN_0057c480+0x1B0` panel gated by `surface[0x636]`/
 `[0x630]` (INFO spoken, confirms muted); `r` re-read. Built/deployed, play-test pending.
 Prior: 2026-07-07 (S17) message-text read-points decompile-exhausted; 2026-07-06 Pathfinder RE.

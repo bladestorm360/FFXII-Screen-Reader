@@ -61,6 +61,7 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
                 case 0xae: out.push_back(L'('); break;
                 case 0xaf: out.push_back(L')'); break;
                 case 0xa2: out.push_back(L'/'); break;
+                case 0xa0: out.push_back(L'&'); break;   // "Magicks & Technicks"
                 case 0x9e: out.push_back(L'%'); break;
                 case 0x8f: out.push_back(L'-'); break;   // em-dash
                 default:   break;                        // unmapped extended glyph: drop
