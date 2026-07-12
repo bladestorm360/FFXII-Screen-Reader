@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include "navigation/nav_types.h"
 
 // Resolves the FIELD leader (the character the player currently controls) to its
@@ -29,6 +30,18 @@ bool IsFieldActive();
 // planner never touches a half-loaded or half-freed map. Call on the game thread
 // before any raycast. SEH-guarded throughout.
 bool IsFieldNavSafe();
+
+// Diagnostic companion to IsFieldNavSafe(): evaluates ALL 8 gate conditions (no
+// short-circuit) and returns a bitmask of the ones that FAILED (0 == fully nav-safe).
+// Bits: 0 field, 1 field2, 2 areaId, 3 areaColl, 4 actorPool, 5 leaderPtr, 6 world,
+// 7 leaderObj. Both this and IsFieldNavSafe() evaluate the same single-source
+// condition helpers, so they can never drift apart. Log-only; not a gate.
+uint8_t NavSafeFailMask();
+// Short name for gate-condition bit 0..7 (e.g. "world"); "?" out of range.
+const char* NavSafeCondName(int bit);
+// Format a fail-mask into buf as a comma-joined name list ("world,leaderObj"); empty
+// string when mask == 0. buf is always null-terminated.
+void FormatNavSafeMask(uint8_t mask, char* buf, size_t bufLen);
 
 // Raw leader handle (DAT_022c7fe0). 0 if none.
 uint32_t ReadLeaderHandle();

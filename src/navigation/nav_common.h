@@ -26,6 +26,12 @@ const wchar_t* EgocentricBearing(const FVec3& from, const FVec3& to, float playe
 // atan2(fwd.x, fwd.z)). Used for the "facing" readout.
 const wchar_t* CardinalOfHeading(float yawRad);
 
+// Primary cardinal word for a single signed axis delta (mod convention: north=-Z,
+// east=+X). Used to decompose a route leg into "North N, East M" rather than a single
+// intercardinal word (whose 45deg displacement misrepresents the leg).
+const wchar_t* NorthSouthWord(float dz);   // dz < 0 -> "North", else "South"
+const wchar_t* EastWestWord(float dx);     // dx > 0 -> "East",  else "West"
+
 // Distance -> whole "steps" using the configured units-per-step (FFXII-specific,
 // runtime-tuned). Rounded to nearest, min 0.
 int DistanceToSteps(float dist);

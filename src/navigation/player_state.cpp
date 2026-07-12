@@ -1,10 +1,11 @@
 #include "navigation/player_state.h"
 #include "navigation/nav_rva.h"
-#include "navigation/bullet_query.h"
+#include "navigation/map_query.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 
 #include <cmath>
+#include <cstdio>
 
 using namespace MemRead;
 
@@ -17,28 +18,85 @@ bool IsFieldActive() {
     return (b & 0x10) != 0;
 }
 
-bool IsFieldNavSafe() {
-    // Field sim live this session (0x10) — necessary but not sufficient.
-    if (!IsFieldActive()) return false;
-    // Field module started at all (coarse; 1 after first field entry).
+namespace {
+// The 8 IsFieldNavSafe() conditions, each as ONE single-source predicate (true = OK).
+// This is the ONLY place the conditions are spelled out — both the real gate (a &&
+// chain, so short-circuit + semantics are preserved) and the diagnostic fail-mask
+// evaluate these, so the gate and the diagnostic can never drift apart.
+bool CondFieldActive() {   // bit 0 — field sim live this session (0x10)
+    return IsFieldActive();
+}
+bool CondFieldStarted() {  // bit 1 — field module started (1 after first field entry)
     uint32_t started = 0;
-    if (!SafeReadU32(Hooks::ResolveRva(NavRva::FIELD_ACTIVE2), 0, &started) || started == 0)
-        return false;
-    // Area id valid (0xFFFFFFFF = no area loaded / mid-transition).
+    return SafeReadU32(Hooks::ResolveRva(NavRva::FIELD_ACTIVE2), 0, &started) && started != 0;
+}
+bool CondAreaId() {        // bit 2 — area id valid (0xFFFFFFFF = no area / mid-transition)
     uint32_t areaId = 0;
-    if (!SafeReadU32(Hooks::ResolveRva(NavRva::AREA_ID), 0, &areaId) || areaId == 0xFFFFFFFF)
-        return false;
-    // Area collision blob loaded (the earliest-cleared reliable "gone" signal).
-    if (!PtrAt(Hooks::ResolveRva(NavRva::AREA_COLLISION), 0)) return false;
-    // Actor pool allocated (belt-and-suspenders; true post-boot).
-    if (!PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0)) return false;
-    // Leader actor ptr present (zeroed at the very start of teardown).
-    if (!PtrAt(Hooks::ResolveRva(NavRva::LEADER_ACTOR_PTR), 0)) return false;
-    // The Bullet world itself is built (lazy; re-checked live every frame).
-    if (!BulletQuery::HasWorld()) return false;
-    // And the leader actually resolves through the handle table.
-    if (!ReadLeaderSceneObject()) return false;
-    return true;
+    return SafeReadU32(Hooks::ResolveRva(NavRva::AREA_ID), 0, &areaId) && areaId != 0xFFFFFFFF;
+}
+bool CondAreaCollision() { // bit 3 — area collision blob loaded (earliest "gone" signal)
+    return PtrAt(Hooks::ResolveRva(NavRva::AREA_COLLISION), 0) != nullptr;
+}
+bool CondActorPool() {     // bit 4 — actor pool allocated (true post-boot)
+    return PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0) != nullptr;
+}
+bool CondLeaderPtr() {     // bit 5 — leader actor ptr present (zeroed at teardown start)
+    return PtrAt(Hooks::ResolveRva(NavRva::LEADER_ACTOR_PTR), 0) != nullptr;
+}
+bool CondWorld() {         // bit 6 — the SQEX field walkmap is loaded (re-checked live)
+    return MapQuery::HasWorld();
+}
+bool CondLeaderObj() {     // bit 7 — leader resolves through the handle table
+    return ReadLeaderSceneObject() != nullptr;
+}
+} // namespace
+
+bool IsFieldNavSafe() {
+    // Short-circuit && chain — identical order/semantics to the per-condition helpers,
+    // so the cheapest checks gate the expensive world-deref + handle-walk as before.
+    return CondFieldActive() && CondFieldStarted() && CondAreaId() &&
+           CondAreaCollision() && CondActorPool() && CondLeaderPtr() &&
+           CondWorld() && CondLeaderObj();
+}
+
+uint8_t NavSafeFailMask() {
+    uint8_t m = 0;
+    if (!CondFieldActive())    m |= 0x01;
+    if (!CondFieldStarted())   m |= 0x02;
+    if (!CondAreaId())         m |= 0x04;
+    if (!CondAreaCollision())  m |= 0x08;
+    if (!CondActorPool())      m |= 0x10;
+    if (!CondLeaderPtr())      m |= 0x20;
+    if (!CondWorld())          m |= 0x40;
+    if (!CondLeaderObj())      m |= 0x80;
+    return m;
+}
+
+const char* NavSafeCondName(int bit) {
+    switch (bit) {
+        case 0: return "field";
+        case 1: return "field2";
+        case 2: return "areaId";
+        case 3: return "areaColl";
+        case 4: return "actorPool";
+        case 5: return "leaderPtr";
+        case 6: return "world";
+        case 7: return "leaderObj";
+        default: return "?";
+    }
+}
+
+void FormatNavSafeMask(uint8_t mask, char* buf, size_t bufLen) {
+    if (!buf || bufLen == 0) return;
+    buf[0] = '\0';
+    size_t n = 0;
+    for (int b = 0; b < 8; ++b) {
+        if (!(mask & (1u << b))) continue;
+        int r = snprintf(buf + n, bufLen - n, "%s%s", n ? "," : "", NavSafeCondName(b));
+        if (r < 0) break;
+        n += static_cast<size_t>(r);
+        if (n >= bufLen) { buf[bufLen - 1] = '\0'; break; }
+    }
 }
 
 uint32_t ReadLeaderHandle() {

@@ -41,6 +41,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/navigation.cpp
     src/navigation/player_state.cpp
     src/navigation/bullet_query.cpp
+    src/navigation/map_query.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp

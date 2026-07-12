@@ -2,7 +2,7 @@
 #include "navigation/nav_rva.h"
 #include "navigation/nav_common.h"
 #include "navigation/player_state.h"
-#include "navigation/bullet_query.h"
+#include "navigation/map_query.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
@@ -434,10 +434,11 @@ void CmdDescribeCurrent() {
     // Obstacle-aware hint toward the selection (<=5 rays; safe on the input thread).
     // A full A* grid is a later enhancement (thousands of rays => needs game-thread
     // execution to avoid racing the physics step).
-    if (BulletQuery::HasWorld()) {
+    if (MapQuery::HasWorld()) {
         const FVec3 tgt = g_entities[sel].pos;
-        const float margin = 0.6f;   // ~capsule radius, meters
-        if (BulletQuery::HorizontalClear(p, tgt, margin)) {
+        const float bodyPad = 0.9f;                  // test at body height, not at the feet
+        const FVec3 from{ p.x, p.y + bodyPad, p.z };
+        if (MapQuery::SegmentClear(from, FVec3{ tgt.x, p.y + bodyPad, tgt.z })) {
             Speech::SpeakQueued(L"Path clear");
         } else {
             // Heading convention matches nav_common::BearingDeg: north = -Z, so a
@@ -449,8 +450,8 @@ void CmdDescribeCurrent() {
             bool found = false;
             for (float o : offs) {
                 const float a = base + o;
-                const FVec3 pt{ p.x + std::sin(a) * probe, p.y, p.z - std::cos(a) * probe };
-                if (BulletQuery::HorizontalClear(p, pt, margin)) {
+                const FVec3 pt{ p.x + std::sin(a) * probe, p.y + bodyPad, p.z - std::cos(a) * probe };
+                if (MapQuery::SegmentClear(from, pt)) {
                     std::wstring s = L"Blocked, bear ";
                     s += NavCommon::CardinalOfHeading(a);
                     Speech::SpeakQueued(s);

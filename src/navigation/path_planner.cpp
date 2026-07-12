@@ -1,6 +1,6 @@
 #include "navigation/path_planner.h"
 #include "navigation/player_state.h"
-#include "navigation/bullet_query.h"
+#include "navigation/map_query.h"
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
 #include "speech/speech.h"
@@ -53,10 +53,20 @@ inline int KeyZ(int64_t k) { return static_cast<int>(static_cast<uint32_t>(k & 0
 
 struct CellInfo { bool walkable = false; float floorY = 0.0f; };
 
-// A* over a walkability grid sampled lazily with Bullet rays. Runs on the game
-// thread; every ray is SEH-guarded inside BulletQuery. `outPoly` = player -> ... ->
-// target on Route.
-Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) {
+// Diagnostic counters filled by PlanRoute, logged by OnGameFrame (no effect on the
+// search). The single most useful fact is startFloorHit — whether the floor ray under
+// the player hit at all: 0 with a live world => the raycast/world/filter is wrong;
+// >0 floorHits but NoPath => connectivity/step/margin.
+struct PlanStats {
+    int  rays = 0, floorHits = 0, expands = 0, cells = 0;
+    int  tx = 0, tz = 0;
+    bool startFloorHit = false;
+};
+
+// A* over a walkability grid sampled lazily against the SQEX field walkmap. Runs on the
+// game thread; every query is SEH-guarded inside MapQuery. `outPoly` = player -> ... ->
+// target on Route. `stats` is filled for diagnostics only.
+Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly, PlanStats& stats) {
     if (NavCommon::Distance2D(from, to) > kMaxRange) return Plan::TooFar;
 
     int rays = 0;
@@ -75,9 +85,12 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) 
         if (rays < kMaxRays) {
             ++rays;
             float fy = 0.0f;
-            if (BulletQuery::FloorBelow(worldOf(cx, cz, from.y), 2.0f, 8.0f, fy)) {
+            // Walkable-floor test against the SQEX field walkmap (the system the map + AI
+            // NPCs use; live even with no Bullet world). Arbitrary (X,Z) -> floor + height.
+            if (MapQuery::GroundAt(from.x + cx * kCell, from.z + cz * kCell, fy)) {
                 ci.walkable = true;
                 ci.floorY = fy;
+                ++stats.floorHits;
             }
         }
         return cells.emplace(k, ci).first->second;
@@ -89,12 +102,14 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) 
         if (std::fabs(a.floorY - b.floorY) > kMaxStep) return false;
         if (rays >= kMaxRays) return false;
         ++rays;
-        return BulletQuery::HorizontalClear(worldOf(ax, az, a.floorY + kBodyPad),
-                                            worldOf(bx, bz, b.floorY + kBodyPad), kMargin);
+        // Wall test at body height along the edge, against the same SQEX walkmap.
+        return MapQuery::SegmentClear(worldOf(ax, az, a.floorY + kBodyPad),
+                                      worldOf(bx, bz, b.floorY + kBodyPad));
     };
 
     const int tx = static_cast<int>(std::lround((to.x - from.x) / kCell));
     const int tz = static_cast<int>(std::lround((to.z - from.z) / kCell));
+    stats.tx = tx; stats.tz = tz;
 
     auto heur = [&](int x, int z) -> float {
         float ax = std::fabs(static_cast<float>(tx - x));
@@ -110,6 +125,7 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) 
 
     // The player stands on valid ground even if the floor probe grazes an edge.
     CellInfo& start = cellInfo(0, 0);
+    stats.startFloorHit = start.walkable;   // capture BEFORE the force-walkable override
     if (!start.walkable) { start.walkable = true; start.floorY = from.y; }
 
     gScore[Key(0, 0)] = 0.0f;
@@ -147,6 +163,9 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) 
         }
     }
 
+    stats.rays = rays;
+    stats.expands = expands;
+    stats.cells = static_cast<int>(cells.size());
     if (!reached) return Plan::NoPath;
 
     // Reconstruct target -> start, then emit from -> ... -> to.
@@ -168,6 +187,27 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly) 
         outPoly.push_back(worldOf(cx, cz, ci.walkable ? ci.floorY : from.y));
     }
     outPoly.push_back(to);
+
+    // String-pull: collapse the 1m-cell staircase to minimal line-of-sight waypoints. Keep a
+    // corner only when the anchor can no longer SEE the next point (a real wall corner). A
+    // straight-clear target -> {from, to}; the target-overshoot cell from the lround snap is
+    // dropped because an earlier anchor still sees the true `to`. SegmentClear is game-thread
+    // safe here; cost is O(corners).
+    if (outPoly.size() > 2) {
+        auto atBody = [&](const FVec3& q) { return FVec3{ q.x, q.y + kBodyPad, q.z }; };
+        std::vector<FVec3> smooth;
+        smooth.reserve(outPoly.size());
+        smooth.push_back(outPoly.front());
+        size_t anchor = 0;
+        for (size_t probe = 1; probe + 1 < outPoly.size(); ++probe) {
+            if (!MapQuery::SegmentClear(atBody(outPoly[anchor]), atBody(outPoly[probe + 1]))) {
+                smooth.push_back(outPoly[probe]);   // outPoly[probe] is a needed corner
+                anchor = probe;
+            }
+        }
+        smooth.push_back(outPoly.back());
+        outPoly.swap(smooth);
+    }
     return Plan::Route;
 }
 
@@ -241,10 +281,15 @@ void OnGameFrame() {
         // per request (dedupe on seq) so the file isn't spammed per frame.
         if (seq != g_notSafeLoggedSeq) {
             g_notSafeLoggedSeq = seq;
-            char m[128];
+            // Name WHICH gate condition(s) failed (0 == would be safe; then posOk was the
+            // blocker). This is what turns a silent route into a diagnosable one.
+            uint8_t fm = PlayerState::NavSafeFailMask();
+            char names[96];
+            PlayerState::FormatNavSafeMask(fm, names, sizeof(names));
+            char m[192];
             snprintf(m, sizeof(m),
-                     "drain seq=%llu: not nav-safe (fieldSafe=%d posOk=%d) -> retry up to %d frames",
-                     (unsigned long long)seq, navSafe ? 1 : 0, posOk ? 1 : 0, kWaitFrames);
+                     "drain seq=%llu: not nav-safe (fieldSafe=%d posOk=%d failMask=0x%02X[%s]) -> retry up to %d frames",
+                     (unsigned long long)seq, navSafe ? 1 : 0, posOk ? 1 : 0, fm, names, kWaitFrames);
             Log::Write("NAV-ROUTE", m);
         }
         if (giveUp) {
@@ -256,13 +301,22 @@ void OnGameFrame() {
     }
 
     std::vector<FVec3> poly;
-    Plan r = PlanRoute(from, target, poly);
+    PlanStats st;
+    Plan r = PlanRoute(from, target, poly, st);
 
     const char* planName = (r == Plan::Route) ? "Route" : (r == Plan::TooFar) ? "TooFar" : "NoPath";
     char m[160];
     snprintf(m, sizeof(m), "drain seq=%llu: from=(%.2f,%.2f,%.2f) plan=%s legs=%zu",
              (unsigned long long)seq, from.x, from.y, from.z, planName, poly.size());
     Log::Write("NAV-ROUTE", m);
+    // Walkability stats — diagnoses a NoPath: startFloor=0/floorHits=0 with a live world
+    // => rays aren't hitting (world/ctx/filter); floorHits>0 => connectivity/step/margin.
+    char ms[192];
+    snprintf(ms, sizeof(ms),
+             "drain seq=%llu: stats plan=%s tgtCell=(%d,%d) rays=%d floorHits=%d startFloor=%d expands=%d cells=%d",
+             (unsigned long long)seq, planName, st.tx, st.tz, st.rays, st.floorHits,
+             st.startFloorHit ? 1 : 0, st.expands, st.cells);
+    Log::Write("NAV-ROUTE", ms);
 
     std::wstring say = label.empty() ? std::wstring() : (label + L". ");
     if (r == Plan::Route)       say += PathDirections::Describe(poly);

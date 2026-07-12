@@ -34,6 +34,15 @@ transform node != 0 (valid for all world-present categories 1–7).
 field object's name with `FUN_0035d380(1, def+4)` always returns empty ("Object"): it is the
 party/roster resolver fed a model index. FIX: read the name key at `sceneObj+0x102` → npcdic.
 
+**KEYWORDS: pathfinder walkability Bullet world FUN_006a1a70 FUN_006a0310 ctx capture prologue never
+fires no region** (Session 33) — Building route walkability on the **Bullet** raycast world
+(`FUN_006a1a70`, world at `*(ctx+0x60)`) fails in the **Nalbina prologue**: it builds NO Bullet
+region-world. `FUN_006a0310` is the sole world constructor and runs only inside the master physics
+tick `FUN_00698c80`'s per-region loop, SKIPPED when region count==0. FOUR ctx-capture hooks (builder
+`FUN_006a0310`, step `FUN_0069f070`, raycast `FUN_006a1a70`, char-ground `FUN_006a5c00`) all install
+but NEVER capture; `failMask=0x40[world]`. DO NOT retry Bullet for field walkability. FIX under
+Solved: the SQEX floor/wall walkmap (`FUN_003208c0` / `FUN_00230b60`), which is what the AI NPCs use.
+
 ## Solved Problems
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
@@ -46,6 +55,20 @@ field object (NPCs + static gimmicks) from map load. 5 containers × 0x288: acti
 array `*(base+c*0x288+0x08)`; count `*(int)entries`; object i `*(entries+0x08+i*8)`. Filter
 interactive by `sceneObj+0x1C` flags (`0x400`=talk/NPC, `0x4`=action/gate-door-switch) + npcdic
 band. Position `*(sceneObj+0xB8)+0/4/8`. This is the correct source for a proactive object list.
+
+**KEYWORDS: pathfinder SQEX field walkmap ground wall FUN_003208c0 FUN_00230b60 mask 4 walk class
+getgroundy prologue** (Session 33) SOLUTION: Field walkability = the game's own **SQEX floor/wall
+mesh** (the AI NPCs walk it; loaded per-map, independent of Bullet, so it's live in the prologue).
+Ground-at-XZ: **`FUN_003208c0`** (RVA 0x2008C0) `bool(float x, float z, float* outY)` → walkable-floor
+exists + height (uses cached ctx `DAT_02ec1370`). Wall/segment: **`FUN_00230b60`** (RVA 0x110B60)
+`int(ctx0, out16, from[4], to[4], u16 mask, u32 flags)` → hit index >=0 BLOCKED / <0 CLEAR. ctx0 =
+`*DAT_0209a678` (RVA 0x1F7A678), gate `DAT_0209a670` (RVA 0x1F7A670). Both reentrant/read-only, safe
+for thousands of calls/route. **mask is a query-CLASS enum (compared `==4` in `FUN_0022cc50`), NOT a
+bitmask: pass mask=4, flags=0 (WALK class)** — exactly what the player leader's own wall feelers use
+(`FUN_0032cf50`→`FUN_003d97e0(…,4)`→`FUN_00230b60(…,4,0)`). Class 4 blocks real + character-only
+walls, skips camera-only planes/floors/ceilings; **0xffff/1 is the CAMERA class and is doubly wrong**
+(falsely blocks camera planes → phantom-wall detours, falsely passes character-only walls). Shipped as
+`src/navigation/map_query.{h,cpp}` (`MapQuery::GroundAt` / `SegmentClear` / `SegmentHit`).
 
 **KEYWORDS: pathfinder route drain FUN_0022a770 game-thread per-frame tick turn-by-turn** SOLUTION:
 Drain the game-thread route planner from `FUN_0022a770` (RVA 0x10A770), the no-arg per-field-frame
@@ -145,7 +168,39 @@ Current module interaction diagram + logging format. Keep up to date as modules 
 
 ## Known Issues
 
-*(none yet — Phase 0)*
+### Turn-by-turn routing polish (open — Session 33, 2026-07-12)
+Routing WORKS (SQEX walkmap, `plan=Route`) but has three quality problems reported by the
+user. Detail + hypotheses in `sessions_001_current.md` Session 33.
+
+1. **Directions point away from the objective (intermittent).** Holding a route direction
+   moves the player *further*; re-route reports a *growing* distance ("East 15"→"17"→"20").
+   User: not a constant axis flip ("works sometimes"). Prime hypothesis: **world-cardinal
+   directions vs. camera-relative movement** — the route speaks WORLD cardinals (north=-Z,
+   east=+X) but the stick is camera-relative, so "east"=="right" only at some camera angles
+   → likely needs an EGOCENTRIC route mode (off `PlayerState::ReadPlayerYaw`) or a facing cue.
+   Also rule out a geometric first-waypoint bug (see #3). Next: log raw + smoothed polyline +
+   target + yaw.
+2. **Distance cap too small.** `path_planner.cpp kMaxRange=40m` → targets past ~53 steps get
+   "Too far to route". User wants routing to ANY map entity regardless of distance. Raise/
+   remove `kMaxRange` AND raise A* budgets (`kMaxRays=2000`/`kMaxExpand=500` — a 27×15 route
+   already used 1266 rays/157 expands; long routes will blow them → need bigger caps or a
+   coarser long-range pass). Verify `entity_list` enumerates distant objects (no distance
+   filter, but confirm the handle table / actor pool holds far map objects).
+3. **Routes cut through walls/rooms.** A route said "East 15, South 17" (a single straight
+   diagonal) to a target unreachable by going east/south (walls between). Walkability is
+   UNDER-detecting walls, or the LOS string-pull straightened a valid detour into an
+   impassable line (opposite of the old 0xffff over-block). Next: log the mask=4 seg-test
+   result along the reported line; add the deferred smoothed-segment validation (denser
+   sample + floor-continuity + `|ΔfloorY|≤kMaxStep`); check `GroundAt` isn't returning floor
+   across gaps/room boundaries. Related to #1.
+
+### Enter key intermittently drops mid-game (diagnosed — Session 33; upstream, NOT our mod)
+The `GetDeviceState` diagnostic captured it: `INPUT-DIAG keyboard GetDeviceState FAILING
+hr=0x8007001E` = **DIERR_INPUTLOST** → the keyboard DirectInput device went UNACQUIRED (game
+sees no keys). This is the game's own acquisition / a focus loss, **not** our read-only hook
+(and the redundant `WH_KEYBOARD_LL` hook is now retired once DInput latches). Optional future
+mitigation: a mod-side re-`Acquire()` nudge when we detect the failure — defer unless it
+becomes a real blocker (it touches the game's device).
 
 ## Session Log
 

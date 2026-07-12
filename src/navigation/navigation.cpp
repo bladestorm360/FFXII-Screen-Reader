@@ -17,8 +17,8 @@ bool Init() {
     EntityList::Init();
     // Route nav hotkeys to the command dispatcher.
     InputTracker::SetNavKeyCallback(&NavCommands::OnNavKey);
-    Log::Write("NAV", "navigation ready: \\=describe  [/]=object  -/==category  "
-                      "`=rescan  ;=facing  /=route  '=diagnostic");
+    Log::Write("NAV", "navigation ready: \\=route  [/]=object  -/==category  "
+                      "`=rescan  ;=facing  /=describe  '=diagnostic");
     return ok;
 }
 

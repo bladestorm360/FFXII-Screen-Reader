@@ -107,25 +107,30 @@ pathfinding the user can't reach an NPC to talk to one — so this phase
 must precede interactive dialogue. Cutscene / auto-narrative text reading
 can land in parallel under Phase 5 (it's passive — no walking required).
 
-**Validation gates (CROW-FLIES + path-validation scope, see `Docs/RiskAudit.md`):**
-- [x] G4.1: BattleUnit struct base + position offsets (DrummerIX seed)
+**STATUS (Session 33, 2026-07-12): turn-by-turn routing SHIPPED and working** — on the SQEX
+field walkmap (NOT Bullet, which the prologue never builds; NOT POctreeWorld). Three polish
+issues open — see `Docs/debug.md` Known Issues: (1) world-cardinal directions vs. camera-relative
+movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
+
+**Validation gates:**
+- [x] G4.1: player position read (leader handle → sceneObj `+0xB8`)
 - [x] G4.3: Map name lookup (mod ships parsed planmapname.bin)
-- [x] G4.6: walkability — Bullet RTTI'd, no NavMesh needed
-- [ ] G4.2: current-area name (hook PTextObject area banner)
-- [ ] G4.4: entity enumeration via setfieldsign hook + CharacterOrderedObject walk
-- [ ] G4.7: player yaw offset in BattleUnit struct (one grep)
-- [ ] G4.8: btDiscreteDynamicsWorld active ptr + player capsule field (two greps)
-- [~] G4.5: AUTO-WALK — DEFERRED to v1.x optional
+- [x] G4.6: walkability — **SQEX floor/wall walkmap** (`FUN_003208c0`/`FUN_00230b60`, mask=4);
+      Bullet proven absent in the prologue
+- [x] G4.2: current-area name (`FUN_003778b0`)
+- [x] G4.4: entity enumeration via the scene-object handle table + actor pool
+- [x] G4.7: player yaw (`comp+0x100` matrix fwd; `atan2(fx,-fz)`)
+- [~] G4.5: AUTO-WALK — DROPPED (announce-only design)
 
 **Phase 4 features:**
-- [ ] Player character position read
-- [ ] Compass / facing direction
-- [ ] Area name announcement on map transition
-- [ ] Entity list (NPCs, exits, save points, shops)
-- [ ] Hotkey cycling through entity list (`[` / `]`)
-- [ ] Distance + direction announcement
-- [ ] Basic pathfinding via `Phyre::PHierarchy::POctreeWorld`
-- [ ] Auto-walk to selected entity
+- [x] Player character position read
+- [x] Compass / facing direction
+- [x] Area name announcement
+- [x] Entity list (NPCs, exits, save points, gimmicks)
+- [x] Hotkey cycling through entity list (`[` / `]`)
+- [x] Distance + direction announcement (`\`=route legs, `/`=crow-flies describe)
+- [x] Basic pathfinding (A* over the SQEX walkmap; string-pulled + cardinal-decomposed legs)
+- [~] Auto-walk to selected entity — DROPPED (announce-only)
 - [ ] Map menu reading
 - [ ] Locale detection finalized via `GetUserDefaultLangID` hook
 - [ ] Phrasebook live across all 12 locales

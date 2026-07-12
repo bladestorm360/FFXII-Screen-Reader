@@ -792,6 +792,43 @@ Teardown hook (`FUN_002695a0`) + `IsFieldNavSafe` gate unchanged. `entity_list` 
 table, rescans fresh on every cycle/describe, and `LogDiagnostic` dumps all named/interactive scene
 objects per container (cat byte, flags, npcdic key, name, pos).
 
+### Walkability = SQEX field walkmap, NOT Bullet (Session 33, 2026-07-12) — SHIPPED, routing works
+
+**Bullet is a dead end for field walkability.** The route grid was first built on the Bullet raycast
+world (`FUN_006a1a70`, world `*(ctx+0x60)`); runtime-proven the **Nalbina prologue builds no Bullet
+world** — `FUN_006a0310` is the sole Bullet-world constructor and runs only inside master physics tick
+`FUN_00698c80`'s per-region loop, skipped when region count==0. Four ctx-capture hooks all install but
+never fire. See debug.md Tried & Failed.
+
+**The real oracle = the SQEX floor/wall mesh** (the collision the field + AI NPCs walk on; loaded with
+every map, independent of Bullet, so live in the prologue). Shipped `src/navigation/map_query.{h,cpp}`:
+- **Ground-at-(X,Z):** `FUN_003208c0` (RVA **0x2008C0**) `bool groundAt(float x, float z, float* outY)`
+  — walkable-floor-exists + height; uses cached ctx `DAT_02ec1370` (no ctx arg). MS x64: x=XMM0, z=XMM1,
+  outY=R8. Internally `FUN_0026e3c0`→`FUN_00231900`/`FUN_00231890` (topmost floor tri + plane height).
+- **Segment/wall test:** `FUN_00230b60` (RVA **0x110B60**)
+  `int seg(void* ctx0, float out16[4], const float from[4], const float to[4], u16 mask, u32 flags)`
+  → hit index **>=0 BLOCKED / <0 CLEAR**; from/to = {x,y,z,1}. Traversal = 2D DDA grid walk
+  `FUN_0022f430`, per-cell `FUN_0022cc50`. Reentrant, stack-local, no shared writable scratch → safe
+  for thousands of calls/route.
+- **ctx0** = `*DAT_0209a678` (RVA **0x1F7A678**), valid only when gate `DAT_0209a670` (RVA **0x1F7A670**)
+  != 0 (`FUN_0026e500(0)` = the same). Memory-only read; no capture hook needed.
+- **mask is a query-CLASS enum (compared `==4` in `FUN_0022cc50`), NOT a bitmask.** Pass **mask=4,
+  flags=0 (WALK class)** — the exact query the PLAYER leader's own per-frame wall feelers use
+  (`FUN_002593a0`→`FUN_00259990(1,0,…)` slot-0=leader→`FUN_003d9930`→…→`FUN_0032cf50`→
+  `FUN_003d97e0(…,4)`→`FUN_00230b60(…,4,0)`; NPCs share the funnel byte-for-byte). Class 4 blocks real
+  walls (edge type 0, type1/bit30=0) + character-only invisible walls (type 4), and **skips** camera-only
+  occluder planes (type1/bit30=1), floors/ceilings (poly records), triggers/water (types 2,3,5,6,7).
+  `0xffff/1` is the CAMERA/occlusion class — doubly wrong for routing (blocks camera planes → phantom
+  detours; passes character-only walls). flags: 0 = nearest-blocker (movement), 1 = first-hit (occlusion).
+  Material override tables `DAT_0209a3e0/…3e4` are benign (applied identically to every caller, zeroed at
+  load). Confidence 0.98 (+runtime `'` self-test logs walk vs camera per cardinal).
+
+**Planner now:** A* over a 1m grid, cell walkable iff `MapQuery::GroundAt`; edge passable iff
+`|ΔfloorY|≤kMaxStep` AND `MapQuery::SegmentClear` (mask=4). Reconstructed polyline is string-pulled
+(greedy line-of-sight via SegmentClear) and each leg decomposed into primary+secondary cardinals
+("North 16, East 2"). Known open issues (range cap, world-vs-egocentric directions, LOS-through-walls):
+see debug.md Known Issues (Session 33).
+
 ---
 
 ## Message / Dialogue / Panel Text (2026-07-07) — decompile-exhausted, ≥0.98; Frida-pending

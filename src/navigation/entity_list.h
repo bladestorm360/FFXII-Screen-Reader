@@ -48,7 +48,7 @@ void CmdNext();               // ]
 void CmdPrev();               // [
 void CmdNextCategory();       // Shift+]
 void CmdPrevCategory();       // Shift+[
-void CmdDescribeCurrent();    // \  (cardinal bearing + distance to the selection)
+void CmdDescribeCurrent();    // /  (cardinal bearing + distance to the selection)
 void CmdRescan();             // `
 
 // Live world position + label of the current route target (the focused object, else

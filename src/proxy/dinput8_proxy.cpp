@@ -129,8 +129,30 @@ static void PatchVtableEntry(void* comObj, int index, void* detour, void** origO
 // thread each frame; we read the freshly-filled DIK buffer and feed the mod's keys.
 static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, void* lpvData) {
     HRESULT hr = g_origGetDeviceState(self, cbData, lpvData);
-    if (SUCCEEDED(hr) && lpvData && cbData >= 256 && IsKeyboardDev(self))
-        InputTracker::FeedDInputKeyboard(reinterpret_cast<const unsigned char*>(lpvData));
+    if (cbData >= 256 && IsKeyboardDev(self)) {
+        // Diagnostic (rate-limited to transitions): a sustained keyboard GetDeviceState
+        // failure (DIERR_INPUTLOST / DIERR_NOTACQUIRED) means the device is UNACQUIRED — the
+        // game then sees NO keys at all (Enter included). This is the prime suspect for an
+        // intermittent "confirm dead" spell, and it is upstream of us: our hook is read-only
+        // and never alters the buffer. Logging the transition proves where Enter was lost.
+        static bool s_wasOk = true;
+        bool ok = SUCCEEDED(hr);
+        if (ok != s_wasOk) {
+            s_wasOk = ok;
+            char msg[128];
+            if (!ok) snprintf(msg, sizeof(msg),
+                              "keyboard GetDeviceState FAILING hr=0x%08lX (device unacquired -> game sees no keys)",
+                              (unsigned long)hr);
+            else     snprintf(msg, sizeof(msg), "keyboard GetDeviceState recovered (hr=DI_OK)");
+            Log::Write("INPUT-DIAG", msg);
+        }
+        if (ok && lpvData) {
+            // A fault here must never propagate into the game's input thread.
+            __try {
+                InputTracker::FeedDInputKeyboard(reinterpret_cast<const unsigned char*>(lpvData));
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+    }
     return hr;
 }
 

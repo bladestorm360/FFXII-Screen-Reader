@@ -34,6 +34,55 @@ constexpr uint32_t BUILD_WORLD = 0x580310;
 //   *(context+0x60); returns 1 on hit (out[0..2]=hit point, out[3]=1.0,
 //   out[4..6]=normal), 0 on miss. Filter 0xF = all groups.
 constexpr uint32_t RAYCAST_WRAPPER = 0x581A70;
+// FUN_0069f070 (ABS 0x0069f070): the per-world physics STEP. arg0 (RCX) is the SAME
+// PPhysicsWorld ctx BUILD_WORLD populates and RAYCAST_WRAPPER queries — it reads the
+// Bullet world at *(arg0+0x60) and even lazily calls FUN_006a0310(arg0) to build it.
+// Unlike BUILD_WORLD (one-shot, fires only on a fresh map build), this runs EVERY field
+// frame regardless of when we hooked in — so it captures the ctx on a save-load into an
+// already-built area, which BUILD_WORLD misses. Signature: undefined8(ctx, stepCtx).
+constexpr uint32_t WORLD_STEP = 0x57F070;
+// NOTE: BUILD_WORLD + WORLD_STEP both live inside the master physics tick's per-region
+// loop, which is SKIPPED when the region count is 0 — so a scene that builds no Bullet
+// world (e.g. the scripted Nalbina prologue) never fires either. The capture points that
+// fire while an actor WALKS on a world are RAYCAST_WRAPPER + CHAR_GROUND_RESOLVE below.
+// FUN_006a5c00 (ABS 0x006a5c00): the char-controller ground/slope resolve. It guards
+// *(arg0+8)!=0 and passes *(arg0+8) (the physics ctx) to the raycast, once per frame per
+// walking actor. Hook it and cache *(arg0+8) — fires wherever a Bullet world is stepped.
+// Signature: undefined8(void* p1, float* p2, float p3)  (p3 in XMM2).
+constexpr uint32_t CHAR_GROUND_RESOLVE = 0x585C00;
+
+// ---- SQEX field-collision walkability (the ACTUAL field walkmap) -------------
+// The game's own floor/wall mesh collision — the world the AI NPCs walk on. Loaded
+// with every field map, INDEPENDENT of Bullet (so it is live in the Nalbina prologue,
+// which builds no Bullet region-world). Reentrant, read-only, arbitrary-point; the ctx
+// is a global (no capture hook needed). This REPLACES the Bullet raycast walkability.
+//
+// FUN_003208c0: `bool groundAt(float x, float z, float* outY)` — returns true iff a
+// walkable floor exists at (X,Z), writing its height to *outY. Uses its own cached ctx
+// (DAT_02ec1370). MS x64: x=XMM0, z=XMM1, outY=R8. (The game's own arbitrary-XZ probe.)
+constexpr uint32_t MAP_GROUND_AT = 0x2008C0;
+// FUN_00230b60: `int segTest(void* ctx0, void* outHit16, const float from[4],
+// const float to[4], u16 mask, u32 flags)` — segment-vs-walkmap test. Returns a hit
+// index >=0 (BLOCKED) / <0 (CLEAR). from/to are {x,y,z,1}. This is the SQEX analogue of
+// the Bullet raycast wrapper, and exactly what the NPC wall-feelers use.
+constexpr uint32_t MAP_SEG_TEST  = 0x110B60;
+// Collision-manager gate + ctx0 pointer (memory-only, from FUN_0026e500):
+// gate = *(MAP_COLL_GATE) (the collision manager; 0 => field collision not loaded);
+// ctx0 = *(MAP_COLL_CTX0) when the gate is set.
+constexpr uint32_t MAP_COLL_GATE = 0x1F7A670;  // DAT_0209a670
+constexpr uint32_t MAP_COLL_CTX0 = 0x1F7A678;  // DAT_0209a678
+// FUN_00230b60's "mask" is a query-CLASS enum (compared ==4 in FUN_0022cc50), NOT a
+// bitmask. Class 4 = WALKING: blocks real walls + character-only invisible walls, skips
+// camera-only occluder planes / floors / ceilings / triggers. This is the exact class the
+// PLAYER leader's own per-frame wall feelers use (FUN_0032cf50->FUN_003d97e0(...,4)->
+// FUN_00230b60(...,4,0)), so a SegmentClear with it matches where the character can walk.
+// flags: 0 = scan for nearest blocker (what movement uses); 1 = return on first hit.
+// 0xffff/1 is the CAMERA/occlusion class (doubly wrong for routing) — kept only so the
+// '-key self-test can log the walk-vs-camera contrast as a runtime confirmation.
+constexpr uint16_t MAP_MASK_WALK     = 4;       // walking geometry — routing uses this
+constexpr uint32_t MAP_SEG_FLAGS     = 0;       // nearest-blocker (movement)
+constexpr uint16_t MAP_MASK_CAM      = 0xFFFF;  // camera/occlusion (diagnostic contrast only)
+constexpr uint32_t MAP_SEG_FLAGS_CAM = 1;
 
 // ---- Handle-table layout (from FUN_003588b0 + FUN_00263ff0) -----------------
 constexpr uint32_t HANDLE_TABLE_STRIDE = 0x288;  // 0x51 * sizeof(uint64)

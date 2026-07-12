@@ -51,6 +51,8 @@ constexpr uint32_t ACTOR_SCENEOBJ   = 0x10;    // *(actor+0x10) = scene object
 constexpr uint32_t SCENEOBJ_KIND    = 0x0E;    // *(u8)(sceneObj+0x0e) & 0x0f: 3 = ally, {1,2,7} = enemy
 constexpr uint8_t  KIND_MASK        = 0x0F;
 constexpr uint8_t  KIND_ALLY        = 3;
+constexpr uint32_t DEF_KIND_BYTE    = 0x05;    // *(u8)(bc+5): 0 = player-controlled leader (self-target)
+constexpr uint8_t  PLAYER_DEF_KIND  = 0;       // matches nav_rva.h; the leader's scene-kind is NOT 3
 
 constexpr uint32_t BC_CURHP = 0x48;            // real current HP (confirmed vs Reks 135)
 constexpr uint32_t BC_MAXHP = 0x24;            // real max HP
@@ -85,9 +87,14 @@ std::wstring NameForBtlChr(void* bc, bool* ally) {
         const uint8_t* codec = reinterpret_cast<const uint8_t*>(PtrAt(actor, ACTOR_NAME_STR));
         std::wstring nm = GameText::Decode(codec, 128);
         if (!GameText::IsMostlyPrintable(nm)) return std::wstring();
-        uint8_t kind = 0xFF;
+        uint8_t kind = 0xFF, def5 = 0xFF;
         SafeReadU8(PtrAt(actor, ACTOR_SCENEOBJ), SCENEOBJ_KIND, &kind);
-        *ally = ((kind & KIND_MASK) == KIND_ALLY);
+        SafeReadU8(bc, DEF_KIND_BYTE, &def5);
+        // ally = the player-controlled leader (self-target: def+5==0, but its scene-kind is NOT 3)
+        // OR a party-side unit (guests / AI party, kind==3). Mirrors the proven nav classifier
+        // (entity_list.cpp) — KIND_ALLY alone misses the solo-Reks leader, so a curative on
+        // yourself read as a percentage instead of a number.
+        *ally = (def5 == PLAYER_DEF_KIND) || ((kind & KIND_MASK) == KIND_ALLY);
         return nm;
     }
     return std::wstring();

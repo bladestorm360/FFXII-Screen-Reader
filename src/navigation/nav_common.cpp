@@ -74,6 +74,10 @@ const wchar_t* CardinalOfHeading(float yawRad) {
     return kCardinal[OctantOf(deg)];
 }
 
+// Axis words reuse kCardinal (0=North, 2=East, 4=South, 6=West), north=-Z / east=+X.
+const wchar_t* NorthSouthWord(float dz) { return kCardinal[dz < 0.0f ? 0 : 4]; }
+const wchar_t* EastWestWord(float dx)   { return kCardinal[dx > 0.0f ? 2 : 6]; }
+
 int DistanceToSteps(float dist) {
     if (g_unitsPerStep <= 0.0f) return 0;
     int steps = static_cast<int>(dist / g_unitsPerStep + 0.5f);

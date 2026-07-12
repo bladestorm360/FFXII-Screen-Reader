@@ -5,6 +5,7 @@
 #include "navigation/entity_list.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/mem_read.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -22,11 +23,96 @@ uint64_t __fastcall HookedBuildWorld(void* ctx) {
     BulletQuery::SetContext(ctx);
     if (ctx != s_lastLoggedCtx) {   // O(unique map load), not per-call spam
         s_lastLoggedCtx = ctx;
-        char msg[96];
-        snprintf(msg, sizeof(msg), "physics context captured: %p (map-load)", ctx);
+        // Log the world pointer too (the orig has run, so *(ctx+0x60) is populated) — a
+        // later "not nav-safe" failMask bit-6 (world) is only interpretable if we know
+        // whether the build actually produced a non-null world here.
+        void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "world-builder FIRED ctx=%p world=%p status=%llu (map-load)",
+                 ctx, world, static_cast<unsigned long long>(r));
         Log::Write("NAV", msg);
     }
     return r;
+}
+
+// FUN_006a1a70(ctx, from[3], to[3], out[8], filter): the raycast wrapper — reads the world
+// at *(ctx+0x60). The game calls it during actor/camera collision whenever a Bullet world
+// exists, so we snapshot arg0 (the EXACT ctx our own raycasts need). Self-validating: only
+// cache while we lack a live world AND *(ctx+0x60) != 0, so we can never cache a bogus ctx
+// and never oscillate off a good one (teardown Invalidates -> we re-grab next raycast).
+// Our own BulletQuery calls pass this hook too, but HasWorld() is true then -> no-op.
+typedef uint64_t(__fastcall* Pfn_RayCast)(void* ctx, const float* from, const float* to,
+                                          float* out, int filter);
+Pfn_RayCast s_origRayCast = nullptr;
+void* s_lastRayCtx = nullptr;
+
+uint64_t __fastcall HookedRayCast(void* ctx, const float* from, const float* to,
+                                  float* out, int filter) {
+    if (ctx && !BulletQuery::HasWorld()) {
+        void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
+        if (world) {
+            BulletQuery::SetContext(ctx);
+            if (ctx != s_lastRayCtx) {
+                s_lastRayCtx = ctx;
+                char msg[128];
+                snprintf(msg, sizeof(msg), "raycast-wrapper ctx captured: ctx=%p world=%p", ctx, world);
+                Log::Write("NAV", msg);
+            }
+        }
+    }
+    return s_origRayCast ? s_origRayCast(ctx, from, to, out, filter) : 0;
+}
+
+// FUN_006a5c00(p1, p2, p3): the char-controller ground/slope resolve. p1+8 is the physics
+// ctx (the fn guards *(p1+8)!=0 then passes it to the raycast). Fires once/frame per walking
+// actor — captures the field ctx wherever an actor moves on a Bullet world, even in scenes
+// the raycast wrapper alone might not exercise. Same self-validating cache discipline.
+typedef uint64_t(__fastcall* Pfn_CharGround)(void* p1, float* p2, float p3);
+Pfn_CharGround s_origCharGround = nullptr;
+void* s_lastGroundCtx = nullptr;
+
+uint64_t __fastcall HookedCharGround(void* p1, float* p2, float p3) {
+    if (p1 && !BulletQuery::HasWorld()) {
+        void* ctx = MemRead::PtrAt(p1, 8);
+        if (ctx) {
+            void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
+            if (world) {
+                BulletQuery::SetContext(ctx);
+                if (ctx != s_lastGroundCtx) {
+                    s_lastGroundCtx = ctx;
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "char-ground ctx captured: ctx=%p world=%p", ctx, world);
+                    Log::Write("NAV", msg);
+                }
+            }
+        }
+    }
+    return s_origCharGround ? s_origCharGround(p1, p2, p3) : 0;
+}
+
+// FUN_0069f070(ctx, stepCtx): the per-world physics STEP — runs every frame the field
+// world advances, regardless of when we installed (unlike the one-shot BUILD_WORLD hook,
+// which misses a save-load into an already-built area, leaving the world ctx uncaptured).
+// arg0 is the SAME PPhysicsWorld ctx FUN_006a1a70 uses (both read the Bullet world at
+// *(ctx+0x60); this step even lazily calls FUN_006a0310(ctx) to build it). We only READ
+// arg0 and cache it; return-transparent (a wrong return type would clobber RAX).
+typedef uint64_t(__fastcall* Pfn_WorldStep)(void* ctx, void* stepCtx);
+Pfn_WorldStep s_origWorldStep = nullptr;
+void* s_lastStepCtx = nullptr;
+
+uint64_t __fastcall HookedWorldStep(void* ctx, void* stepCtx) {
+    if (ctx) {
+        BulletQuery::SetContext(ctx);
+        if (ctx != s_lastStepCtx) {   // O(unique world), not per-frame spam
+            s_lastStepCtx = ctx;
+            void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "physics-step ctx captured: ctx=%p world=%p (per-frame)",
+                     ctx, world);
+            Log::Write("NAV", msg);
+        }
+    }
+    return s_origWorldStep ? s_origWorldStep(ctx, stepCtx) : 0;
 }
 
 // FUN_0022a770(): the per-field-frame tick, entered once per rendered frame in the
@@ -67,6 +153,22 @@ bool Init() {
     Log::Write("NAV", ok ? "world-builder hook installed (ctx capture)"
                          : "world-builder hook FAILED to install");
 
+    // Per-frame ctx capture (the reliable one): the physics step fires every field frame,
+    // so it captures the world ctx even on a save-load into an already-built area, which
+    // the one-shot builder above misses. Non-fatal if it fails.
+    bool okWorldStep = Hooks::InstallTyped(NavRva::WORLD_STEP, &HookedWorldStep, &s_origWorldStep);
+    Log::Write("NAV", okWorldStep ? "world-step hook installed (per-frame ctx capture)"
+                                  : "world-step hook FAILED to install");
+
+    // The reliable captures: these fire while an actor WALKS on a Bullet world (the
+    // builder/step above only run when the scene actually builds a physics region).
+    bool okRayCast = Hooks::InstallTyped(NavRva::RAYCAST_WRAPPER, &HookedRayCast, &s_origRayCast);
+    Log::Write("NAV", okRayCast ? "raycast-wrapper hook installed (ctx capture)"
+                                : "raycast-wrapper hook FAILED to install");
+    bool okCharGround = Hooks::InstallTyped(NavRva::CHAR_GROUND_RESOLVE, &HookedCharGround, &s_origCharGround);
+    Log::Write("NAV", okCharGround ? "char-ground hook installed (ctx capture)"
+                                   : "char-ground hook FAILED to install");
+
     // Game-thread route-planner hooks (Layer 3). Both are non-fatal if they fail —
     // the planner simply never runs / never invalidates, but the rest of nav is fine.
     bool okStep = Hooks::InstallTyped(NavRva::FIELD_FRAME, &HookedFieldFrame, &s_origFieldFrame);
@@ -81,6 +183,9 @@ bool Init() {
 
 void Shutdown() {
     Hooks::Uninstall(NavRva::BUILD_WORLD);
+    Hooks::Uninstall(NavRva::WORLD_STEP);
+    Hooks::Uninstall(NavRva::RAYCAST_WRAPPER);
+    Hooks::Uninstall(NavRva::CHAR_GROUND_RESOLVE);
     Hooks::Uninstall(NavRva::FIELD_FRAME);
     Hooks::Uninstall(NavRva::FIELD_TEARDOWN);
     BulletQuery::Invalidate();

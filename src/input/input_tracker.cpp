@@ -10,10 +10,11 @@ namespace {
 
 // Deferred hotkey messages posted from the hook proc to the input thread's own
 // message loop, so speech never runs inside the low-level hook callback.
-constexpr UINT WM_DESCRIBE = WM_APP + 1;
-constexpr UINT WM_REREAD   = WM_APP + 2;
-constexpr UINT WM_NAVKEY   = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
-constexpr UINT WM_DIAG     = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
+constexpr UINT WM_DESCRIBE  = WM_APP + 1;
+constexpr UINT WM_REREAD    = WM_APP + 2;
+constexpr UINT WM_NAVKEY    = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
+constexpr UINT WM_DIAG      = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
+constexpr UINT WM_UNHOOK_LL = WM_APP + 5;   // retire the WH_KEYBOARD_LL hook once DInput owns input
 
 // Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
 // working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
@@ -150,13 +151,23 @@ DWORD WINAPI InputThread(LPVOID) {
             snprintf(msg, sizeof(msg), "LL keydown vk=0x%02X fg=%d",
                      static_cast<unsigned>(m.wParam), static_cast<int>(m.lParam));
             Log::Write("INPUT-DIAG", msg);
+        } else if (m.message == WM_UNHOOK_LL) {
+            // DirectInput now owns key dispatch (the LL block below g_dinputActive is dead;
+            // the recent-input timestamp is stamped by FeedDInputKeyboard). Retire the
+            // system-wide WH_KEYBOARD_LL hook — from its OWNING thread — so a global keyboard
+            // hook can't interfere with input. The thread stays alive to dispatch hotkeys.
+            if (g_hook) {
+                UnhookWindowsHookEx(g_hook);
+                g_hook = nullptr;
+                Log::Write("INPUT", "WH_KEYBOARD_LL hook retired (DirectInput feed owns input)");
+            }
         } else {
             TranslateMessage(&m);
             DispatchMessageW(&m);
         }
     }
 
-    UnhookWindowsHookEx(g_hook);
+    if (g_hook) UnhookWindowsHookEx(g_hook);   // may already be retired on DInput-active
     g_hook = nullptr;
     Log::Write("INPUT", "InputTracker thread exiting");
     return 0;
@@ -199,8 +210,12 @@ void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 
 void FeedDInputKeyboard(const unsigned char* dik) {
     if (!dik || !g_threadId) return;
-    if (!g_dinputActive.exchange(true))
+    if (!g_dinputActive.exchange(true)) {
         Log::Write("INPUT", "DirectInput keyboard feed active — hotkeys via the game's own poll");
+        // DInput now owns dispatch — retire the redundant global WH_KEYBOARD_LL hook
+        // (removed on its owning thread; the input thread keeps running for hotkeys).
+        PostThreadMessageW(g_threadId, WM_UNHOOK_LL, 0, 0);
+    }
 
     // Stamp the "recent input" time on ANY key's rising edge (the menu reader gates
     // animation false-positives on this) — NOT on every per-frame poll.
@@ -223,7 +238,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false, false);
-    DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true,  false);  // \  describe
+    DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true,  false);  // \  route
     DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true,  false);  // [  prev object
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true,  false);  // ]  next object
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true,  false);  // `  rescan
@@ -231,7 +246,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true,  false);  // =  next category
     DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  facing
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true,  false);  // '  diagnostic
-    DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true,  false);  // /  route
+    DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true,  false);  // /  describe
 }
 
 uint64_t LastInputTimestampMs() {
