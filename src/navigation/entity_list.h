@@ -57,10 +57,6 @@ void CmdRescan();             // `
 // planner. Reads only the persistent handle table — input-thread safe.
 bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel);
 
-// Cardinal (default) vs egocentric direction mode for spoken bearings.
-void SetEgocentric(bool on);
-bool IsEgocentric();
-
 // Dump the raw handle table (tag NAV-DIAG): every named/interactive scene object per
 // container with its category byte, interaction flags, npcdic key, name, and world
 // position — the data that confirms where a given object (e.g. the tutorial gate) lives.

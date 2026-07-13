@@ -84,6 +84,50 @@ constexpr uint32_t MAP_SEG_FLAGS     = 0;       // nearest-blocker (movement)
 constexpr uint16_t MAP_MASK_CAM      = 0xFFFF;  // camera/occlusion (diagnostic contrast only)
 constexpr uint32_t MAP_SEG_FLAGS_CAM = 1;
 
+// ---- SQEX walkmap GRID structure (DIRECT read; the "map overlay" source) -----
+// The walkmap is a uniform staggered ("brick") grid over a floor-triangle + wall-
+// segment collision mesh — the same structure the engine's own full-grid enumerator
+// FUN_0022ffe0 walks. ctx0 (= *MAP_COLL_CTX0) exposes a grid header, the vertex/floor/
+// wall arrays, a CSR cell->list table, and the world origin. Reading these lets us bake
+// a WHOLE-MAP walkability + height overlay with NO raycasts, and gives the exact per-map
+// bounds for free (extent = nCols*cellSizeX by nRows*cellSizeZ meters, min-corner
+// (-originX,-originZ)). Cell index is a 16-bit short in the engine, so nCols*nRows is
+// hard-capped at 32767 => every map is a few hundred meters/side. Offsets from the
+// decompiled bodies (FUN_00233050 world->cell, FUN_00231890 plane height); CONFIRMED at
+// runtime by the baked self-diagnostic (direct read cross-checked vs MAP_GROUND_AT).
+//
+// ctx0 sub-fields:
+constexpr uint32_t WALK_CTX_HEADER    = 0x00;  // ptr -> grid header (fields below)
+constexpr uint32_t WALK_CTX_VERTS     = 0x08;  // ptr -> vertex array   (stride 0x10: x@0,y@4,z@8)
+constexpr uint32_t WALK_CTX_POLYS     = 0x10;  // ptr -> floor-poly array (stride 0x20)
+constexpr uint32_t WALK_CTX_WALLS     = 0x18;  // ptr -> wall-segment array (stride 0x90) [phase 2]
+constexpr uint32_t WALK_CTX_CSR       = 0x20;  // ptr -> CSR cell->list offsets (u16[nCols*nRows+1])
+constexpr uint32_t WALK_CTX_PRIMS     = 0x28;  // ptr -> primitive index list (u16[])
+constexpr uint32_t WALK_CTX_ORIGIN_X  = 0x38;  // int originX (gridX = originX + worldX)
+constexpr uint32_t WALK_CTX_ORIGIN_Z  = 0x3C;  // int originZ
+// grid header fields (at *ctx0):
+constexpr uint32_t WALK_HDR_NCOLS     = 0x08;  // int cols (X axis)
+constexpr uint32_t WALK_HDR_NROWS     = 0x0C;  // int rows (Z axis)
+constexpr uint32_t WALK_HDR_CELL_X    = 0x10;  // int cellSizeX (world units/col, integer)
+constexpr uint32_t WALK_HDR_CELL_Z    = 0x14;  // int cellSizeZ (world units/row)
+// floor-poly entry (stride 0x20):
+constexpr uint32_t WALK_POLY_STRIDE   = 0x20;
+constexpr uint32_t WALK_POLY_PLANE_A  = 0x00;  // float plane A
+constexpr uint32_t WALK_POLY_PLANE_B  = 0x04;  // float plane B (divisor; guard |B|>0.001)
+constexpr uint32_t WALK_POLY_PLANE_C  = 0x08;  // float plane C
+constexpr uint32_t WALK_POLY_FLAGS    = 0x0C;  // u32 flags; walk type = low 3 bits (0 = walkable)
+constexpr uint32_t WALK_POLY_BASEVERT = 0x10;  // s16 base-vertex index -> vertex array
+constexpr uint32_t WALK_POLY_TYPE_MASK = 0x7;
+constexpr uint32_t WALK_VERT_STRIDE   = 0x10;
+// primitive index encoding (per-cell list entries): < 0x4000 => floor-poly index;
+// 0x4000-0x4FFF => wall segment (idx-0x4000); >= 0x5000 => empty/sentinel.
+constexpr uint16_t WALK_PRIM_FLOOR_MAX = 0x4000;
+constexpr uint32_t WALK_MAX_CELLS      = 32767; // 16-bit cell-index cap (sanity bound)
+// Reference RVAs (read-only replication; NOT called):
+constexpr uint32_t WALK_GRID_ENUM      = 0x10FFE0; // FUN_0022ffe0 (full-grid enumerator; bake model)
+constexpr uint32_t WALK_WORLD_TO_CELL  = 0x113050; // FUN_00233050 (world XZ -> cell)
+constexpr uint32_t WALK_PLANE_HEIGHT   = 0x111890; // FUN_00231890 (plane height at XZ)
+
 // ---- Handle-table layout (from FUN_003588b0 + FUN_00263ff0) -----------------
 constexpr uint32_t HANDLE_TABLE_STRIDE = 0x288;  // 0x51 * sizeof(uint64)
 constexpr uint32_t HANDLE_TABLE_CONTAINERS = 5;  // 5 map containers (sel 0..4)
@@ -124,8 +168,42 @@ constexpr uint32_t XFORM_POS_Y          = 0x04;   // float Y (elevation / up)
 constexpr uint32_t XFORM_POS_Z          = 0x08;   // float Z (ground)
 // Char component embedded 4x4 world matrix (row-major) at comp+0xE0:
 constexpr uint32_t COMP_MATRIX          = 0xE0;   // right row @ +0x00
-constexpr uint32_t COMP_MATRIX_FWD      = 0x100;  // forward row: fwd.x@+0x00, fwd.y@+0x04, fwd.z@+0x08
+constexpr uint32_t COMP_MATRIX_FWD      = 0x100;  // NOT a forward row — internal point vector (see below)
 constexpr uint32_t COMP_MATRIX_TRANSL   = 0x110;  // translation row: X@+0x00, Y@+0x04, Z@+0x08 (pos cross-check)
+// NOTE: the OLD freecam globals DAT_020955e0/f0 were the dead freecam slot in our build (read
+// (0,0,0)) — still correct to ignore. The GAMEPLAY camera + movement frame below are the real ones.
+
+// ---- Movement frame: camera-relative confirmation + egocentric "forward" reference ----
+// FFXII field movement is CAMERA-RELATIVE: the leader locomotion driver FUN_00358cb0 (RVA
+// 0x238CB0) rotates the raw stick by the camera basis (FUN_004742a0, RVA 0x3542A0) into a WORLD
+// move vector, then turns the character to face atan2f(moveX,moveZ). "Up on the stick" moves
+// along camera-forward, not world-north — so egocentric directions need the camera look yaw.
+// World move vector the driver writes each frame (reset to 0 while idle):
+constexpr uint32_t MOVE_VEC_X = 0x21A7FD0;  // DAT_022c7fd0
+constexpr uint32_t MOVE_VEC_Y = 0x21A7FD4;  // DAT_022c7fd4 (~0, ground move)
+constexpr uint32_t MOVE_VEC_Z = 0x21A7FD8;  // DAT_022c7fd8
+// Camera-forward reference for EGOCENTRIC directions ("North" = the way UP takes you). Read the
+// forward row of the MOVEMENT camera matrix DAT_02aedf30 (row 2 @ +0x20) — the SAME matrix the stick
+// rotator FUN_004742a0 consumes (worldMove = stickX*row0 - stickY*row2). A pure UP push has stickY>0,
+// so worldMove = -stickY*row2 => the "direction UP takes you" yaw = atan2(-fwd.x, -fwd.z). SAME
+// atan2(x,z) convention as faceNode, so it drops into the egocentric transform in place of
+// ReadPlayerFacing — but unlike faceNode it is valid idle, after a camera rotate, AND in combat.
+constexpr uint32_t CAMERA_FWD_X = 0x29CDF50;  // DAT_02aedf50 (camera matrix row2 .x = forward.x)
+constexpr uint32_t CAMERA_FWD_Z = 0x29CDF58;  // DAT_02aedf58 (camera matrix row2 .z = forward.z)
+// Scalar camera-forward yaw DAT_02aedf94 = atan2f(row2.x,row2.z) of the SIBLING/view matrix
+// DAT_02aede70 (built with sign-flips ^0x80000000 on rows 0/1/3 in FUN_003820c0) — NOT the movement
+// matrix, so its offset from the move heading is not constant (why the earlier diag's camLook
+// wandered). Kept ONLY as a diagnostic cross-check, never as the egocentric reference.
+constexpr uint32_t CAMERA_YAW_SCALAR = 0x29CDF94;  // DAT_02aedf94 (diagnostic only)
+// Leader world facing yaw (radians) — the egocentric "forward" reference; persists when idle.
+// TWO decompile-confirmed reads (the diagnostic logs both, the feature keeps the valid one):
+//   (a) ACTOR facing cache: *(float*)(leaderActor + ACTOR_FACING_CACHE), leaderActor = *(LEADER_ACTOR_PTR).
+//       FUN_00236300 rewrites it every frame from FUN_00263cc0(core). NOTE +0x15C, NOT +0x160 — the
+//       0x160 neighbor is never written by the sync (read a flat 0.0 in the iteration-1 test).
+//   (b) NODE facing slot: *(float*)((*(sceneObj+SCENEOBJ_XFORM_PTR)) + XFORM_FACING_YAW) — the class-3
+//       slot on the SAME +0xB8 node we read position from (setter FUN_0026a0d0 / getter FUN_00263cc0).
+constexpr uint32_t ACTOR_FACING_CACHE = 0x15C;  // actor+0x15C
+constexpr uint32_t XFORM_FACING_YAW   = 0xA4;   // node+0xA4 (class-3 leader facing)
 
 // ---- Field-actor pool (the game's own actor walk; from FUN_00236820/00236300)
 // The authoritative live field-object list. `*ACTOR_POOL_BASE` is a pointer to

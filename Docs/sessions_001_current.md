@@ -1283,3 +1283,222 @@ N/S (negate Z); (4) then full A* turn-by-turn (game-thread grid).
 **ENTER-KEY follow-up:** the drop is upstream (DIERR_INPUTLOST = device unacquired on focus loss). Not our bug. If it recurs and hurts, consider a mod-side re-`Acquire()` nudge when we detect the failure — but that touches the game's device and needs care; defer unless it becomes a real blocker.
 
 **COMMIT:** this session's working state committed (routing via SQEX walkmap + Fix A/B/D + ally-HP). Full RE archived in `GameArchitecture.md` (SQEX walkmap oracle + mask=4 taxonomy).
+
+## Session 34 — 2026-07-12 — [pathfinder] Whole-map walkmap-grid overlay (Session-33 fixes)
+
+**KEYWORDS:** whole-map routing overlay walkmap grid direct read FUN_0022ffe0 FUN_00233050 FUN_00231890 ctx0 header nCols nRows cellSize origin brick stagger NavGrid EnsureBuilt ReadCellFloor SegmentTraversable dense validator kMaxRange removed 32767 short cap world-absolute directions delta-scan non-regression prologue no treasure nameIdx -1
+
+**Fixed all three Session-33 routing issues by rebuilding the planner's grid layer** on a
+whole-map walkability OVERLAY read directly from the game's own SQEX walkmap grid — the
+architecture the user asked for ("we effectively need a map overlay"). Built + deployed; **PENDING
+one runtime confirmation pass (baked self-diagnostic), NOT yet committed.**
+
+- **KEY RE (conf 0.92, offline; runtime-confirm via `'`):** the SQEX walkmap **is itself a uniform
+  staggered ("brick") grid** over a floor-triangle + wall-segment mesh — the same structure the
+  engine's own full-grid enumerator **`FUN_0022ffe0`** (RVA 0x10FFE0) walks. `ctx0 = *DAT_0209a678`
+  exposes: grid header ptr `+0x00` (→ `nCols +0x08`, `nRows +0x0C`, `cellSizeX +0x10`, `cellSizeZ
+  +0x14`, all int meters), vertex array `+0x08` (stride 0x10), floor-poly array `+0x10` (stride
+  0x20: planeA/B/C @0/4/8, flags @0xC type=low3bits, baseVert s16 @0x10), wall array `+0x18`
+  (stride 0x90, phase-2), CSR cell→list table `+0x20` (u16[nCols*nRows+1]), primitive list `+0x28`
+  (u16; <0x4000 floor-poly idx, 0x4000-0x4FFF wall, ≥0x5000 empty), originX `+0x38`, originZ
+  `+0x3C`. World→cell = `FUN_00233050` (0x113050): `col=(originX+wx)/cellSizeX`; `if(col&1)
+  gz-=cellSizeZ/2` (**integer**); `row=(gz)/cellSizeZ`; cell=`nCols*row+col`. Height = `FUN_00231890`
+  (0x111890): `vy + ((vx-x)*A + (vz-z)*C)/B`. **Map extent is free at runtime** = `nCols*cellSizeX ×
+  nRows*cellSizeZ` m, min-corner `(-originX,-originZ)`; the 16-bit cell index hard-caps every map at
+  **≤32767 cells** (a few hundred m/side). NO callable engine A* (AI = reactive steering +
+  waypoint-follower `FUN_00335180`), so we keep our own A*.
+
+- **Architecture (`src/navigation/`):** new `nav_grid.{h,cpp}` = persistent whole-map overlay
+  (`EnsureBuilt(epoch)` bakes `walkable[]+floorY[]` in one O(cells) pass, cached per map-epoch,
+  game-thread-only, `Invalidate()` on teardown). `map_query` gained `GetGridInfo`/`WorldToCell`/
+  `CellCenter`/`ReadCellFloor` (direct grid parse, zero raycast) + `SegmentTraversable` (dense
+  validator). `path_planner` A* now runs over the overlay end-to-end.
+
+- **Bug 2 (40 m cap) — ELIMINATED.** Dropped `kMaxRange`/`Plan::TooFar`/per-cell `GroundAt` raycast;
+  A* searches the whole ≤32k-cell grid at the walkmap's native resolution; budgets raised
+  (`kMaxExpand=20000`, `kMaxRays=60000`) as safety ceilings only. Per-cell floor sampling is now a
+  zero-raycast overlay read; the only rays are A* edge wall tests + string-pull validation (bounded
+  by ROUTE size, not map size). Full turn-by-turn at ANY distance — no approximate heading.
+
+- **Bug 3 (routes through walls) — FIXED.** `SegmentTraversable(a,b,step=1m,...)` samples every 1 m
+  requiring floor-continuity (GroundAt) + `|ΔfloorY|≤kMaxStep` + per-substep `SegmentClear(mask=4)`
+  at the local floor height (shrinks the SegmentHit Y-flatten to ~1 m). Used in the string-pull in
+  place of the single long ray, so a detour is only collapsed when the straight span is densely
+  traversable — every committed leg is wall-validated. Dead `kMargin` removed.
+
+- **Bug 1 (points away) — kept WORLD-ABSOLUTE + instrumented.** Per user directive: directions stay
+  north/south/east/west from the player (NO egocentric/facing mode — camera only moves the view).
+  The "points away" symptom is chiefly Bug 3 (through-wall routes) bleeding in; added `NAV-ROUTE`
+  logging (yaw°, target, raw+smoothed polyline sizes, first leg, spoken text) to catch any residual
+  first-waypoint geometry bug in the runtime pass.
+
+- **Confirmation = baked C++ self-diagnostic (user's choice, no Frida).** `'` now logs the grid
+  header (→ exact map extent) and cross-checks the direct read (`ReadCellFloor`) vs the confirmed
+  `GroundAt` oracle over a ~400-cell stride sample (`grid xcheck: walkAgree=N (X%)`). High agreement
+  promotes the 0.92 direct read to ship bar; `NavGrid::SetDirectRead(false)` is the GroundAt-bake
+  fallback lever if it fails.
+
+- **Non-regression (verified before coding):** the live enemy scanner is stateless input-thread
+  re-enumeration of the actor pool (`ScanCombatantsLocked`), separate mutex from the router, on the
+  same frame hook but ordered EntityList-first. Preserved all 5 couplings (untouched
+  `nav_hooks::HookedFieldFrame`; router never calls `EntityList::*`; teardown keeps the epoch bump +
+  request clear + adds `NavGrid::Invalidate`; `map_query` changes additive-only; scan path
+  untouched). Router changes cannot reach the scanner.
+
+- **Prologue objects (user check):** confirmed no treasure on Nalbina Inner Ward — `ClassifyByNameKey`
+  labels Treasure only for npcdic id 434/468 with `nameIdx≥0`; every observed prologue object has
+  `nameIdx=-1` (combatants, talk NPCs, an iron gate=ACTION→Object). Deployed log has 0 "Treasure".
+  No classifier change; the enhanced `'` dump (nameIdx/flags/name) verifies identities live.
+
+**PENDING (next session, tester on a fresh field map):** press `'` → confirm `grid NxM cell=…` +
+`grid xcheck walkAgree ≥~90%` on ≥2 maps; `\` to an object >40 m → `plan=Route` (not TooFar), full
+turn-by-turn; reproduce the through-wall case → smoothed poly retains detour corners; spawn enemies +
+cycle scanner → still appear. THEN commit + move the 3 Known Issues to Solved. Straight-to-C++
+exception (no new RE crash surface — tuning confirmed primitives + a struct read confirmed in-C++).
+
+## Session 35 — 2026-07-12 — [pathfinder] Facing-relative directions ("North" = forward), DQ7R model
+
+**KEYWORDS:** facing bug comp+0x100 frozen 129 comp+0x15C current heading comp+0x160 target comp+0xAC brad byte camera-relative movement DQ7R relative directions North=forward RelativeCardinal frame toggle `.` key ReadFacingCandidates convention calibration pending
+
+**Runtime (S34 log) proved absolute directions are unfollowable + facing read is broken.** With the
+S34 overlay giving geometrically-correct WORLD-absolute routes, the tester held the stick toward
+"North" and the character moved SOUTH (from Z 110→116→122→124, +Z=south, target north) — re-route
+"North" grew 30→38→41. And `yaw=129deg` was **frozen all session**. Two agents diagnosed both:
+- **Facing bug root cause (0.92):** `comp+0x100` (was read as a "forward row") is NOT a forward
+  vector — it's an internal point-vector lane on the persistent char component, so `atan2` froze at
+  ~129deg. **Live facing = `comp+0x15C`** (current heading, rad); alts `comp+0x160` (target/cached,
+  = actor-pool +0x160) and `comp+0xAC` (byte brad, deg=×1.40625). `comp = *(sceneObj+0x30)`. 0.85.
+- **Movement is camera/facing-relative: CONFIRMED (0.9)** — the leader seeks a target set upstream
+  from `stick+cameraYaw` (driver `FUN_0032aec0`; camera = behind-cam `PPhysicsCharacterCamera`,
+  update 0x574260). So absolute cardinals can't be followed without a facing frame.
+
+**DQ7R correction (I mis-read it twice; user corrected):** DQ7R does NOT remap movement to north — it
+speaks directions **relative to the frame, using cardinal words where "North" = forward = up on the
+stick**. Facing southeast + target ahead → "North 3" = push up 3 (southeast *becomes* "north" for that
+instruction). It's a **speech relabel, NOT an input/movement remap**. Works because the behind-camera
+makes forward ≈ up-on-stick ≈ facing — so we only need the live FACING, no camera-yaw discovery and no
+input hook. (An earlier "up=north stick remap" plan was drafted then RETRACTED by the user.)
+
+**Shipped (built+deployed, straight-to-C++ per the overlay precedent; PENDING calibration, NOT
+committed):**
+- `player_state`: `ReadPlayerYaw` → `comp+0x15C`; new `ReadFacingCandidates` (logs all 3).
+- `nav_common`: `RelativeCardinal(dx,dz,facingYaw)` decomposition (project leg onto facing
+  forward F=(sin f,−cos f)/right R=(cos f,sin f) → North=ahead/East=right) + `RelativeCardinalBearing`
+  + a shared `g_relativeDirections` frame flag (default RELATIVE).
+- `path_directions::Describe(poly, relative, facingYaw)`; `path_planner` reads facing + frame, logs
+  `frame=relative/absolute yaw=…`; `entity_list` `/` describe uses the same frame.
+- `nav_commands`: **`.` key** toggles relative/absolute (spoken); `'` diagnostic now logs the 3 facing
+  candidates + `cardinal(cur)`. `input_tracker`: `.` wired (DIK 0x34).
+
+**PENDING = CALIBRATION (the facing angle convention is assumed = BearingDeg atan2(dx,−dz), unconfirmed
+at 0.85).** Tester: walk toward an object so you FACE it, press `\` (relative mode) → expect "North N";
+also press `'` + `;`. Send the log — I compare logged `yaw` vs the world bearing to the target to lock
+the convention (add an offset/sign in `ReadPlayerYaw` if the frame is rotated/mirrored). Then confirm
+`;` tracks turning + directions are followable, and commit. Separate follow-up still open: 8 m coarse
+overlay grid (some false NoPath) + 84% direct-read agreement.
+
+**UPDATE (same session) — frame is CAMERA, not facing.** User clarified the field camera is a FREE
+look-camera on a separate stick that does NOT trail or turn the character; movement is CAMERA-relative
+(decompile ~0.9 + the runtime south-while-north). So "up on the stick" = camera-forward, and facing is
+the WRONG reference (diverges whenever the camera is rotated). Switched the relative frame from facing
+to the **camera yaw**. Camera-yaw source = **static community globals** `DAT_020955e0` (pos, RVA
+0x1F755E0) + `DAT_020955f0` (look-at, RVA 0x1F755F0), Vector3f each; `camYaw = atan2(fwdX,-fwdZ)`,
+fwd = look-at − pos. **These are the same globals `feedback_validate_community_rvas` grep-flagged
+"absent" — but that is a FALSE NEGATIVE** (register-written struct fields have no literal DAT_ xref;
+XIIHook + ffgriever freecam read them). Now `player_state::ReadCameraYaw`/`ReadCameraVectors`; route +
+`/` describe use camera yaw for the relative frame (fall back to absolute if not live); `'` diagnostic
+logs `camera: pos/look/yaw` to VALIDATE the globals live (yaw must track a camera rotation) before we
+depend on them. Built+deployed. PENDING: user presses `'`, rotates camera-only, re-presses `'` → does
+`camYaw` change? + directions line up. If globals dead → escalate to a read-only hook on the camera
+object (`PPhysicsCharacterCamera` update, getCameraPosition=this+0x48; getCameraDirection thunk
+0x583950). If live → update [[feedback_validate_community_rvas]] (globals ARE usable) + commit.
+
+## Session 36 — 2026-07-12 — [pathfinder] Absolute directions only; fine GroundAt routing grid
+
+**KEYWORDS:** removed facing relative camera orientation dormant code world-absolute CardinalBearing crow-flies parity turn+forward tank fine grid GroundAt 1.5m lazy cache 8m walkmap coarse false NoPath wall margin SegmentTraversable lateral offset rays
+
+**Resolved the long direction-frame saga + attacked the real pathing bug.** Runtime tests killed every
+frame theory: camera-position globals `DAT_020955e0/f0` read the **dead freecam slot** (frozen
+pos=(0,0,0)); `comp+0x15C` facing IS live but was the wrong reference; a decompile trace of the player
+input path (`FUN_0032c910`→`FUN_0032b9c0`: stick-X=turn `char+0x70`, stick-Y=forward, no camera in the
+math) said movement is turn+forward, but the user's in-game test (holding left/right STEPS the char)
+contradicts pure tank — mechanism stays unresolved. **User's decisive call: directions are
+WORLD-ABSOLUTE, no facing/relative/camera/orientation; remove that dormant code; the real fix is the
+pathing.**
+
+- **REMOVED** all direction-frame machinery: `RelativeCardinal`/`RelativeCardinalBearing`/
+  `EgocentricBearing`/`kEgo`/`g_relativeDirections`, `ReadPlayerYaw`/`ReadFacingCandidates`/
+  `ReadCameraYaw`/`ReadCameraVectors`, `COMP_HEADING_*` + `CAMERA_*` RVAs, `SpeakFacing`(`;`) +
+  `ToggleDirectionFrame`(`.`) + their key bindings, `NorthSouthWord`/`EastWestWord`,
+  `SetEgocentric`/`IsEgocentric`, and the facing/camera `'`-diagnostic blocks.
+- **Directions = world-absolute, IDENTICAL to `/` crow-flies:** `DescribeDirection(from,to)` +
+  each `\` route leg now use a single 8-point `NavCommon::CardinalBearing` (same axes north=−Z, same
+  `ReadPlayerPos`), so `\` and `/` never disagree ("North 18, Northeast 5. 23 steps").
+- **PATHING FIX (the priority):** the routing grid was the walkmap's NATIVE **8 m** cells (a coarse
+  spatial index; log showed `cell=8x8`, causing `NoPath` to ~3 m targets + blocky/through-wall routes).
+  Rebuilt `NavGrid` as a **fine ~1.5 m uniform grid lazily sampled via `MapQuery::GroundAt`** (the real
+  floor mesh) + cached per map-epoch (cost = explored cells, no whole-map bake; off-map GroundAt=false
+  bounds the search, no distance cap). Re-added a **0.5 m lateral wall margin**: `SegmentTraversable`
+  (string-pull) + the A* edge test now fire two rays offset ±margin perpendicular, so a leg only counts
+  clear with body width on both sides (stops through-walls + wall-sliding/corner-cut).
+
+Built + deployed clean. **PENDING runtime test:** `\` to a close object that used to say `NoPath` →
+real route; routes stop cutting through/along walls; `\` first-leg cardinal == `/` crow-flies cardinal;
+`'` stats show `fineCell=1.5m gridSamples=N`. Then commit + correct
+[[feedback_validate_community_rvas]] (camera globals = dead freecam) + record in GameArchitecture.
+Superseded [[project_pathfinder_whole_map_overlay_session34]]'s 8 m direct-read overlay.
+
+## Session 37 — 2026-07-13 — [pathfinder] Egocentric directions re-anchored to camera-forward (camera-relative CONFIRMED)
+
+**KEYWORDS:** camera-relative movement confirmed egocentric directions North=forward camera-forward DAT_02aedf30 row2 fwd.x DAT_02aedf50 fwd.z DAT_02aedf58 atan2(-fwd.x,-fwd.z) ReadCameraForward faceNode wrong reference FUN_004742a0 FUN_00358cb0 FUN_003820c0 DAT_02aedf94 view-matrix diagnostic sign trap position-delta ground truth calibration walk W-leg D-leg right=East ; Forward points combat target-facing FUN_00307300 FUN_0037b4d0 FUN_0031adb0 boss loses focus
+
+**Reversed Session-36's "world-absolute, no camera" call — the decompile PROVED movement is
+camera-relative, so directions had to become egocentric on the RIGHT reference.** Session 36 removed all
+facing/camera code on the premise the camera doesn't govern movement. A boss-fight report ("boss called
+NE while audibly to my left; going left made me attack it") + a first-time faceNode-egocentric build that
+came out ~90° off in the field reopened it. Read the actual code (not just agents):
+
+- **Movement is CAMERA-RELATIVE (≥0.98, code-proven).** `FUN_004742a0` (RVA 0x3542A0) *unconditionally*
+  rotates the stick by the camera matrix `DAT_02aedf30`: `worldMove = stickX·row0 − stickY·row2` (row0
+  camera-right, row2 camera-forward, Y zeroed + normalized) — NO top-down branch. `FUN_00358cb0`
+  (RVA 0x238CB0) writes the move vector `DAT_022c7fd0/4/8` and sets facing = `atan2(moveX,moveZ)` via
+  `FUN_0026a0d0` (node+0xA4) ONLY while moving. The "top-down feeling" is the follow-cam trailing behind.
+- **`faceNode` (node+0xA4) was the wrong reference.** It = "where UP takes you" ONLY while actively
+  walking; when stationary (exactly when you query) it's stale, and in combat the battle action /
+  target-steering subsystems (`FUN_00307300` 0x1c7 / `FUN_0037b4d0` / `FUN_0031adb0`) turn it to face the
+  TARGET — that's the boss "NE" bug. (`bVar5 & 4`, the skip-move-facing flag, is script-only, NOT a lock.)
+- **`DAT_02aedf94` scalar is NOT the movement forward** — `FUN_003820c0` builds it from the view/sibling
+  matrix `DAT_02aede70` with sign-flips; its delta to the move heading wanders. Diagnostic-only.
+
+**FIX (shipped, built, deployed):** anchor "North = forward = where UP takes you" to the LIVE camera-forward
+read from the MOVEMENT matrix `DAT_02aedf30` row 2 (+0x20): `fwd.x=DAT_02aedf50` (RVA 0x29CDF50),
+`fwd.z=DAT_02aedf58` (RVA 0x29CDF58); up-direction = `atan2(−fwd.x,−fwd.z)`. New `PlayerState::
+ReadCameraForward`; every `facingRad` source repointed `ReadPlayerFacing`→`ReadCameraForward`
+(`path_planner` `\` legs, `entity_list` scanner describe + obstacle hint, `nav_commands` `;`). `;` now says
+"Forward points <cardinal>" (which real-world way UP points). `nav_rva.h` +`CAMERA_FWD_X/Z`. The egocentric
+transform in `nav_common.cpp` was already correct — only the reference vector changed.
+
+**CALIBRATION (baked `'` diagnostic, position-delta ground truth — user-run, no Frida):** logs pos-delta
+(actual walked dir) + move vector + faceNode + BOTH camera-forward sign candidates. Result:
+- W leg (walk forward, sampled moving): `camFwdNeg=168.9°` (camera matrix ALONE) == move vector `168.9°` ==
+  faceNode `168.9°` == walked `174.7°` (±6° follow-cam drift); `camFwdRaw` was the 180° opposite. ⇒ camera
+  orientation alone predicts movement ⇒ **camera-relative confirmed at ground truth; sign `(−,−)` correct.**
+- D leg (walk right): forward `151.1°`, moved at `61.1°` = forward−90 ⇒ transform yields `ego=+90=East` ⇒
+  **right→East, no handedness flip.**
+So the provisional sign was right: **no further feature-code change.** User confirmed `;` tracks camera
+rotation. `'` diagnostic KEPT (lean; re-verify after game updates / boss fights).
+
+Supersedes Session-36's world-absolute direction model and the Session-35 DQ7R relative-facing model.
+
+### Next steps — combat targeting (NOT implemented this session)
+Addresses the original "loses focus in combat" via an explicit locked-target route, bypassing the mod cursor:
+1. **`p` (VK_P) = route to the game's locked/selected target.** Reuse the Session-32 battle-target reader
+   (`DAT_0209be80`, sel handle +0x9fd8, gate +0x10f78 — the combat trace confirms `DAT_0209be80` is the
+   target-selection/reticle module, 61 refs all `0028exxx`). Read target scene object → world pos →
+   `PathPlanner::Request` (same pipe as `\`, but to the locked target). Wire `VK_P` in `input_tracker.cpp`
+   (free `g_extraDown` slot) + an `OnNavKey` case. **PRE-SHIP CHECK (≥0.98):** confirm the game's Lock-On
+   (`2`) drives that SAME `DAT_0209be80` object vs a camera soft-lock — a quick xref, not a guess.
+2. **Target-cell walkability snap** in `PlanRoute` (`path_planner.cpp`): snap the target to its nearest
+   walkable cell (nav_grid / map_query) so an off-mesh / map-edge target can't cause a latent NoPath.
+3. **`\`-cursor lock-by-identity** (`entity_list.cpp`): re-anchor the `[`/`]` cursor to its object by stable
+   identity across rescans so it can't silently jump to the nearest.

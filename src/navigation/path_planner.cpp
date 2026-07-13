@@ -1,6 +1,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
+#include "navigation/nav_grid.h"
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
 #include "speech/speech.h"
@@ -32,17 +33,19 @@ int                   g_framesLeft = 0;     // retry countdown while not yet saf
 uint64_t              g_notSafeLoggedSeq = 0; // game-thread only: dedupe the per-frame not-safe log to once/request
 
 // ---- planner tunables (bound the game-thread cost per route) -----------------
-constexpr float kCell       = 1.0f;   // grid cell size, meters
-constexpr float kMaxRange   = 40.0f;  // straight-line beyond this -> "Too far"
-constexpr int   kMaxExpand  = 500;    // A* node-expansion cap
-constexpr int   kMaxRays    = 2000;   // total raycast budget (the real limiter)
-constexpr float kMaxStep    = 1.5f;   // climbable floor-height delta between cells
-constexpr float kBodyPad    = 0.9f;   // ray height above floor for wall clearance
-constexpr float kMargin     = 0.5f;   // horizontal clearance margin (~capsule radius)
-constexpr int   kWaitFrames = 90;     // ~1.5 s: retry if the map isn't fully live yet
-const float     kSqrt2      = 1.41421356f;
+// A* over a FINE (NavGrid::kFineCell ~1.5 m) walkability grid, lazily sampled with GroundAt
+// against the actual floor mesh (NOT the walkmap's coarse 8 m native cells, which false-fail
+// short routes). No distance cap; GroundAt returns false off the floor, so the search bounds
+// itself at map edges. Budgets are safety ceilings for the pathological case.
+constexpr int   kMaxExpand    = 20000;   // A* node-expansion cap
+constexpr int   kMaxRays      = 60000;   // wall-ray budget (A* edges + string-pull validation)
+constexpr float kMaxStep      = 1.5f;    // climbable floor-height delta between cells
+constexpr float kBodyPad      = 0.9f;    // ray height above floor for wall clearance
+constexpr float kValidateStep = 1.0f;    // dense string-pull validator sample spacing (m)
+constexpr float kMargin       = 0.5f;    // lateral clearance (capsule radius) — keeps routes off walls
+constexpr int   kWaitFrames   = 90;      // ~1.5 s: retry if the map isn't fully live yet
 
-enum class Plan { Route, NoPath, TooFar };
+enum class Plan { Route, NoPath };
 
 inline int64_t Key(int x, int z) {
     return static_cast<int64_t>(static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32 |
@@ -51,85 +54,74 @@ inline int64_t Key(int x, int z) {
 inline int KeyX(int64_t k) { return static_cast<int>(static_cast<uint32_t>(k >> 32)); }
 inline int KeyZ(int64_t k) { return static_cast<int>(static_cast<uint32_t>(k & 0xffffffff)); }
 
-struct CellInfo { bool walkable = false; float floorY = 0.0f; };
-
 // Diagnostic counters filled by PlanRoute, logged by OnGameFrame (no effect on the
-// search). The single most useful fact is startFloorHit — whether the floor ray under
-// the player hit at all: 0 with a live world => the raycast/world/filter is wrong;
-// >0 floorHits but NoPath => connectivity/step/margin.
+// search). startFloorHit = whether the overlay marks the player's own cell walkable;
+// rays = wall rays spent (A* edges + string-pull validation); expands = A* nodes popped.
 struct PlanStats {
-    int  rays = 0, floorHits = 0, expands = 0, cells = 0;
+    int  rays = 0, expands = 0, cells = 0;
     int  tx = 0, tz = 0;
     bool startFloorHit = false;
 };
 
-// A* over a walkability grid sampled lazily against the SQEX field walkmap. Runs on the
-// game thread; every query is SEH-guarded inside MapQuery. `outPoly` = player -> ... ->
-// target on Route. `stats` is filled for diagnostics only.
-Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly, PlanStats& stats) {
-    if (NavCommon::Distance2D(from, to) > kMaxRange) return Plan::TooFar;
+// A* over a FINE walkability grid (NavGrid), lazily sampled with GroundAt against the actual
+// floor mesh + cached per map-epoch. Runs on the game thread. `rawPoly` = the raw cell
+// staircase (diagnostics); `outPoly` = the smoothed, wall-validated route.
+Plan PlanRoute(const FVec3& from, const FVec3& to, uint32_t epoch,
+               std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, PlanStats& stats) {
+    rawPoly.clear();
+    outPoly.clear();
+    if (!MapQuery::HasWorld()) return Plan::NoPath;   // walkmap not loaded
+    NavGrid::EnsureEpoch(epoch);                       // fresh cache on a new map
+
+    int tc, tr; NavGrid::WorldToCell(to.x, to.z, tc, tr);
+    int sc, sr; NavGrid::WorldToCell(from.x, from.z, sc, sr);
+    stats.tx = tc; stats.tz = tr;
 
     int rays = 0;
-    std::unordered_map<int64_t, CellInfo> cells;
-    const int box = static_cast<int>(kMaxRange / kCell) + 2;
 
-    auto worldOf = [&](int cx, int cz, float y) -> FVec3 {
-        return FVec3{ from.x + cx * kCell, y, from.z + cz * kCell };
+    auto worldOf = [&](int c, int r, float y) -> FVec3 {
+        float wx, wz; NavGrid::CellCenter(c, r, wx, wz);
+        return FVec3{ wx, y, wz };
     };
-    // Lazily test + cache a cell's walkability (floor exists below its center).
-    auto cellInfo = [&](int cx, int cz) -> CellInfo& {
-        int64_t k = Key(cx, cz);
-        auto it = cells.find(k);
-        if (it != cells.end()) return it->second;
-        CellInfo ci;
-        if (rays < kMaxRays) {
-            ++rays;
-            float fy = 0.0f;
-            // Walkable-floor test against the SQEX field walkmap (the system the map + AI
-            // NPCs use; live even with no Bullet world). Arbitrary (X,Z) -> floor + height.
-            if (MapQuery::GroundAt(from.x + cx * kCell, from.z + cz * kCell, fy)) {
-                ci.walkable = true;
-                ci.floorY = fy;
-                ++stats.floorHits;
-            }
-        }
-        return cells.emplace(k, ci).first->second;
+    float twx, twz; NavGrid::CellCenter(tc, tr, twx, twz);
+    auto heur = [&](int c, int r) -> float {
+        float wx, wz; NavGrid::CellCenter(c, r, wx, wz);
+        const float dx = wx - twx, dz = wz - twz;
+        return std::sqrt(dx * dx + dz * dz);            // admissible Euclidean (meters)
     };
-    // Edge passability: both walkable, no big step, and a clear body-height corridor.
-    auto passable = [&](int ax, int az, const CellInfo& a,
-                        int bx, int bz, const CellInfo& b) -> bool {
-        if (!a.walkable || !b.walkable) return false;
-        if (std::fabs(a.floorY - b.floorY) > kMaxStep) return false;
+    // A clear body-height corridor WITH lateral margin: center ray + two rays offset +/-margin
+    // perpendicular, so a leg only counts clear with body width on both sides (keeps the route
+    // off wall faces / from clipping corners).
+    auto clearWithMargin = [&](const FVec3& a, const FVec3& b) -> bool {
+        if (!MapQuery::SegmentClear(a, b)) return false;
+        const float dx = b.x - a.x, dz = b.z - a.z;
+        const float len = std::sqrt(dx * dx + dz * dz);
+        if (len < 1e-4f || kMargin <= 0.0f) return true;
+        const float px = -dz / len * kMargin, pz = dx / len * kMargin;  // perpendicular * margin
+        return MapQuery::SegmentClear(FVec3{ a.x + px, a.y, a.z + pz }, FVec3{ b.x + px, b.y, b.z + pz })
+            && MapQuery::SegmentClear(FVec3{ a.x - px, a.y, a.z - pz }, FVec3{ b.x - px, b.y, b.z - pz });
+    };
+    auto passable = [&](int ac, int ar, float ay, int bc, int br, float by) -> bool {
+        if (std::fabs(ay - by) > kMaxStep) return false;
         if (rays >= kMaxRays) return false;
-        ++rays;
-        // Wall test at body height along the edge, against the same SQEX walkmap.
-        return MapQuery::SegmentClear(worldOf(ax, az, a.floorY + kBodyPad),
-                                      worldOf(bx, bz, b.floorY + kBodyPad));
+        rays += 3;   // center + two offset rays
+        return clearWithMargin(worldOf(ac, ar, ay + kBodyPad), worldOf(bc, br, by + kBodyPad));
     };
 
-    const int tx = static_cast<int>(std::lround((to.x - from.x) / kCell));
-    const int tz = static_cast<int>(std::lround((to.z - from.z) / kCell));
-    stats.tx = tx; stats.tz = tz;
+    float sy = from.y;
+    const bool startWalk = NavGrid::WalkableAt(sc, sr, sy);   // fills sy on hit
+    stats.startFloorHit = startWalk;
+    if (!startWalk) sy = from.y;                              // stand on the player's own Y
 
-    auto heur = [&](int x, int z) -> float {
-        float ax = std::fabs(static_cast<float>(tx - x));
-        float az = std::fabs(static_cast<float>(tz - z));
-        return (ax + az) + (kSqrt2 - 2.0f) * std::min(ax, az);   // octile
-    };
-
-    struct Node { int x, z; float f; };
+    struct Node { int c, r; float f; };
     struct Cmp { bool operator()(const Node& a, const Node& b) const { return a.f > b.f; } };
     std::priority_queue<Node, std::vector<Node>, Cmp> open;
     std::unordered_map<int64_t, float>   gScore;
     std::unordered_map<int64_t, int64_t> came;
 
-    // The player stands on valid ground even if the floor probe grazes an edge.
-    CellInfo& start = cellInfo(0, 0);
-    stats.startFloorHit = start.walkable;   // capture BEFORE the force-walkable override
-    if (!start.walkable) { start.walkable = true; start.floorY = from.y; }
-
-    gScore[Key(0, 0)] = 0.0f;
-    open.push({ 0, 0, heur(0, 0) });
+    const int64_t startKey = Key(sc, sr);
+    gScore[startKey] = 0.0f;
+    open.push({ sc, sr, heur(sc, sr) });
 
     const int dirs[8][2] = { {1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1} };
     int expands = 0;
@@ -137,77 +129,83 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, std::vector<FVec3>& outPoly, 
 
     while (!open.empty()) {
         Node cur = open.top(); open.pop();
-        if (cur.x == tx && cur.z == tz) { reached = true; break; }
+        if (cur.c == tc && cur.r == tr) { reached = true; break; }
         if (++expands > kMaxExpand || rays >= kMaxRays) break;
 
-        int64_t ck = Key(cur.x, cur.z);
+        const int64_t ck = Key(cur.c, cur.r);
         auto cgit = gScore.find(ck);
         if (cgit == gScore.end()) continue;
-        float cg = cgit->second;
-        if (cur.f > cg + heur(cur.x, cur.z) + 0.001f) continue;   // stale queue entry
+        const float cg = cgit->second;
+        if (cur.f > cg + heur(cur.c, cur.r) + 0.001f) continue;   // stale queue entry
 
-        CellInfo& ci = cellInfo(cur.x, cur.z);
+        float cy = sy;
+        if (!NavGrid::WalkableAt(cur.c, cur.r, cy) && !(cur.c == sc && cur.r == sr)) continue;
         for (auto& d : dirs) {
-            int nx = cur.x + d[0], nz = cur.z + d[1];
-            if (std::abs(nx) > box || std::abs(nz) > box) continue;
-            CellInfo& ni = cellInfo(nx, nz);
-            if (!passable(cur.x, cur.z, ci, nx, nz, ni)) continue;
-            float ng = cg + ((d[0] != 0 && d[1] != 0) ? kSqrt2 : 1.0f);
-            int64_t nk = Key(nx, nz);
+            const int nc = cur.c + d[0], nr = cur.r + d[1];
+            float ny;
+            if (!NavGrid::WalkableAt(nc, nr, ny)) continue;   // off-map / no floor -> not walkable
+            if (!passable(cur.c, cur.r, cy, nc, nr, ny)) continue;
+            float wx0, wz0, wx1, wz1;
+            NavGrid::CellCenter(cur.c, cur.r, wx0, wz0);
+            NavGrid::CellCenter(nc, nr, wx1, wz1);
+            const float ddx = wx1 - wx0, ddz = wz1 - wz0;
+            const float ng = cg + std::sqrt(ddx * ddx + ddz * ddz);
+            const int64_t nk = Key(nc, nr);
             auto git = gScore.find(nk);
             if (git == gScore.end() || ng < git->second) {
                 gScore[nk] = ng;
                 came[nk] = ck;
-                open.push({ nx, nz, ng + heur(nx, nz) });
+                open.push({ nc, nr, ng + heur(nc, nr) });
             }
         }
     }
 
     stats.rays = rays;
     stats.expands = expands;
-    stats.cells = static_cast<int>(cells.size());
+    stats.cells = static_cast<int>(gScore.size());
     if (!reached) return Plan::NoPath;
 
-    // Reconstruct target -> start, then emit from -> ... -> to.
+    // Reconstruct target -> start, then emit from -> ... -> to (world coords).
     std::vector<int64_t> rev;
-    int64_t k = Key(tx, tz);
+    int64_t k = Key(tc, tr);
     rev.push_back(k);
-    while (k != Key(0, 0)) {
+    while (k != startKey) {
         auto it = came.find(k);
         if (it == came.end()) break;
         k = it->second;
         rev.push_back(k);
     }
-    outPoly.clear();
-    outPoly.push_back(from);
+    rawPoly.push_back(from);
     for (auto it = rev.rbegin(); it != rev.rend(); ++it) {
-        int cx = KeyX(*it), cz = KeyZ(*it);
-        if (cx == 0 && cz == 0) continue;                 // start == `from` already
-        CellInfo& ci = cellInfo(cx, cz);
-        outPoly.push_back(worldOf(cx, cz, ci.walkable ? ci.floorY : from.y));
+        const int cc = KeyX(*it), cr = KeyZ(*it);
+        if (cc == sc && cr == sr) continue;                 // start cell == `from` already
+        float cy2 = from.y;
+        NavGrid::WalkableAt(cc, cr, cy2);
+        rawPoly.push_back(worldOf(cc, cr, cy2));
     }
-    outPoly.push_back(to);
+    rawPoly.push_back(to);
 
-    // String-pull: collapse the 1m-cell staircase to minimal line-of-sight waypoints. Keep a
-    // corner only when the anchor can no longer SEE the next point (a real wall corner). A
-    // straight-clear target -> {from, to}; the target-overshoot cell from the lround snap is
-    // dropped because an earlier anchor still sees the true `to`. SegmentClear is game-thread
-    // safe here; cost is O(corners).
+    // String-pull: collapse the cell staircase to line-of-sight waypoints, but keep a corner
+    // unless the straight span to the next point is DENSELY traversable (floor-continuous, no
+    // cliff, no wall along it). Every committed leg therefore passed SegmentTraversable, so a
+    // valid detour is never straightened through a wall (the Bug-3 fix).
+    outPoly = rawPoly;
     if (outPoly.size() > 2) {
-        auto atBody = [&](const FVec3& q) { return FVec3{ q.x, q.y + kBodyPad, q.z }; };
         std::vector<FVec3> smooth;
         smooth.reserve(outPoly.size());
         smooth.push_back(outPoly.front());
         size_t anchor = 0;
         for (size_t probe = 1; probe + 1 < outPoly.size(); ++probe) {
-            if (!MapQuery::SegmentClear(atBody(outPoly[anchor]), atBody(outPoly[probe + 1]))) {
-                smooth.push_back(outPoly[probe]);   // outPoly[probe] is a needed corner
+            if (!MapQuery::SegmentTraversable(outPoly[anchor], outPoly[probe + 1],
+                                              kValidateStep, kBodyPad, kMaxStep, kMargin, rays, kMaxRays)) {
+                smooth.push_back(outPoly[probe]);   // needed corner
                 anchor = probe;
             }
         }
         smooth.push_back(outPoly.back());
         outPoly.swap(smooth);
     }
+    stats.rays = rays;
     return Plan::Route;
 }
 
@@ -238,6 +236,7 @@ void Request(const FVec3& target, const std::wstring& label) {
 
 void OnMapTeardown() {
     g_epoch.fetch_add(1, std::memory_order_acq_rel);   // any pending request is now stale
+    NavGrid::Invalidate();                             // drop the whole-map overlay for the dead map
     std::lock_guard<std::mutex> lk(g_mutex);
     g_hasRequest.store(false, std::memory_order_release);
 }
@@ -300,28 +299,56 @@ void OnGameFrame() {
         return;
     }
 
-    std::vector<FVec3> poly;
+    std::vector<FVec3> rawPoly, poly;
     PlanStats st;
-    Plan r = PlanRoute(from, target, poly, st);
+    Plan r = PlanRoute(from, target, curEpoch, rawPoly, poly, st);
 
-    const char* planName = (r == Plan::Route) ? "Route" : (r == Plan::TooFar) ? "TooFar" : "NoPath";
+    const char* planName = (r == Plan::Route) ? "Route" : "NoPath";
     char m[160];
     snprintf(m, sizeof(m), "drain seq=%llu: from=(%.2f,%.2f,%.2f) plan=%s legs=%zu",
              (unsigned long long)seq, from.x, from.y, from.z, planName, poly.size());
     Log::Write("NAV-ROUTE", m);
-    // Walkability stats — diagnoses a NoPath: startFloor=0/floorHits=0 with a live world
-    // => rays aren't hitting (world/ctx/filter); floorHits>0 => connectivity/step/margin.
-    char ms[192];
+    // Search stats — diagnoses a NoPath (startFloor=0 => the player's own fine cell has no
+    // floor; expands maxed => budget/maze). gridSamples = fine GroundAt samples this map
+    // (cache size), fineCell = routing resolution.
+    char ms[208];
     snprintf(ms, sizeof(ms),
-             "drain seq=%llu: stats plan=%s tgtCell=(%d,%d) rays=%d floorHits=%d startFloor=%d expands=%d cells=%d",
-             (unsigned long long)seq, planName, st.tx, st.tz, st.rays, st.floorHits,
-             st.startFloorHit ? 1 : 0, st.expands, st.cells);
+             "drain seq=%llu: stats plan=%s tgtCell=(%d,%d) rays=%d startFloor=%d expands=%d touched=%d | fineCell=%.1fm gridSamples=%d",
+             (unsigned long long)seq, planName, st.tx, st.tz, st.rays, st.startFloorHit ? 1 : 0,
+             st.expands, st.cells, NavGrid::kFineCell, NavGrid::SamplesThisMap());
     Log::Write("NAV-ROUTE", ms);
 
+    // Instrumentation: target + raw/smoothed polyline sizes + the first leg, for diagnosing
+    // a route. Directions are WORLD-ABSOLUTE (no facing/camera frame).
+    {
+        const FVec3 s1 = (poly.size() > 1) ? poly[1] : target;
+        char mg[192];
+        snprintf(mg, sizeof(mg),
+                 "drain seq=%llu: tgt=(%.1f,%.1f) rawPts=%zu smPts=%zu firstLeg=(%.1f,%.1f)",
+                 (unsigned long long)seq, target.x, target.z, rawPoly.size(), poly.size(), s1.x, s1.z);
+        Log::Write("NAV-ROUTE", mg);
+    }
+
+    // Egocentric leg directions: "North" = forward = where UP takes you (movement is camera-relative).
+    // Reference is the live camera up-direction, NOT the character facing (which is stale when idle
+    // and points at the target in combat). 0 fallback if unavailable.
+    float facingRad = 0.0f;
+    PlayerState::ReadCameraForward(facingRad);
+
     std::wstring say = label.empty() ? std::wstring() : (label + L". ");
-    if (r == Plan::Route)       say += PathDirections::Describe(poly);
-    else if (r == Plan::TooFar) say += L"Too far to route";
-    else                        say += L"No path";
+    if (r == Plan::Route) say += PathDirections::Describe(poly, facingRad);
+    else                  say += L"No path";
+
+    // Log the spoken directions (ASCII cardinals/digits) so the exact leg text is diagnosable.
+    {
+        char t[192]; size_t n = 0;
+        for (wchar_t wc : say) { if (n + 1 >= sizeof(t)) break; t[n++] = (wc < 128) ? static_cast<char>(wc) : '?'; }
+        t[n] = '\0';
+        char mt[224];
+        snprintf(mt, sizeof(mt), "drain seq=%llu: say=\"%s\"", (unsigned long long)seq, t);
+        Log::Write("NAV-ROUTE", mt);
+    }
+
     Speech::Output(say, true);
     ClearIfSeq(seq);
 }

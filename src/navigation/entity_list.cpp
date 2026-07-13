@@ -38,7 +38,6 @@ std::mutex             g_mutex;
 std::vector<Entity>    g_entities;
 Category               g_currentCategory = Category::All;
 void*                  g_currentObj      = nullptr;  // focus (scene object), tracked across refreshes
-bool                   g_egocentric      = false;    // cardinal by default
 
 // --- helpers ---------------------------------------------------------------
 
@@ -162,17 +161,16 @@ std::vector<size_t> FilteredSortedLocked() {
     return v;
 }
 
-bool ReadPlayer(FVec3& pos, float& yaw) {
-    if (!PlayerState::ReadPlayerPos(pos)) return false;
-    yaw = 0.0f;
-    PlayerState::ReadPlayerYaw(yaw);   // best-effort; only egocentric uses it
-    return true;
+bool ReadPlayer(FVec3& pos) {
+    return PlayerState::ReadPlayerPos(pos);
 }
 
-void SpeakEntityLocked(const Entity& e, const FVec3& playerPos, float yaw) {
+void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
+    float facingRad = 0.0f;
+    PlayerState::ReadCameraForward(facingRad);                  // "North" = forward = where UP takes you
     std::wstring phrase = e.label;
     phrase += L". ";
-    phrase += NavCommon::DescribeDirection(playerPos, e.pos, g_egocentric, yaw);
+    phrase += NavCommon::DescribeDirectionRelative(playerPos, e.pos, facingRad);   // egocentric
     Speech::Output(phrase);
 }
 
@@ -383,7 +381,7 @@ void CmdRescan() {
 }
 
 // Shared body for Next/Prev: refresh, build the nearest-first view, move focus.
-static void CycleLocked(int dir, const FVec3& playerPos, float yaw) {
+static void CycleLocked(int dir, const FVec3& playerPos) {
     RefreshPositionsLocked(playerPos);
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) { g_currentObj = nullptr; SpeakNoTargets(); return; }
@@ -398,30 +396,30 @@ static void CycleLocked(int dir, const FVec3& playerPos, float yaw) {
                                % static_cast<int>(view.size());
     const Entity& e = g_entities[view[next]];
     g_currentObj = e.sceneObj;
-    SpeakEntityLocked(e, playerPos, yaw);
+    SpeakEntityLocked(e, playerPos);
 }
 
 void CmdNext() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();   // fresh — pick up objects that appeared since the last command
-    FVec3 p; float yaw;
-    if (!ReadPlayer(p, yaw)) { Speech::Output(L"Position unavailable"); return; }
-    CycleLocked(+1, p, yaw);
+    FVec3 p;
+    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    CycleLocked(+1, p);
 }
 
 void CmdPrev() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
-    FVec3 p; float yaw;
-    if (!ReadPlayer(p, yaw)) { Speech::Output(L"Position unavailable"); return; }
-    CycleLocked(-1, p, yaw);
+    FVec3 p;
+    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    CycleLocked(-1, p);
 }
 
 void CmdDescribeCurrent() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
-    FVec3 p; float yaw;
-    if (!ReadPlayer(p, yaw)) { Speech::Output(L"Position unavailable"); return; }
+    FVec3 p;
+    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
     RefreshPositionsLocked(p);
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) { SpeakNoTargets(); return; }
@@ -429,12 +427,14 @@ void CmdDescribeCurrent() {
     size_t sel = view[0];
     for (size_t idx : view) if (g_entities[idx].sceneObj == g_currentObj) { sel = idx; break; }
     g_currentObj = g_entities[sel].sceneObj;
-    SpeakEntityLocked(g_entities[sel], p, yaw);
+    SpeakEntityLocked(g_entities[sel], p);
 
     // Obstacle-aware hint toward the selection (<=5 rays; safe on the input thread).
     // A full A* grid is a later enhancement (thousands of rays => needs game-thread
     // execution to avoid racing the physics step).
     if (MapQuery::HasWorld()) {
+        float facingRad = 0.0f;
+        PlayerState::ReadCameraForward(facingRad);   // egocentric "bear <cardinal>" hint (forward = UP)
         const FVec3 tgt = g_entities[sel].pos;
         const float bodyPad = 0.9f;                  // test at body height, not at the feet
         const FVec3 from{ p.x, p.y + bodyPad, p.z };
@@ -453,7 +453,7 @@ void CmdDescribeCurrent() {
                 const FVec3 pt{ p.x + std::sin(a) * probe, p.y + bodyPad, p.z - std::cos(a) * probe };
                 if (MapQuery::SegmentClear(from, pt)) {
                     std::wstring s = L"Blocked, bear ";
-                    s += NavCommon::CardinalOfHeading(a);
+                    s += NavCommon::CardinalOfHeadingRelative(a, facingRad);
                     Speech::SpeakQueued(s);
                     found = true;
                     break;
@@ -505,8 +505,6 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel) {
     return true;
 }
 
-void SetEgocentric(bool on) { g_egocentric = on; }
-bool IsEgocentric() { return g_egocentric; }
 
 // Dump the raw handle table: every live scene object in every container, with its
 // interaction flags, npcdic name key, resolved name, and world position. This is the

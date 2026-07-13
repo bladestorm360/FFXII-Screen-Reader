@@ -43,10 +43,35 @@ tick `FUN_00698c80`'s per-region loop, SKIPPED when region count==0. FOUR ctx-ca
 but NEVER capture; `failMask=0x40[world]`. DO NOT retry Bullet for field walkability. FIX under
 Solved: the SQEX floor/wall walkmap (`FUN_003208c0` / `FUN_00230b60`), which is what the AI NPCs use.
 
+**KEYWORDS: egocentric directions faceNode reference wrong node+0xA4 stale idle combat target-facing
+DAT_02aedf94 view matrix** (Session 37) — Anchoring egocentric directions ("North"=forward) to the
+character facing `faceNode` (node+0xA4) is WRONG: `FUN_00358cb0` writes it ONLY while the leader is
+moving, so when stationary (exactly when you query directions) it's stale, and in combat the battle
+action/steering subsystems (`FUN_00307300` 0x1c7 / `FUN_0037b4d0` / `FUN_0031adb0`) turn it to face the
+TARGET → boss called "NE" while audibly to the left, and ~90°-off field directions. ALSO wrong: the
+scalar camera-yaw `DAT_02aedf94` (RVA 0x29CDF94) — `FUN_003820c0` builds it from the view/sibling matrix
+`DAT_02aede70` with sign-flipped rows, so its delta to the move heading wanders (the diagnostic's
+`camLookDeg` never held a constant offset). FIX under Solved: read camera-forward from the MOVEMENT
+matrix `DAT_02aedf30` row 2. (`bVar5 & 4`, the skip-move-facing flag, is script-only — NOT a combat lock,
+so don't look for a lock flag.)
+
 ## Solved Problems
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
+
+**KEYWORDS: egocentric directions camera-relative camera-forward DAT_02aedf30 row2 DAT_02aedf50
+DAT_02aedf58 atan2(-fwd.x,-fwd.z) ReadCameraForward North=forward calibration** (Session 37) SOLUTION:
+FFXII movement is camera-relative (`FUN_004742a0` RVA 0x3542A0 rotates the stick by camera matrix
+`DAT_02aedf30`: `worldMove = stickX·row0 − stickY·row2`; NO top-down branch). Anchor egocentric
+directions ("North"=forward=where UP takes you) to the LIVE camera-forward from the MOVEMENT matrix
+`DAT_02aedf30` row 2 (+0x20): `fwd.x=DAT_02aedf50` (RVA 0x29CDF50), `fwd.z=DAT_02aedf58` (RVA 0x29CDF58);
+**up-direction yaw = `atan2(−fwd.x,−fwd.z)`** (UP ⇒ stickY>0 ⇒ worldMove = −row2). Same `atan2(x,z)`
+convention as faceNode → drop-in for the existing egocentric transform (`ego = BearingDeg(target) − (180 −
+facingDeg)`). Writer `FUN_003820c0` (RVA 0x2620C0), live in field gameplay. Valid idle, after a camera
+rotate, AND in combat (unlike faceNode). Shipped as `PlayerState::ReadCameraForward`; all `facingRad`
+sources repointed to it; `;`="Forward points <cardinal>". **Sign + handedness CONFIRMED** by the baked `'`
+position-delta calibration: W leg `camFwdNeg==moveVec` (168.9°), D leg right=forward−90 ⇒ ego +90=East.
 
 **KEYWORDS: pathfinder field object enumeration handle table DAT_02098e10 gate NPC gimmick**
 SOLUTION: Enumerate the scene-object HANDLE TABLE `DAT_02098e10` (RVA 0x1F78E10) — the master
@@ -168,9 +193,28 @@ Current module interaction diagram + logging format. Keep up to date as modules 
 
 ## Known Issues
 
-### Turn-by-turn routing polish (open — Session 33, 2026-07-12)
-Routing WORKS (SQEX walkmap, `plan=Route`) but has three quality problems reported by the
+### Turn-by-turn routing polish (FIX SHIPPED Session 34, pending runtime confirmation)
+Routing WORKS (SQEX walkmap, `plan=Route`) but had three quality problems reported by the
 user. Detail + hypotheses in `sessions_001_current.md` Session 33.
+
+**Session 34 rebuilt the planner on a whole-map walkability OVERLAY read directly from the SQEX
+walkmap grid** (`nav_grid.{h,cpp}` + `map_query` grid reads; the walkmap is a uniform ≤32767-cell
+grid — `FUN_0022ffe0`/`FUN_00233050`/`FUN_00231890`, see GameArchitecture "Walkmap grid").
+- **#2 (40 m cap) ELIMINATED** — no `kMaxRange`; A* searches the whole map at native resolution,
+  per-cell floor sampling is now a zero-raycast overlay read.
+- **#3 (through walls) FIXED** — `MapQuery::SegmentTraversable` dense validator (1 m samples: floor-
+  continuity + `|ΔfloorY|≤kMaxStep` + per-substep `SegmentClear` mask=4) replaces the single long
+  ray in the string-pull, so a detour is never straightened through a wall.
+- **#1 (points away) — directions kept WORLD-ABSOLUTE per user directive** (no egocentric/facing
+  mode; camera only moves the view). Chiefly a symptom of #3; `NAV-ROUTE` now logs yaw°/target/raw+
+  smoothed polyline/spoken text to catch any residual first-waypoint geometry bug.
+- **Confirmation = baked C++ self-diagnostic** (user's choice, no Frida): the direct grid read is
+  0.92 offline; the `'` key logs the grid header + cross-checks `ReadCellFloor` vs the confirmed
+  `GroundAt` oracle (`grid xcheck walkAgree %`). Ships behind that; `NavGrid::SetDirectRead(false)`
+  falls back to a GroundAt bake if agreement is low. **Documented straight-to-C++ exception** (no new
+  RE crash surface — tuning already-confirmed primitives + a struct read confirmed live in-C++).
+- **Move to Solved once the tester confirms** `walkAgree ≥~90%` + `\` routes past 40 m + a detour
+  around the reported wall. The three items below are the original open reports (kept for context).
 
 1. **Directions point away from the objective (intermittent).** Holding a route direction
    moves the player *further*; re-route reports a *growing* distance ("East 15"→"17"→"20").

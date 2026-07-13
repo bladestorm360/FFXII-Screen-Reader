@@ -639,6 +639,36 @@ RVA = Ghidra-abs − 0x120000. Confidence + validation state noted; anything <0.
   `CameraPositionPtr` (community RVA `0x20955F0`/`E0`) do NOT exist here (0 occurrences,
   verified). Community RVAs may target a different build — validate each before use.
 
+### Camera-relative movement + egocentric direction reference (Session 37, 2026-07-13) — CONFIRMED (ground truth)
+FFXII field movement is **camera-relative** (proven, ≥0.98, code + live calibration) — "up on the
+stick" walks along CAMERA-forward, NOT world-north. Spoken directions are therefore EGOCENTRIC
+("North" = forward = where UP takes you) anchored to the live camera-forward.
+- **Locomotion driver `FUN_00358cb0` (RVA `0x238CB0`):** reads the raw stick via `FUN_003594e0`
+  (RVA `0x2394E0`; `stickX = rawX−128`, `stickY = 128−rawY` inverted, so UP ⇒ `stickY>0`), calls the
+  camera-rotate `FUN_004742a0` (RVA `0x3542A0`), then writes facing = `atan2(moveX,moveZ)` via
+  `FUN_0026a0d0` (RVA `0x14A0D0`, node+0xA4) **only while moving** (skipped when stopped).
+- **Camera-rotate `FUN_004742a0`:** `worldMove = stickX·row0 − stickY·row2`, rows copied from the
+  movement camera matrix `DAT_02aedf30` (indices `{0,2}` in `DAT_00d22690` = right, forward; Y zeroed
+  + normalized). Output move vector `DAT_022c7fd0/4/8` (RVA `0x21A7FD0/4/8`). Since UP ⇒ `stickY>0`,
+  `worldMove = −stickY·row2`, so **the direction UP takes you = `−row2`**.
+- **EGOCENTRIC "FORWARD" REFERENCE (what the mod reads):** movement matrix `DAT_02aedf30` row 2
+  (+0x20): `fwd.x = DAT_02aedf50` (RVA `0x29CDF50`), `fwd.z = DAT_02aedf58` (RVA `0x29CDF58`).
+  **up-direction yaw = `atan2(−fwd.x, −fwd.z)`** (same `atan2(x,z)` convention as faceNode → drop-in).
+  Writer `FUN_003820c0` (RVA `0x2620C0`, per-frame camera update). Read live by
+  `PlayerState::ReadCameraForward` — valid idle, after a camera rotate, and in combat.
+  **Calibration (position-delta ground truth):** W leg `camFwdNeg==moveVec==faceNode` (168.9°),
+  `camFwdRaw` the 180° opposite ⇒ sign `(−,−)` correct; D leg right = forward−90 ⇒ ego `+90 = East`
+  (right→East, no handedness flip). `nav_common`'s egocentric transform (`ego = BearingDeg(target) −
+  (180 − facingDeg)`) was already correct; only the reference vector changed from faceNode.
+- **DO NOT use as the forward reference:**
+  - `faceNode` (node+0xA4, char facing) — written only while walking; in combat the battle action /
+    target-steering subsystems (`FUN_00307300` case `0x1c7` / `FUN_0037b4d0` case `0x16` /
+    `FUN_0031adb0`) turn it to face the TARGET. Kept for the `'` diagnostic only (`ReadPlayerFacing`).
+  - Scalar `DAT_02aedf94` (RVA `0x29CDF94`) — `FUN_003820c0` builds it from the view/sibling matrix
+    `DAT_02aede70` (rows sign-flipped `^0x80000000`), so its offset from the move heading is not
+    constant. Diagnostic cross-check only. (This corrects the older nav_rva note that called it the
+    camera-forward yaw.)
+
 ### Bullet walkability (RE-4) — CONFIRMED ~0.95 (verified firsthand); runtime handle Frida-pending
 - `btCollisionWorld::rayTest` = **`FUN_0083fc70` (RVA `0x71FC70`)**, vtable slot 6, called
   via world vtable offset `0x30`. (`0x71DE00` is `debugDrawWorld`, NOT rayTest.)
@@ -685,8 +715,15 @@ decompile facts wired into `src/navigation/nav_rva.h` + `player_state.cpp`:
 The M0 "dump-and-hunt" was retired: position/yaw are STATIC (no controller), and classification/names
 are OFFLINE master data. Implemented in `src/navigation/`.
 - **Player pos** = `*(sceneObj+0xB8)` floats `+0/+4/+8` (engine getter `FUN_00265020`; guarded by type
-  nibble `(*(u8)(sceneObj+3)>>5)∈{1,3}`). **Yaw** = `atan2(fwd.x,fwd.z)`, fwd = `comp+0x100/+0x108`
-  (`comp=*(sceneObj+0x30)`, valid `*(u32)comp & 8`). Controller `+0xD0` matrix was only a *writer*.
+  nibble `(*(u8)(sceneObj+3)>>5)∈{1,3}`). (`comp=*(sceneObj+0x30)`, valid `*(u32)comp & 8`.)
+  Controller `+0xD0` matrix was only a *writer*.
+- **Yaw / facing — CORRECTED Session 35 (was frozen at ~129deg).** `comp+0x100` is NOT a forward row —
+  it is an internal point-vector lane, so `atan2(comp+0x100, comp+0x108)` never tracked turning. The
+  **live facing** is the steering heading: **`comp+0x15C`** (current, radians) — use this; alts
+  `comp+0x160` (target/cached, = actor-pool `+0x160`) and `comp+0xAC` (byte brad, deg = ×1.40625). A
+  world `atan2` of an (x,z) delta; the exact convention (0-axis/sign vs `BearingDeg` atan2(dx,−dz)) is
+  being pinned live by the `'` diagnostic's facing candidates + a route calibration. Conf 0.85 pending.
+  Used by the `;` readout and the facing-relative direction mode ("North" = forward).
 - **Field-actor pool** (enumeration): base ptr `DAT_0208e688` (RVA `0x1F6E688`), stride `0xF50`, count
   `DAT_0208e6a0` (`0x1F6E6A0`). Per actor: pos `+0xE0/+0xE4/+0xE8`, yaw `+0x160`, def `*(actor+0x698)`,
   `sceneObj *(actor+0x10)`; def: kind `*(s8)(def+5)` (0=NPC,1=gimmick), id `*(u16)(def+4)`.
@@ -827,7 +864,52 @@ every map, independent of Bullet, so live in the prologue). Shipped `src/navigat
 `|ΔfloorY|≤kMaxStep` AND `MapQuery::SegmentClear` (mask=4). Reconstructed polyline is string-pulled
 (greedy line-of-sight via SegmentClear) and each leg decomposed into primary+secondary cardinals
 ("North 16, East 2"). Known open issues (range cap, world-vs-egocentric directions, LOS-through-walls):
-see debug.md Known Issues (Session 33).
+see debug.md Known Issues (Session 33). **SUPERSEDED by the whole-map overlay below (Session 34).**
+
+### Walkmap GRID structure — direct read = whole-map overlay (Session 34, 2026-07-12) — SHIPPED, confirm-pending
+
+The SQEX walkmap `GroundAt`/`SegmentHit` above sit on a **uniform staggered ("brick") grid over a
+floor-triangle + wall-segment mesh** — a per-map structure we can read DIRECTLY to bake a whole-map
+walkability overlay with **no raycasts**, and to get exact map bounds for free. Model = the engine's own
+full-grid enumerator **`FUN_0022ffe0`** (RVA **0x10FFE0**). World→cell **`FUN_00233050`** (0x113050),
+plane height **`FUN_00231890`** (0x111890). Read memory-only, SEH-guarded (`map_query.cpp`).
+
+**`ctx0 = *DAT_0209a678` (RVA 0x1F7A678) sub-fields:**
+| off | field |
+|---|---|
+| `+0x00` | grid header ptr |
+| `+0x08` | vertex array (stride 0x10: x@0, y@4, z@8) |
+| `+0x10` | floor-poly array (stride 0x20) |
+| `+0x18` | wall-segment array (stride 0x90) — phase 2 (fully zero-raycast A*) |
+| `+0x20` | CSR cell→list offset table (u16, `nCols*nRows+1` entries) |
+| `+0x28` | primitive index list (u16) |
+| `+0x38` / `+0x3C` | int originX / originZ |
+
+**Grid header (at `*ctx0`):** `+0x08` int nCols (X), `+0x0C` int nRows (Z), `+0x10` int cellSizeX,
+`+0x14` int cellSizeZ (world units/cell, **integer meters**).
+**Floor-poly entry (0x20):** planeA/B/C @ +0/4/8 (B divisor, guard |B|>0.001), flags @ +0xC
+(**walk type = low 3 bits**; 0 = walkable floor), baseVertIdx s16 @ +0x10.
+**Primitive encoding (per-cell list):** `<0x4000` = floor-poly index; `0x4000–0x4FFF` = wall segment
+(idx−0x4000); `≥0x5000` = empty.
+**World→cell:** `col=(int)(originX+wx)/cellSizeX`; `gz=originZ+wz; if(col&1) gz-=cellSizeZ/2` (**integer**
+stagger); `row=(int)gz/cellSizeZ`; `cell = nCols*row+col`. **Cell height** = `vy + ((vx−x)*A+(vz−z)*C)/B`
+at the cell center, over `baseVert`.
+**Map extent (free, per map):** `nCols*cellSizeX × nRows*cellSizeZ` meters, min-corner `(−originX,−originZ)`.
+The 16-bit cell index hard-caps every map at **`nCols*nRows ≤ 32767`** ⇒ a few hundred meters/side.
+
+**No callable engine pathfinder** (conf 0.85): AI movement = reactive local steering fan
+(`FUN_0033a720`→`FUN_00335b60`) + a waypoint *follower* (`FUN_00335180`, route node chain at
+`route+0x180`), not an A→B planner. We keep our own A*.
+
+**Planner (Session 34) — `src/navigation/nav_grid.{h,cpp}` + `path_planner.cpp`:** on the game thread,
+`NavGrid::EnsureBuilt(epoch)` bakes `walkable[]+floorY[]` for the whole grid via `MapQuery::ReadCellFloor`
+(zero raycast), cached per map-epoch, invalidated on teardown. A* runs over the entire overlay (no
+distance cap; `kMaxExpand=20000`/`kMaxRays=60000` are safety ceilings). Edge = overlay-walkable +
+`|ΔfloorY|≤kMaxStep` + `SegmentClear`(mask=4). String-pull uses the dense **`SegmentTraversable`** (1 m
+samples: `GroundAt` floor-continuity + `|ΔfloorY|` + per-substep `SegmentClear`) so no leg crosses a
+wall. Directions stay WORLD-ABSOLUTE (no egocentric). **Direct read is conf 0.92**, confirmed live by the
+`'` self-diagnostic (grid header + `ReadCellFloor`-vs-`GroundAt` cross-check `walkAgree %`);
+`NavGrid::SetDirectRead(false)` = GroundAt-bake fallback.
 
 ---
 

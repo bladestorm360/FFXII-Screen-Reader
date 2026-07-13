@@ -78,8 +78,48 @@ LeaderChain CaptureLeaderChain();
 // World position of ANY scene object (leader, NPC, or static gimmick) via its
 // transform pointer at sceneObj+0xB8. Returns false on any read/guard failure.
 bool ReadSceneObjectPos(void* sceneObj, FVec3& out);
-// Live leader world position / yaw.
+// Live leader world position.
 bool ReadPlayerPos(FVec3& out);
-bool ReadPlayerYaw(float& outRadians);
+
+// Live leader world FACING yaw (radians) — `faceNode`, the class-3 facing slot on the leader's
+// transform node (node+0xA4; the SAME +0xB8 node as position). Convention: atan2(worldMoveX,
+// worldMoveZ). NOTE: this is NOT the egocentric "forward" reference — it equals "where UP takes you"
+// only WHILE actively walking in the field (the driver writes it only when moving; combat overrides
+// it to face the target). Kept for the DIAGNOSTIC only; the feature uses ReadCameraForward. Returns
+// false on any read/guard failure.
+bool ReadPlayerFacing(float& outRad);
+
+// Camera "up-direction" yaw (radians) — the world direction a pure UP push sends the leader, read
+// LIVE from the MOVEMENT camera matrix DAT_02aedf30 row 2 (CAMERA_FWD_X/Z). Because worldMove =
+// -stickY*row2 for UP, the up-direction = atan2(-fwd.x, -fwd.z). THIS is the egocentric "forward"
+// reference: SAME atan2(x,z) convention as ReadPlayerFacing (a drop-in), but valid idle, after a
+// camera rotate, and in combat (faceNode is not). Returns false on read failure or a zero row.
+bool ReadCameraForward(float& outRad);
+
+// ---- Movement frame (Phase A diagnostic + egocentric "forward" reference) ----
+// One SEH-guarded snapshot of the pieces that determine "which way does the stick send
+// me": the leader's world facing yaw, the gameplay camera's world look yaw, and the live
+// world move vector the locomotion driver writes. All yaws are RADIANS in the game's
+// atan2(x,z) convention, so their differences are directly comparable. `have*` flag each
+// piece independently (a missing camera/actor ptr does not sink the others).
+struct MoveFrame {
+    bool  havePos       = false;  FVec3 pos;
+    bool  haveFaceCache = false;  float faceCacheRad = 0.0f;  // leader actor+0x15C (per-frame cache)
+    bool  haveFaceNode  = false;  float faceNodeRad  = 0.0f;  // (*(sceneObj+0xB8))+0xA4 (class-3 slot)
+    bool  haveCamLook   = false;  float camLookRad   = 0.0f;  // DAT_02aedf94 scalar (diag cross-check)
+    bool  haveMove      = false;  bool  moving        = false;
+    float moveX = 0.0f, moveZ = 0.0f;  float moveYawRad = 0.0f;  // atan2(moveX, moveZ) when moving
+    // Phase A calibration: camera-forward candidates from the MOVEMENT matrix DAT_02aedf30 row 2,
+    // BOTH signs logged so one walk pins which equals the actual move direction.
+    bool  haveCamFwd = false;  float camFwdX = 0.0f, camFwdZ = 0.0f;
+    float camFwdRawRad = 0.0f;   // atan2( fwd.x,  fwd.z)
+    float camFwdNegRad = 0.0f;   // atan2(-fwd.x, -fwd.z)  (the up-direction candidate ReadCameraForward uses)
+    // GROUND TRUTH: world movement since the PREVIOUS ReadMoveFrame call (independent of every field).
+    bool  haveDPos = false;  float dPosX = 0.0f, dPosZ = 0.0f, dPosDist = 0.0f;
+    float dPosYawF = 0.0f;   // atan2(dx,  dz)  (faceNode / atan2(x,z) convention)
+    float dPosYawB = 0.0f;   // atan2(dx, -dz)  (BearingDeg convention)
+};
+// Fill `out` with the current movement frame. Returns true if ANY field was read.
+bool ReadMoveFrame(MoveFrame& out);
 
 } // namespace PlayerState

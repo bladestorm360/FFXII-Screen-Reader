@@ -9,24 +9,15 @@ namespace {
 constexpr float kPi = 3.14159265358979f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
-// World units per spoken "step". FFXII's field world is in METERS (confirmed
-// offline: Bullet gravity -10, character capsule height 0.8 + radius 0.6 ~= a 2 m
-// humanoid, 0.04 m collision margin). A ~2 m humanoid's walking stride at ~2
-// steps/s is ~0.75 m, so 1 step = 0.75 world units. Runtime-tunable for feel.
+// World units per spoken "step". FFXII's field world is in METERS (offline: Bullet gravity
+// -10, char capsule height 0.8 + radius 0.6 ~= a 2 m humanoid). ~0.75 m stride => 1 step.
 float g_unitsPerStep = 0.75f;
 
-// Cardinal labels, index 0 = North, clockwise. Bearing convention: FFXII's world
-// north is -Z (confirmed in-game: +Z read as South), so 0deg = -Z ("north"),
-// +90deg = +X ("east"). E/W (dx) is not flipped. If a runtime pass shows E/W is
-// also inverted, additionally negate dx here.
+// Cardinal labels, index 0 = North, clockwise. FFXII world north = -Z, so 0deg = -Z ("north"),
+// +90deg = +X ("east").
 const wchar_t* kCardinal[8] = {
     L"North", L"Northeast", L"East", L"Southeast",
     L"South", L"Southwest", L"West", L"Northwest",
-};
-
-const wchar_t* kEgo[8] = {
-    L"Ahead", L"Ahead and right", L"Right", L"Behind and right",
-    L"Behind", L"Behind and left", L"Left", L"Ahead and left",
 };
 
 // Bearing in degrees [0,360): 0 = -Z (game north), increasing toward +X (east).
@@ -41,6 +32,20 @@ float BearingDeg(const FVec3& from, const FVec3& to) {
 int OctantOf(float deg) {
     int idx = static_cast<int>(std::floor(deg / 45.0f + 0.5f));
     return ((idx % 8) + 8) % 8;
+}
+
+float Norm360(float deg) {
+    deg = std::fmod(deg, 360.0f);
+    if (deg < 0.0f) deg += 360.0f;
+    return deg;
+}
+
+// The leader `faceNode` yaw is in the game's `atan2(worldMoveX, worldMoveZ)` convention (0 = +Z);
+// our BearingDeg is `atan2(dx, -dz)` (0 = north = -Z). For the SAME direction vector the two
+// differ by a reflection: compass = 180 - faceNode. So this returns the facing as a compass
+// bearing in [0,360). Subtracting it from a world BearingDeg rotates the frame so "forward" = 0.
+float CompassFaceDeg(float facingRad) {
+    return Norm360(180.0f - facingRad * kRadToDeg);
 }
 
 } // namespace
@@ -59,24 +64,26 @@ const wchar_t* CardinalBearing(const FVec3& from, const FVec3& to) {
     return kCardinal[OctantOf(BearingDeg(from, to))];
 }
 
-const wchar_t* EgocentricBearing(const FVec3& from, const FVec3& to, float playerYawRad) {
-    // Rotate the world bearing into the player's frame (yaw is the facing about Y).
-    float rel = BearingDeg(from, to) - playerYawRad * kRadToDeg;
-    rel = std::fmod(rel, 360.0f);
-    if (rel < 0.0f) rel += 360.0f;
-    return kEgo[OctantOf(rel)];
-}
-
-const wchar_t* CardinalOfHeading(float yawRad) {
-    float deg = yawRad * kRadToDeg;
+const wchar_t* CardinalOfHeading(float headingRad) {
+    float deg = headingRad * kRadToDeg;
     deg = std::fmod(deg, 360.0f);
     if (deg < 0.0f) deg += 360.0f;
     return kCardinal[OctantOf(deg)];
 }
 
-// Axis words reuse kCardinal (0=North, 2=East, 4=South, 6=West), north=-Z / east=+X.
-const wchar_t* NorthSouthWord(float dz) { return kCardinal[dz < 0.0f ? 0 : 4]; }
-const wchar_t* EastWestWord(float dx)   { return kCardinal[dx > 0.0f ? 2 : 6]; }
+const wchar_t* CardinalBearingRelative(const FVec3& from, const FVec3& to, float facingRad) {
+    const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
+    return kCardinal[OctantOf(ego)];
+}
+
+const wchar_t* CardinalOfHeadingRelative(float headingRad, float facingRad) {
+    const float ego = Norm360(headingRad * kRadToDeg - CompassFaceDeg(facingRad));
+    return kCardinal[OctantOf(ego)];
+}
+
+const wchar_t* CardinalOfFacing(float facingRad) {
+    return kCardinal[OctantOf(CompassFaceDeg(facingRad))];
+}
 
 int DistanceToSteps(float dist) {
     if (g_unitsPerStep <= 0.0f) return 0;
@@ -86,8 +93,7 @@ int DistanceToSteps(float dist) {
 
 std::wstring ElevationSuffix(const FVec3& from, const FVec3& to) {
     float dy = to.y - from.y;
-    // Threshold ~half a step so tiny slope noise doesn't chatter.
-    float thresh = g_unitsPerStep * 0.5f;
+    float thresh = g_unitsPerStep * 0.5f;   // ~half a step so tiny slope noise doesn't chatter
     if (dy > thresh)  return L" (above)";
     if (dy < -thresh) return L" (below)";
     return L"";
@@ -97,13 +103,21 @@ bool IsWithinReach(float dist2D) {
     return dist2D < g_unitsPerStep * 1.5f;
 }
 
-std::wstring DescribeDirection(const FVec3& from, const FVec3& to,
-                               bool egocentric, float playerYawRad) {
+std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
     float d2 = Distance2D(from, to);
     if (IsWithinReach(d2)) return L"here";
-    const wchar_t* dir = egocentric ? EgocentricBearing(from, to, playerYawRad)
-                                    : CardinalBearing(from, to);
-    std::wstring s = dir;
+    std::wstring s = CardinalBearing(from, to);
+    s += L", ";
+    s += std::to_wstring(DistanceToSteps(d2));
+    s += L" steps";
+    s += ElevationSuffix(from, to);
+    return s;
+}
+
+std::wstring DescribeDirectionRelative(const FVec3& from, const FVec3& to, float facingRad) {
+    float d2 = Distance2D(from, to);
+    if (IsWithinReach(d2)) return L"right next to you";
+    std::wstring s = CardinalBearingRelative(from, to, facingRad);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
     s += L" steps";

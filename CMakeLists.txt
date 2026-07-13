@@ -47,6 +47,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/entity_list.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
+    src/navigation/nav_grid.cpp
     src/navigation/path_planner.cpp
 )
 

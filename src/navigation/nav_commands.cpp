@@ -13,6 +13,7 @@
 
 #include <Windows.h>
 #include <cstdio>
+#include <cmath>
 #include <string>
 
 namespace NavCommands {
@@ -25,21 +26,25 @@ namespace {
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     if (!EntityList::GetCurrentTarget(pos, label)) {
-        // Front-of-pipeline diagnostic: distinguishes "/ produced no target" from
-        // "/ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
-        Log::Write("NAV-ROUTE", "'/' pressed: GetCurrentTarget returned no target -> \"No target\"");
+        // Front-of-pipeline diagnostic: distinguishes "\\ produced no target" from
+        // "\\ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
+        Log::Write("NAV-ROUTE", "'\\' (route) pressed: GetCurrentTarget returned no target -> \"No target\"");
         Speech::Output(L"No target");
         return;
     }
-    Log::Write("NAV-ROUTE", "'/' pressed: target acquired -> PathPlanner::Request");
+    Log::Write("NAV-ROUTE", "'\\' (route) pressed: target acquired -> PathPlanner::Request");
     PathPlanner::Request(pos, label);
 }
 
+// `;` — speak which real-world (true-north) direction "forward"/UP currently points ("Forward points
+// north"). The spoken route/scan directions are EGOCENTRIC ("North" = forward = where UP takes you);
+// this is the absolute-orientation companion. Reads the camera up-direction (ReadCameraForward), the
+// SAME reference those directions use — not the character's facing.
 void SpeakFacing() {
-    float yaw = 0.0f;
-    if (!PlayerState::ReadPlayerYaw(yaw)) { Speech::Output(L"Facing unavailable"); return; }
-    std::wstring s = L"Facing ";
-    s += NavCommon::CardinalOfHeading(yaw);
+    float upRad = 0.0f;
+    if (!PlayerState::ReadCameraForward(upRad)) { Speech::Output(L"Facing unavailable"); return; }
+    std::wstring s = L"Forward points ";
+    s += NavCommon::CardinalOfFacing(upRad);
     Speech::Output(s);
 }
 
@@ -52,6 +57,40 @@ void DiagnosticDump() {
         Log::Write("NAV-DIAG", msg);
     } else {
         Log::Write("NAV-DIAG", "player pos unavailable");
+    }
+
+    // Movement-frame snapshot — pins the egocentric "forward" reference sign against GROUND TRUTH.
+    // Protocol: (1) stand, tap '; (2) hold W and tap ' WHILE MOVING; (3) hold D and tap ' while
+    // moving. On the W leg, walkedYawF (the actual direction UP took you, from the position delta) and
+    // moveYawDeg and faceNodeDeg should all agree, and match camFwdNegDeg OR camFwdRawDeg — whichever
+    // matches is the correct up-direction formula (locks the 180deg sign). All degrees, signed,
+    // atan2(x,z) convention except walkedYawB which is the BearingDeg atan2(x,-z) convention.
+    {
+        PlayerState::MoveFrame mf;
+        PlayerState::ReadMoveFrame(mf);
+        const float R2D = 57.2957795f;
+        char fn[24], md[48], cfn[24], cfr[24], cd[24];
+        if (mf.haveFaceNode)  snprintf(fn, sizeof(fn), "%.1f", mf.faceNodeRad * R2D);  else snprintf(fn, sizeof(fn), "n/a");
+        if (mf.haveMove && mf.moving) snprintf(md, sizeof(md), "%.1f(%.2f,%.2f)", mf.moveYawRad * R2D, mf.moveX, mf.moveZ);
+        else if (mf.haveMove)         snprintf(md, sizeof(md), "idle");
+        else                          snprintf(md, sizeof(md), "n/a");
+        if (mf.haveCamFwd) snprintf(cfn, sizeof(cfn), "%.1f", mf.camFwdNegRad * R2D); else snprintf(cfn, sizeof(cfn), "n/a");
+        if (mf.haveCamFwd) snprintf(cfr, sizeof(cfr), "%.1f", mf.camFwdRawRad * R2D); else snprintf(cfr, sizeof(cfr), "n/a");
+        if (mf.haveCamLook) snprintf(cd, sizeof(cd), "%.1f", mf.camLookRad * R2D);    else snprintf(cd, sizeof(cd), "n/a");
+        char fmsg[224];
+        snprintf(fmsg, sizeof(fmsg),
+                 "move-frame: faceNodeDeg=%s moveYawDeg=%s camFwdNegDeg=%s camFwdRawDeg=%s camScalarDeg=%s",
+                 fn, md, cfn, cfr, cd);
+        Log::Write("NAV-DIAG", fmsg);
+
+        // Ground truth: the world direction actually walked since the PREVIOUS ' press.
+        char db[64];
+        if (mf.haveDPos)
+            snprintf(db, sizeof(db), "walkedYawF=%.1f walkedYawB=%.1f dist=%.2f (d=%.2f,%.2f)",
+                     mf.dPosYawF * R2D, mf.dPosYawB * R2D, mf.dPosDist, mf.dPosX, mf.dPosZ);
+        else
+            snprintf(db, sizeof(db), "walked=n/a (first tap or no movement since last tap)");
+        Log::Write("NAV-DIAG", (std::string("move-frame dPos: ") + db).c_str());
     }
 
     // Which route-gate condition(s) fail RIGHT NOW (works even when NOT nav-safe — that
@@ -104,6 +143,50 @@ void DiagnosticDump() {
         Log::Write("NAV-DIAG", "selftest skipped (no walkmap or no player pos)");
     }
 
+    // Walkmap GRID self-test (confirmation for the whole-map overlay). Logs the grid header
+    // (=> exact map extent) and cross-checks the DIRECT cell read (ReadCellFloor, the zero-
+    // raycast overlay source, conf 0.92) against the confirmed GroundAt oracle on a sampled
+    // stride of cells. High walkAgree% promotes the direct read to the >=0.98 ship bar; a low
+    // rate means the struct offsets are off (fix them, or flip NavGrid to the GroundAt fill).
+    if (MapQuery::HasWorld()) {
+        MapQuery::WalkGridInfo g;
+        if (MapQuery::GetGridInfo(g)) {
+            const float extX = static_cast<float>(g.nCols * g.cellSizeX);
+            const float extZ = static_cast<float>(g.nRows * g.cellSizeZ);
+            char gh[192];
+            snprintf(gh, sizeof(gh),
+                     "grid: %dx%d cells cell=%dx%dm origin=(%d,%d) extent=%.0fx%.0fm minCorner=(%d,%d)",
+                     g.nCols, g.nRows, g.cellSizeX, g.cellSizeZ, g.originX, g.originZ,
+                     extX, extZ, -g.originX, -g.originZ);
+            Log::Write("NAV-DIAG", gh);
+
+            int sampled = 0, walkAgree = 0, yAgree = 0, directWalk = 0, oracleWalk = 0;
+            const int total = g.nCols * g.nRows;
+            const int stride = total > 400 ? total / 400 : 1;   // ~<=400 samples
+            for (int cell = 0; cell < total; cell += stride) {
+                const int col = cell % g.nCols, row = cell / g.nCols;
+                float dy = 0.0f; const bool dW = MapQuery::ReadCellFloor(g, col, row, dy);
+                float wx, wz; MapQuery::CellCenter(g, col, row, wx, wz);
+                float oy = 0.0f; const bool oW = MapQuery::GroundAt(wx, wz, oy);
+                ++sampled;
+                if (dW) ++directWalk;
+                if (oW) ++oracleWalk;
+                if (dW == oW) {
+                    ++walkAgree;
+                    if (dW && std::fabs(dy - oy) <= 0.5f) ++yAgree;
+                }
+            }
+            char gc[208];
+            snprintf(gc, sizeof(gc),
+                     "grid xcheck: sampled=%d walkAgree=%d (%.0f%%) yAgree=%d directWalk=%d oracleWalk=%d",
+                     sampled, walkAgree, sampled ? 100.0f * static_cast<float>(walkAgree) / sampled : 0.0f,
+                     yAgree, directWalk, oracleWalk);
+            Log::Write("NAV-DIAG", gc);
+        } else {
+            Log::Write("NAV-DIAG", "grid: GetGridInfo failed (no grid header)");
+        }
+    }
+
     EntityList::Rescan();
     EntityList::LogDiagnostic();
     Speech::Output(L"Diagnostic logged");
@@ -119,8 +202,8 @@ void OnNavKey(int vk, bool /*shift*/) {
         case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
-        case VK_OEM_1:      SpeakFacing();                    break;  // ;  facing readout
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
+        case VK_OEM_1:      SpeakFacing();                    break;  // ;  facing readout (true north)
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump
         default:            break;
     }

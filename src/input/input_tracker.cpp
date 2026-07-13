@@ -59,7 +59,7 @@ constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x
               DIK_SLASH = 0x35;
 
 // Extra hotkeys beyond the 4 original nav keys: - = ; ' /  (standalone, no Shift).
-std::atomic<bool> g_extraDown[5]{};
+std::atomic<bool> g_extraDown[6]{};
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -244,9 +244,9 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true,  false);  // `  rescan
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true,  false);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true,  false);  // =  next category
-    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  facing
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true,  false);  // '  diagnostic
     DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true,  false);  // /  describe
+    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  facing readout
 }
 
 uint64_t LastInputTimestampMs() {
