@@ -67,11 +67,18 @@ Save as `ReadMe.txt` (capital R, capital M) in the version directory.
   mask a validator failure.
 - **FF12 Module Loader / External File Loader** — incompatible; both want the `dinput8.dll` slot.
 
-> **Note on the TTS DLLs (rule changed 2026-07-15).** These used to be excluded — "user-supplied,
-> never bundled" was a hard rule. The user reversed it: they are needed to play, and the sibling FFPR
-> projects already ship the same two files. **This applies to the release zip ONLY.** The build-side
-> rule is unchanged and still absolute: **no `Tolk.h`, no CMake link, no vendored headers** — the mod
-> resolves Tolk purely via `LoadLibrary` + hand-rolled typedefs and stays silent if it is absent.
+> **Note on the TTS DLLs (corrected 2026-07-15).** These used to be excluded from the release on the
+> strength of a "user-supplied, never bundled" rule. That rule was about **deploy**, not release —
+> `build_and_deploy.bat` must never copy Tolk into the *game directory*, because the user manages
+> their own Tolk install there. It should never have said anything about the release zip, and the
+> over-reach cost the release its TTS DLLs. **The release ships them; deploy still must not.**
+>
+> Three separate concerns (see `CLAUDE.md`), only the third of which is this file's business:
+> 1. **Deploy** — `build_and_deploy.bat` copies `dinput8.dll` ONLY. Never Tolk. Unchanged, absolute.
+> 2. **Build** — no `Tolk.h`, no CMake link, no vendored headers; `LoadLibrary` + hand-rolled
+>    typedefs only, silent when absent. Unchanged, absolute.
+> 3. **Release** — the zip DOES include `Tolk.dll` + `nvdaControllerClient64.dll`. This is the one
+>    that changed.
 
 ### 3. Zip with 7-Zip
 
