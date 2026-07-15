@@ -22,7 +22,7 @@ NVDA's own keyboard commands do not work while the game has focus. FFXII takes e
 
 Not yet read: FMV movie subtitles and full-page Handbook tutorials (both are pre-rendered images, not text). The License Board, Gambit editor, Bestiary and Clan Primer screens are not implemented yet.
 
-There is no combat log yet. Battle is readable through the target and party status keys.
+There is no combat log yet. In battle, the semicolon key reads the target you have selected; there is no readout of your own party's HP and MP.
 
 ## Install
 
