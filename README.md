@@ -14,7 +14,9 @@ Button prompts inside tutorial text are skipped. A line like "press [button] to 
 
 Exits do not say where they lead. They are found, listed, and can be routed to, but they read as "Exit" rather than naming the destination area.
 
-The party status keys (4, 5, 6) and the target status key (semicolon) are new and have not yet been confirmed in play. If they say nothing at all, that is worth reporting.
+There is no party status readout yet. Reading each party member's HP and MP with a keypress is being worked on, but it does not function in this build, so it is not listed under Keys.
+
+The target status key (semicolon) is new and has not yet been confirmed in play. If it says nothing at all, that is worth reporting.
 
 NVDA's own keyboard commands do not work while the game has focus. FFXII takes exclusive control of the keyboard, which blocks NVDA's shortcuts. The mod's own keys and its speech are unaffected.
 
@@ -34,9 +36,7 @@ If you installed to a Steam library on another drive, it is:
 
 drive:\path to library\SteamLibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64
 
-Copy dinput8.dll from the release zip into that x64 folder, alongside FFXII_TZA.exe.
-
-Copy Tolk.dll and nvdaControllerClient64.dll into the same x64 folder. These are not included in the release — you supply them. Get them from the Tolk project (https://github.com/dkager/tolk), or reuse the copies from another screen-reader mod.
+Copy all three DLLs from the release zip — dinput8.dll, Tolk.dll and nvdaControllerClient64.dll — into that x64 folder, alongside FFXII_TZA.exe. All three go in the same place.
 
 Start NVDA (or JAWS, Narrator, or another supported reader), then launch the game. The mod announces itself a few seconds after the game starts.
 
@@ -94,12 +94,7 @@ Directions are given relative to the way you are facing — "north" means straig
 
 #### Status
 
-- 4: party slot 1 status — name, HP and MP with maximums.
-- 5: party slot 2 status.
-- 6: party slot 3 status.
 - Semicolon: status of the target the game currently has selected. Works outside battle too, when you select something with the cursor keys.
-
-An empty party slot says nothing.
 
 #### Reading
 

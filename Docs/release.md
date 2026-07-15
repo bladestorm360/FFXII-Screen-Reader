@@ -34,26 +34,44 @@ directory, which is fine and expected — that is how the tester picks it up.
 
 ### 2. Assemble `Releases\V<version>\`
 
-Create the directory and copy in **exactly two** files:
+Create the directory and copy in **exactly four** files:
 
 | File | Source |
 |---|---|
 | `dinput8.dll` | `build\bin\Release\dinput8.dll` (the fresh build from step 1) |
+| `Tolk.dll` | most recent prior `Releases\V*\`; for the first release, `D:\Games\Dev\Unity\FFPR\ff1\ff1-screen-reader\Releases\V1.4\Tolk.dll` |
+| `nvdaControllerClient64.dll` | most recent prior `Releases\V*\`; for the first release, the same FFPR `V1.4` directory |
 | `ReadMe.txt` | `README.md` converted to plain text (see below) |
+
+**Preserve casing exactly:** capital `T` in `Tolk.dll`, lowercase `n` in `nvdaControllerClient64.dll`.
+
+**The TTS DLLs must be x64.** `FFXII_TZA.exe` is 64-bit; a 32-bit `Tolk.dll` loads and then simply
+never speaks, which is a miserable bug to diagnose from a user report. Verify before copying — the PE
+machine field must read `8664`, not `014c`:
+
+```
+od -An -tx2 -j$(( $(od -An -tu4 -j0x3c -N4 "<file>" | tr -d ' ') + 4 )) -N2 "<file>"
+```
+
+**Do NOT source Tolk from `D:\Games\Dev\tolk\tolk\dist_x86\Tolk.dll`** — that build is **x86** and
+will not work. The `libs\x64\` folder there holds `nvdaControllerClient64.dll` only, not Tolk itself.
 
 **ReadMe conversion:** strip Markdown so the file reads cleanly under a screen reader — drop `#`
 heading markers, `**`/`*` emphasis, code-fence ` ``` ` lines, and leading `-` bullet markers;
 convert `[text](url)` to `text (url)`; convert tables to plain columns. No leftover `#` or backticks.
 Save as `ReadMe.txt` (capital R, capital M) in the version directory.
 
-**These two files are the entire release.** Do not add:
+**These four files are the entire release.** Do not add:
 
-- **`Tolk.dll` / `nvdaControllerClient64.dll`** — user-supplied, never bundled. This is a hard
-  project rule (`CLAUDE.md`). The mod `LoadLibrary`s them at runtime and logs + continues silently if
-  absent; the ReadMe tells the user where to get them and where to put them.
 - **`mod_config.ini`** — the mod's RVA byte-validator writes it on first launch. Shipping one would
   mask a validator failure.
 - **FF12 Module Loader / External File Loader** — incompatible; both want the `dinput8.dll` slot.
+
+> **Note on the TTS DLLs (rule changed 2026-07-15).** These used to be excluded — "user-supplied,
+> never bundled" was a hard rule. The user reversed it: they are needed to play, and the sibling FFPR
+> projects already ship the same two files. **This applies to the release zip ONLY.** The build-side
+> rule is unchanged and still absolute: **no `Tolk.h`, no CMake link, no vendored headers** — the mod
+> resolves Tolk purely via `LoadLibrary` + hand-rolled typedefs and stays silent if it is absent.
 
 ### 3. Zip with 7-Zip
 

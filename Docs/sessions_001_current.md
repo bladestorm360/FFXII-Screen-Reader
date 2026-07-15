@@ -1941,12 +1941,22 @@ populated and well-formed, just empty of records here).
    (header `+0x04` → 8-byte records by mapNo; `rec+0x02` = area index into a `0x10`-stride table at
    `+0x08`; `rec+0x06` = group) then maps it to a name.
 
-**UNTESTED — `4`/`5`/`6` and `;` never fired.** The log has **zero** `[PARTY]` lines and only the
-`[TARGET]` init line across the whole 2.5-minute session, so the party-status and target-status keys
-were not exercised at all. Their read chains are ≥0.98 offline but have **no runtime confirmation** —
-do not treat them as working. First thing to check next session; if a keypress produces no `[PARTY]`
-line at all, suspect the `g_extraDown[6]` → `[9]` growth / the `'4'`/`'5'`/`'6'` VK dispatch tokens
-rather than the BtlChr reads.
+**FAIL — `4`/`5`/`6` DO NOT WORK (tester-confirmed).** Zero `[PARTY]` lines in the log, so
+`PartyStatus::SpeakSlot` is **never reached** — the failure is in the **INPUT path**, not the BtlChr
+reads (those never got a chance to run; they remain ≥0.98 offline and untested). **Removed from the
+end-user `README.md`** per the tester; `Controls.md` marks them NOT WORKING with the suspect list.
+Suspects in order: the `g_extraDown[6]` → `[9]` growth; the `DIK_4/5/6 = 0x05/0x06/0x07` scan codes;
+the `'4'`/`'5'`/`'6'` VK tokens through `WM_NAVKEY` → `OnNavKey`. **Add a first-fire diagnostic in
+`DInputEdge` before theorising** — the mod currently logs nothing on the input path, so there is no
+way to tell "key never seen" from "key seen, dispatch dropped it". Possibly shares a root cause with
+the already-recorded, still-undiagnosed "`[` failing in-game is a scan-code/read bug" note in
+`Controls.md`.
+
+**UNTESTED — `;` (target status).** Only the `[TARGET]` init line appears; the key was never
+exercised. Given `4`/`5`/`6` fail on the input path and `;` was re-pointed at a new handler this
+session, treat `;` as suspect until proven — though note `;` uses `g_extraDown[2]`, a **pre-existing**
+slot that worked before, whereas `4`/`5`/`6` use the **newly added** `[6]`/`[7]`/`[8]`. That
+difference is itself a clue: it points at the array growth rather than at `DInputEdge` generally.
 
 - **(10) New CRITICAL rule in `CLAUDE.md`: CHECK `GameArchitecture.md` FIRST**, before any decompile
   research — grep it (plus `debug.md` Tried & Failed) for the function/global/offset/feature before

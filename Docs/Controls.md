@@ -81,9 +81,31 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `;` | Battle: active target status (name + HP) | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
 | `'` | Nav: diagnostic dump | free |
-| `4` | Party: slot 1 status (HP / MP with maximums) | free |
-| `5` | Party: slot 2 status | free |
-| `6` | Party: slot 3 status | free |
+| `4` | Party: slot 1 status (HP / MP with maximums) — **NOT WORKING, see below** | free |
+| `5` | Party: slot 2 status — **NOT WORKING** | free |
+| `6` | Party: slot 3 status — **NOT WORKING** | free |
+
+> **`4`/`5`/`6` DO NOT FIRE (Session 45, tester-confirmed).** Not listed in the end-user
+> `README.md`. The log shows **zero** `[PARTY]` lines, i.e. `PartyStatus::SpeakSlot` is never
+> reached — so this is the **input path**, not the BtlChr reads (those are ≥0.98 offline and
+> untested precisely because the key never arrives).
+>
+> **Already eliminated:** (a) *not* a build/deploy miss — the `"party slot"` log literal is present
+> in the **deployed** `dinput8.dll`, so the code shipped; (b) *not* the scan codes being unreadable
+> in general — `DIK_MINUS` (`0x0C`) sits in the same number row as `DIK_4`-`DIK_6` (`0x05`-`0x07`)
+> and `-`/`=` work fine; (c) *not* a `SpeakSlot` early-return — the empty-slot path logs before it
+> returns, so even an empty slot would leave a `[PARTY]` line.
+>
+> **Remaining suspects, in order:** the `g_extraDown[6]` → `[9]` array growth (this is the sharpest
+> lead — `;` uses the pre-existing `[2]` and the *newly added* `[6]`/`[7]`/`[8]` are the ones that
+> fail); the `'4'`/`'5'`/`'6'` VK tokens through `WM_NAVKEY` → `OnNavKey`; log buffering (`[PARTY]`
+> is not in the flush list — `logger.cpp` flushes only ERROR/INIT/HOOK_HEALTH — so a hard exit could
+> in principle drop the lines, though `[MSGTEXT]` from the same session did survive).
+> **Add a first-fire diagnostic in `DInputEdge` before theorising further** — the input path logs
+> nothing today, so there is no way to distinguish "key never seen" from "seen, dispatch dropped it".
+> `DIAG_KEYS` (`input_tracker.cpp:21`) already exists for exactly this and is currently `false`.
+> Possibly shares a root cause with the still-undiagnosed "`[` failing in-game is a scan-code/read
+> bug" note below.
 | `F4` | Combat log open (planned) | free (F1–F3 are game speed; F4 unbound) |
 | `Esc` | Combat log close (planned) | game Pause — handled by modal intercept |
 
