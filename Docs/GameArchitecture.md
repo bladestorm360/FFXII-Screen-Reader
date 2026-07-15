@@ -209,6 +209,57 @@ The script-side API for map transitions is fully named:
 This is exactly the surface a screen reader needs to enumerate exits, get
 their positions, look up destination names, and announce them.
 
+## World MAP screen (`page+0x138` = map id) — RE'd Session 45, KEEP for map-transition speech
+
+Found while disproving the "e5f0 dialogue" read-points (they were this screen all along). **Not
+currently hooked** — the mod removed both hooks in Session 45 because they were wired up as
+*dialogue*. The RE itself is sound and is exactly what a **"speak the map/area on map load or map
+open"** feature needs, so it is recorded here rather than lost.
+
+| What | Where | Conf |
+|---|---|---|
+| Map screen page proc | `FUN_002baf80(page, msg)` — abs `0x2baf80`, **RVA `0x19AF80`** | 0.99 |
+| **Current MAP ID** | **`*(s16)(page + 0x138)`** | **0.99** |
+| ...set at | proc **case 1** (birth): `*(short*)(page+0x27*8) = (short)msg[2]`; `< 0` is clamped to 0 | 0.99 |
+| ...consumed at | proc **case 0xE** (build) + case `0x2A`: `FUN_003c02b0((int)*(short*)(page+0x138), &out)` — passed **unmodified**, so page id and resolver id are the **same id space** | 0.99 |
+| Map-name resolver | `FUN_003c02b0(mapId, out)` — abs `0x3c02b0`, **RVA `0x2A02B0`** | 0.99 |
+| Map DB | `*(u64*)(DAT_02b457e0 + 0xe8)`; table base = `db + *(u16)(db+8)`; `[u32 count][8-byte entries]`; entry `+0` = attr byte, entry `+4` = **s32 text id (`-1` = none)** → `FUN_002f9920` | 0.98 |
+| Map width/height | `FUN_003be680(id, &w, &h)` (callers do `0xc80 / w` → `FUN_00402f00` zoom-to-fit) | 0.98 |
+| Page creator | `FUN_002b9d30(id, mode)` → root `DAT_0209e5f0` (size `0x179e0`, proc `FUN_002ba700`); page size `0xbc08` at `root + 0x1B0 + bit*0xBC10` | 0.97 |
+| Openers | `FUN_0028e630(x)` → `(0, 6)`; `FUN_0028e660(x)` → `(x, 5)`; `FUN_0028e690(p)` → `(p[1], 5)` else the **movie-subtitle** path `FUN_00550510` | 0.97 |
+| Sibling proc | `FUN_002b7b80` on `DAT_0209e5c0` — near line-for-line clone that reads the **player's world position** (`FUN_00265020`) + `TrackingMapScreenRateX/Y` config globals = the position-tracking map | 0.94 |
+
+**`out` layout (0x18 bytes)** — confirmed against the caller's own stack locals in `FUN_002baf80`
+(`local_1f8`/`local_1f0`/`uStack_1e8` at +0/+8/+0x10, tested with `& 0x8000`):
+
+| Off | Type | Meaning |
+|---|---|---|
+| +0x00 | u16 | id (echo of arg0) |
+| +0x02 | u16 | group/attr byte (→ `FUN_003bf6c0`, capped ≤ `0x3a`) |
+| **+0x08** | **ptr** | **codec text ptr** (the map NAME) — NUL-terminated, decode with `GameText::Decode`. **NULL when entry+4 == -1**, which is legitimate |
+| +0x10 | u32 | flags from `FUN_003c05f0`; **bit15 = "no text"** |
+
+Other page fields: `+0xd4` zoom %, `+0xBBD8`/`+0xBBDA` scroll x/y, `+0xBBE0` mode (5/6),
+`+0xBBE4`/`+0xBBE5` cursor; case `0x27` = scroll-to-keep-cursor-onscreen; `FUN_00402db0(marker,
+padDir, …)` = d-pad marker navigation.
+
+**Caveat before building on this (0.93, not 0.98):** that `out+8` is a *map/area name* is inferred
+from the surrounding cluster (map DB, zoom-to-fit, `./GameData/D3D11/ArtData/menu/localmap/` at RVA
+`0x7D74E0`, the position-tracking sibling) — the string itself was never read at runtime. **Also
+unproven: whether this id shares the `planmapname` id space** (`FUN_00377870`, `DAT_02add0f8`,
+`notes/planmapname_areas.csv` — 808 ids incl. 275 Inner Ward / 1327 Nalbina Fortress). The map DB
+here (`DAT_02b457e0+0xe8`) is a **different** blob from planmapname, so do not assume they match —
+check before cross-using ids.
+
+**For map-transition speech specifically**, the mod already has a simpler, proven route that needs
+none of the above: `FUN_003778b0()` = current-area name (`CURRENT_AREA_NAME = 0x2578B0`, already
+called by `EntityList::CurrentAreaName`), plus the map-jump executor **`FUN_003145e0`** (RVA
+`0x1f45e0`) which writes `nowMapNo`/`nowJumpIndex` to gameState `+0x1044`/`+0x1048` (base
+`FUN_002ef2b0()`, RVA `0x1cf2b0`) — getters `FUN_003148f0` (`0x1f48f0`) nowMapNo, `FUN_003148b0`
+(`0x1f48b0`) nowjumpindex, `FUN_00314870` lastMapNo, `FUN_00314850` lastjumpindex. An observe-only
+hook on `FUN_003145e0` is the natural "a map transition just happened, announce it" event; the
+`page+0x138` path above is for reading the **map screen itself** when the player opens it (`M`).
+
 ## .ebp Bytecode + .dbg Symbols (Game-Script Layer) — UNLOCKED 2026-05-05
 
 `FFXII_TZA.vbf` (29 GiB compressed, 55 GiB uncompressed) contains the
@@ -918,20 +969,31 @@ wall. Directions stay WORLD-ABSOLUTE (no egocentric). **Direct read is conf 0.92
 Full spec + evidence: `..\FFXII-Decompile\notes\message_text_readpoints_spec.md`. Four distinct
 surfaces; two readable, two are baked assets (not readable via codec).
 
-**A. NPC dialogue + in-engine cutscene captions — message window `e5f0`.**
-- `DAT_0209e5f0` (RVA `0x1F7E5F0`, pointer global) = primary live dialogue surface (all openers
-  drive it; owns `mini_face_c` portrait). `e5c0` redundant twin; `b47760` chrome. None is a backlog.
-- Page obj: `page = DAT_0209e5f0 + 0x1B0 + ((*(u16*)(root+0x179d2)>>2)&1)*0xBC10`. Page proc
-  `FUN_002baf80` (RVA `0x19AF80`); builder `FUN_002b9d30` (RVA `0x199D30`). msgId = `*(short*)(page+0x138)`.
-- **Body text:** observe `FUN_003c02b0(msgId,out)` (RVA `0x2A02B0`) → `*(out+8)` = codec ptr;
-  `*(u16*)(out+2)&0xff` = speaker attr. No game call. (Body is glyph-nodes at `page+0xBBC0` — no
-  memory-only string.)
-- **Speaker name (memory-only):** nameplate `DAT_02b62d78` (RVA `0x2962D78`, ptr global):
-  `*(char**)( *(void**)( *(void**)(DAT_02b62d78+0x60) ) + 0x18 )` = rendered caption (draw chain
-  ends `FUN_002dd680:40`→`FUN_002b0280`). Visibility gate `(*(u32*)(DAT_02b62d78+0x40) & 0x405)==5`
-  (FUN_00245e60 draw gate) — read the name only when visible, else a stale name can persist.
+**A. ~~NPC dialogue + in-engine cutscene captions — message window `e5f0`.~~ — STRUCK (Session 45).**
+> **THIS ENTIRE SUBSECTION IS WRONG. It is the WORLD MAP SCREEN, not dialogue.** `page+0x138` is a
+> **MAP ID**, not a msgId; `FUN_003c02b0`'s `out+8` is a **MAP NAME**, not a body. The "decisive"
+> `mini_face_c` evidence below was a misread — that symbol is a **texture-bundle name** passed to
+> `FUN_0024a5a0` alongside `battle_4_p`/`s_font_c`, and the `FUN_002baf80` family never references
+> it. Both hooks were REMOVED; wired up, they spoke nothing, and would have spoken a map name over
+> real dialogue. The nameplate `DAT_02b62d78` went with them — it existed only to prefix these
+> "dialogue" lines, so do NOT assume it belongs to the real dialogue window; re-derive the speaker
+> against THAT widget once it is found.
+>
+> The RE is preserved (correctly labelled) under **"World MAP screen (`page+0x138` = map id)"** —
+> use it for map-screen / map-transition speech. **The real field dialogue window is STILL UNKNOWN**;
+> the only dialogue path that works is the telop `FUN_002e16b0` (a whole-message setter, which is why
+> multi-page screens read all at once). Unverified lead: `FUN_003cb650` (RVA `0x2AB650`) case 1 vs
+> case `0x20`, `DAT_02b47760`, `+0x179D0` msg id, `+0x179D2` bit `0x2000` open / bit `0x80` page-done.
 
-**B. Item / treasure / battle-system / yes-no confirm — one memory-only buffer.**
+**B. ~~Item / treasure~~ / battle-system / yes-no confirm — one memory-only buffer.**
+> **PARTLY STRUCK (Session 45): `FUN_0057c480` is the MENU system-message window — NOT the field /
+> item / treasure path.** Its case 1 does `*(longlong*)(DAT_0209ac30 + 0x328) = surface`, i.e. it
+> registers into the menu manager; every caller of its producer `FUN_002ce370` is a menu screen, and
+> it never fired once in a 17-minute play log. The "field-chest 'obtained X' reuses this surface"
+> claim was self-tagged **0.90 — below this project's 0.98 bar** — and is wrong.
+> **The real obtained-item read point is `FUN_0035e070` (RVA `0x23E070`) + `widget+0xC8`** — see the
+> Session 45 block at the top. The offsets below are still correct **for menu system messages**
+> ("cannot equip", "sold"), which is the only role this surface now has.
 - Hook `FUN_0057c480` (RVA `0x45C480`), message==1 (surface birth); text = `param_1(surface)+0x1B0`
   (0x400-byte codec buffer, written once by `FUN_00254f30`). No global needed — the surface is the
   hook's `param_1`. (Also reachable as `*(*(DAT_0209ac30 RVA 0x1F7AC30, ptr→&DAT_0209ac60)+0x328)`.)
@@ -1023,7 +1085,187 @@ See `notes/status_char_select_labels_2026_07_11.md`.
 
 ---
 
-**Last updated:** 2026-07-11 (Session 32) — Battle target-selection readout SHIPPED: real path is a
+**Last updated:** 2026-07-15 (Session 45) — **FIVE prior conclusions STRUCK. Read this block before
+trusting anything below it.**
+
+1. **`FUN_00353490` is `getmapjumpanglebyindex`, NOT a party-placement call.** It is abs `0x353490` =
+   RVA `0x233490` = the mod's own `GETMAPJUMPANGLEBYINDEX`; its body returns a jump's angle
+   (`buf+0xc`). Session 43's demotion of `mapData+0x54` from Exit to "party ARRIVAL/SPAWN" rested
+   ENTIRELY on this misread and is **REVERTED**. `mapData+0x54` is the **map-jump point table** = the
+   intra-map "Mapjump" exits (Inner Ward -> Upper Apartments), tester-confirmed by walking into them.
+   `Category::Event` is retired; those entries are `Category::Exit` again.
+2. **`+0x54` records carry x/y/z/angle ONLY.** `FUN_00264b90` is the sole reader of that table in all
+   33,105 functions and touches only `word[i*8+1..4]`; bytes `+0x10..+0x1f` are read by **nothing**.
+   The Session-42 `destIdx@+0x1d -> +0x8c -> areaId` chain read **dead bytes** and returned
+   `destIdx=0 / areaId=0xffff` on every record of every map (see the live log). `+0x1d` is real only
+   on the **`+0x70` field-sign** records — a different table.
+3. **`mapData+0x70` — SETTLED at runtime (Session 45 test). Do not re-litigate.** The array is
+   **populated and structurally valid**, and the mod's reader is **correct**; it simply holds **no
+   records** on the prologue map. Live dump: `off=0x20650 groupCount=5`, group offsets
+   `0x20600`..`0x20640` spaced `0x10` — five `0x10`-byte sub-table headers packed exactly into the
+   `0x50` bytes before the group table — every group `count=0`. So the map has **no field signs**,
+   hence no destination name to read (the game draws none either). **Session 44's "`blob+0x70` is
+   empty at runtime" is FALSE** (`blob+0x70` = `0x20650`, non-zero); its `count=0` came from the ABI
+   bug below. **Session 43's "`+0x70` = the exit source" was the RIGHT table** — it just never worked
+   because of that same bug. NEXT: re-dump on a map that visibly draws "→ \<area\>" arrows (town gate
+   / open field). If still empty there, `+0x70` is authored-empty in TZA and destinations must come
+   from the script — observe-hook **`FUN_003145e0`** (RVA `0x1f45e0`, receives `(mapNo, jumpIndex,
+   flags)`) + the global map table `DAT_02099d88`.
+   The original supporting analysis, still accurate:
+   measurements behind it are invalid: (a) the runtime `count=0` came from `Pfn_ExitCount` declared
+   `int(*)()` and called with **no argument**, while `FUN_00264ac0` passes its incoming `ecx` through
+   to `FUN_00264ae0(group)` and uses it as an array index — so it read register junk on every map;
+   (b) `parse_mapdata.py` reports `+0x8c` = 0 in all 550 files, yet the live log shows `+0x8c`
+   populated (`destCount=2`) — it is reading the wrong blob base (Session 44's own note concedes the
+   map-control blob "is a cluster child, not `mpk[+0x10]`", which is what the parser uses). **`+0x70`
+   had never actually been measured.** ABI fixed + a direct-memory group-table dump added.
+4. **`FUN_003c02b0` + `FUN_002baf80` are the WORLD MAP screen, not dialogue.** `page+0x138` is a MAP
+   id; the resolver's `out+8` is a MAP NAME (`DAT_02b457e0+0xe8` = map DB; `FUN_003be680(id,&w,&h)`
+   returns width/height for zoom-to-fit; assets under `ArtData/menu/localmap/`; sibling proc
+   `FUN_002b7b80` tracks player position). The spec's "decisive" `mini_face_c` evidence was a misread
+   — that is a **texture-bundle name** passed to `FUN_0024a5a0`, and the `002baf80` family never
+   references it. **Both hooks REMOVED** (they would have spoken a map name over real dialogue).
+   **The RE is KEPT, not discarded** — see *"World MAP screen (`page+0x138` = map id)"* below: it is
+   what a "speak the map/area" feature will want, just wired to the map screen instead of dialogue.
+5. **`FUN_0057c480` is the MENU system-message window, not the field/item path.** Its case 1 does
+   `*(longlong*)(DAT_0209ac30 + 0x328) = surface` — it registers into the menu manager. It never
+   fired once in a 17-minute play log. The `message_text_readpoints_spec.md` claim that field-chest
+   "obtained X" reuses it was self-tagged **0.90 — below this project's 0.98 bar** — and is wrong.
+
+**NEW (Session 45), all ≥0.98 offline-derived, no probe:**
+
+- **"Obtained \<item\>" popup — RUNTIME-CONFIRMED** (`[MSGTEXT] item: "You obtain a Potion"`):
+  proc **`FUN_0035e070`** (RVA **`0x23E070`**), gate `*(int*)param_2 == 1`
+  (build), read the composed codec text at **`widget + 0xC8`** (cap `0x4A0`). `FUN_002b4090`
+  (codec-sprintf) fills it from a template of three `0f 31 80 80 80` slots separated by `0x02`
+  (item / item / gil, max 3; truncated in-place for 1-2 entries). Widget = 0x6e8 bytes, created by
+  `FUN_0035df40`, handle in `_DAT_022ca430` (RVA `0x21AA430`). Reached from BOTH `FUN_0050faf0`
+  (treasure) and `FUN_002a59c0` (field). It is a **timed toast** — case 2 self-destructs when the
+  animation ends — so it never paginates and fires once per popup.
+- **Party vitals (combat support)**: roster **list 3** at `DAT_02ebf190 + 0x5a7e` (RVA `0x2D9F190`;
+  9 x u16 = BtlChr index, `>= 0x28` means empty). BtlChr array = `base + 8`, stride `0x1c8`, `0x28`
+  entries. Fields: `+0x04` u8 charId, **`+0x24` i32 maxHP**, **`+0x28` i16 maxMP**, `+0x3c` u32
+  statusA, **`+0x48` i32 curHP**, **`+0x4c` i16 curMP**, `+0x64` u32 statusB, `+0x6c`/`+0x7c` i8
+  MP-enabled guard (both sign bits clear => MP usable), `+0x1c2` u8 level (0.97). **HP is i32, MP is
+  i16** — reading MP as i32 gives garbage in the high half. Slots 0..3 (3 active + 1 guest); test each
+  for emptiness rather than trusting the `< 4` bound. **Status = `*(u32*)(bc+0x64) | *(u32*)(bc+0x3c)`**
+  — which is why the old "status bit 0x10000" guess failed: bit 16 is real (max-HP-lock / Disease) but
+  only reads correctly from the OR of BOTH words. Bit->name is data-driven at `DAT_022c8b08`
+  (RVA `0x21A8B08`, stride `0xA8`, `rec+0x98` = bit index, name = `FUN_002b58b0(*(u64*)(rec+0x18),0)`).
+  Derived from the seven `btlAtel*FromPartySlot` natives (`FUN_0050fd00`..`FUN_0050ff20`), resolved by
+  fingerprint (seven consecutive fns funnelling through the slot->BtlChr resolver `FUN_00320ab0`;
+  address order == .dbg order 7/7; each body matches its name 7/7). **Do NOT call them** — they are
+  athena-VM natives that pop args via `FUN_00267db0`/`FUN_00267e10` (aborts on underflow) and push
+  returns through the VM context. Read the data directly, as their bodies do.
+- **Codec escape params are SELECTOR-dependent**, from the game's own interpreter **`FUN_002ac5f0`**
+  (RVA `0x18C5F0`): `0x21` = 0 params; `0x20/0x27/0x2f/0x32/0x34/0x35/0x37/0x3a/0x3c/0x3d/0x3e/0x56`
+  = 2 (`FUN_003ffab0`); **`0x31` = 3** (`FUN_003fff10`, the sprintf "%s" slot); `0x40`-`0x6b` = the
+  icon/glyph family (`FUN_002aeb20`, RVA `0x18EB20` — selector->button mapping NOT yet decoded).
+  The old "skip every following byte >= 0x80" rule is only an approximation and **corrupts live text**:
+  digits are `0x85`-`0x8e` and punctuation `0x99/0x9a/0xa0`-`0xaf`, so a 0-param escape followed by a
+  number ate it ("Obtained 3 Potions!" -> loses the 3 and the !).
+  **STILL BROKEN for the icon family (open):** `0x40`-`0x6b` have an unknown param count, so they fall
+  back to the legacy `>= 0x80` run and it eats the byte after the glyph. Live proof (Session 45 test):
+  *"...by approaching a save crystal and pressing Touching one of these crystals..."* — the button
+  glyph AND the `.` (`0xa8`) after it are both gone. **Fix = decode `FUN_002aeb20` (RVA `0x18EB20`)**,
+  which yields the param count and the selector→button-name mapping together. Do NOT patch this by
+  making the fallback stop at any decodable byte — a genuine param byte landing in `0x85`-`0x8e` or
+  the punctuation range would then be emitted as literal text. Get the real count.
+- **The `nav_rva.h:247` formula `sel-0 slot = mapctrl.dbg_idx - 5140` is BROKEN** — not a constant
+  offset (`getmapjumpposbyindex` implies 5142, `getmapjumpanglebyindex` implies 5140), because the
+  .dbg symbol list interleaves variables/source-markers with actions. Resolve natives **by behaviour**,
+  never by index arithmetic.
+
+**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination. The working dialogue path
+is the **telop** (`FUN_002e16b0`), which is a whole-message setter — it hands over speaker + every page
+in one string, which is exactly why multi-page screens read all at once. Best unverified lead:
+`FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20, with `DAT_02b47760` / `+0x179D0` msg id /
+`+0x179D2` bit `0x2000` open, bit `0x80` page-done. **Unverified — do not ship.**
+
+---
+
+2026-07-14 (Session 44) — **(a) Mod is strictly READ-ONLY on input/memory** (audit:
+no `SendInput`/`keybd_event`/`WriteProcessMemory`/mem-write; DirectInput buffer passed as `const`; only
+`VirtualProtect` = the one-time vtable patch; all game calls are pure getters). The tester's speed jump
+was their own `1`/`2`/`3` keypress = **Game Speed 1×/2×/4×** (the old Controls.md "Lock On / Target Group"
+labels for 1/2/3 were WRONG — corrected). **(b) Naviicon "markers" REMOVED** (see below — disproven).
+**(c) All-maps exit DB extracted OFFLINE** from the VBF (`tools/parse_mapdata.py`): each map ships as
+`ps2data/plan_master/map_ctrl/<AREA>/<MAP>/bin/<MAP>.mpk` (~550 maps); `mld = mpk[u32(mpk,0x10):]`; the
+`.mld` tables are file-relative (reloc `_DAT_01f83530`=0): `+0x70` EXITS `[u32 count][u32 recOff…]`, record
+`X@+0/Z@+8/enable@+0xc/destGroup@+0x1d`; `+0x8c` DEST-IDs (`u16 areaId@+0x0a` → planmapname); `+0x54`
+arrival, `+0x84` dest-pos. Accessors `FUN_00264ae0`/`FUN_00264870`/`FUN_00264920`/`FUN_00264b90`. Emits
+`notes/map_exits.csv` — the whole game's exit graph in one offline pass (answers "post-boss Nalbina map:
+what exits does it actually have, or is it cutscene-only" without a per-map play-through). Inner exit-record
+byte offsets ~0.9 (self-validate across 550 maps: sane positions + resolvable dest names ⇒ ≥0.98).
+
+Session 44 — **The naviicon minimap "markers" claim (Session 43 below) is DISPROVEN and the code REMOVED.**
+Two decompile traces proved `DAT_02b45a80` holds ONLY character/unit dots (party / ally / enemy / neutral),
+each a 1:1 duplicate of a live scene object the combatant + handle-table scans already list — there is NO
+objective/waypoint marker (zero `setnaviicon`/objective code in the whole decompile), NO crystal, NO treasure
+in it, and `marker[+0x04]` was the entity HANDLE, not a label id. `EnumerateMarkers`/`MarkerRec`/`NAVIICON_*`
+/`MARK_*`/`ScanMarkersLocked` all deleted; nothing labelled "Marker" appears anymore. `Category::Event` (old
+`+0x54` spawn/dialogue triggers) and the real exits (`+0x70`) are unchanged. **`p`-key target source**: `p`
+routes to the battle target the game is currently selecting (`DAT_0209be80 + 0x9FD8`, `battle_target_reader`);
+it does NOT press or depend on any keyboard "Lock On" key — there is no such binding (1/2/3 = Game Speed).
+
+Session 43 — ~~**Map-exit source CORRECTED.**~~ **STRUCK (Session 45) — the "correction" was wrong.**
+> `mapData+0x54` is **NOT** the arrival/spawn table. Its ONLY evidence was "`FUN_00353490` places the
+> party from it" — that function is `getmapjumpanglebyindex` (abs `0x353490` = RVA `0x233490` = the
+> mod's own `GETMAPJUMPANGLEBYINDEX`); it returns a jump's **angle** and places nothing. `+0x54` is
+> the **map-jump point table = the exits**, exactly as Sessions 39-42 had it, tester-confirmed by
+> walking into them. `Category::Event` is retired; they are `Category::Exit` again.
+> Also struck from this entry: the `+0x54` record's `+0x1d` dest chain (those bytes are read by
+> **nothing** — `FUN_00264b90` is the table's sole reader and takes only x/y/z/angle).
+> The `+0x70` field-sign array below is **real and still the destination-name source** — but note the
+> getters take a **GROUP index** (see the Session 45 block at the top: `FUN_00264ac0(group)` was being
+> called with no argument, which is why it always reported 0 exits).
+
+The `mapData+0x70` field-sign array — the list the game draws as
+radar blips / 3D "→ area" arrows (`FUN_003f9720`/`FUN_003c34e0`). Enumerate via getters:
+`count=FUN_00264ac0(group)` (RVA 0x144AC0); `obj=FUN_002649b0(group,i)` (0x1449B0, null=hidden, leader-visibility
+filtered); `FUN_002648f0(obj,buf)` (0x1448F0) → `buf[0]`=story-gate USABLE, `buf+4`=u16 areaId. Record floats
+off `obj`: X@+0, Y@+4, Z@+8, enable@+0xc; +0x1c vis mask, +0x1d dest-group. Name via `FUN_00377870(areaId)`.
+A story-gated (disabled) exit has `buf[0]=0` (e.g. the Nalbina "no simple way through"). **Minimap/naviicon
+markers** (`DAT_02b45a80` / `_DAT_02b45a70`, stride 0x20) were hypothesized here to carry objective/crystal
+icons — **DISPROVEN and REMOVED in Session 44 (see above): they are unit dots only.** ~~`Category::Event` now
+holds only the old +0x54 spawn/dialogue triggers.~~ — **STRUCK: `Category::Event` no longer exists
+(Session 45); the +0x54 entries are `Category::Exit`.**
+Session 40 — Three fixes. (1) **`p` route** now gates on the LIVE
+`DAT_0209be80` selection state (gate `PtrAt(P,0x10F78)!=null`, handle `*(u32)(P+0x9FD8)`) read at
+press-time — NOT a cache-age window (the target nameplate `FUN_002bfd20` redraws are event-driven, so
+the cache freezes between target changes); it re-resolves a fresh pos from the cached target `bc`.
+(2) **Map-jump EXIT ARRAY — corrected (≥0.95, two decompile traces agree):** container **slot 0** only;
+**`mapData = *(u64*)(containerBase+0)`** (the missing dereference — `containerBase = 0x1F78E10`),
+require `mapData!=0` and `*(u16)(mapData+0)>2`; jump table offset `*(u32)(mapData+0x54)` (dest table
+`+0x84`); `exitBase = mapData + tableOff + reloc` (reloc `_DAT_01f83530`@0x1E63530 ≈ 0); `count=*(u32)
+exitBase`; exit `i` floats x/y/z/angle at word `[i*8+1..4]` (0x20 stride). Prior recipe used
+`containerBase` directly → 0 exits. Natives: `getmapjumpposbyindex`=FUN_003538f0→FUN_00264b90(0,0,idx),
+dest=FUN_00353ed0→FUN_00264b90(1,…). (3) **Scanner** now also lists **named** objects
+(`ResolveObjectName`: npcdic `nameIdx>0` or field-sign `+0xf8` for `nameIdx<0`) regardless of
+TALK/ACTION flag (scene categories 1-4: gates/doors/signs), still gated by a readable `+0xB8` node.
+Session 39 — Fixed `p` "No target" + wired `Category::Exit`.
+(1) `p`-target position now falls back to the field-actor cached pos **`actor+0xE0/E4/E8`** (see :728)
+when the battle target's `sceneObj+0xB8` node is null during attack-menu selection (state-dependent;
+`battle_target_reader`). (2) **Map-jump EXIT ARRAY** (backs `getmapjumpposbyindex`/`FUN_00264b90`) —
+PENDING `'`-dump confirmation: per handle-table container `c`, `containerBase = 0x1F78E10 + c*0x288`,
+`exitBase = containerBase + *(u32)(containerBase+0x54) + *(u32)@0x1E63530`, `count = *(u32)exitBase`,
+exit `i` floats `x/y/z/angle` at word `[i*8+1..4]` (0x20 stride). Read by `MapQuery::EnumerateExits`
+behind a sanity gate; surfaced as fixed-position `Category::Exit` in `entity_list`. `mapjumpgroup*` are
+story flags, NOT exit geometry (:736). Canonicalize these offsets (drop the ~0.85 caveat) once the `'`
+exit-table dump validates `count`+positions in a fortress corridor.
+Session 38 — `p` key (VK_P / **DIK_P `0x19`**, `input_tracker` free
+`g_extraDown[5]`) = turn-by-turn route to the locked/selected battle target, via the SAME
+`PathPlanner::Request` pipe as `\`. Target sourced from `battle_target_reader`'s new live cache: the
+render hooks resolve `bc`→actor (`+0x698`)→`sceneObj` (`+0x10`)→world pos (`sceneObj+0xB8` via
+`ReadSceneObjectPos`) and store `pos+label+handle+tickMs`; `GetLockedTarget` returns it if <300 ms old.
+`PlanRoute` now snaps an off-mesh GOAL cell to its nearest walkable cell (ring ≤6 cells). `entity_list`
+`[`/`]` cursor is now identity-locked (`CursorId` = obj+nameIdx+label+category). **OPEN (pending runtime
+confirmation):** whether `DAT_0209be80+0x9FD8` stays populated outside command target-selection (⇒ `p` works
+for a persistent lock) or only while the command menu is choosing a target — answered by the baked `NAV-ROUTE`
+log, not yet verified. (NOTE Session 44: the keyboard `2` is **Game Speed**, not Lock-On — there is no
+keyboard lock-on binding; `p` reads the selection object directly, it never presses a key.) Also confirm the
+field stays nav-safe in battle-state mode.
+Session 32 — Battle target-selection readout SHIPPED: real path is a
 SEPARATE selector on `DAT_0209be80` (`P+0x9FD8` handle, gate `P+0x10f78`), NOT the reticle set
 (DISPROVEN) nor `DAT_0209ac30+0xde0` (acting char). Two-hook reader (`FUN_002bfd20`+`FUN_00329220`),
 name/HP via actor pool, faction via scene-kind; enemy=HP%, ally=HP numbers. `src/ui/battle_target_reader.*`.

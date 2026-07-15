@@ -25,19 +25,32 @@ namespace {
 // A live interactive field object. Identity is the SCENE OBJECT pointer, which is stable
 // while the map is loaded (the handle table holds it from load to teardown).
 struct Entity {
-    void*        sceneObj = nullptr;   // handle-table scene object (identity)
+    void*        sceneObj = nullptr;   // handle-table scene object (identity; nullptr for fixed exits)
     uint32_t     flags    = 0;         // *(sceneObj+0x1C): FLAG_TALK (NPC) / FLAG_ACTION
     int16_t      nameIdx  = 0;         // *(sceneObj+0x102): npcdic id (>=0) / custom (<0)
     Category     category = Category::Object;
     std::wstring label;
     FVec3        pos;
     float        dist2D   = 0.0f;      // to player, refreshed per command
+    bool         fixed    = false;     // exit/map-jump: fixed world pos, no scene node (don't refresh via +0xB8)
 };
 
 std::mutex             g_mutex;
 std::vector<Entity>    g_entities;
 Category               g_currentCategory = Category::All;
-void*                  g_currentObj      = nullptr;  // focus (scene object), tracked across refreshes
+
+// The [ / ] focus, tracked across rescans by STABLE IDENTITY (not a bare scene-object pointer,
+// which can be reused/aliased by a pooled combatant slot or momentarily drop from a rescan and
+// silently re-anchor the cursor to the nearest object). Match tiers: exact (pointer + name-key +
+// label) beats an identity re-lock (name-key + label + category, adopting the object's new pointer).
+struct CursorId {
+    void*        obj     = nullptr;
+    int16_t      nameIdx = 0;
+    std::wstring label;
+    Category     cat     = Category::All;
+    bool         valid   = false;
+};
+CursorId               g_cursor;
 
 // --- helpers ---------------------------------------------------------------
 
@@ -111,14 +124,15 @@ bool InGimmickBand(int16_t nameIdx) {
     return id >= 433 && id <= 469;
 }
 
-// Category from the interaction flags + the npcdic id band (both locale-independent).
-// The named gimmick sub-types come from the npcdic id (sceneObj+0x102 when >= 0): ids
-// 433-469 are the field gimmick-object band (434 Treasure, 468 Urn, 466 Gate Crystal,
-// 469 Save Crystal, 435-459/467 area/life crystals). The NPC-vs-object split then rides
-// the scene object's interaction flags (FUN_0025b820): FLAG_TALK => a talk target
-// (person), otherwise an action target (gate/door/switch) => object. The spoken LABEL
-// is always the game's own text; this only drives the category FILTER.
-Category ClassifyByNameKey(uint32_t flags, int16_t nameIdx) {
+// Category from the npcdic id band + the scene-object CHARACTER category (both locale-independent).
+// The named gimmick sub-types come from the npcdic id (sceneObj+0x102 when >= 0): ids 433-469 are the
+// field gimmick-object band (434 Treasure, 468 Urn, 466 Gate Crystal, 469 Save Crystal, 435-459/467
+// area/life crystals). NPC-vs-object then rides: FLAG_TALK => a talk target (person); else the scene
+// object's CHARACTER type — `isCharacter` = scene category (sceneObj+0x03 & 0x1f) in 5-7, the classes
+// that carry a char component (people/actors) — vs a non-character gate/door/sign/switch. (The old
+// "named person outside the gimmick band => NPC" heuristic mislabeled named GATES as NPCs; replaced.)
+// The spoken LABEL is always the game's own text; this only drives the category FILTER.
+Category ClassifyByNameKey(uint32_t flags, int16_t nameIdx, bool isCharacter) {
     if (nameIdx >= 0) {
         int id = static_cast<int>(static_cast<uint32_t>(nameIdx) & NavRva::NPCDIC_NAME_MASK);
         if (id == 434 || id == 468)                    return Category::Treasure;
@@ -128,12 +142,8 @@ Category ClassifyByNameKey(uint32_t flags, int16_t nameIdx) {
         if (id >= 433 && id <= 469)                    return Category::Object;   // misc gimmick
     }
     if (flags & NavRva::FLAG_TALK) return Category::NPC;   // talk target => person
-    // No talk flag: a named person outside the gimmick band is still a person.
-    if (nameIdx >= 0) {
-        int id = static_cast<int>(static_cast<uint32_t>(nameIdx) & NavRva::NPCDIC_NAME_MASK);
-        if (id < 433 || id >= 470) return Category::NPC;
-    }
-    return Category::Object;                               // action gimmick (gate/door/switch)
+    if (isCharacter)               return Category::NPC;   // char-component scene object => person/actor
+    return Category::Object;                               // non-character = gate/door/sign/switch
 }
 
 // Re-read live positions for the current set; drop objects whose transform no longer
@@ -141,6 +151,11 @@ Category ClassifyByNameKey(uint32_t flags, int16_t nameIdx) {
 // survives. Caller holds g_mutex.
 void RefreshPositionsLocked(const FVec3& playerPos) {
     for (auto it = g_entities.begin(); it != g_entities.end();) {
+        if (it->fixed) {   // exit/map-jump: fixed world pos, no scene node — keep pos, just re-range
+            it->dist2D = NavCommon::Distance2D(playerPos, it->pos);
+            ++it;
+            continue;
+        }
         FVec3 p;
         if (!PlayerState::ReadSceneObjectPos(it->sceneObj, p)) { it = g_entities.erase(it); continue; }
         it->pos = p;
@@ -164,6 +179,43 @@ std::vector<size_t> FilteredSortedLocked() {
 bool ReadPlayer(FVec3& pos) {
     return PlayerState::ReadPlayerPos(pos);
 }
+
+// --- cursor identity (lock-by-identity across rescans) ---------------------
+
+// 2 = exact (same object): pointer + name-key + label all agree — rejects a pointer that a pooled
+// slot reused for a DIFFERENT unit. 1 = identity re-lock: the same logical object under a new
+// pointer (name-key + label + category agree). 0 = no match.
+int CursorMatch(const Entity& e) {
+    if (!g_cursor.valid) return 0;
+    if (e.sceneObj == g_cursor.obj && e.nameIdx == g_cursor.nameIdx && e.label == g_cursor.label)
+        return 2;
+    if (e.nameIdx == g_cursor.nameIdx && e.label == g_cursor.label && e.category == g_cursor.cat)
+        return 1;
+    return 0;
+}
+
+// Index WITHIN `view` of the focused object, preferring an exact match over an identity re-lock;
+// -1 if the focus is genuinely gone. So the "fall back to nearest" path is taken only when the
+// object truly departed, never on a transient rescan wobble or a pointer alias.
+int FindFocusInViewLocked(const std::vector<size_t>& view) {
+    int relock = -1;
+    for (int i = 0; i < static_cast<int>(view.size()); ++i) {
+        int m = CursorMatch(g_entities[view[i]]);
+        if (m == 2) return i;
+        if (m == 1 && relock < 0) relock = i;
+    }
+    return relock;
+}
+
+void SetFocusLocked(const Entity& e) {
+    g_cursor.obj = e.sceneObj;
+    g_cursor.nameIdx = e.nameIdx;
+    g_cursor.label = e.label;
+    g_cursor.cat = e.category;
+    g_cursor.valid = true;
+}
+
+void ClearFocusLocked() { g_cursor = CursorId{}; }
 
 void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
     float facingRad = 0.0f;
@@ -238,6 +290,77 @@ void ScanCombatantsLocked() {
     }
 }
 
+// Append the current map's EXITS — the intra-map "Mapjump" transitions that move the party between areas
+// (Inner Ward -> Upper Apartments). These are NOT scene objects in the handle table, so the interaction
+// scanner is blind to them; they come from the per-map map-jump point table (mapData+0x54, behind
+// getmapjumpposbyindex). Each is a FIXED-position Category::Exit entity (no scene node) with a synthetic
+// stable identity so the cursor can lock to it.
+//
+// Destination names come from a SEPARATE table: the +0x70 field-sign array is the only thing that carries
+// a destination area id (the +0x54 records are position-only — see map_query.h). So we enumerate both and
+// attach a sign's name to the jump point it sits on. A sign with no matching jump point is listed in its
+// own right; a jump point with no sign keeps the generic "Exit" word.
+//
+// Strict sanity gates live in the enumerators, so a wrong offset yields no exits, never garbage.
+// Caller holds g_mutex.
+constexpr float kExitMaxDist   = 2000.0f;   // generous sanity bound (reject garbage positions)
+constexpr float kSignMatchDist = 3.0f;      // XZ radius: field sign <-> its map-jump point
+
+void ScanExitsLocked() {
+    FVec3 p; const FVec3* pp = PlayerState::ReadPlayerPos(p) ? &p : nullptr;
+
+    std::vector<MapQuery::ExitRec> jumps, signs;
+    MapQuery::EnumerateMapJumps(pp, kExitMaxDist, jumps, /*logRaw=*/false);
+    MapQuery::EnumerateExits(pp, kExitMaxDist, signs, /*logRaw=*/false);
+
+    std::vector<bool> signUsed(signs.size(), false);
+
+    for (const auto& jp : jumps) {
+        // Nearest field sign in XZ, if any, names this jump point.
+        const MapQuery::ExitRec* best = nullptr;
+        size_t bestIdx = 0;
+        float bestD2 = kSignMatchDist * kSignMatchDist;
+        for (size_t s = 0; s < signs.size(); ++s) {
+            if (signs[s].destName.empty()) continue;
+            const float dx = signs[s].pos.x - jp.pos.x, dz = signs[s].pos.z - jp.pos.z;
+            const float d2 = dx * dx + dz * dz;
+            if (d2 <= bestD2) { bestD2 = d2; best = &signs[s]; bestIdx = s; }
+        }
+
+        Entity e;
+        e.sceneObj = nullptr;
+        e.fixed    = true;
+        e.flags    = 0;
+        e.nameIdx  = static_cast<int16_t>(-(1000 + jp.index));   // distinct stable id
+        e.pos      = jp.pos;
+        e.category = Category::Exit;
+        e.label    = best ? best->destName : CategoryWord(Category::Exit);
+        if (best) signUsed[bestIdx] = true;
+        g_entities.push_back(e);
+    }
+
+    // Field signs that didn't land on a jump point are still real, named exits — list them too.
+    for (size_t s = 0; s < signs.size(); ++s) {
+        if (signUsed[s] || signs[s].destName.empty()) continue;
+        Entity e;
+        e.sceneObj = nullptr;
+        e.fixed    = true;
+        e.flags    = 0;
+        e.nameIdx  = static_cast<int16_t>(-(2000 + signs[s].index));
+        e.pos      = signs[s].pos;
+        e.category = Category::Exit;
+        e.label    = signs[s].destName;
+        g_entities.push_back(e);
+    }
+}
+
+// NOTE: the naviicon minimap "markers" were REMOVED (Session 44). Two decompile traces proved they are
+// only character/unit dots (party/allies/enemies) that duplicate the combatant scan — no objective/crystal
+// source, and a per-frame render buffer. Nothing to surface; deleted.
+//
+// NOTE: ScanSpawnTriggersLocked / Category::Event are GONE. The mapData+0x54 table it read is the
+// map-jump exit table, not spawn/arrival points — it is now merged into ScanExitsLocked above.
+
 // Rebuild the set from the scene-object HANDLE TABLE — the game's own registry of live
 // interactive field objects (DAT_02098e10, 5 containers), populated at map load and
 // walked every frame by FUN_0025b820 to decide what the player is near. We list every
@@ -271,9 +394,22 @@ int RescanLocked() {
             SafeReadU32(obj, NavRva::SCENEOBJ_FLAGS_OFF, &flags);
             int16_t nameIdx = 0;
             SafeReadS16(obj, NavRva::SCENEOBJ_NAME_IDX, &nameIdx);
-            // List interactive objects (NPCs / action gimmicks) plus any named gimmick.
+            // Scene CATEGORY (sceneObj+0x03 & 0x1f): classes 5-7 carry a char component (people/actors),
+            // classes 1-4 are position-only gates/doors/signs/props, class 0 is a null-node trigger.
+            uint8_t catByte = 0;
+            SafeReadU8(obj, NavRva::SCENEOBJ_TYPE_BYTE, &catByte);
+            const int  sceneCat    = catByte & 0x1f;
+            const bool isCharacter = (sceneCat >= 5 && sceneCat <= 7);
+            // Include: interactive objects (talk/action), any named gimmick, AND — only for NON-character
+            // objects — anything with a resolvable name (gates/doors/field-sign path-markers, cat 1-4).
+            // Character objects (NPCs/party/enemies, cat 5-7) are deliberately NOT surfaced by the name
+            // widening: unflagged ones are left to the combatant scan (ally/Enemy/dead) or the talk-flag
+            // path, so defeated enemies and non-talk NPCs don't fall into the "Interactables" bucket.
             const bool interactive = (flags & (NavRva::FLAG_TALK | NavRva::FLAG_ACTION)) != 0;
-            if (!interactive && !InGimmickBand(nameIdx)) continue;
+            std::wstring name;
+            if (nameIdx != 0 && !isCharacter) name = ResolveObjectName(obj);
+            const bool named = !name.empty();
+            if (!interactive && !InGimmickBand(nameIdx) && !named) continue;
 
             FVec3 pos;
             if (!PlayerState::ReadSceneObjectPos(obj, pos)) continue;
@@ -284,8 +420,9 @@ int RescanLocked() {
             e.flags = flags;
             e.nameIdx = nameIdx;
             e.pos = pos;
-            e.label = ResolveObjectName(obj);
-            e.category = ClassifyByNameKey(flags, e.nameIdx);
+            e.label = name;   // resolved above (empty for a flagged/character object)
+            e.category = ClassifyByNameKey(flags, e.nameIdx, isCharacter);
+            if (e.label.empty()) e.label = ResolveObjectName(obj);         // flagged char/gimmick name
             if (e.label.empty()) e.label = CategoryWord(e.category);
             g_entities.push_back(e);
         }
@@ -295,8 +432,20 @@ int RescanLocked() {
     // handle-table filter drops them, so in a battle this is what makes them navigable.
     ScanCombatantsLocked();
 
-    char msg[64];
-    snprintf(msg, sizeof(msg), "rescan: %zu field objects", g_entities.size());
+    // Map exits — the map-jump points (+0x54), named from the field-sign array (+0x70) where possible.
+    // Fixed-position, invisible to the interaction scanner. (Naviicon "markers" removed — they only
+    // duplicated the combatant scan.)
+    ScanExitsLocked();
+
+    // Per-category breakdown (confirms the categorization: NPCs/Enemies stay out of Interactables).
+    int cc[static_cast<int>(Category::Count)] = {};
+    for (const auto& e : g_entities) { int ci = static_cast<int>(e.category); if (ci >= 0 && ci < static_cast<int>(Category::Count)) ++cc[ci]; }
+    char msg[176];
+    snprintf(msg, sizeof(msg),
+             "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Save=%d Gate=%d Treasure=%d)",
+             g_entities.size(), cc[(int)Category::NPC], cc[(int)Category::Enemy], cc[(int)Category::Object],
+             cc[(int)Category::Exit], cc[(int)Category::SaveCrystal],
+             cc[(int)Category::GateCrystal], cc[(int)Category::Treasure]);
     Log::Write("NAV", msg);
     return static_cast<int>(g_entities.size());
 }
@@ -328,7 +477,7 @@ bool Init() {
 void Shutdown() {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_entities.clear();
-    g_currentObj = nullptr;
+    ClearFocusLocked();
 }
 
 int Rescan() {
@@ -359,6 +508,19 @@ void OnFieldFrame() {
     // is allowed to clear it, and the next cycle command prunes any departed objects.
     if (n == 0 && hadObjects && mask != 0)
         g_entities = std::move(prev);
+
+    // One-shot per-area exit-table dump (baked confirmation of the map-jump + field-sign recipes): fires
+    // once when the container set changes (area load), so we get the raw mapData/tag/tableOff/count
+    // + records in the log without the tester having to press the diagnostic key. The +0x70 dump also
+    // does a DIRECT memory read of the group table, which is the first honest measurement of whether
+    // that array is populated (every prior "count=0" came from a getter called with no group argument).
+    if (mask != 0) {
+        FVec3 pep; const FVec3* ppp = PlayerState::ReadPlayerPos(pep) ? &pep : nullptr;
+        std::vector<MapQuery::ExitRec> jp;
+        MapQuery::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true);   // map-jump points (+0x54)
+        std::vector<MapQuery::ExitRec> sg;
+        MapQuery::EnumerateExits(ppp, kExitMaxDist, sg, /*logRaw=*/true);      // field signs + dest (+0x70)
+    }
 }
 
 std::wstring CurrentAreaName() {
@@ -384,18 +546,14 @@ void CmdRescan() {
 static void CycleLocked(int dir, const FVec3& playerPos) {
     RefreshPositionsLocked(playerPos);
     std::vector<size_t> view = FilteredSortedLocked();
-    if (view.empty()) { g_currentObj = nullptr; SpeakNoTargets(); return; }
+    if (view.empty()) { ClearFocusLocked(); SpeakNoTargets(); return; }
 
-    // Find current focus within the view.
-    int cur = -1;
-    for (int i = 0; i < static_cast<int>(view.size()); ++i)
-        if (g_entities[view[i]].sceneObj == g_currentObj) { cur = i; break; }
-
-    int next = (cur < 0) ? 0
-                         : ((cur + dir) % static_cast<int>(view.size()) + static_cast<int>(view.size()))
-                               % static_cast<int>(view.size());
+    // Find current focus within the view by stable identity (exact, else identity re-lock).
+    int cur = FindFocusInViewLocked(view);
+    const int nv = static_cast<int>(view.size());
+    int next = (cur < 0) ? 0 : ((cur + dir) % nv + nv) % nv;
     const Entity& e = g_entities[view[next]];
-    g_currentObj = e.sceneObj;
+    SetFocusLocked(e);
     SpeakEntityLocked(e, playerPos);
 }
 
@@ -423,10 +581,10 @@ void CmdDescribeCurrent() {
     RefreshPositionsLocked(p);
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) { SpeakNoTargets(); return; }
-    // Speak the current focus, or the nearest if no focus yet.
-    size_t sel = view[0];
-    for (size_t idx : view) if (g_entities[idx].sceneObj == g_currentObj) { sel = idx; break; }
-    g_currentObj = g_entities[sel].sceneObj;
+    // Speak the current focus (by stable identity), or the nearest if the focus is gone / unset.
+    int fi = FindFocusInViewLocked(view);
+    size_t sel = (fi >= 0) ? view[fi] : view[0];
+    SetFocusLocked(g_entities[sel]);
     SpeakEntityLocked(g_entities[sel], p);
 
     // Obstacle-aware hint toward the selection (<=5 rays; safe on the input thread).
@@ -481,7 +639,7 @@ static void ChangeCategoryLocked(int dir) {
     wchar_t buf[96];
     _snwprintf_s(buf, _TRUNCATE, L"%s, %zu", CategoryWord(g_currentCategory), matches);
     Speech::Output(buf);
-    g_currentObj = nullptr;   // re-anchor to nearest on next cycle
+    ClearFocusLocked();   // re-anchor to nearest on next cycle
 }
 
 void CmdNextCategory() { std::lock_guard<std::mutex> lk(g_mutex); ChangeCategoryLocked(+1); }
@@ -494,10 +652,15 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel) {
     if (g_entities.empty()) return false;
     FVec3 p;
     if (PlayerState::ReadPlayerPos(p)) RefreshPositionsLocked(p);
-    // Prefer the focused object; else the nearest in the active filter.
-    for (const auto& e : g_entities) {
-        if (e.sceneObj == g_currentObj) { outPos = e.pos; outLabel = e.label; return true; }
+    // Prefer the focused object (by stable identity: exact, else re-lock); else the nearest in
+    // the active filter. Read-only query (drives `\`) — does not mutate the cursor.
+    int relock = -1;
+    for (size_t i = 0; i < g_entities.size(); ++i) {
+        int m = CursorMatch(g_entities[i]);
+        if (m == 2) { outPos = g_entities[i].pos; outLabel = g_entities[i].label; return true; }
+        if (m == 1 && relock < 0) relock = static_cast<int>(i);
     }
+    if (relock >= 0) { outPos = g_entities[relock].pos; outLabel = g_entities[relock].label; return true; }
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) return false;
     outPos = g_entities[view[0]].pos;
@@ -609,6 +772,29 @@ void LogDiagnostic() {
                  kind, charid, faction,
                  nlabel, pos.x, pos.y, pos.z, havePos ? 1 : 0);
         Log::Write("NAV-DIAG", line);
+    }
+
+    // EXIT dump (baked confirmation of both recipes). +0x54 logs the raw rel-offset / computed base /
+    // count / each {x,y,z,angle}; +0x70 direct-reads the group table and then walks it via the getters,
+    // logging destIdx-resolved areaId + name per sign. A single ' press by an area transition confirms
+    // (or corrects) both layouts, and settles whether +0x70 carries data on this map.
+    Log::Write("NAV-DIAG", "==== map-jump points (+0x54) ====");
+    {
+        std::vector<MapQuery::ExitRec> jumps;
+        const FVec3* pep = haveP ? &pp : nullptr;
+        MapQuery::EnumerateMapJumps(pep, kExitMaxDist, jumps, /*logRaw=*/true);
+        char es[72];
+        snprintf(es, sizeof(es), "  map-jumps accepted (sanity-gated): %zu", jumps.size());
+        Log::Write("NAV-DIAG", es);
+    }
+    Log::Write("NAV-DIAG", "==== field signs + destinations (+0x70) ====");
+    {
+        std::vector<MapQuery::ExitRec> signs;
+        const FVec3* pep = haveP ? &pp : nullptr;
+        MapQuery::EnumerateExits(pep, kExitMaxDist, signs, /*logRaw=*/true);
+        char es[72];
+        snprintf(es, sizeof(es), "  signs accepted (sanity-gated): %zu", signs.size());
+        Log::Write("NAV-DIAG", es);
     }
 
     Log::Write("NAV-DIAG", "==== end handle-table diag ====");

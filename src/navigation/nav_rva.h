@@ -256,6 +256,82 @@ constexpr uint32_t SETFIELDSIGN           = 0x234F20;  // observe-hook target (l
 constexpr uint32_t FIELDSIGNMES           = 0x236B70;  // observe-hook target (label text)
 constexpr uint32_t SETNPCNAME             = 0x22B9A0;  // observe-hook target (NPC name)
 constexpr uint32_t MAPJUMP_ARRAY_LOOKUP   = 0x144B90;  // FUN_00264b90 (exit array base/stride)
+// ---- Map-jump EXIT ARRAY layout (per handle-table container; backs getmapjumpposbyindex) -----
+// Derived from FUN_00264b90 (~0.85, PENDING confirmation via the '-key exit dump):
+//   containerBase = HANDLE_TABLE_BASE + c*HANDLE_TABLE_STRIDE
+//   exitBase = containerBase + *(u32)(containerBase + TBL_EXIT_OFF) + *(u32)(MAPJUMP_RELOC_BASE)
+//   count    = *(u32)exitBase ; exit i: float x/y/z/angle at word [i*8 + 1..4] (EXIT_REC_STRIDE bytes)
+constexpr uint32_t TBL_EXIT_OFF       = 0x54;       // u32 rel-offset to the exit sub-table (primary)
+constexpr uint32_t TBL_EXIT_OFF_ALT   = 0x84;       // alt exit sub-table (destination-side positions)
+constexpr uint32_t MAPJUMP_RELOC_BASE = 0x1E63530;  // _DAT_01f83530 (reloc delta added by FUN_0020e600)
+constexpr uint32_t EXIT_REC_STRIDE    = 0x20;       // bytes per jump record (from +0x54 table)
+constexpr uint32_t EXIT_COUNT_MAX     = 64;         // sanity clamp on the exit count
+// ---- Exit DESTINATION AREA id -> planmapname (FUN_00264870/00264920/002648f0) -----
+// The dest-id table at mapData+0x8c is indexed by a FIELD-SIGN record's +0x1d byte (see the +0x70 block
+// below), NOT by a jump index, and it is read through the game's own getters — the mod never walks it by
+// hand. Chain (confirmed in the sign renderer FUN_003f9720): signRec+0x1d = destIdx ->
+// FUN_00264920(destIdx, buf) -> buf+4 = s16 areaId (<0 = none) -> FUN_00377870(areaId) -> planmapname.
+constexpr uint32_t TBL_DEST_OFF          = 0x8c;    // u32 rel-offset to the dest-id table (via FUN_00264870)
+constexpr uint32_t EXIT_DEST_REC_STRIDE  = 0x10;    // bytes per dest record (8x u16)
+constexpr uint32_t EXIT_DEST_AREAID_OFF  = 0x0A;    // u16 word[5] = destination AREA id (planmapname index)
+constexpr uint16_t AREAID_NONE           = 0xFFFF;  // sentinel: exit has no named destination
+constexpr uint32_t MAPAREA_NAME_BY_ID    = 0x257870; // FUN_00377870(areaId) -> planmapname codec ptr
+
+// RETIRED: EXIT_JUMP_DESTIDX_OFF (0x1d on a +0x54 JUMP record). The +0x54 records carry x/y/z/angle ONLY
+// — FUN_00264b90 is the sole reader of that table in the whole binary and touches just word[i*8+1..4];
+// bytes +0x10..+0x1f are read by NOTHING. The old chain read dead bytes and returned destIdx=0 / areaId
+// 0xffff on every record of every map (confirmed in the live log). +0x1d is real, but only on the +0x70
+// FIELD-SIGN records below — a different table.
+
+// CORRECTION (this session): Session 43's claim that the +0x54 table is the party ARRIVAL/SPAWN table
+// rather than the exits is WRONG, and is reverted. Its sole evidence was "FUN_00353490 places the party
+// from it" — but FUN_00353490 is abs 0x353490 = RVA 0x233490 = GETMAPJUMPANGLEBYINDEX above, the script
+// native `getmapjumpanglebyindex`; it returns a jump's angle and places nothing. mapData+0x54 is the
+// MAP-JUMP POINT table, i.e. the intra-map "Mapjump" exits (Inner Ward -> Upper Apartments), as Sessions
+// 39-42 had it and as the tester confirmed by walking into them.
+
+// ---- Map EXIT DESTINATIONS = field-sign array at mapData+0x70 (FUN_00264ae0/002649b0/002648f0) --------
+// This is the curated list the game draws as radar blips / 3D "→ <area>" arrows, and the ONLY source of
+// exit destination names. Read via the game's own side-effect-free getters (they apply the ETB
+// indirection + leader-visibility filter + story gate):
+//   count = FUN_00264ac0(group); obj = FUN_002649b0(group, i) (null if not shown);
+//   FUN_002648f0(obj, buf) -> buf{b0 usable, .., areaId u16 @+4}.
+//
+// STRUCTURE (FUN_00264ae0): +0x70 is a GROUP-OFFSET table, not an inline record array:
+//   groupTable = blob + *(u32)(blob+0x70) + reloc = [u32 groupCount][u32 groupOff_0][u32 groupOff_1]...
+//   group g sub-table = blob + groupOff_g = [u32 count][12B hdr][rec x 0x20]; rec_i = sub + 0x10 + i*0x20
+//   FUN_002649b0 applies the story/visibility mask (rec+0x1c) only for group < 2.
+//
+// ABI (was a live bug): FUN_00264ac0 and FUN_00264ae0 take a GROUP index in ecx. Ghidra shows them as
+// taking no args because FUN_00264ac0 never WRITES ecx — it passes its own incoming ecx through. The mod
+// declared the count getter as `int(*)()` and called it with no argument, so it read whatever junk was in
+// rcx, FUN_00264ae0's `param_1 < groupCount` bounds check failed, and the count came back 0 on EVERY map.
+// "map-exits(+0x70): count=0" therefore never measured the data — it measured this bug. (The offline
+// parser's matching "+0x70 is 0 in all 550 .mpk" is also not credible: it reports +0x8c = 0 too, yet the
+// live log shows +0x8c populated with destCount=2, so it is reading the wrong blob base.)
+constexpr uint32_t TBL_FIELDSIGN_OFF     = 0x70;      // u32 rel-offset to the field-sign GROUP table
+constexpr uint32_t MAPEXIT_GROUP_MAX     = 4;         // groups to enumerate (sanity bound)
+constexpr uint32_t MAPEXIT_COUNT         = 0x144AC0;  // FUN_00264ac0(group) -> int exit count in group
+constexpr uint32_t MAPEXIT_OBJ_BY_INDEX  = 0x1449B0;  // FUN_002649b0(uint group, int i) -> record* / null
+constexpr uint32_t MAPEXIT_DESTINFO      = 0x1448F0;  // FUN_002648f0(record*, buf*) fills buf (usable+areaId)
+constexpr uint32_t EXITREC_X_OFF     = 0x00;   // float world X
+constexpr uint32_t EXITREC_Y_OFF     = 0x04;   // float world Y (height)
+constexpr uint32_t EXITREC_Z_OFF     = 0x08;   // float world Z
+constexpr uint32_t EXITREC_ENABLE_OFF = 0x0C;  // float; != 0 => drawn/shown
+constexpr uint32_t EXITREC_VIS_OFF   = 0x1C;   // u8 per-member visibility mask
+constexpr uint32_t EXITREC_DESTGRP_OFF = 0x1D; // u8 dest-area-group byte (used by FUN_002648f0)
+constexpr uint32_t EXITBUF_USABLE_OFF = 0x00;  // buf: b0 != 0 => story gate satisfied (usable now)
+constexpr uint32_t EXITBUF_AREAID_OFF = 0x04;  // buf: u16 destination area id (0xffff = none)
+
+// ---- Minimap / naviicon MARKERS — RETIRED Session 44 -------------------------------------------------
+// The naviicon flat array (DAT_02b45a80 / _DAT_02b45a70, stride 0x20) was surfaced in Session 43 on the
+// HYPOTHESIS (only 0.6 conf on the subtype) that it carried save/gate-crystal/target/OBJECTIVE icons.
+// Two follow-up decompile traces DISPROVED that: the array holds ONLY character/unit dots (party / ally /
+// enemy / neutral), each a 1:1 duplicate of a live scene object the combatant + handle-table scans already
+// list. There is NO objective/waypoint marker (zero setnaviicon/objective code in the whole decompile), NO
+// crystal, NO treasure in it, and marker[+0x04] was the entity HANDLE, not a label id. Enumerating it added
+// nothing and an Objective category had no source here. The consts (NAVIICON_*/MARK_*) and the enumerator
+// are removed; keeping this note so the dead hypothesis is on record and not re-attempted.
 
 // ---- Name resolution (the game's own master data, read memory-only) ----------
 // Each field object stores its name key on its SCENE OBJECT (*(actor+0x10)) — read

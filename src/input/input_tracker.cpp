@@ -56,10 +56,14 @@ std::atomic<bool> g_dinputActive{false};
 constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x1B,
               DIK_GRAVE = 0x29, DIK_BACKSLASH = 0x2B, DIK_LSHIFT = 0x2A, DIK_RSHIFT = 0x36,
               DIK_MINUS = 0x0C, DIK_EQUALS = 0x0D, DIK_SEMICOLON = 0x27, DIK_APOSTROPHE = 0x28,
-              DIK_SLASH = 0x35;
+              DIK_SLASH = 0x35, DIK_P = 0x19;
+// Party-status keys. DIK number row is 1..0 == 0x02..0x0B, so 4/5/6 = 0x05/0x06/0x07.
+// Free in this game: it binds 1/2/3 to Game Speed and nothing to 4/5/6 (Docs/Controls.md).
+constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07;
 
-// Extra hotkeys beyond the 4 original nav keys: - = ; ' /  (standalone, no Shift).
-std::atomic<bool> g_extraDown[6]{};
+// Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6  (standalone, no Shift).
+// NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
+std::atomic<bool> g_extraDown[9]{};
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -246,7 +250,11 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true,  false);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true,  false);  // '  diagnostic
     DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true,  false);  // /  describe
-    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  facing readout
+    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  target status
+    DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true,  false);  // p  route to locked target
+    DInputEdge('4',           g_extraDown[6],(dik[DIK_4]          & 0x80) != 0, true,  false);  // 4  party slot 1 status
+    DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true,  false);  // 5  party slot 2 status
+    DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true,  false);  // 6  party slot 3 status
 }
 
 uint64_t LastInputTimestampMs() {

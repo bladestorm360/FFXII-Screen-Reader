@@ -23,6 +23,10 @@ enum class Category {
     Enemy,        // live battle combatant (BtlWork pool), read separately from the handle table
     Count
 };
+// (Category::Event is RETIRED. It was created in Session 43 to hold the mapData+0x54 table after that
+//  table was wrongly demoted from Exit — see map_query.h. The +0x54 entries are map-jump exits and are
+//  back under Category::Exit; nothing else ever produced an Event, so the category had no source left.
+//  The naviicon "markers" that were its other intended source were disproven and removed in Session 44.)
 
 bool Init();
 void Shutdown();

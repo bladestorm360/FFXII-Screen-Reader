@@ -6,6 +6,8 @@
 #include "navigation/map_query.h"
 #include "navigation/nav_rva.h"
 #include "navigation/nav_types.h"
+#include "ui/battle_target_reader.h"
+#include "battle/party_status.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/logger.h"
@@ -36,17 +38,35 @@ void RouteToCurrent() {
     PathPlanner::Request(pos, label);
 }
 
-// `;` — speak which real-world (true-north) direction "forward"/UP currently points ("Forward points
-// north"). The spoken route/scan directions are EGOCENTRIC ("North" = forward = where UP takes you);
-// this is the absolute-orientation companion. Reads the camera up-direction (ReadCameraForward), the
-// SAME reference those directions use — not the character's facing.
-void SpeakFacing() {
-    float upRad = 0.0f;
-    if (!PlayerState::ReadCameraForward(upRad)) { Speech::Output(L"Facing unavailable"); return; }
-    std::wstring s = L"Forward points ";
-    s += NavCommon::CardinalOfFacing(upRad);
-    Speech::Output(s);
+// `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the
+// mod's [ / ] cursor, addressing "loses focus in combat"). Same PathPlanner pipe as `\`; the only
+// difference is the target source: the battle target-selection/lock reader (DAT_0209be80), read
+// from its live cache. Fresh cache (<=300 ms) => a target is currently selected/locked; otherwise
+// "No target". The NAV-ROUTE lines here + the drain log answer the PRE-SHIP CHECK (does Lock-On
+// keep the object populated, and does the field stay nav-safe in battle-state mode).
+void RouteToLockedTarget() {
+    FVec3 tgt; std::wstring label;
+    // Gates on the LIVE DAT_0209be80 selection state (not a cache age window) so a held target keeps
+    // routing on every press, and re-resolves a fresh position for a moving target.
+    if (!BattleTargetReader::GetLockedTarget(tgt, label)) {
+        Log::Write("NAV-ROUTE", "'p' (route to locked target) pressed: no live locked target -> \"No target\"");
+        Speech::Output(L"No target");
+        return;
+    }
+    char m[160];
+    snprintf(m, sizeof(m), "'p' (route to locked target) pressed: target acquired at (%.2f,%.2f,%.2f) -> PathPlanner::Request",
+             tgt.x, tgt.y, tgt.z);
+    Log::Write("NAV-ROUTE", m);
+    PathPlanner::Request(tgt, label);
 }
+
+// `;` — speak the ACTIVE TARGET's status (name + vitals), for whatever the game currently has
+// selected. Works out of battle too: the target-selection state is what the cursor keys (I/J/K/L,
+// Q/E) drive, not something battle-only.
+//
+// (This key used to be the true-north facing readout. Dropped: orientation isn't needed — the route
+// directions are egocentric and pathfinding works without knowing where the camera points.)
+// (implemented in battle_target_reader, which owns the target state + the vitals formatting)
 
 void DiagnosticDump() {
     FVec3 p;
@@ -197,14 +217,18 @@ void DiagnosticDump() {
 void OnNavKey(int vk, bool /*shift*/) {
     switch (vk) {
         case VK_OEM_5:      RouteToCurrent();                 break;  // \  turn-by-turn route
+        case 'P':           RouteToLockedTarget();           break;  // p  route to locked battle target
         case VK_OEM_4:      EntityList::CmdPrev();            break;  // [  previous object
         case VK_OEM_6:      EntityList::CmdNext();            break;  // ]  next object
         case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
-        case VK_OEM_1:      SpeakFacing();                    break;  // ;  facing readout (true north)
+        case VK_OEM_1:      BattleTargetReader::SpeakTargetStatus(); break;  // ;  active target status
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump
+        case '4':           PartyStatus::SpeakSlot(0);        break;  // 4  party slot 1 status
+        case '5':           PartyStatus::SpeakSlot(1);        break;  // 5  party slot 2 status
+        case '6':           PartyStatus::SpeakSlot(2);        break;  // 6  party slot 3 status
         default:            break;
     }
 }

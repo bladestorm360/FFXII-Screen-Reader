@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <string>
+#include "navigation/nav_types.h"   // FVec3
+
 // Reader for the battle TARGET-SELECTION readout — announces the unit the target cursor is on
 // when you aim a battle action (Attack / Magick / Item) at a foe or ally.
 //
@@ -19,5 +23,17 @@ namespace BattleTargetReader {
 // Installs the vitals-snapshot hook (FUN_00329220). Call once from MenuReader::Init.
 bool Init();
 void Shutdown();
+
+// On-demand read of the current locked/selected battle target's live world position + name, for
+// the `p`-key route (nav_commands). Gates on the LIVE game target-selection state (DAT_0209be80
+// gate + selected handle read at call time) — NOT on cache age — then re-resolves a fresh position
+// from the cached target. Returns false when no target is currently selected/locked (or not in
+// battle), INCLUDING when the selected unit has died. Thread-safe (called from the input thread;
+// all reads SEH-guarded).
+bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut);
+
+// `;` — speak the currently selected target's status (name + vitals), or "No target". Same liveness
+// rules and formatting as the automatic target-change announcement. Thread-safe (input thread).
+void SpeakTargetStatus();
 
 } // namespace BattleTargetReader

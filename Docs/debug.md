@@ -7,6 +7,68 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: message read-point spec refuted FUN_0057c480 menu system message DAT_0209ac30 0x328
+obtained item field chest e5f0 FUN_003c02b0 FUN_002baf80 world map screen page+0x138 map id
+mini_face_c texture bundle 0.90 0.98 below bar** — `notes/message_text_readpoints_spec.md` §A and
+§B(field) are **REFUTED** (Session 45). §B claimed field-chest "obtained X" reuses the `FUN_0057c480`
+surface at **0.90 — below the project's 0.98 bar, and it was wrong**: that proc's case 1 does
+`*(longlong*)(DAT_0209ac30 + 0x328) = surface`, i.e. it registers into the MENU manager; it is the
+menu system-message window ("cannot equip", "sold") and never fired once in a 17-minute play log.
+§A put dialogue on `FUN_002baf80` + `FUN_003c02b0`; those are the **world MAP screen** (`page+0x138`
+= map id, `out+8` = map name, `DAT_02b457e0+0xe8` = map DB, assets `ArtData/menu/localmap/`). §A's
+"decisive" evidence — that the widget owns the `mini_face_c` speaker portrait — was a misread: it is
+a **texture-bundle name** passed to `FUN_0024a5a0` alongside `battle_4_p`/`s_font_c`, and the
+`002baf80` family never references it. LESSON: the spec self-tagged these 0.98/0.90; a confident tag
+is not evidence. The REAL obtained-item path is `FUN_0035e070` + `widget+0xC8`.
+
+**KEYWORDS: Ghidra dropped argument register passthrough FUN_00264ac0 FUN_00264ae0 group index
+Pfn_ExitCount no parameters count=0 every map +0x70 field sign dead never measured** — "the
+`mapData+0x70` exit array is empty/dead" (Session 44) was **measuring the mod's own bug**, not the
+data. `Pfn_ExitCount` was typed `int(__fastcall*)()` and called as `fn()`, but `FUN_00264ac0` takes a
+GROUP index: Ghidra decompiles it as `(void)` only because it never *writes* `ecx` — it passes its
+own incoming `ecx` straight through to `FUN_00264ae0(group)`, which uses it as a real array index
+(`if (param_1 < *(int*)groupTable) return groupTable[param_1+1] + blob;`). Calling with no argument
+left register junk in `rcx`, the bounds check failed, and `count` was 0 on **every** map regardless
+of the data. LESSON: when Ghidra shows a call-through with no args and the callee indexes `param_1`,
+that is a **passthrough signature**, not a no-arg function — check the game's own caller (here
+`FUN_003f9720` passes the same group to both getters).
+
+**KEYWORDS: parse_mapdata.py wrong blob base mpk+0x10 cluster child +0x8c zero all 550 files
+contradicted by live log destCount=2 offline extraction premise failed** — `parse_mapdata.py`'s
+"`+0x70` and `+0x8c` are zero in all 550 `.mpk`" is **not credible**. The live mod log shows
+`destBase` non-null with `destCount=2`, i.e. `mapData+0x8c` IS populated at runtime — so the parser
+is reading the wrong blob. Session 44's own note concedes the map-control blob "is a cluster child,
+not `mpk[+0x10]`", which is exactly what the parser uses (`mld = mpk[u32(mpk,0x10):]`). LESSON: an
+offline parse that disagrees with a runtime read is wrong until proven otherwise — the runtime is
+ground truth.
+
+**KEYWORDS: FUN_00353490 getmapjumpanglebyindex not party placement mapData+0x54 arrival spawn
+demotion Category::Event Session 43 reverted** — Session 43's "`mapData+0x54` is the party
+ARRIVAL/SPAWN table, not exits" rested entirely on *"proven: FUN_00353490 places the party
+post-jump"*. `FUN_00353490` is abs `0x353490` = RVA `0x233490` = the mod's OWN
+`GETMAPJUMPANGLEBYINDEX` constant (`nav_rva.h`); its body returns a jump's **angle**. It places
+nothing. `+0x54` is the map-jump point table = the exits, tester-confirmed by walking into them.
+LESSON: check a claimed function identity against the RVAs the mod already has before building on it.
+
+**KEYWORDS: dbg_idx 5140 formula broken native slot action_binding_tables selector 0 index
+arithmetic btlAtel resolve by behaviour** — `nav_rva.h:247`'s *"sel-0 slot = mapctrl.dbg_idx - 5140"*
+does **not** reproduce: `getmapjumpposbyindex` (dbg 5671 -> slot 529) implies 5142 while
+`getmapjumpanglebyindex` (dbg 5943 -> slot 803) implies 5140. The `.dbg` symbol list interleaves
+variables and source markers (e.g. `mapctrl.src`) with actions, and duplicate symbol names exist, so
+index arithmetic is contaminated. Resolve natives **by behaviour** instead (a run of consecutive
+functions funnelling through one resolver, address order matching .dbg order, each body confirmed
+against its name) — that is how the seven `btlAtel*FromPartySlot` natives landed at 0.99.
+
+**KEYWORDS: GameText Decode 0x0f escape high bit run eats digits punctuation 0x85 0x8e obtained 3
+Potions The command can selector param count FUN_002ac5f0** — skipping a `0x0f` escape by consuming
+every following byte `>= 0x80` is **wrong** and corrupts live text. Digits are `0x85`-`0x8e` and
+punctuation `0x99/0x9a/0xa0`-`0xaf`, all `>= 0x80`, so a zero-parameter escape (`0x21`) followed by a
+number ate it. Seen live as `"Sometimes it's necessary to escape.The  command can"`. Param counts are
+**selector-dependent**, from the game's own interpreter `FUN_002ac5f0` (RVA `0x18C5F0`): `0x21`=0;
+`0x20/0x27/0x2f/0x32/0x34/0x35/0x37/0x3a/0x3c/0x3d/0x3e/0x56`=2 (`FUN_003ffab0`); `0x31`=3
+(`FUN_003fff10`). `tools/ebp_msg_decode.py` has the same latent bug — its rule only held on the
+offline corpus.
+
 **KEYWORDS: pathfinder scanner actor pool BtlWork gimmick gate missing enumeration** — Enumerating
 field objects by walking the 32-slot BtlWork actor pool `DAT_0208e688` (RVA 0x1F6E688) finds ONLY
 characters/combatants (NPCs, party). Static field gimmicks — gates, doors, switches, treasure,
@@ -59,6 +121,20 @@ so don't look for a lock flag.)
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
+
+**KEYWORDS: read-only input controls game speed 1 2 3 mod not modifying no injection no
+SendInput no WriteProcessMemory DirectInput const buffer** (Session 44) SOLUTION: The tester's
+player speed jumped mid-session and asked whether the mod alters game controls. **It does not — the
+mod is strictly READ-ONLY on input and game memory, verified by audit:** (1) the DirectInput hook
+`HookedGetDeviceState` (`src/proxy/dinput8_proxy.cpp`) calls the real `GetDeviceState` and passes the
+buffer to the tracker as a `const unsigned char*` — it never writes the buffer; `InputTracker::
+FeedDInputKeyboard` only edge-detects/reads. (2) Repo-wide there is **no** `SendInput` / `keybd_event`
+/ `mouse_event` / `PostMessage(WM_KEY…)`, **no** `WriteProcessMemory`, and **no** memory-write helper —
+the mod has no path to write game memory. The only `VirtualProtect` is the one-time vtable patch that
+installs the read-only hook. (3) Every game function the mod calls is a pure getter (area name, ground/
+segment/exit queries). **The speed change was the tester's own `1`/`2`/`3` keypress** (those are Game
+Speed 1×/2×/4× — see Controls.md; the old "Lock On / Target Group" labels were wrong). The mod reserves
+none of `1`/`2`/`3`.
 
 **KEYWORDS: egocentric directions camera-relative camera-forward DAT_02aedf30 row2 DAT_02aedf50
 DAT_02aedf58 atan2(-fwd.x,-fwd.z) ReadCameraForward North=forward calibration** (Session 37) SOLUTION:
@@ -193,9 +269,60 @@ Current module interaction diagram + logging format. Keep up to date as modules 
 
 ## Known Issues
 
-### Turn-by-turn routing polish (FIX SHIPPED Session 34, pending runtime confirmation)
+### Session 40 fixes (SHIPPED, pending runtime confirmation) — supersede the S39 pending items
+Three tester regressions, root-caused (Bug 3 from the live log; Bugs 1-2 from two agreeing decompile traces):
+- **`p` routed once then "No target" (FIXED).** The `[TARGET] GetLockedTarget` log showed `tickMs` FROZEN
+  between target changes → the target nameplate render (`FUN_002bfd20`) is event-driven, not per-frame, so
+  any cache-age window ages out. Fix: `GetLockedTarget` now gates on the LIVE `DAT_0209be80` state
+  (`gate=PtrAt(P,0x10F78)`, `liveHandle=*(u32)(P+0x9FD8)`) at press time (input-thread, SEH-guarded) and
+  re-resolves a fresh pos from the cached `bc`. Removed the age window. Confirm: press `p` repeatedly on a
+  held target → keeps routing.
+- **Exits still 0 (FIXED).** `EnumerateExits` missed a dereference: use slot 0, `mapData=*(u64*)(container
+  Base+0)`, `tag=*(u16)(mapData)>2`, `tableOff=*(u32)(mapData+0x54)`, `exitBase=mapData+tableOff+reloc`.
+  Prior code used `containerBase` directly → garbage → 0. Auto per-area `[NAV-DIAG] exit-table slot0` dump
+  now fires on area load (no `'` needed). Confirm: dump shows `mapData≠0 tag>2` + sane count.
+- **Only enemies navigable (FIXED).** Scanner now also lists **named** objects (gates/doors/field-signs/
+  NPCs, categories 1-4) via `ResolveObjectName`, not just TALK/ACTION/gimmick. Confirm: `rescan: N` rises;
+  `]` cycles named objects.
+
+### Session 39 fixes (SHIPPED, pending runtime confirmation)
+Two Session-38 runtime bugs, root-caused from the live log + already-documented RE:
+- **`p` "No target" even with a target selected (FIXED).** The target reader announced the target
+  (`[TARGET] "Imperial Swordsman..."`) but the `p`-cache write is gated on `havePos`, and
+  `havePos = ReadSceneObjectPos(target sceneObj)` returned false — the battle target's `sceneObj+0xB8`
+  transform node is null during attack-menu selection (works for combatants in real-time combat, so
+  state-dependent). Fix: `NameForBtlChr` falls back to `actor+0xE0/E4/E8` (documented field-actor pos,
+  `GameArchitecture.md:728`) when the scene node fails/reads (0,0,0); freshness 300→1000 ms; baked
+  `[TARGET]` log records both sources + cache age. Confirm: `p` in a battle → `src=1/2 havePos=1` and a
+  route; if both sources are 0 during selection, escalate to gating on live `DAT_0209be80+0x10F78`.
+- **No routable fortress objects → wired the never-populated `Category::Exit`.** Documented follow-up
+  (`plan.md` marked exits `[x]` prematurely; nothing populated it). Exits = walk-into map-jump zones,
+  invisible to the `FLAG_TALK|FLAG_ACTION|gimmick` scanner filter; read the per-map exit array behind
+  `getmapjumpposbyindex` (`MapQuery::EnumerateExits`, offsets ~0.85) behind a strict sanity gate;
+  surfaced as fixed-position `Category::Exit`. Confirm via the `'` exit-table dump in a fortress
+  corridor (sane `count`+positions → canonicalize offsets; else the dump shows which term is off).
+
+### `p` = route to locked battle target (SHIPPED Session 38, pending runtime confirmation)
+`p` (VK_P / DIK_P 0x19) routes to the game's locked/selected battle target via the same
+`PathPlanner::Request` pipe as `\`, sourcing the target from `battle_target_reader`'s live cache
+(`DAT_0209be80` → `+0x9FD8`, gate `+0x10F78`, refreshed every flagged-target render; `GetLockedTarget`
+returns it if <300 ms old). Built + deployed, UNCOMMITTED. Two open confirmations, both answered by the
+baked `NAV-ROUTE` log (no guess):
+1. **PRE-SHIP CHECK** — press `p` under **Lock-On (`2`) with NO command menu**. Routes ⇒ Lock-On drives
+   `DAT_0209be80+0x9FD8` (persistent target, ≥0.98); "No target" ⇒ `p` only works during command
+   target-selection. Record the verdict in `GameArchitecture.md`.
+2. **Nav-safe in battle** — the drain line proves whether the field stays nav-safe in battle-state mode.
+   Expected yes (battle is on-field; `FIELD_ACTIVE2 0x1F69300` is the "field/battle-active" flag). If a
+   persistent "*not nav-safe*" appears, relax the single battle-cleared gate bit in `IsFieldNavSafe` — do
+   NOT loosen the gate pre-emptively without that log evidence.
+Also Session 38: `PlanRoute` target-cell walkability snap (off-mesh goal → nearest walkable cell) and
+`entity_list` cursor lock-by-identity (`CursorId`) — both pending the same runtime pass.
+
+### Turn-by-turn routing polish (FIX SHIPPED Sessions 34+37, pending runtime confirmation)
 Routing WORKS (SQEX walkmap, `plan=Route`) but had three quality problems reported by the
-user. Detail + hypotheses in `sessions_001_current.md` Session 33.
+user. Detail + hypotheses in `sessions_001_current.md` Session 33. **Resolution:** #1 (directions point
+away) was the world-cardinal-vs-camera-relative mismatch — FIXED by Session 37's camera-forward egocentric
+model (`ReadCameraForward`); #2 (distance cap) ELIMINATED and #3 (through-walls) FIXED by Session 34.
 
 **Session 34 rebuilt the planner on a whole-map walkability OVERLAY read directly from the SQEX
 walkmap grid** (`nav_grid.{h,cpp}` + `map_query` grid reads; the walkmap is a uniform ≤32767-cell

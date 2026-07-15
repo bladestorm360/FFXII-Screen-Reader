@@ -75,6 +75,44 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, uint32_t epoch,
 
     int tc, tr; NavGrid::WorldToCell(to.x, to.z, tc, tr);
     int sc, sr; NavGrid::WorldToCell(from.x, from.z, sc, sr);
+
+    // Target-cell walkability snap: a target standing slightly off-mesh (a ledge, a map edge, an
+    // enemy-only tile, or a fine-grid sampling gap) lands on a non-walkable cell, and A* — which only
+    // reaches walkable neighbours — would then report a spurious NoPath. Snap the GOAL to its nearest
+    // walkable cell (ring search outward; among a ring's walkable cells pick the one whose centre is
+    // closest to the true target). The final poly point becomes that walkable cell, not the off-mesh
+    // target, so the last leg lands on ground rather than pointing into a wall.
+    bool snapped = false;
+    {
+        float ty;
+        if (!NavGrid::WalkableAt(tc, tr, ty)) {
+            const int kSnapMax = 6;   // ~9 m at kFineCell (1.5 m)
+            int bcx = tc, bcz = tr; float bestD2 = -1.0f;
+            for (int rad = 1; rad <= kSnapMax && bestD2 < 0.0f; ++rad) {
+                for (int dz = -rad; dz <= rad; ++dz) {
+                    for (int dx = -rad; dx <= rad; ++dx) {
+                        const int adx = dx < 0 ? -dx : dx, adz = dz < 0 ? -dz : dz;
+                        if ((adx > adz ? adx : adz) != rad) continue;   // ring perimeter only
+                        const int cc = tc + dx, cr = tr + dz;
+                        float cy;
+                        if (!NavGrid::WalkableAt(cc, cr, cy)) continue;
+                        float wx, wz; NavGrid::CellCenter(cc, cr, wx, wz);
+                        const float ddx = wx - to.x, ddz = wz - to.z;
+                        const float d2 = ddx * ddx + ddz * ddz;
+                        if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bcx = cc; bcz = cr; }
+                    }
+                }
+            }
+            if (bestD2 >= 0.0f) {
+                char sm[128];
+                snprintf(sm, sizeof(sm), "snap: tgt cell (%d,%d)->(%d,%d) d=%.1fm",
+                         tc, tr, bcx, bcz, std::sqrt(bestD2));
+                Log::Write("NAV-ROUTE", sm);
+                tc = bcx; tr = bcz; snapped = true;
+            }
+            // No walkable cell within radius -> leave the goal; A* reports NoPath honestly.
+        }
+    }
     stats.tx = tc; stats.tz = tr;
 
     int rays = 0;
@@ -183,7 +221,17 @@ Plan PlanRoute(const FVec3& from, const FVec3& to, uint32_t epoch,
         NavGrid::WalkableAt(cc, cr, cy2);
         rawPoly.push_back(worldOf(cc, cr, cy2));
     }
-    rawPoly.push_back(to);
+    // End on the exact target only when it sat on a walkable cell; a snapped (off-mesh) target
+    // already terminates at its walkable goal-cell centre (last point pushed by the loop), so
+    // appending the original off-mesh point would route the final leg into the wall. The size<2
+    // guard covers the rare collapse where the snapped goal is the player's own cell.
+    if (!snapped) {
+        rawPoly.push_back(to);
+    } else if (rawPoly.size() < 2) {
+        float gy = from.y;
+        NavGrid::WalkableAt(tc, tr, gy);
+        rawPoly.push_back(worldOf(tc, tr, gy));
+    }
 
     // String-pull: collapse the cell staircase to line-of-sight waypoints, but keep a corner
     // unless the straight span to the next point is DENSELY traversable (floor-continuous, no

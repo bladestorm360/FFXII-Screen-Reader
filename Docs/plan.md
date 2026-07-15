@@ -126,7 +126,7 @@ movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
 - [x] Player character position read
 - [x] Compass / facing direction
 - [x] Area name announcement
-- [x] Entity list (NPCs, exits, save points, gimmicks)
+- [x] Entity list (NPCs, save points, gimmicks, combatants; **exits** wired Session 39 — pending runtime confirm of the map-jump exit-array offsets)
 - [x] Hotkey cycling through entity list (`[` / `]`)
 - [x] Distance + direction announcement (`\`=route legs, `/`=crow-flies describe)
 - [x] Basic pathfinding (A* over the SQEX walkmap; string-pulled + cardinal-decomposed legs)

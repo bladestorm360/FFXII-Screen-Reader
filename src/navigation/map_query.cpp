@@ -2,9 +2,13 @@
 #include "navigation/nav_rva.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "core/logger.h"
+#include "core/game_text.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cmath>
+#include <string>
 
 namespace {
 
@@ -31,6 +35,56 @@ static int CallSegTest(Pfn_SegTest fn, void* ctx, void* out, const float* from,
                        const float* to, uint16_t mask, uint32_t flags) {
     __try { return fn(ctx, out, from, to, mask, flags); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }   // fault -> treat as clear
+}
+
+// FUN_00377870(areaId) -> planmapname area-name codec ptr (same getter family as FUN_003778b0, the
+// current-area name the mod already calls). Pure getter, POD in/out, SEH-guarded.
+typedef const uint8_t* (__fastcall* Pfn_AreaName)(unsigned int);
+static const uint8_t* CallAreaNameById(Pfn_AreaName fn, unsigned int areaId) {
+    __try { return fn(areaId); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+// Destination area name for a planmapname area id (0xffff -> none). Empty on any failure.
+static std::wstring ResolveAreaName(uint16_t areaId) {
+    if (areaId == NavRva::AREAID_NONE) return std::wstring();
+    Pfn_AreaName fn = reinterpret_cast<Pfn_AreaName>(Hooks::ResolveRva(NavRva::MAPAREA_NAME_BY_ID));
+    if (!fn) return std::wstring();
+    const uint8_t* codec = CallAreaNameById(fn, areaId);
+    if (!codec || reinterpret_cast<const void*>(codec) == Hooks::ResolveRva(NavRva::EMPTY_STRING))
+        return std::wstring();
+    std::wstring s = GameText::Decode(codec, 128);
+    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
+// ---- Real map-exit getters (FUN_00264ac0 / 002649b0 / 002648f0) — pure getters, SEH-guarded.
+// They self-gate on "field map loaded", so they are safe to call anytime (return 0/null if no map).
+//
+// ABI FIX: FUN_00264ac0 takes a GROUP index. Ghidra decompiles it as `FUN_00264ac0(void)` calling
+// `FUN_00264ae0()` because it never WRITES ecx — it passes its own incoming ecx straight through, and
+// FUN_00264ae0 uses that as a real array index (`if (param_1 < *(int*)groupTable) return
+// groupTable[param_1 + 1] + blob;`). The old typedef here took no parameters, so every call left
+// whatever junk happened to be in rcx, the bounds check failed, and the count came back 0 on EVERY
+// map — which is what "the +0x70 path is dead" was actually measuring. The game's own sign renderer
+// FUN_003f9720 passes the same group to the count getter and to FUN_002649b0.
+typedef int   (__fastcall* Pfn_ExitCount)(unsigned int group);
+typedef void* (__fastcall* Pfn_ExitObj)(unsigned int group, int index);
+typedef unsigned long long (__fastcall* Pfn_ExitDestInfo)(void* obj, void* buf);
+
+static int CallExitCount(unsigned int group) {
+    Pfn_ExitCount fn = reinterpret_cast<Pfn_ExitCount>(Hooks::ResolveRva(NavRva::MAPEXIT_COUNT));
+    if (!fn) return 0;
+    __try { return fn(group); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+static void* CallExitObj(unsigned int group, int index) {
+    Pfn_ExitObj fn = reinterpret_cast<Pfn_ExitObj>(Hooks::ResolveRva(NavRva::MAPEXIT_OBJ_BY_INDEX));
+    if (!fn) return nullptr;
+    __try { return fn(group, index); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+static bool CallExitDestInfo(void* obj, void* buf) {
+    Pfn_ExitDestInfo fn = reinterpret_cast<Pfn_ExitDestInfo>(Hooks::ResolveRva(NavRva::MAPEXIT_DESTINFO));
+    if (!fn) return false;
+    __try { fn(obj, buf); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
 } // namespace
@@ -219,5 +273,201 @@ bool SegmentTraversable(const FVec3& a, const FVec3& b,
     }
     return true;
 }
+
+// The mapData+0x54 table = the MAP-JUMP POINT table (getmapjumpposbyindex) — the intra-map "Mapjump"
+// transitions that move the party between areas. Tester-confirmed by walking into them. See the header
+// for why Session 43's "arrival/spawn, not exits" demotion was wrong (FUN_00353490 is
+// getmapjumpanglebyindex, not a party-placement call).
+void EnumerateMapJumps(const FVec3* playerPos, float maxDist, std::vector<ExitRec>& out, bool logRaw) {
+    out.clear();
+    using MemRead::PtrAt; using MemRead::SafeReadU16;
+    using MemRead::SafeReadU32; using MemRead::SafeReadF32;
+
+    // mapData = *(u64*)(containerBase+0); jump table offset at mapData+0x54, base = mapData + off +
+    // reloc (~0). Precondition: *(u16)(mapData)>2.
+    void* containerBase = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
+    if (!containerBase) return;
+    uint32_t reloc = 0;
+    SafeReadU32(Hooks::ResolveRva(NavRva::MAPJUMP_RELOC_BASE), 0, &reloc);   // _DAT_01f83530 (~0)
+
+    void* mapData = PtrAt(containerBase, NavRva::TBL_GUARD_OFF);   // *(u64*)(containerBase+0)
+    uint16_t tag = 0;
+    uint32_t tableOff = 0;
+    if (mapData) { SafeReadU16(mapData, 0, &tag); SafeReadU32(mapData, NavRva::TBL_EXIT_OFF, &tableOff); }
+    const uint32_t exitOff = tableOff + reloc;
+    char* exitBase = (mapData && tag > 2 && exitOff != 0)
+                         ? static_cast<char*>(mapData) + exitOff : nullptr;
+    uint32_t count = 0;
+    if (exitBase) SafeReadU32(exitBase, 0, &count);
+    const bool countOk = (count >= 1 && count <= NavRva::EXIT_COUNT_MAX);
+
+    if (logRaw) {
+        char m[192];
+        snprintf(m, sizeof(m),
+                 "map-jumps(+0x54) slot0: mapData=%p tag=%u tableOff=0x%X base=%p count=%u ok=%d",
+                 mapData, tag, tableOff, static_cast<void*>(exitBase), count, countOk ? 1 : 0);
+        Log::Write("NAV-DIAG", m);
+    }
+    if (!countOk) return;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        // float x/y/z/angle at uint-word [i*8 + 1..4] -> byte i*0x20 + {4,8,0xC,0x10}.
+        const uint32_t rec = i * 8u;
+        float x = 0, y = 0, z = 0, ang = 0;
+        bool ok = SafeReadF32(exitBase, (rec + 1) * 4, &x)
+               && SafeReadF32(exitBase, (rec + 2) * 4, &y)
+               && SafeReadF32(exitBase, (rec + 3) * 4, &z)
+               && SafeReadF32(exitBase, (rec + 4) * 4, &ang);
+        const bool finite = std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && std::isfinite(ang);
+        const bool nonZero = !(x == 0.0f && y == 0.0f && z == 0.0f);
+        float dist = -1.0f;
+        bool nearOk = true;
+        if (playerPos && ok && finite) {
+            const float dx = x - playerPos->x, dz = z - playerPos->z;
+            dist = std::sqrt(dx * dx + dz * dz);
+            nearOk = dist <= maxDist;
+        }
+
+        // NO destination id here. FUN_00264b90 is the only reader of this table in the entire binary
+        // and it touches x/y/z/angle only — record bytes +0x10..+0x1f are read by nothing, so the old
+        // destIdx@+0x1d -> mapData+0x8c chain was reading dead bytes (it returned destIdx=0 / areaId
+        // 0xffff on every record of every map). Names come from the +0x70 field-sign array instead and
+        // are attached by the caller.
+        const bool pass = ok && finite && nonZero && nearOk;
+        if (logRaw) {
+            char m[160];
+            snprintf(m, sizeof(m), "  jump[%u] pos=(%.1f,%.1f,%.1f) ang=%.2f dist=%.1f pass=%d",
+                     i, x, y, z, ang, dist, pass ? 1 : 0);
+            Log::Write("NAV-DIAG", m);
+        }
+        if (!pass) continue;
+        ExitRec e;
+        e.pos = FVec3{ x, y, z };
+        e.angle = ang;
+        e.index = static_cast<int>(i);
+        out.push_back(e);
+    }
+}
+
+// Log the +0x70 group table by DIRECT MEMORY READ — no call, no calling-convention assumption. This is
+// the honest answer to "is +0x70 populated?", which has never actually been measured: the only prior
+// measurement went through a count getter that was invoked with no group argument (see the ABI note
+// above), so it was guaranteed to read garbage and return 0 regardless of the data.
+//   blob+0x70 -> u32 rel-offset; groupTable = blob + off + reloc
+//   groupTable = [u32 groupCount][u32 groupOff_0][u32 groupOff_1]...   (FUN_00264ae0)
+//   group g sub-table = blob + groupOff_g = [u32 count][12B hdr][rec x 0x20]   (FUN_002649b0)
+static void LogExitGroupTableRaw(void* mapData, uint32_t reloc) {
+    using MemRead::SafeReadU32;
+    uint32_t off = 0;
+    if (!mapData || !SafeReadU32(mapData, NavRva::TBL_FIELDSIGN_OFF, &off)) {
+        Log::Write("NAV-DIAG", "map-exits(+0x70) raw: no mapData");
+        return;
+    }
+    char m[192];
+    if (off == 0) {
+        Log::Write("NAV-DIAG", "map-exits(+0x70) raw: blob+0x70 == 0 (no field-sign table on this map)");
+        return;
+    }
+    char* groupTable = static_cast<char*>(mapData) + off + reloc;
+    uint32_t groupCount = 0;
+    SafeReadU32(groupTable, 0, &groupCount);
+    snprintf(m, sizeof(m), "map-exits(+0x70) raw: off=0x%X table=%p groupCount=%u",
+             off, static_cast<void*>(groupTable), groupCount);
+    Log::Write("NAV-DIAG", m);
+    if (groupCount == 0 || groupCount > 32) return;
+    for (uint32_t g = 0; g < groupCount; ++g) {
+        uint32_t groupOff = 0;
+        if (!SafeReadU32(groupTable, 4 + g * 4, &groupOff) || groupOff == 0) continue;
+        char* sub = static_cast<char*>(mapData) + groupOff;
+        uint32_t n = 0;
+        SafeReadU32(sub, 0, &n);
+        snprintf(m, sizeof(m), "  group[%u] off=0x%X sub=%p count=%u", g, groupOff, static_cast<void*>(sub), n);
+        Log::Write("NAV-DIAG", m);
+    }
+}
+
+// Map exits with DESTINATIONS — the field-sign array at mapData+0x70 (the radar / "→ <area>" gate list).
+// Read via the game's own getters, which apply the leader-visibility filter + the ETB indirection; the
+// story-gate usability + destination area id come from FUN_002648f0. Each SHOWN exit -> world pos + name.
+void EnumerateExits(const FVec3* /*playerPos*/, float /*maxDist*/, std::vector<ExitRec>& out, bool logRaw) {
+    out.clear();
+    using MemRead::PtrAt; using MemRead::SafeReadU8; using MemRead::SafeReadU32; using MemRead::SafeReadF32;
+
+    // Only when a field map is loaded (slot-0 active bit). The getters self-gate too.
+    void* containerBase = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
+    uint8_t active = 0;
+    if (!containerBase || !SafeReadU8(containerBase, NavRva::TBL_ACTIVE_OFF, &active) || (active & 1) == 0) {
+        if (logRaw) Log::Write("NAV-DIAG", "map-exits: no field map loaded");
+        return;
+    }
+
+    if (logRaw) {
+        uint32_t reloc = 0;
+        SafeReadU32(Hooks::ResolveRva(NavRva::MAPJUMP_RELOC_BASE), 0, &reloc);
+        LogExitGroupTableRaw(PtrAt(containerBase, NavRva::TBL_GUARD_OFF), reloc);
+    }
+
+    // Walk every group. Group 0 is the one the sign renderer uses for the leader-visibility-filtered
+    // list, but the table is group-indexed and higher groups skip the story mask (FUN_002649b0 only
+    // applies it for group < 2), so enumerating all of them is what "every exit on this map" means.
+    for (unsigned int group = 0; group < NavRva::MAPEXIT_GROUP_MAX; ++group) {
+        const int count = CallExitCount(group);
+        if (logRaw && count != 0) {
+            char m[80];
+            snprintf(m, sizeof(m), "map-exits(+0x70): group=%u count=%d", group, count);
+            Log::Write("NAV-DIAG", m);
+        }
+        if (count <= 0 || count > 256) continue;
+
+        for (int i = 0; i < count; ++i) {
+            void* obj = CallExitObj(group, i);   // null = not shown now (story/visibility filtered)
+            if (!obj) continue;
+
+            float x = 0, y = 0, z = 0, enable = 0;
+            SafeReadF32(obj, NavRva::EXITREC_X_OFF, &x);
+            SafeReadF32(obj, NavRva::EXITREC_Y_OFF, &y);
+            SafeReadF32(obj, NavRva::EXITREC_Z_OFF, &z);
+            SafeReadF32(obj, NavRva::EXITREC_ENABLE_OFF, &enable);
+
+            // FUN_002648f0(record, buf) -> FUN_00264920(record[+0x1d] = destIdx, buf).
+            // buf: b0 usable, b1..b3 story flags, u16 @+4 = destination area id (signed <0 => none).
+            // Chain confirmed in the game's own sign renderer FUN_003f9720.
+            unsigned char buf[16] = {};
+            const bool infoOk = CallExitDestInfo(obj, buf);
+            const uint8_t usable = buf[NavRva::EXITBUF_USABLE_OFF];
+            const uint16_t areaId = static_cast<uint16_t>(buf[NavRva::EXITBUF_AREAID_OFF] |
+                                                          (buf[NavRva::EXITBUF_AREAID_OFF + 1] << 8));
+            std::wstring destName = infoOk ? ResolveAreaName(areaId) : std::wstring();
+
+            const bool finite  = std::isfinite(x) && std::isfinite(z);
+            const bool nonZero = !(x == 0.0f && z == 0.0f);
+            const bool shown   = enable != 0.0f;
+            const bool pass    = infoOk && finite && nonZero;   // surface all SHOWN exits (usable or story-locked)
+
+            if (logRaw) {
+                char nm[48] = {};
+                for (size_t k = 0; k < destName.size() && k < 47; ++k)
+                    nm[k] = (destName[k] < 128) ? static_cast<char>(destName[k]) : '?';
+                char m[208];
+                snprintf(m, sizeof(m),
+                         "  exit[g%u:%d] obj=%p pos=(%.1f,%.1f,%.1f) enable=%.1f usable=%u areaId=%u \"%s\" pass=%d",
+                         group, i, obj, x, y, z, enable, usable, areaId, nm, pass ? 1 : 0);
+                Log::Write("NAV-DIAG", m);
+            }
+            if (!pass) continue;
+            ExitRec e;
+            e.pos = FVec3{ x, y, z };
+            e.index = i;
+            e.areaId = areaId;
+            e.destName = destName;
+            e.usable = (usable != 0) && shown;
+            out.push_back(e);
+        }
+    }
+}
+
+// (EnumerateMarkers removed in Session 44 — the naviicon array DAT_02b45a80 holds only character/unit dots
+//  (party/ally/enemy) that duplicate the combatant scan, with no objective/crystal/label source. See
+//  nav_rva.h for the retired NAVIICON_*/MARK_* note.)
 
 } // namespace MapQuery

@@ -21,6 +21,33 @@ bool SafeCopy(const uint8_t* p, size_t maxBytes, uint8_t* out, size_t* outLen) {
     }
 }
 
+// Parameter-byte count for a 0x0f escape selector; -1 = unknown.
+//
+// Sourced from the game's OWN control-code interpreter FUN_002ac5f0 (RVA 0x18C5F0), which switches
+// on bytes < 0x10 and, for 0x0f, on the selector 0x20-0x6f. Each case calls a param decoder whose
+// return value is how far to advance from the selector:
+//   FUN_003ffab0 -> returns 3 => selector + 2 param bytes
+//   FUN_003fff10 -> returns 4 => selector + 3 param bytes
+//   0x21         -> inline, no decoder => 0 param bytes
+// The 0x40-0x6b block is the icon/glyph family (shared handler -> FUN_002aeb20); its selectors take
+// a variable number of params which we have NOT decoded, so they return -1 and use the fallback.
+// This reconciles with tools/ebp_msg_decode.py's observed set (0x20/0x27/0x2f/0x37/0x3c = 2,
+// 0x60 = 1, 0x21 = 0) and extends it — notably 0x31, the string-substitution slot used by the
+// obtained-item template, takes 3.
+int EscapeParamCount(uint8_t sel) {
+    switch (sel) {
+        case 0x21:
+            return 0;
+        case 0x20: case 0x27: case 0x2f: case 0x32: case 0x34: case 0x35:
+        case 0x37: case 0x3a: case 0x3c: case 0x3d: case 0x3e: case 0x56:
+            return 2;   // FUN_003ffab0
+        case 0x31:
+            return 3;   // FUN_003fff10 — the codec-sprintf "%s" slot
+        default:
+            return -1;  // unknown / icon family -> conservative high-bit fallback
+    }
+}
+
 } // namespace
 
 std::wstring Decode(const uint8_t* p, size_t maxBytes) {
@@ -42,11 +69,27 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
         else if (c >= 0x3a && c <= 0x53) out.push_back((wchar_t)(L'a' + (c - 0x3a))); // a-z
         else if (c >= 0x85 && c <= 0x8e) out.push_back((wchar_t)(L'0' + (c - 0x85))); // 0-9
         else if (c == 0x0f) {
-            // Variable/format escape: 0x0f <selector> <params...> where every
-            // param byte has the high bit set (>=0x80); the run ends at the
-            // first byte < 0x80 (matches tools/ebp_msg_decode.py).
-            if (i + 1 < n) ++i;                       // skip selector
-            while (i + 1 < n && buf[i + 1] >= 0x80) ++i;  // skip params
+            // Inline format escape: 0x0f <selector> <params...>. The parameter count is
+            // SELECTOR-DEPENDENT (see EscapeParamCount) — it is NOT "every following byte with the
+            // high bit set". That old rule is only an approximation: digits are 0x85-0x8e and
+            // punctuation is 0x99/0x9a/0xa0-0xaf, all >= 0x80, so a zero-parameter escape (0x21)
+            // followed by a number had the number eaten. "Obtained 3 Potions!" lost both the 3 and
+            // the !, and the live tutorial text shows it as "The  command can" (the button glyph
+            // and nothing else survived). Counts come from the game's own control-code interpreter
+            // FUN_002ac5f0, whose per-selector param decoders are FUN_003ffab0 (2 params) and
+            // FUN_003fff10 (3 params).
+            if (i + 1 >= n) break;
+            const uint8_t sel = buf[i + 1];
+            ++i;                                      // consume selector
+            int params = EscapeParamCount(sel);
+            if (params < 0) {
+                // Unknown selector: fall back to the old high-bit run so we never emit raw
+                // parameter bytes as text. Conservative, and only reachable for selectors the
+                // interpreter maps to decoders we have not read.
+                while (i + 1 < n && buf[i + 1] >= 0x80) ++i;
+            } else {
+                for (int k = 0; k < params && i + 1 < n; ++k) ++i;
+            }
         }
         else {
             switch (c) {

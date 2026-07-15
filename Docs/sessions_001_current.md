@@ -1502,3 +1502,456 @@ Addresses the original "loses focus in combat" via an explicit locked-target rou
    walkable cell (nav_grid / map_query) so an off-mesh / map-edge target can't cause a latent NoPath.
 3. **`\`-cursor lock-by-identity** (`entity_list.cpp`): re-anchor the `[`/`]` cursor to its object by stable
    identity across rescans so it can't silently jump to the nearest.
+
+## Session 38 — 2026-07-14 — [pathfinder] `p` = route to locked battle target; walkable-cell snap; cursor lock-by-identity
+
+**KEYWORDS:** p key VK_P DIK_P 0x19 g_extraDown[5] route to locked target lock-on combat loses focus
+DAT_0209be80 handle +0x9FD8 gate +0x10F78 battle_target_reader GetLockedTarget TargetCache 300ms freshness
+NameForBtlChr actor+0x698 sceneObj actor+0x10 ReadSceneObjectPos sceneObj+0xB8 PathPlanner::Request
+RouteToLockedTarget OnNavKey 'P' PRE-SHIP-CHECK lock-on persistence nav-safe battle-state FIELD_ACTIVE2
+0x1F69300 PlanRoute target-cell walkability snap nearest walkable cell ring search snapped goal CursorId
+FindFocusInViewLocked CursorMatch identity re-lock pointer aliasing SetFocusLocked entity_list Controls swap
+
+**Implemented all three of Session-37's "Next steps — combat targeting" items.** Key correction from the
+user: **FFXII battles run ON the field** — the battle-state mode only changes camera/targeting; the field
+frames keep ticking and the SQEX walkmap stays live, so routing works in combat exactly as on the field.
+That flipped `p` from a bearing-only readout to a **full turn-by-turn route** (the Session-37 note's literal
+intent). Shipped straight to C++ under the Session-34 confirmed-primitives exception (every read below was
+already shipped/live-confirmed — no new RE crash surface), with baked `NAV-ROUTE` logging that answers the
+PRE-SHIP CHECK empirically instead of by guess.
+
+- **Item 1 — `p` (VK_P) = turn-by-turn route to the locked/selected battle target.** `battle_target_reader`
+  now resolves the target's world position in the same actor-pool pass it already used for name/faction
+  (`*(actor+0x698)==bc` → `sceneObj=*(actor+0x10)` → `PlayerState::ReadSceneObjectPos` `sceneObj+0xB8`), and
+  keeps a mutex-guarded **cache** (`pos`+`label`+`handle`+`tickMs`) refreshed on EVERY flagged-target render
+  (not the announce-dedup). New `BattleTargetReader::GetLockedTarget(pos,label,maxAgeMs)` returns it only when
+  the capture is younger than 300 ms (⇒ selection/lock still live) — no cross-thread game-pointer deref on the
+  input thread. `nav_commands::RouteToLockedTarget()` feeds that into the SAME `PathPlanner::Request` pipe as
+  `\`. Key wired via `input_tracker` (`DIK_P=0x19`, free `g_extraDown[5]`, `isNav=true`) → `OnNavKey('P')`.
+- **Item 2 — target-cell walkability snap in `PlanRoute`.** When the A* GOAL cell is non-walkable (target on
+  a ledge / map edge / enemy-only tile / fine-grid gap), ring-search outward ≤6 cells (~9 m) for the nearest
+  walkable cell (closest-to-true-target within a ring) and use it as the goal; the final poly point becomes
+  that walkable cell (not the off-mesh target), so the last leg lands on ground, not into a wall. `snap:` line
+  logged. Non-off-mesh targets are byte-for-byte unchanged (zero regression to `\`).
+- **Item 3 — `\`-cursor lock-by-identity.** Replaced the bare `void* g_currentObj` focus with a `CursorId`
+  (obj + npcdic `nameIdx` + label + category). Centralized the 3 duplicated match sites into `CursorMatch`
+  (tier 2 exact = pointer+key+label, rejecting a pooled-slot pointer alias; tier 1 re-lock = key+label+category
+  under a new pointer) + `FindFocusInViewLocked`. Focus now tracks its object across rescans; the
+  "fall back to nearest" path fires only when the object truly departed, not on a transient rescan wobble.
+
+Also fixed a stale doc bug: `Docs/Controls.md` had `\` and `/` swapped (code: `\`=route `VK_OEM_5`,
+`/`=describe `VK_OEM_2`).
+
+**Shipped: built clean + deployed, UNCOMMITTED.** PENDING one runtime confirmation pass:
+1. **PRE-SHIP CHECK** — `p` during **Lock-On (`2`/R2) with no command menu**: routes ⇒ Lock-On drives
+   `DAT_0209be80+0x9FD8` (≥0.98, record in `GameArchitecture.md`); "No target" ⇒ `p` is scoped to command
+   target-selection. The `NAV-ROUTE` log reports gate/handle/cache-age + drain outcome either way.
+2. **Nav-safe in battle** — the same log's drain line proves whether the field stays nav-safe in battle-state
+   mode. If a persistent "not nav-safe" appears, relax the one battle-cleared gate bit in `IsFieldNavSafe`
+   (contingency; not expected — `FIELD_ACTIVE2 0x1F69300` is the "field/battle-active" flag).
+3. Item 2 snap around a real off-mesh target; Item 3 focus-persistence across a rescan + scanner non-regression.
+
+## Session 39 — 2026-07-14 — [pathfinder] Fix `p` "No target" (havePos) + wire the never-populated `Category::Exit`
+
+**KEYWORDS:** p No target havePos ReadSceneObjectPos null +0xB8 battle target actor+0xE0 fallback ACTOR_POS
+GameArchitecture:728 ResolveActorPos NonZero PosDiag freshness 300->1000ms GetLockedTarget cache age log
+Category::Exit never populated map-jump exit table getmapjumpposbyindex FUN_00264b90 FUN_0020e600 reloc
+_DAT_01f83530 0x1E63530 TBL_EXIT_OFF 0x54 MAPJUMP_RELOC_BASE EnumerateExits map_query ScanExitsLocked fixed
+entity RefreshPositionsLocked skip sanity gate 2000m EXIT_COUNT_MAX ' dump NAV-DIAG exit-table confirm
+
+Two Session-38 runtime bugs, diagnosed from the live log + already-documented RE (NOT fresh RE):
+
+- **Bug 1 — `p` always "No target" (FIXED).** The log proved the target reader announced targets
+  (`[TARGET] "Imperial Swordsman, HP 100 percent"`) yet every `p` press hit an empty cache. Root cause:
+  `battle_target_reader`'s cache write is gated on `havePos`, and `havePos` = `ReadSceneObjectPos(target
+  sceneObj)` which returns false when the battle target's `sceneObj+0xB8` transform node is null during
+  attack-menu selection (the same node worked for combatants in *real-time* combat — state-dependent).
+  **Fix:** `NameForBtlChr` now falls back to the actor's own cached world position `actor+0xE0/E4/E8`
+  (the documented field-actor pos, `GameArchitecture.md:728`) when the scene node fails or reads (0,0,0);
+  `havePos` set iff a **non-zero** position came from either source. Freshness window 300→1000 ms (hedge
+  vs. a non-per-frame nameplate render). Baked `[TARGET]` log records both sources + cache age at each
+  press — confirms which source populates the cache in a battle. If BOTH are 0 during selection, escalate
+  to gating on the live `DAT_0209be80+0x10F78` (noted, not built).
+- **Bug 2 — no routable fortress objects: wired the never-populated `Category::Exit`.** This was a
+  **documented, never-completed follow-up**, not new RE: the enum slot existed, the map-jump API was named
+  2026-05-07 (`GameArchitecture.md:194-210`), and `plan.md` marked "exits" `[x]` prematurely — nothing
+  ever populated it. FFXII inter-area exits are walk-into map-jump zones invisible to the
+  `FLAG_TALK|FLAG_ACTION|gimmick` scanner filter (category-0 triggers with null `+0xB8`, or not scene
+  objects); they live in the per-map exit array behind `getmapjumpposbyindex` (`FUN_00264b90`).
+  **New `MapQuery::EnumerateExits`** reads that array per handle-table container
+  (`exitBase = containerBase + *(u32)(containerBase+0x54) + reloc`, `reloc=*(u32)@0x1E63530`; count at
+  `[0]`; `x/y/z/angle` at word `[i*8+1..4]`, 0x20 stride) behind a **strict sanity gate** (count 1..64,
+  finite, non-zero, ≤2000 m). `entity_list::ScanExitsLocked` appends each as a **fixed-position**
+  `Category::Exit` entity (`sceneObj=nullptr`, synthetic stable `nameIdx`, label "Exit");
+  `RefreshPositionsLocked` skips the scene-node re-read for `fixed` entities so they aren't erased. Exits
+  are now navigable via `[`/`]`, describable via `/`, routable via `\`. The `'` diagnostic dumps the raw
+  exit table (rel-offset/reloc/base/count/records + verdict) — the ≥0.98 confirmation.
+
+Also fixed `Docs/Controls.md` (already done S38) and reconciled `plan.md` exits checkbox.
+
+**Shipped: built clean + deployed, UNCOMMITTED.** PENDING runtime confirmation:
+1. **Bug 1** — `p` in a battle with a target selected: should route (`[TARGET]` log shows `src=1` scene or
+   `src=2` actor+0xE0, `havePos=1`); if still "No target", the log's `sceneOk/actorOk` reveal why.
+2. **Bug 2** — `'` in the fortress: the `[NAV-DIAG]` exit-table dump confirms the offset recipe (sane
+   `count` + positions). If exits don't appear, the dump shows which term (rel-offset/reloc/stride) is off
+   → adjust; if right, canonicalize the offsets in `GameArchitecture.md` and drop the ~0.85 caveat.
+3. Non-regression of the scanner (NPCs/gimmicks/combatants; fixed exits survive rescans).
+
+## Session 40 — 2026-07-14 — [pathfinder] Fix `p` works-once (live-gate), exits-0 (mapData deref), missing objects (named widening)
+
+**KEYWORDS:** p works once No target frozen cache event-driven nameplate FUN_002bfd20 not per-frame live-gate
+DAT_0209be80 OFF_GATE 0x10F78 OFF_TARGETID 0x9FD8 GetLockedTarget re-resolve bc NameForBtlChr exits 0
+EnumerateExits missing dereference mapData=*(u64*)(containerBase+0) TBL_GUARD_OFF slot 0 FUN_00264b90
+FUN_0020e600 reloc ~0 tag>2 tableOff +0x54 dest +0x84 stride 0x20 named-object widening ResolveObjectName
+nameIdx +0xf8 fieldsign categories 1-4 OnFieldFrame per-area exit dump logRaw auto-diagnostic
+
+Three tester regressions from Session 39, root-caused (Bug 3 from the live log; Bugs 1&2 from two agreeing
+decompile re-traces):
+
+- **`p` routed ONCE then "No target" (FIXED).** Log proof: `GetLockedTarget` succeeded only while cache
+  age <1000 ms, then `tickMs` stayed FROZEN between target changes → the nameplate render that refreshes
+  the cache is **event-driven (redraw on state change), not per-frame**, so any age window ages out. **Fix:**
+  gate `p` on the **LIVE** `DAT_0209be80` selection state read at press time — `gate=PtrAt(P,0x10F78)!=null`,
+  `liveHandle=*(u32)(P+0x9FD8)` (same reads `HookedNameplate` does; SEH-guarded on the input thread, like
+  `\`/entity_list). Cache now stores the target `bc` pointer; `p` requires `gate && liveHandle==cachedHandle
+  && bc`, then **re-resolves a FRESH position from `bc`** via `NameForBtlChr` (handles a moving target),
+  falling back to cached pos. Removed the `maxAgeMs` param. `[TARGET] GetLockedTarget: gate=.. liveHandle=..
+  match=..` logs each press. (Also directly answers the PRE-SHIP CHECK: gate set during Lock-On?)
+- **Exits STILL 0 (FIXED).** `EnumerateExits` was missing one dereference. `FUN_00264b90` reads container
+  **slot 0** and dereferences it first: `mapData = *(u64*)(containerBase+0)` (`TBL_GUARD_OFF`); precondition
+  `*(u16)(mapData)>2`; jump table off at `mapData+0x54` (dest `+0x84`); `exitBase = mapData + tableOff +
+  reloc` (reloc `_DAT_01f83530`@0x1E63530 ≈0); `count=*(u32)exitBase`; x/y/z/angle at word `[i*8+1..4]`
+  (0x20 stride). My code used `containerBase` directly + iterated all 5 → garbage → 0 exits everywhere.
+  Now slot-0 + deref + tag/tableOff guards, kept the sanity gate.
+- **Only enemies to navigate to (FIXED).** The scanner already sees a superset of the game's interaction
+  scanner (`FUN_0025b820`, two flag passes only), but dropped **named** objects (gates/doors/field-signs/
+  NPCs, scene categories 1-4) whose talk/action flag isn't armed. **Fix:** `RescanLocked` also lists an
+  object with a resolvable name — `ResolveObjectName` (npcdic `nameIdx>0`, or custom field-sign string at
+  `+0xf8` for `nameIdx<0`), skipping the ambiguous `nameIdx==0`; still gated by `ReadSceneObjectPos`
+  (excludes cat-0 null-node triggers).
+- **Auto-diagnostic:** `OnFieldFrame` now fires a one-shot `EnumerateExits(logRaw=true)` on each
+  active-container-mask change (area load), so the raw exit-table dump is captured passively (no `'` needed).
+
+**Shipped: built clean + deployed, UNCOMMITTED.** PENDING confirmation: (1) `p` pressed repeatedly on a held
+target keeps routing; (2) the auto `[NAV-DIAG] exit-table slot0` dump shows `mapData≠0 tag>2` + sane count/
+positions and `]` cycles exits; (3) `rescan: N` rises and `]` cycles named gates/doors/NPCs, not just enemies.
+
+## Session 41 — 2026-07-14 — [pathfinder] Fix S40 categorization regression: characters out of the Interactables bucket
+
+**KEYWORDS:** category regression named-object widening NPCs Interactables Object defeated enemies scene
+category byte sceneObj+0x03 SCENEOBJ_TYPE_BYTE isCharacter 5-7 char component ClassifyByNameKey ScanCombatants
+dedup AlreadyListed per-category count log rescan breakdown
+
+**S40's named-object widening over-reached.** Tester: targeting + exits work, BUT everything except active
+enemies (NPCs, DEFEATED enemies, party) got bucketed as **Interactables**. Root cause: the widening surfaced
+**character-type scene objects** (cat 5-7, which carry a char component) via the handle-table pass, where
+`ClassifyByNameKey`'s old "named person outside gimmick band => NPC" / else-Object heuristic mislabeled them,
+and `AlreadyListed` dedup then blocked `ScanCombatantsLocked` from classifying them as ally/Enemy/dead.
+
+**Fix:** read the scene CATEGORY byte (`sceneObj+0x03 & 0x1f`; classes **5-7 = character/actor**, 1-4 =
+gates/doors/signs/props, 0 = null-node trigger). The name-widening now applies **only to NON-character**
+objects (cat 1-4) — character objects are left to their proper handlers (talk-flag → NPC, or the combatant
+pool scan → ally/Enemy, or dropped when dead). `ClassifyByNameKey(flags,nameIdx,isCharacter)`: FLAG_TALK or
+`isCharacter` → NPC; non-character unflagged named → Object (fixes named GATES being called NPCs too). Net:
+defeated enemies drop (combatant scan, kind==dead), non-talk NPCs/party classify via the combatant scan,
+gates/doors/signs stay as Object. Added a per-category count to the `rescan:` log to confirm the breakdown.
+
+**Shipped: built clean + deployed, UNCOMMITTED.** PENDING: `]` cycles NPCs as NPC (not Interactables),
+defeated enemies gone, gates/doors as Object; `rescan:` breakdown line confirms. STILL OPEN (tester-flagged):
+exits don't resolve to real area NAMES (deferred: dest table `+0x84` via `getmapdestposbyindex` + planmapname
+PLMN reader) and need runtime validation that they're real exits (route to one, confirm the area transition).
+
+## Session 42 — 2026-07-14 — [pathfinder] Exit destination NAMES via the dest-id table + planmapname
+
+**KEYWORDS:** exit destination name planmapname PLMN FUN_00377870 area name by id FUN_00264870 FUN_00264920
+FUN_002648f0 dest table mapData+0x8c destIdx jump record +0x1d word[5] areaId +0x0A ResolveAreaName
+CallAreaNameById GameText::Decode ExitRec destName To area label 1314 Nalbina Dungeons
+
+Exits now speak the **destination area name** (e.g. "Nalbina Dungeons") instead of generic "Exit". Traced the
+game's own "▲ To <area>" path (`FUN_003f9720` sign renderer → `FUN_00377870`):
+- **Dest area id** lives in a THIRD per-map table at **`mapData+0x8c`** (`FUN_00264870`), separate from the
+  jump `+0x54` and dest-pos `+0x84` tables. It's indexed NOT by the exit index but by the **jump record's
+  `+0x1d` byte** (`FUN_002648f0`): `destIdx = *(u8)(exitBase+4+i*0x20+0x1d)`; `destRec = destBase+4+
+  destIdx*0x10`; **`areaId = *(u16)(destRec+0x0A)` = word[5]** (raw; `0xffff` = no name) (`FUN_00264920`).
+  (`getmapdestposbyindex`/+0x84 gives the dest ARRIVAL POSITION, NOT an id — the community label was wrong.)
+- **Name**: reuse the game's planmapname area accessor **`FUN_00377870(areaId)`** (RVA 0x257870; the same
+  getter family as `FUN_003778b0`, the current-area name the mod already calls) → codec ptr → `GameText::
+  Decode`. Sidesteps the PLMN header/bias uncertainty. Blob base is `DAT_02add0f8` (0x29BD0F8) if we ever
+  need a pure read. Impl: `MapQuery::ResolveAreaName` (SEH game call) fills `ExitRec.destName`;
+  `ScanExitsLocked` labels the exit with it (else "Exit"). Baked log: the `'`/auto exit dump now prints
+  `destIdx areaId "name"` per exit.
+
+**Shipped: built clean + deployed, UNCOMMITTED.** Recipe ~0.85 (two decompile traces + the sign-renderer
+path) → ship + confirm. PENDING: `]` on an exit speaks the real area name; the `[NAV-DIAG] exit[i]` line shows
+sane `areaId`+name; VALIDATE by routing to an exit and confirming it leads to that named area. If names are
+wrong/mismatched, the log's `destIdx`/`areaId` pinpoint whether the `+0x1d` linkage or the `+0x8c` table is off.
+
+## Session 43 — 2026-07-14 — [pathfinder] REAL exits (mapData+0x70) + minimap objective markers + Event category
+
+**KEYWORDS:** real map exits mapData+0x70 field-sign array FUN_00264ae0 FUN_00264ac0 FUN_002649b0 FUN_002648f0
+story-gate usable buf[0] areaId +0x54 ARRIVAL spawn table wrong all along FUN_00353490 place party naviicon
+minimap markers DAT_02b45a80 _DAT_02b45a70 objective target crystal EnumerateMarkers EnumerateSpawnTriggers
+Category::Event ScanMarkersLocked ScanSpawnTriggersLocked FUN_003f9720 radar FUN_003c34e0
+
+**The exits I'd shipped (S39-42) were the WRONG table.** Tester confirmed they were event triggers / spawn
+points. Two decompile traces found why: **`mapData+0x54` (getmapjumpposbyindex) is the party ARRIVAL/SPAWN
+table** — where you LAND after a jump (proven: `FUN_00353490` calls it to place the party post-jump) — which
+is exactly the entrance gates + dialogue/cutscene triggers seen. Live log confirmed: all had `areaId=0xffff`,
+duplicate positions.
+
+- **REAL exits = the field-sign array at `mapData+0x70`** (the curated list the game draws as radar blips /
+  3D "→ \<area\>" arrows, `FUN_003f9720`/`FUN_003c34e0`). Read via the game's own getters: `count=
+  FUN_00264ac0()` (0x144AC0), `obj=FUN_002649b0(0,i)` (0x1449B0, null=not shown / leader-visibility filtered),
+  `FUN_002648f0(obj,buf)` (0x1448F0) → `buf[0]=usable` (STORY GATE — a disabled forward exit reads buf0=0,
+  explaining "No simple way through the fortress"), `buf+4=areaId`. Record floats off `obj`: X@+0, Z@+8,
+  enable@+0xc. Name via `FUN_00377870(areaId)`. `MapQuery::EnumerateExits` rewritten to this; `ExitRec.usable`.
+- **Minimap / naviicon MARKERS** (`DAT_02b45a80`, count `_DAT_02b45a70`, stride 0x20: type@+0, subtype@+1,
+  label@+4, X@+8, Z@+0xc) — the icons the radar shows for party/crystals/save/**target/objective**. New
+  `MapQuery::EnumerateMarkers`; surfaced as `Category::Event` "Marker \<subtype\>" (v1 — subtype meaning ~0.6,
+  log-confirmed; the objective is the "where to go" the tester needs).
+- **Old +0x54 read renamed `EnumerateSpawnTriggers`** → `Category::Event` (the tester said these belong in an
+  events category, not exits). New `Category::Event` enum + word.
+- Auto per-area dump now logs exits(+0x70) + markers + spawn-triggers; `rescan:` breakdown adds `Event=`.
+
+**Shipped: built clean + deployed, UNCOMMITTED.** Confidences: real-exit structure 0.9 (two agents agree),
+markers 0.85 struct / 0.6 subtype → ship behind sanity gates + baked logs. PENDING: (1) `]` in Exit cycles the
+REAL exits with names + only-shown; route to one and confirm the transition; `[NAV-DIAG] exit[i]` shows
+`enable/usable/areaId/name/XZ`. (2) `]` reaches the objective marker (route to it → the way forward); the
+`[NAV-DIAG] marker` log pins which subtype = objective (then label properly + skip party next pass). (3) old
+spawn/dialogue triggers now under **Event**, not Exit. Fast-follow: naviicon subtype→category + label-id→text;
+optional "(locked)" hint on story-gated exits.
+
+## Session 44 — 2026-07-14 — [pathfinder] Read-only guarantee + Controls fix + markers REMOVED + all-maps exit DB (offline)
+
+**KEYWORDS:** read-only input controls game speed 1 2 3 not lock-on not target group mod does not modify
+SendInput WriteProcessMemory const DirectInput buffer VirtualProtect vtable pure getters naviicon markers
+DISPROVEN removed unit dots EnumerateMarkers MarkerRec NAVIICON MARK_ ScanMarkersLocked p-key DAT_0209be80
+0x9FD8 battle_target_reader parse_mapdata.py VBF map_ctrl mpk mld +0x70 exits +0x8c dest +0x54 arrival
+planmapname map_exits.csv all maps offline extraction Nalbina fortress post-boss
+
+Four items, all from tester follow-ups after the Nalbina fortress test.
+
+- **(A) Confirmed the mod is strictly READ-ONLY on input + game memory** (tester's speed jump made them ask).
+  Audit: NO `SendInput`/`keybd_event`/`mouse_event`/`PostMessage(WM_KEY…)`, NO `WriteProcessMemory`, NO
+  mem-write helper anywhere in the repo; the DirectInput hook passes the buffer to the tracker as
+  `const unsigned char*` and never mutates it; the only `VirtualProtect` is the one-time vtable patch that
+  installs the read-only `GetDeviceState` hook; all game calls are pure getters. Documented in `debug.md`
+  (Solved) + a hard guardrail in the mod's `CLAUDE.md` (any feature that *drives* the game needs explicit
+  permission — it's a category change).
+- **(B) `Docs/Controls.md` corrected.** The menu-captured labels "`1`=Game Speed/Target Group, `2`=Lock On,
+  `3`=Target Group" were **WRONG** — runtime shows **`1`/`2`/`3` all change Game Speed (1×/2×/4×)**, mirroring
+  `F1`/`F2`/`F3`. There is no keyboard Lock-On / Target-Group binding. **The mod reserves NONE of `1`/`2`/`3`.**
+  Also clarified the `p` key: it routes to the battle target the game is currently selecting
+  (`DAT_0209be80 + 0x9FD8`, `battle_target_reader`) — it does NOT press or depend on a keyboard lock-on.
+- **(C) Naviicon minimap "markers" DISPROVEN + REMOVED.** The Session-43 hypothesis (0.6 conf) that the
+  `DAT_02b45a80` array carried objective/crystal/target icons was disproven by two decompile traces: it holds
+  ONLY character/unit dots (party/ally/enemy/neutral), each a 1:1 duplicate of a live scene object the
+  combatant + handle-table scans already list; no objective, no crystal, no treasure, and `marker[+0x04]` was
+  the entity HANDLE not a label id. Deleted `EnumerateMarkers`/`MarkerRec` (map_query.h/.cpp),
+  `ScanMarkersLocked` + its RescanLocked call + the marker auto-dump (entity_list.cpp), and `NAVIICON_*`/
+  `MARK_*` (nav_rva.h). Nothing labelled "Marker" appears anymore. `Category::Event` (old +0x54 spawn/dialogue
+  triggers) and real exits (+0x70) unchanged. Built clean + deployed.
+- **(D) Offline all-maps exit DB — INVESTIGATED DEEPLY; the premise failed and uncovered a ROOT-CAUSE bug.**
+  Wrote `..\FFXII-Decompile\tools\parse_mapdata.py` + ran it against the VBF (tester granted permission). It
+  does NOT work, and 3 decompile passes + all-550-map empirical validation proved why: **the exit data is not
+  in the `.mpk` files.** The map-control blob's `+0x70` (exit/field-sign) and `+0x8c` (dest-id) offsets are
+  **ZERO in ALL 550 files**; only arrival `+0x54` is file-resident (396/550). Every simpler source ruled out
+  (mapjumpgroup=story-flag ROM; jsondata/maps=render config; efb=sound; no global connectivity file; the
+  per-event `.ebp` are cutscenes). The `.mpk` map-control blob is a cluster child (not `mpk[+0x10]`), runtime
+  base = global ptr at `0x2098E10`.
+- **ROOT CAUSE of "nothing detected in the fortress":** the live mod log shows `[NAV-DIAG]
+  map-exits(+0x70): count=0` — **`blob+0x70` is empty at RUNTIME too**, not just on disk. Source accessor
+  `FUN_00264ae0` reads `blob+0x70` (blob=`*(u64*)0x2098E10`, gate `DAT_02098e20 & 1`); getters
+  `FUN_00264ac0`/`FUN_002649b0`(story-gate `record+0x1c` vs chapter `FUN_00377860`)/`FUN_002648f0`; renderer
+  `FUN_003c34e0` (record floats X@+0/Z@+8/enable@+0xc, story@+0x1c, destIdx@+0x1d). **So Session 43's
+  "`+0x70` = field-sign exits" (0.9 conf) is almost certainly WRONG — `blob+0x70` is empty everywhere, so the
+  mod has detected NO exit on ANY map** (not story-gating). Another 0.9-conf RE that didn't hold.
+- **DECISIVE NEXT STEP (authored):** `frida/probe_fieldsign_source.js` — run on a map with VISIBLE "→ Area"
+  field signs (early field/town gate). It dumps `blob+0x70`/`+0x54`/`+0x8c` live + the gate + hooks the
+  getters. If `blob+0x70` is nonzero there → it populates at runtime → reverse the writer/source & extract
+  offline (or fix the mod hook). If still 0 → the `blob+0x70` path is dead in TZA; re-RE field signs from the
+  renderer side. This is the pivotal experiment for the committed offline-DB effort.
+
+**Shipped A/B/C: built clean + deployed, UNCOMMITTED.** Part D is an open, committed RE effort — offline exit
+extraction is blocked at the source (data not in files) pending the probe result. Goal remains detection
+COMPLETENESS, honestly reported.
+
+## Session 45 — 2026-07-15 — [pathfinder/menus/battle] Exits restored, obtained-item text, party status keys
+
+**KEYWORDS:** exits Category::Event retired Category::Exit mapData+0x54 map-jump point table
+FUN_00353490 getmapjumpanglebyindex NOT party placement Session 43 demotion reverted +0x1d dead bytes
+FUN_00264b90 sole reader +0x70 group table ABI bug Pfn_ExitCount no argument FUN_00264ac0 ecx
+passthrough parse_mapdata wrong blob base obtained item FUN_0035e070 widget+0xC8 FUN_002b4090
+codec-sprintf 0f31 slots _DAT_022ca430 timed toast e5f0 map screen FUN_003c02b0 FUN_002baf80 REMOVED
+mini_face_c texture bundle FUN_0057c480 menu manager DAT_0209ac30+0x328 party status 4 5 6 btlAtel
+FromPartySlot FUN_00320ab0 roster list 3 DAT_02ebf190+0x5a7e BtlChr 0x1c8 HP i32 MP i16 status OR
+bc+0x64 bc+0x3c escape selector FUN_002ac5f0 0x31 3 params target clear on death KIND_DEAD
+
+Five load-bearing conclusions in the session log / read-point spec were **wrong**, and the live mod log
+already contained the disproof. Offline-only session (user directive: no Frida discovery probes) —
+every finding came from the decompile plus the existing log.
+
+- **(1) Exits restored.** Session 43 demoted `mapData+0x54` from Exit to "party ARRIVAL/SPAWN" on one
+  claim: *"proven: FUN_00353490 places the party post-jump"*. **False** — `FUN_00353490` is abs
+  `0x353490` = RVA `0x233490` = the mod's own `GETMAPJUMPANGLEBYINDEX`; it returns a jump's angle and
+  places nothing. `+0x54` is the **map-jump point table** = the intra-map "Mapjump" exits the tester
+  walks through (Inner Ward -> Upper Apartments). `Category::Event` **retired** (nothing produced it);
+  `EnumerateSpawnTriggers` -> `EnumerateMapJumps`.
+- **(2) The `+0x54` dest chain was fiction.** `FUN_00264b90` is the SOLE reader of that table in all
+  33,105 functions and touches only x/y/z/angle — record bytes `+0x10..+0x1f` are read by **nothing**.
+  The Session-42 `destIdx@+0x1d -> +0x8c` chain read dead bytes; the log proves it (`destIdx=0
+  areaId=65535` on every record of every map). Deleted. `+0x1d` is real only on `+0x70` records.
+- **(3) `+0x70` had NEVER been measured — an ABI bug.** `Pfn_ExitCount` was typed `int(*)()` and called
+  with no argument, but `FUN_00264ac0` passes its incoming `ecx` through to `FUN_00264ae0(group)`,
+  which uses it as an array index — so the count came from register junk and was 0 on **every** map.
+  That is what "the `+0x70` path is dead" measured. And `parse_mapdata.py`'s corroborating "+0x8c = 0
+  in all 550 .mpk" is not credible either: the live log shows `+0x8c` populated (`destCount=2`), so the
+  parser reads the wrong blob base (Session 44's own note concedes the blob "is a cluster child, not
+  `mpk[+0x10]`" — which is what the parser uses). Fixed the signature, enumerate all groups, and added
+  a **direct-memory** group-table dump (`map-exits(+0x70) raw: ... groupCount=`) that needs no call and
+  no ABI assumption — the first honest measurement. Destination names via the game's own chain,
+  confirmed in its sign renderer `FUN_003f9720`: `rec+0x1d` -> `FUN_00264920(destIdx,buf)` -> `buf+4`
+  s16 areaId -> `FUN_00377870` -> planmapname. Signs are matched to jump points within 3 m XZ.
+- **(4) "Obtained \<item\>" SOLVED** (the priority). Proc **`FUN_0035e070`** (RVA `0x23E070`), gate
+  `*(int*)param_2 == 1`, composed text at **`widget+0xC8`** (cap `0x4A0`) — `FUN_002b4090`
+  (codec-sprintf) fills it from a template of three `0f 31 80 80 80` slots separated by `0x02`
+  (item/item/gil, truncated in-place for 1-2 entries; verified first-hand). Widget 0x6e8 B from
+  `FUN_0035df40`, handle `_DAT_022ca430`; reached from BOTH `FUN_0050faf0` (treasure) and
+  `FUN_002a59c0` (field), so the read point holds either way. **Timed toast** (case 2 self-destructs)
+  -> no pagination, one fire per popup.
+- **(5) The e5f0 "dialogue" hooks were the WORLD MAP screen — REMOVED.** `page+0x138` is a MAP id;
+  `out+8` is a MAP NAME (`DAT_02b457e0+0xe8` = map DB, `FUN_003be680(id,&w,&h)` -> zoom-to-fit,
+  `ArtData/menu/localmap/`, sibling `FUN_002b7b80` tracks player pos). The spec's "decisive"
+  `mini_face_c` pillar was a misread — a **texture-bundle name** for `FUN_0024a5a0`, never referenced
+  by the `002baf80` family. Left wired, they'd have spoken a map name over real dialogue.
+  `FUN_0057c480` demoted to menu-only (its case 1 registers into `DAT_0209ac30+0x328`; zero fires in a
+  17-min log). Spec §A + §B(field) refuted — both self-tagged 0.98/0.90.
+- **(6) Party status keys `4`/`5`/`6` — start of combat support** (`src/battle/` was empty). New
+  `src/battle/party_status.{h,cpp}`: roster **list 3** `DAT_02ebf190+0x5a7e` -> BtlChr
+  `base+8+idx*0x1c8`; HP **i32** `+0x48`/`+0x24`, MP **i16** `+0x4c`/`+0x28` (guarded by
+  `+0x6c`/`+0x7c` sign bits), charId `+0x04`; `bcIdx >= 0x28` = empty -> **silent**. Derived from the
+  seven `btlAtel*FromPartySlot` natives (`FUN_0050fd00`..`FUN_0050ff20`) found by fingerprint
+  (consecutive fns through resolver `FUN_00320ab0`; address order == .dbg order 7/7, body==name 7/7).
+  **Not called** — they are VM natives that abort on arg-stack underflow. List 3 (not the HUD-masked
+  list 2) is why it works on the field and with the HUD hidden. Name from the actor pool
+  (`actor+0x18`), NOT `FUN_0035d330` — that writes a shared static and these keys run on the input
+  thread. `;` = **active target status** (facing readout dropped per user: orientation isn't needed).
+  `nav_rva.h:247`'s `dbg_idx-5140` formula is **BROKEN** (implies 5142 vs 5140 on two known natives) —
+  resolve natives by behaviour, never index arithmetic.
+- **(7) `p` target no longer sticks to a dead enemy.** `GetLockedTarget` had **no liveness test** and
+  **discarded** `NameForBtlChr`'s return, so a departed actor -> `havePos=false` -> `posOut` = the
+  STALE cached pos -> route to the corpse. Now `ResolveLiveTarget` (shared by `p` and `;`) rejects
+  empty-resolve / `KIND_DEAD(5)` / `curHP==0` and clears the cache; the cache is also cleared when the
+  selection gate drops (previously only `Shutdown` ever cleared it).
+- **(8) `GameText::Decode` escape fix.** Param counts are **selector-dependent** (from the game's own
+  interpreter `FUN_002ac5f0`): `0x21`=0; `0x20/0x27/0x2f/0x32/0x34/0x35/0x37/0x3a/0x3c/0x3d/0x3e/0x56`=2;
+  **`0x31`=3**. The old "skip every byte >= 0x80" rule ate digits (`0x85`-`0x8e`) and punctuation —
+  visible in the live log as `"The  command can"`. Unknown selectors keep the old fallback.
+
+**Shipped: built clean + deployed, UNCOMMITTED.** PENDING RUNTIME VALIDATION (all via baked logs, no
+probe): (a) `]` in Exit cycles the ex-"Event" entries and routing to one transitions areas;
+`rescan:` shows `Exit=N`, no `Event=`. (b) `map-exits(+0x70) raw: groupCount=` — non-zero => destination
+NAMES are live; zero => `+0x70` genuinely empty on that map and the `mapjump(mapNo,jumpIndex)` script
+route (`FUN_003145e0`, RVA `0x1f45e0`, writes gameState `+0x1044`/`+0x1048`) is next. (c) open a chest
+-> `MSGTEXT item: "Obtained ..."`. (d) `4`/`5`/`6` HP/MP vs the on-screen gauges (MP is i16 — a wrong
+width shows as absurd numbers); empty slot silent. (e) kill a target, press `p` -> "No target".
+**STILL OPEN:** `meswin` field dialogue window + multi-page pagination — the telop (`FUN_002e16b0`) is a
+whole-message setter, which is exactly why the Basch/Reks fortress screen reads all at once. Lead:
+`FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20 — UNVERIFIED, do not ship. Also open:
+`FUN_002aeb20` (RVA `0x18EB20`) selector->button-name mapping so button glyphs read.
+**Note `MSGTEXT`/`NAV` are not flushed** (`logger.cpp` flushes only ERROR/INIT/HOOK_HEALTH) — exit the
+game cleanly before reading the log.
+
+- **(9) World MAP screen RE KEPT, not discarded** (user call). The e5f0 pair was removed as a
+  *dialogue* read-point, but the RE is what a **"speak the map/area"** feature wants — recorded in
+  `GameArchitecture.md` under *"World MAP screen (`page+0x138` = map id)"*: page proc `FUN_002baf80`
+  (RVA `0x19AF80`), **map id = `*(s16)(page+0x138)`** (set at case 1 from `msg[2]`, consumed at case
+  0xE — passed unmodified to the resolver, so page and resolver share an id space), resolver
+  `FUN_003c02b0(mapId, out)` (RVA `0x2A02B0`) with `out+0` id echo / `out+2` attr / **`out+8` codec
+  name ptr** (NULL when `entry+4 == -1`) / `out+0x10` flags bit15 = no-text; map DB
+  `DAT_02b457e0+0xe8` (`[u32 count][8-byte entries]`, `entry+4` = s32 text id → `FUN_002f9920`).
+  **Caveats recorded:** "out+8 is a map NAME" is 0.93 (inferred from the cluster, string never read
+  live), and whether this id shares the **planmapname** id space is UNPROVEN — different blob
+  (`DAT_02add0f8`), so don't cross-use ids without checking. For map-TRANSITION speech the simpler
+  proven route is noted alongside: `FUN_003778b0` (current-area name, already used) + an observe hook
+  on the map-jump executor `FUN_003145e0` (RVA `0x1f45e0`) → gameState `+0x1044`/`+0x1048`.
+### Session 45 — TEST RESULTS (tester, same day)
+
+**PASS — "obtained item" reads.** The new read point is confirmed live:
+```
+[MSGTEXT] diag: item popup proc FUN_0035e070 fired
+[MSGTEXT] item: "You obtain a Potion"
+```
+`FUN_0035e070` (RVA `0x23E070`) + `widget+0xC8` is **CONFIRMED ≥0.98 at runtime**. Canonicalized.
+
+**FAIL — multi-page dialogue still reads as one chunk.** Expected: not fixed this session, and the log
+re-confirms the mechanism — the telop hands over speaker + every page in a single string:
+```
+[MSGTEXT] telop[slot=0]: "Basch
+This is a save crystal Reks.You can save your progress by approaching a
+save crystal and pressing Touching one of these crystals will also fully
+restore your HP and MP.Though you will gradually recover MP as you
+```
+Still needs the consumer-side page state. Lead remains `FUN_003cb650` (RVA `0x2AB650`) case 1 vs
+case `0x20` — UNVERIFIED.
+
+**NEW BUG surfaced by that same line — the escape fallback still eats punctuation.** *"and pressing
+Touching one of these crystals"* is missing both the **button glyph** AND the **`.`** after it. The
+Session-45 decode fix is only half a fix: icon-family selectors (`0x40`-`0x6b` → `FUN_002aeb20`) have
+an **unknown** param count, so they fall through to the legacy "consume every byte `>= 0x80`" run —
+which then swallows the following `0xa8` (`.`). So the class of corruption I fixed for known selectors
+still bites on icon inserts. **Fix = decode `FUN_002aeb20` (RVA `0x18EB20`)** for the selector→param
+count AND the selector→button-name mapping; both fall out of the same function. Do NOT "fix" this by
+having the fallback stop at any decodable byte — a genuine param byte in `0x85`-`0x8e` or the
+punctuation range would then be emitted as literal text. Get the real count.
+
+**FAIL — exits still have no destination name. But `+0x70` is now HONESTLY measured for the first
+time, and the answer is "structurally valid, genuinely empty":**
+```
+[NAV-DIAG] map-exits(+0x70) raw: off=0x20650 table=2CCFFBD0 groupCount=5
+[NAV-DIAG]   group[0] off=0x20600 sub=2CCFFB80 count=0
+[NAV-DIAG]   group[1] off=0x20610 sub=2CCFFB90 count=0     ... groups 2-4 identical, all count=0
+```
+Read this carefully — it is **not** the old "count=0" (that was the ABI bug reading register junk):
+- `blob+0x70` is **NON-ZERO** (`off=0x20650`) — so the Session-44 claim "`blob+0x70` is empty at
+  runtime" is **FALSE**.
+- `groupCount=5` is sane, and the five group offsets (`0x20600`..`0x20640`, spaced `0x10`) sit
+  **exactly** in the `0x50` bytes immediately before the group table at `0x20650`. That is five
+  `0x10`-byte sub-table headers packed head-to-tail — i.e. the layout derived from `FUN_00264ae0` /
+  `FUN_002649b0` is **CORRECT**, and the reader now works.
+- Every group's record count is **0**. The map has **no field signs**. There is no destination name
+  to read here, because the game does not have one to draw either.
+
+So `+0x70` is confirmed as the right structure and the right chain, with no data on this map (Reks
+prologue / Nalbina — a railroaded corridor with no "→ area" arrows, which is consistent). **The
+Session-43/44 conclusions were BOTH wrong in different ways**: 43 said `+0x70` was the exit source
+(right table, but it never worked because of the count ABI); 44 said `+0x70` was dead (wrong — it is
+populated and well-formed, just empty of records here).
+- `rescan: 9 field objects (NPC=0 Enemy=4 Object=0 Exit=3 Save=0 Gate=0 Treasure=2)` — **Exit=3, no
+  `Event=`**: the relabel shipped correctly, and Treasure=2 re-confirms the tester's report.
+
+**DECISIVE NEXT STEP for exit destinations** (do NOT re-litigate `+0x70` — it is settled):
+1. Re-run the `'` dump on a map that visibly draws "→ \<area\>" arrows (a town gate / open field, NOT
+   the prologue). If a group's count > 0 there, names light up with zero code changes and `+0x70` is
+   simply prologue-empty.
+2. If it is empty there too, `+0x70` is authored-empty in TZA and the destination must come from the
+   **script**: observe-hook the map-jump executor **`FUN_003145e0`** (RVA `0x1f45e0`), which receives
+   `(mapNo, jumpIndex, flags)` and writes gameState `+0x1044`/`+0x1048`. That gives the true
+   destination pair per transition; `FUN_00264f90(mapNo)` + the global map table `DAT_02099d88`
+   (header `+0x04` → 8-byte records by mapNo; `rec+0x02` = area index into a `0x10`-stride table at
+   `+0x08`; `rec+0x06` = group) then maps it to a name.
+
+**UNTESTED — `4`/`5`/`6` and `;` never fired.** The log has **zero** `[PARTY]` lines and only the
+`[TARGET]` init line across the whole 2.5-minute session, so the party-status and target-status keys
+were not exercised at all. Their read chains are ≥0.98 offline but have **no runtime confirmation** —
+do not treat them as working. First thing to check next session; if a keypress produces no `[PARTY]`
+line at all, suspect the `g_extraDown[6]` → `[9]` growth / the `'4'`/`'5'`/`'6'` VK dispatch tokens
+rather than the BtlChr reads.
+
+- **(10) New CRITICAL rule in `CLAUDE.md`: CHECK `GameArchitecture.md` FIRST**, before any decompile
+  research — grep it (plus `debug.md` Tried & Failed) for the function/global/offset/feature before
+  chasing it. Motivated directly by this session: `FUN_00353490`'s real identity was already in the
+  mod's own `nav_rva.h`, and the file itself asserted several wrong conclusions **as fact** that got
+  built on repeatedly. The rule has two halves: (a) read before you dig, and if the file contradicts
+  the runtime, **the runtime wins and you fix the file**; (b) when you disprove something there,
+  **STRIKE it — don't just append a newer entry** — or the stale claim gets re-derived and re-shipped.
