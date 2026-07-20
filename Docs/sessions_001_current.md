@@ -2028,44 +2028,51 @@ The generality demand was the thing that cracked it. Repeatedly insisting this b
 never per-map, is what pushed past single-map inference to the five-map test that exposed the wrong
 `NNN = slot` reading and produced the correct `N+1` rule.
 
-## Session 47 — 2026-07-20 — [input] Stuck-Ctrl diagnostic for the battle menu that won't open
+## Session 47 — 2026-07-20 — [input/release] Battle menu "won't open" = the game's own Left Ctrl Escape toggle
 
-**KEYWORDS: INPUT-DIAG modifiers ctrl stuck battle menu won't open Ctrl+key DIK_LCONTROL 0x1D DIK_RCONTROL
-0x9D DIK_LMENU 0x38 DIK_RMENU 0xB8 GetAsyncKeyState VK_CONTROL asyncCtrl input_tracker FeedDInputKeyboard
-read-only diagnostic O(changes) shotgun build 0.02**
+**KEYWORDS: left ctrl escape toggle battle menu won't open menus locked ping whoosh sound cue
+Controls.md binding INPUT-DIAG modifiers reverted stuck ctrl STRUCK not a stuck key ReadMe exits
+destination stale release V0.02-shotgun-build**
 
-**SHIPPED (diagnostic only, no behaviour change).** The tester reports the battle menu will not open
-because the game sees **`Ctrl+<key>` instead of the bare key**. The mod's input path is entirely passive
-— the `GetDeviceState` hook copies the game's buffer and never mutates it (`const`) — so the mod cannot
-be the source. This block exists to pin **where** the stuck Ctrl lives, not to fix it.
+**RESOLVED — no code change. The mod was never involved.**
 
-### What it logs
+### The report and the wrong turn
 
-In `FeedDInputKeyboard` (`src/input/input_tracker.cpp`), reading the game's **own** DIK buffer:
+The tester could not open the battle menu; the game behaved as though **Ctrl were held** on every
+keypress. First move was a **stuck-Ctrl diagnostic** in `FeedDInputKeyboard` — log the modifier bits
+from the game's own DIK buffer beside `GetAsyncKeyState(VK_CONTROL)`, on change, plus a `CTRL STUCK?`
+warning. It was committed (`7d51917`) and then **reverted in this same session**, because:
 
-- `INPUT-DIAG modifiers: Ctrl=n(Ln Rn) Shift=n Alt=n asyncCtrl=n` — emitted **only on change**, so the
-  log is O(modifier transitions), not per-frame (console-budget rule).
-- `INPUT-DIAG CTRL STUCK? held Nms, no other key (bufCtrl=n asyncCtrl=n)` — when Ctrl reads down for
-  >3 s with no other key pressed; rate-limited to one line per 5 s.
+**The tester identified the real cause from play:** pressing Left Ctrl emits a sound cue and locks the
+menus; pressing it again emits a second cue and unlocks them. It is a **toggle**, not a stuck key.
 
-The pairing is the whole point: `bufCtrl` is what the **game's DirectInput buffer** says, `asyncCtrl` is
-what the **OS** says via `GetAsyncKeyState(VK_CONTROL)`. That splits the fault three ways —
+**`Docs/Controls.md:43` already had the answer** — the game binds **Left Ctrl → "Escape"**, captured
+from the in-game Controls menu on 2026-07-07. The mod reserves no modifier (every hotkey is standalone)
+and its DirectInput hook takes the buffer as `const`, so a held Ctrl was never something the mod could
+cause or explain. **One grep of `Controls.md` would have skipped the whole detour** — the same
+read-the-docs-first failure as Session 45.
 
-| bufCtrl | asyncCtrl | Conclusion |
-|---|---|---|
-| 1 | 1 | Physically/OS-level held — sticky key, remap utility, or a real stuck key. Not the game. |
-| 1 | 0 | The game's DInput device state is stale/wrong while the OS sees Ctrl up — engine-side. |
-| 0 | 1 | OS thinks Ctrl is down but the game doesn't — an overlay/hook outside the mod. |
+### STRIKE
 
-Read-only throughout: buffer reads and `GetAsyncKeyState` only, no writes, no synthesized input
-(read-only guarantee, Session 44).
+- **"Stuck Ctrl / the game sees `Ctrl+<key>`"** — WRONG. It is the game's Escape binding on Left Ctrl,
+  working as designed. Struck here and in `debug.md`.
+- The diagnostic was also **actively bad to ship**: its change-detector includes Shift, and the game
+  binds **Left Shift to Walk/Run**, so it would have written an `INPUT-DIAG modifiers:` line throughout
+  ordinary movement — log spam in service of an answered question.
+
+Confidence in the binding: **0.99** (captured from the game's own Controls menu, and it predicts the
+observed lock/unlock toggle exactly). Confidence in what the sound *is* (a "zoom"?): **not claimed** —
+the binding name is what is established; the audio cue is not identified and is not needed.
 
 ### Files
 
-- `src/input/input_tracker.cpp` — +39 lines in `FeedDInputKeyboard`, above the standalone-hotkey edges.
+- `src/input/input_tracker.cpp` — diagnostic added then removed; **net zero change this session.**
+- `README.md` — Left Ctrl now documented as a menu-locking toggle (it was a bare "escape (flee from
+  battle)", true but useless for diagnosing this); stale exits Known Issue dropped, since Session 46
+  shipped destination names.
 
-### Note
+### Lesson
 
-Precedent: the previous `INPUT-DIAG` block is what caught the Enter-key drop as
-`DIERR_INPUTLOST` (Session 33) — upstream, not the mod. Same shape, same purpose. Shipped in release
-`V0.02-shotgun-build` so the tester's next log answers the question.
+A tester's plain description of what they hear beat a memory-instrumentation plan outright. When a
+report smells like an input bug, **read `Controls.md` before writing a diagnostic** — the game's own
+bindings are captured there precisely so this class of "bug" is a lookup, not an investigation.

@@ -165,6 +165,19 @@ segment/exit queries). **The speed change was the tester's own `1`/`2`/`3` keypr
 Speed 1×/2×/4× — see Controls.md; the old "Lock On / Target Group" labels were wrong). The mod reserves
 none of `1`/`2`/`3`.
 
+**KEYWORDS: left ctrl escape toggle battle menu won't open menus locked stuck ctrl sound cue ping
+whoosh Controls.md binding INPUT-DIAG modifiers not the mod** (Session 47) SOLUTION: The tester could
+not open the battle menu and the game acted as though **Ctrl were held** on every keypress. **It is the
+game's own binding: Left Ctrl = "Escape"** (`Controls.md:43`, captured from the in-game Controls menu
+2026-07-07), and it **toggles** — one press emits a sound cue and locks the menus, a second press emits
+another cue and unlocks them. **STRIKE the "stuck Ctrl / the game sees `Ctrl+<key>`" framing** — there
+is no stuck modifier and no OS/engine fault to split. A stuck-Ctrl diagnostic was written, committed
+(`7d51917`) and reverted the same session; do not re-add it. It would also have spammed the log, since
+its change-detector includes Shift and **Left Shift is bound to Walk/Run**. **Lesson: grep
+`Controls.md` before instrumenting any suspected input bug** — the game's bindings are captured there
+so this is a lookup, not an investigation. Same family as the Session 44 entry above: the "bug" was a
+game key doing its job.
+
 **KEYWORDS: egocentric directions camera-relative camera-forward DAT_02aedf30 row2 DAT_02aedf50
 DAT_02aedf58 atan2(-fwd.x,-fwd.z) ReadCameraForward North=forward calibration** (Session 37) SOLUTION:
 FFXII movement is camera-relative (`FUN_004742a0` RVA 0x3542A0 rotates the stick by camera matrix
@@ -401,18 +414,6 @@ sees no keys). This is the game's own acquisition / a focus loss, **not** our re
 (and the redundant `WH_KEYBOARD_LL` hook is now retired once DInput latches). Optional future
 mitigation: a mod-side re-`Acquire()` nudge when we detect the failure — defer unless it
 becomes a real blocker (it touches the game's device).
-
-### Battle menu won't open — game sees `Ctrl+<key>` instead of the bare key (OPEN — diagnostic shipped S47)
-The tester cannot open the battle menu; the game behaves as though **Ctrl is held** on every
-keypress. The mod is **not** a candidate cause: the `GetDeviceState` hook takes the DIK buffer
-as `const` and never mutates it, and the mod synthesizes no input at all (read-only guarantee,
-Session 44). Shipped in `V0.02-shotgun-build`: an `INPUT-DIAG modifiers:` line (emitted on
-modifier **change**, not per-frame) plus a `CTRL STUCK?` warning after >3 s of Ctrl-down with no
-other key. It logs the game's own buffer bits **and** `GetAsyncKeyState(VK_CONTROL)` side by
-side, which splits the fault: both set = OS/physical (sticky keys, a remap utility, a real stuck
-key); buffer only = engine-side stale device state; async only = something outside the mod.
-**Next:** read `INPUT-DIAG modifiers` in the tester's log and pick the branch. Do not "fix" this
-mod-side before the log says where it lives.
 
 ## Session Log
 
