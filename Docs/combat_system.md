@@ -359,12 +359,30 @@ if ((*(u64*)actor & 0x4000) && *(i16*)(actor+0xBA0) == cmdId)
 
 ```
 1. committed = CommittedTarget(leaderActor)        // active (0x710) first, else queued (0xBB8)
-   -> speak name + HP  (+ optionally "queued" vs "acting")
-2. else if the select UI is genuinely open (*(P + 0x10F78) != 0)
-   -> speak the browse cursor *(P + 0x9FD8), explicitly labelled as browsing
-3. else "No target"
+   -> speak name + HP  (+ "queued" when not yet acting)
+2. else                                            // browsed, or out of battle
+   -> SILENT. Speak nothing at all; log the reason.
 ```
 This removes the failure mode outright: hovering an ally never touches `0x710`/`0xBB8`.
+
+> **REVISED at release 0.1 (user instruction).** The original steps 2 and 3 — *"else speak the
+> browse cursor `*(P + 0x9FD8)` labelled as browsing"* and *"else `No target`"* — are **STRUCK for
+> the `;` key**.
+>
+> `;` answers exactly one question: **what is the active combat target?** So:
+> - **A browsed cursor is not an answer.** `ResolveTarget` only reports `browsing` when there is no
+>   commitment, so by construction it is never the active target. The `, browsing` suffix is gone.
+> - **Out of battle, `;` does NOTHING.** Not "No target" — *nothing*. Announcing anything is exactly
+>   the "it works out of battle" behaviour that was reported. Out of combat there is no commitment
+>   anyway (`CommittedTargetOf` tests the queued flag and requires a real action-table row), so the
+>   silent path is reached naturally; no new "am I in battle" flag was needed, and none was invented.
+>   See [[feedback_never_speak_filler_be_silent]] — silence is the correct output for
+>   nothing-to-report.
+>
+> **The browse fallback still lives inside `ResolveTarget`** and is NOT deleted: `p`
+> (`GetLockedTarget` → routing) is the other caller, and routing to a browsed target is still
+> wanted. The gate is applied at `SpeakTargetStatus`, so the two callers deliberately differ.
+> Anyone tempted to "simplify" by deleting step 2 from `ResolveTarget` would silently change `p`.
 
 **Which actor is "me":** ⛔ **BOTH options here are superseded (S49, 0.99).**
 
@@ -1051,10 +1069,18 @@ they were always relative to the BtlChr, which is only now being computed from t
 
 ### 8.2 Secondary defects to fix in the same pass
 
-1. **Never be silent.** `SpeakSlot` currently says nothing for an empty or unreadable slot, so the user
-   cannot distinguish "slot 3 is empty" from "the mod is broken". Speak the mod-emitted `"Empty slot"`
-   (already sanctioned in `CLAUDE.md`'s phrasebook list) for a genuinely empty slot; log loudly for an
-   unreadable one.
+1. ~~**Never be silent.** `SpeakSlot` currently says nothing for an empty or unreadable slot, so the
+   user cannot distinguish "slot 3 is empty" from "the mod is broken". Speak the mod-emitted
+   `"Empty slot"` for a genuinely empty slot; log loudly for an unreadable one.~~
+
+   **STRUCK — REJECTED BY THE USER, never shipped.** An empty or unreadable slot is **SILENT**, like
+   every other mod key with nothing to report. `7` (guest) is therefore silent for most of the game,
+   which is correct. The premise was wrong twice over: it argued from a session where the mod *was*
+   broken, and no phrasebook exists to have "sanctioned" the string — `src/speech/phrasebook.cpp` is
+   not a real file and `"Empty slot"` appears in **no** source literal. **Only the "log loudly" half
+   survived**, and it fully solves the stated problem: `BattleState::DiagnoseSlot` puts W, the magic,
+   and the roster entry in the log, so an empty slot and a broken mod are trivially distinguishable
+   there. Do not re-propose speaking filler for empty slots.
 2. **Add `PARTY` to the logger's flush list** (`logger.cpp:173`). A diagnostic that vanishes on exit is
    what made this look like an input bug for two sessions.
 3. **Roster list 3 has 9 entries**, and FFXII has a 4th (guest) slot. Only slots 0–2 are reachable

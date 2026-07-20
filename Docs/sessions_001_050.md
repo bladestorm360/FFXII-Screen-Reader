@@ -2814,3 +2814,93 @@ The 20% warning remains mod-emitted because the game has no text for it.
 
 **Readout order changed to name, STATUSES, HP, MP** — statuses must be reachable the instant the
 line starts speaking. Builds clean.
+
+---
+
+## Session 50 — 2026-07-20 — [release] Release 0.1-shotgun-build: `;` battle-only, silence rule restored, four stale designs struck
+
+**KEYWORDS:** release 0.1-shotgun-build ReadMe.txt four files Tolk nvdaControllerClient64 combat log
+non-modal F4 struck 100 entries menus paused Empty slot SILENT guest slot 7 DiagnoseSlot semicolon
+battle-only committed target browsing ResolveTarget SpeakTargetStatus GetLockedTarget phrasebook
+does-not-exist release.md two-files four-files
+
+Release prep. **No RE this session** — one small behavioural change, plus a documentation sweep that
+found four separate places where the docs described designs that were never built or had been
+reversed. The build was clean and deployed twice.
+
+### `;` is now battle-only and silent otherwise (user instruction)
+
+Reported: *"`;` should not work out of battle. It should only track what is selected as the active
+combat target."*
+
+Applied at **`SpeakTargetStatus`**, NOT in `ResolveTarget` — `ResolveTarget` is shared with `p`
+(`GetLockedTarget` → routing), and routing to a browsed target is still wanted, so deleting the
+browse fallback there would have silently changed `p`. The two callers now differ deliberately and
+both headers say so.
+
+- A **browsed** cursor is rejected. `ResolveTarget` only reports `browsing` when there is no
+  commitment, so by construction it can never be the "active combat target". The `, browsing`
+  speech suffix is gone; `, queued` stays.
+- **Out of battle the key does nothing at all** — not even the old `"No target"`. Announcing
+  anything *is* the "works out of battle" behaviour that was reported.
+- **No new "am I in battle" flag was needed, and none was invented.** Out of combat there is no
+  commitment anyway: `CommittedTargetOf` tests the queued flag (`+0xBA0`/`+0xBB8` retain stale
+  values after it clears) and the active path requires a real action-table row. The silent path is
+  reached naturally. This mattered — an in-battle predicate would have been new RE below the 0.98
+  bar and would have needed a Frida probe, delaying the release for no gain.
+
+### "Empty slot" — the code was right, four docs were wrong
+
+Reported: *"`7` should **not** announce 'Empty slot'. It should be silent like the rest of the keys.
+I gave you explicit instructions about this."*
+
+**`party_status.cpp` already was silent** ("user decision, 2026-07-20"), and `battle_state.h:32`
+already said *"Empty slots are SILENT by design"*. **No `"Empty slot"` string literal exists anywhere
+in `src/`.** The mod has never spoken it. What existed was a stale doc claim in four places, all now
+struck: `party_status.h`'s own header comment (which asserted the opposite of its `.cpp`),
+`Docs/Controls.md`, `Docs/combat_system.md` §8.2, and `CLAUDE.md`'s phrasebook list.
+
+**This is the session's real lesson: a header comment contradicted its implementation, and trusting
+the comment put a false claim into the player-facing ReadMe.** Verify against the `.cpp`.
+
+Also struck: `CLAUDE.md` cited `speech/phrasebook.cpp` as "sanctioning" the string. **That file does
+not exist** — the phrasebook is planned, not built, so it cannot sanction anything. `CLAUDE.md` now
+says so, and carries a new standing rule: never speak filler; diagnostics go to the log
+(`BattleState::DiagnoseSlot`), never to speech. Memory: `feedback_never_speak_filler_be_silent`.
+
+### Combat-log design: the F4 modal spec is struck everywhere
+
+`CLAUDE.md`, `Docs/plan.md` and `Docs/RiskAudit.md` all still specified **F4 to open / Escape to
+close / game pauses / 50 events / `WH_KEYBOARD_LL` hard input intercept**. That design was **never
+built**. What ships is non-modal, 100 entries, `,` `.` Home End.
+
+Confirmed and documented as a **requirement**: the log **works in menus and while the game is
+paused**, because the only dispatch gate is `GameIsForeground()` (`input_tracker.cpp`, `DInputEdge`)
+and the game keeps polling DirectInput while its own menus are open. A player who cannot keep up
+pauses and reads back. Any change gating nav-key dispatch on menu state would break it.
+
+Non-modal also deleted a whole risk class — `RiskAudit.md`'s "pause game during log read" and "modal
+hard input intercept" entries are struck: the mod mutates no game state and swallows no input.
+
+Memory `project_combat_log_design` rewritten. It was wrong on its **core premise** too: *"FFXII is
+not narrative, no textual combat strings exist, so the mod must synthesize every line from a
+12-locale template phrasebook"* — refuted in S48, the game composes its own sentences and Tier 1
+reads them verbatim.
+
+### Release procedure: two files → four
+
+`CLAUDE.md`'s summary still said **"exactly two files"** and **"never bundle `Tolk.dll` /
+`nvdaControllerClient64.dll`"** — the deploy rule leaking into the release rule, the exact error that
+cost an earlier release its TTS DLLs. `Docs/release.md` itself said four in step 2 but **"the two
+files"** in step 3. Both corrected, with the three concerns (deploy / build / release) kept separate.
+
+### ReadMe
+
+Rewritten for 0.1 and then **edited directly by the user**, who reformatted it and finalised the
+wording. Known Issues dropped the two now-false claims ("no party status readout yet", "no combat log
+yet"); the button-glyph entry was narrowed to what is still true (the icon has no readable name, but
+the codec fix stopped it swallowing following punctuation and leaving stray letters); the exits entry
+lost its stale "new in this build" (that shipped in V0.02).
+
+**Docs updated:** `CLAUDE.md` (combat log, release, speech-filler rule), `Docs/release.md`,
+`Docs/Controls.md`, `Docs/combat_system.md`, `Docs/plan.md`, `Docs/RiskAudit.md`, `README.md`.

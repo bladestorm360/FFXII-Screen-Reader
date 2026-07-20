@@ -276,13 +276,18 @@ Save, Magic). The deferred ones carry their own risk into v2.
 
 ### Phase 7 — Combat log
 
-**What it needs:**
-- Pause game during log read
+**What it needs:** *(superseded — see the shipped design in `CLAUDE.md` "Combat log specifics" and
+`combat_log.h`. Kept for the reasoning trail; the two struck items were the risky ones and were the
+reason this audit entry existed at all.)*
+- ~~Pause game during log read~~ — **STRUCK.** Never built. The log is non-modal and mutates no game
+  state; the player pauses the game themselves if they want to. This removed the risk entirely.
 - Capture damage / heal / status / KO events with actor + target
 - Combo aggregation (~750 ms)
-- 50-event continuous FIFO
-- Modal hard input intercept (open with F4, close with Esc)
-- Critical-event auto-speech (KO, <20% HP)
+- ~~50-event~~ **100-event** continuous FIFO
+- ~~Modal hard input intercept (open with F4, close with Esc)~~ — **STRUCK.** No `WH_KEYBOARD_LL`
+  intercept, no open/close. `,` `.` Home End, dispatched only when the game has foreground.
+- Critical-event auto-speech (KO, <20% HP) — shipped as a message-id policy table
+  (`combat_format.cpp`, `ShouldSpeakNow`)
 
 **TRIGGER status:**
 - Damage: solved. DrummerIX `DamageMod` AOB at line 1047 of CT.

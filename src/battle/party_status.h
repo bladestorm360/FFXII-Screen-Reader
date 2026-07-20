@@ -36,10 +36,20 @@ struct SlotVitals {
 // Read one party slot (0-based). Returns false if the slot is empty or unreadable.
 bool ReadSlot(int slot, SlotVitals& out);
 
-// Speak one party slot's vitals: "<name>, HP <cur> of <max>, MP <cur> of <max>, <statuses>".
-// An empty slot now says "Empty slot" rather than staying silent -- silence made a broken mod
-// indistinguishable from an empty party slot, which is what hid the missing-dereference bug for
-// two sessions. `slot` is 0-based (key 4 -> 0, 5 -> 1, 6 -> 2).
+// Speak one party slot's vitals. ORDER IS: "<name>, <statuses>, HP <cur>/<max>, MP <cur>/<max>" --
+// statuses sit right after the name because in real-time combat you must know you are poisoned or
+// stopped before you need the exact numbers (user, 2026-07-20).
+//
+// AN EMPTY OR UNREADABLE SLOT IS **SILENT** -- it speaks nothing at all, like every other mod key
+// with nothing to report. It must NEVER announce "Empty slot" or any other filler; that is a
+// standing user instruction, not a preference. (combat_system.md 8.2 once argued for speaking it so
+// a broken mod could not masquerade as an empty slot, but that reasoning came from a session where
+// the mod WAS broken, and announcing an absent guest on every press is just noise.) The
+// distinguishing detail goes to the LOG instead, via BattleState::DiagnoseSlot -- see SpeakSlot's
+// body, and note PARTY is in the logger's flush list so it survives a hard exit.
+//
+// `slot` is 0-based: key 4 -> 0, 5 -> 1, 6 -> 2, 7 -> 3 (the guest, usually absent and therefore
+// usually silent -- that is correct behaviour, not a bug).
 void SpeakSlot(int slot);
 
 } // namespace PartyStatus

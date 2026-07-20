@@ -393,8 +393,23 @@ bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
 // two is precisely the bug this replaced.
 void SpeakTargetStatus() {
     ResolvedTarget t;
-    if (!ResolveTarget(t)) {
-        Speech::Output(L"No target", /*interrupt=*/true);
+
+    // `;` reports ONLY the COMMITTED combat target -- what the leader is actually acting on --
+    // and is SILENT otherwise (user instruction, release 0.1). Two consequences, both intended:
+    //
+    //   * OUT OF BATTLE IT DOES NOTHING AT ALL. There is no commitment outside combat
+    //     (CommittedTargetOf tests the queued flag and requires a real action-table row), so this
+    //     returns before speaking. It must not read the field target cursor, and it must not say
+    //     "No target" either -- announcing anything is exactly the "works out of battle" behaviour
+    //     that was reported. Silence is the correct output for nothing-to-report.
+    //   * A BROWSED cursor is rejected. ResolveTarget only reports `browsing` when there is no
+    //     commitment, so it can never be the "active combat target" this key exists to answer.
+    //
+    // The browse fallback is deliberately left INSIDE ResolveTarget rather than deleted: `p`
+    // (GetLockedTarget -> routing) is the other caller and its behaviour is unchanged.
+    if (!ResolveTarget(t) || t.browsing) {
+        Log::Write("TARGET", t.browsing ? "; SILENT: browsed cursor, no commitment"
+                                        : "; SILENT: no committed combat target");
         return;
     }
 
@@ -414,9 +429,9 @@ void SpeakTargetStatus() {
             text += L", HP " + std::to_wstring(pct) + L" percent";
         }
     }
-    // Mod-emitted qualifiers: the game has no text for these states.
-    if (t.browsing)   text += L", browsing";
-    else if (!t.acting) text += L", queued";
+    // Mod-emitted qualifier: the game has no text for this state. ("browsing" is gone -- a browsed
+    // cursor returns above, so it can never reach here.)
+    if (!t.acting) text += L", queued";
 
     Speech::Output(text, /*interrupt=*/true);
 }

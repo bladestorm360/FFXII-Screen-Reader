@@ -13,6 +13,13 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > (Game Speed) but **nothing to `4`/`5`/`6`**, so they are free. `;` changed from the facing
 > readout to **active target status**; the facing readout was dropped (orientation isn't needed —
 > the route directions are egocentric and pathfinding works without it).
+>
+> **UPDATE (release 0.1):** `7` added for the guest slot. **`;` is now battle-only and silent
+> otherwise** (user instruction): it reports ONLY the committed combat target, never a browsed
+> cursor, and out of battle it does **nothing at all** — not even "No target". Applied at
+> `SpeakTargetStatus`, not in `ResolveTarget`, so `p`-key routing to a browsed target is unchanged.
+> Empty/absent slots (notably `7`, silent for most of the game) speak nothing; diagnostics go to the
+> log via `BattleState::DiagnoseSlot`, never to speech.
 
 ## Game bindings (captured)
 
@@ -78,7 +85,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `-` | Nav: previous category | free |
 | `=` | Nav: next category | free |
 | `` ` `` | Nav: rescan + area name | free |
-| `;` | Battle: **committed** target status (name + instance letter + HP) | free |
+| `;` | Battle **only**: **committed** target status (name + instance letter + HP). Silent out of battle, and silent on a merely browsed cursor — see below | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
 | `'` | Nav: diagnostic dump | free |
 | `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) | free |
@@ -90,12 +97,17 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > (RVA `0x2D9F190`) as the BtlWork struct; **it is a POINTER**. Every roster read landed in
 > unrelated memory, so `bcIdx >= 0x28`, the lookup returned null, and `SpeakSlot` returned
 > silently. The deref + the engine's own magic check (`0x5071901`) now live in
-> `battle/battle_state.cpp`. Also fixed in the same pass: an empty slot now says **"Empty slot"**
-> instead of nothing (silence made a broken mod indistinguishable from an empty slot, which is
-> what hid this for two sessions), `PARTY` was added to the logger's flush list so its diagnostics
+> `battle/battle_state.cpp`. Also fixed in the same pass: `PARTY` was added to the logger's flush list so its diagnostics
 > survive a hard exit, and the readout now speaks **status names** read from the game's own table.
 > Roster list 3 has **nine** slots (0-2 active, 3 guest, 4-8 reserve) and the game's own bound
-> check is literally `slot < 9`; only 0-2 are currently bound to keys.
+> check is literally `slot < 9`; keys `4`/`5`/`6` cover 0-2 and `7` covers the guest.
+>
+> **An empty or unreadable slot is SILENT — standing user instruction.** It must never announce
+> "Empty slot" or any other filler; it behaves like every other mod key with nothing to report. The
+> `7` key is silent whenever there is no guest, which is most of the game, and that is correct. The
+> distinguishing diagnostic goes to the **log** (`BattleState::DiagnoseSlot`), never to speech.
+> ~~"an empty slot now says **Empty slot**"~~ is **STRUCK** — it was proposed in
+> `combat_system.md` §8.2, reversed by the user before it shipped, and never existed in built code.
 >
 > ~~Remaining suspects: the `g_extraDown[6]` -> `[9]` array growth~~ — **STRUCK.** The input path
 > was correct end to end all along.

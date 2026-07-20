@@ -88,7 +88,7 @@ Save as `ReadMe.txt` (capital R, capital M) in the version directory.
 
 - Zip name: `FFXII-Screen-ReaderV<version>.zip`, placed in `Releases\` — a **sibling** of the version
   directory, not inside it.
-- The zip's root contains the two files **directly**, with no nested `V<version>\` folder, so the
+- The zip's root contains the four files **directly**, with no nested `V<version>\` folder, so the
   user can extract straight into the game's `x64\` folder as the ReadMe instructs.
 
 ### 4. Report

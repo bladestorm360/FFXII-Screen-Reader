@@ -32,8 +32,15 @@ void Shutdown();
 // all reads SEH-guarded).
 bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut);
 
-// `;` — speak the currently selected target's status (name + vitals), or "No target". Same liveness
-// rules and formatting as the automatic target-change announcement. Thread-safe (input thread).
+// `;` — speak the ACTIVE COMBAT TARGET's status (name + vitals): the target the leader is committed
+// to acting on. **SILENT in every other case** — no commitment, a merely browsed cursor, or out of
+// battle entirely. It does NOT say "No target"; it says nothing (user instruction, release 0.1).
+//
+// OUT OF BATTLE THIS KEY DOES NOTHING. That is the point of it — do not "restore" a field-cursor
+// readout or a spoken no-target message. Note this is a NARROWER contract than GetLockedTarget
+// above, which still accepts a browsed target for routing; the two callers differ deliberately.
+// Same liveness rules and formatting as the automatic target-change announcement.
+// Thread-safe (input thread).
 void SpeakTargetStatus();
 
 } // namespace BattleTargetReader

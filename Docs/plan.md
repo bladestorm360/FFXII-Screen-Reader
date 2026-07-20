@@ -174,10 +174,13 @@ NPC-trigger path needs Phase 4 first.
 - [ ] G7.4: KO transition (HP=0 + is_active=0xFF)
 
 **Phase 7 features:**
-- [ ] Modal keyboard hook (input/keyboard_hook.cpp)
-- [ ] Pause-game integration (hook menu-pause path or time-scale global)
-- [ ] 50-event continuous-FIFO ring buffer (battle/combat_log.cpp)
-- [ ] Log open/close UI (F4 open, Escape close, arrows / PgUp / PgDn nav)
+- ~~[ ] Modal keyboard hook (input/keyboard_hook.cpp)~~ — **STRUCK (S48/49).** The log is NOT modal.
+- ~~[ ] Pause-game integration (hook menu-pause path or time-scale global)~~ — **STRUCK (S48/49).**
+  The log never pauses the game. It works while the player pauses it themselves, which is better:
+  no game-state mutation, and it reads back from menus too.
+- [x] 100-event continuous-FIFO ring buffer (battle/combat_log.cpp) — shipped, confirmed in play 0.1
+- [x] Log navigation — **non-modal**, `,` older · `.` newer · Home oldest · End newest. Works in
+  menus and while paused (only gate is `GameIsForeground()`). ~~F4 open / Escape close~~ **STRUCK.**
 - [ ] Damage event capture (Frida-prototype DrummerIX `DamageModAOB` first)
 - [ ] Combo aggregation (~750ms window for same actor+target+type)
 - [ ] Heal event capture
