@@ -1,4 +1,5 @@
 #include "ui/battle_target_reader.h"
+#include "battle/battle_state.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -184,7 +185,7 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
     std::wstring text = name;
     if (maxHP > 0) {
         if (ally) {
-            text += L", HP " + std::to_wstring(curHP) + L" of " + std::to_wstring(maxHP);
+            text += L", HP " + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
         } else {
             int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
             text += L", HP " + std::to_wstring(pct) + L" percent";
@@ -282,100 +283,142 @@ void Shutdown() {
     g_cache = TargetCache{};   // drop any stale target
 }
 
-// Resolve the CURRENTLY SELECTED, CONFIRMED-LIVE target. Shared by `p` (route) and `;` (status), so
-// both agree on what "the target" is and both refuse a dead one.
+struct ResolvedTarget {
+    void*        actor    = nullptr;
+    void*        bc       = nullptr;
+    std::wstring name;                  // display name, instance letter included
+    bool         ally     = false;
+    bool         browsing = false;      // true = the cursor, NOT a commitment
+    bool         acting   = false;      // committed and mid-action (vs queued)
+    uint16_t     actionId = 0xFFFF;
+    FVec3        pos;
+    bool         havePos  = false;
+};
+
+// Resolve THE TARGET, committed first. Shared by `p` (route) and `;` (status).
 //
-// Gates on the LIVE DAT_0209be80 target-selection state (read here, SEH-guarded, mirroring
-// HookedNameplate) — NOT on cache age, because the nameplate redraw that fills the cache is
-// event-driven and sparse. A target is "live" iff the game's gate (+0x10F78) is set and its selected
-// handle (+0x9FD8) still matches the one we captured (the redraw updates both together on a target
-// change) AND the unit has not died. Re-resolves a FRESH position from the cached BtlChr (handles a
-// moving target), falling back to the last cached pos.
-bool ResolveLiveTarget(void** bcOut, std::wstring& nameOut, bool& allyOut,
-                       FVec3& posOut, bool& havePosOut) {
-    // Live selection state (input thread; same reads HookedNameplate does on the game thread).
-    void* P = Pstate();
-    const bool gateActive = P && MemRead::PtrAt(P, OFF_GATE) != nullptr;
-    uint32_t liveHandle = 0;
-    if (P) MemRead::SafeReadU32(P, OFF_TARGETID, &liveHandle);
+// ===== WHY THIS CHANGED (Session 49) =====
+// The old implementation resolved `*(P + 0x9FD8)`, which is written ONLY by browse handlers. A live
+// capture settled it: scrolling the cursor across two enemies moved that field on every step while
+// the character's actual commitment sat on a THIRD enemy the cursor never visited. So the previous
+// readout could name a unit the character was not acting on at all.
+//
+// The real commitment lives on the ACTOR, and BattleState::CommittedTargetOf applies the corrected
+// precedence: ACTIVE (+0x710/+0x714) only when it holds a real ability id and a non-null target --
+// actor+0x714 can carry an AI/behaviour opcode from a 0x4000+ band with target 0 -- otherwise the
+// QUEUED pair (+0xBB8/+0xBA0) gated on flag bit 0x4000, which must be tested because those fields
+// retain stale values after it clears.
+//
+// The browse cursor is kept as an explicitly-labelled SECOND choice: while the select UI is open,
+// what you are hovering is genuinely useful, it just is not "the target".
+//
+// No cache is needed any more. It existed because FUN_003588b0 was unreliable to call; handle ->
+// actor is now a direct scan of actor+0x08, which is the actor's own handle (assigned outright in
+// FUN_00322080).
+bool ResolveTarget(ResolvedTarget& out) {
+    out = ResolvedTarget{};
 
-    void* bc = nullptr; int32_t cachedHandle = 0; FVec3 cachedPos; std::wstring label;
-    {
-        std::lock_guard<std::mutex> lk(g_cacheMx);
-        bc = g_cache.bc; cachedHandle = g_cache.handle; cachedPos = g_cache.pos; label = g_cache.label;
+    void* actor = nullptr;
+
+    // 1. the committed target
+    void* leader = BattleState::LeaderActor();
+    if (leader) {
+        const BattleState::Committed c = BattleState::CommittedTargetOf(leader);
+        if (c.valid) {
+            actor = BattleState::ActorForHandle(c.targetHandle);
+            if (actor) { out.acting = c.active; out.actionId = c.actionId; }
+        }
     }
 
-    const bool match = gateActive && liveHandle != 0 &&
-                       static_cast<int32_t>(liveHandle) == cachedHandle && bc != nullptr;
-    if (!match) {
-        char lg[128];
-        snprintf(lg, sizeof(lg), "ResolveLiveTarget: gate=%d liveHandle=0x%x cachedHandle=0x%x bc=%p match=0",
-                 gateActive ? 1 : 0, liveHandle, cachedHandle, bc);
-        Log::Write("TARGET", lg);
-        // The selection is gone. Drop the cache too — otherwise it survives until DLL unload and a
-        // later selection that happens to reuse this handle value would match a stale BtlChr.
-        if (!gateActive) ClearCache();
-        return false;
+    // 2. else the browse cursor, but ONLY while the select UI is genuinely open
+    if (!actor) {
+        void* P = Pstate();
+        if (P && MemRead::PtrAt(P, OFF_GATE) != nullptr) {
+            uint32_t h = 0;
+            if (MemRead::SafeReadU32(P, OFF_TARGETID, &h) && h != 0) {
+                actor = BattleState::ActorForHandle(static_cast<int32_t>(h));
+                if (actor) out.browsing = true;
+            }
+        }
     }
+    if (!actor) return false;
 
-    // LIVENESS. A matching handle is not enough: when the target dies the game leaves the selection
-    // state alone for a moment, and the actor either flips to scene-kind 5 (dead/removed) or leaves
-    // the pool entirely. Previously NameForBtlChr's return value was discarded here, so a departed
-    // actor produced havePos=false -> posOut = the CACHED position, and `p` happily routed to the
-    // corpse's last known spot. Three separate leaks, all closed below.
-    bool ally = false, dead = false, havePos = false;
-    FVec3 fresh;
-    const std::wstring live = NameForBtlChr(bc, &ally, &fresh, &havePos, nullptr, &dead);
+    // LIVENESS — a handle alone is not enough. When a target dies the game leaves the selection
+    // state alone for a moment and the actor flips to scene-kind 5 (dead/removed) or leaves the
+    // pool. Without this, `p` used to route to the corpse's last known spot.
+    void* bc = BattleState::BtlChrForActor(actor);
+    void* sceneObj = MemRead::PtrAt(actor, ACTOR_SCENEOBJ);
+    uint8_t kind = 0xFF;
+    MemRead::SafeReadU8(sceneObj, SCENEOBJ_KIND, &kind);
+    if ((kind & KIND_MASK) == KIND_DEAD) return false;
 
     uint32_t curHP = 0;
-    const bool hpOk = MemRead::SafeReadU32(bc, BC_CURHP, &curHP);
+    if (bc && MemRead::SafeReadU32(bc, BC_CURHP, &curHP) && curHP == 0) return false;
 
-    const bool gone = live.empty();                       // no longer in the actor pool
-    const bool ko   = hpOk && curHP == 0;                 // killed but still pooled
-    if (gone || dead || ko) {
-        char lg[144];
-        snprintf(lg, sizeof(lg), "ResolveLiveTarget: target no longer live (gone=%d dead=%d hp0=%d) -> cleared",
-                 gone ? 1 : 0, dead ? 1 : 0, ko ? 1 : 0);
-        Log::Write("TARGET", lg);
-        ClearCache();
-        return false;
-    }
+    out.name = BattleState::DisplayNameForActor(actor);   // includes the instance letter
+    if (out.name.empty()) return false;
 
-    char lg[144];
-    snprintf(lg, sizeof(lg), "ResolveLiveTarget: gate=1 handle=0x%x bc=%p hp=%u havePos=%d match=1",
-             liveHandle, bc, curHP, havePos ? 1 : 0);
+    const BattleState::Faction f = BattleState::FactionOf(actor);
+    out.ally = (f == BattleState::Faction::Party || f == BattleState::Faction::Guest ||
+                f == BattleState::Faction::Ally);
+
+    out.actor = actor;
+    out.bc = bc;
+    out.havePos = ResolveActorPos(actor, sceneObj, out.pos, nullptr);
+
+    char lg[224];
+    char utf8[128] = {};
+    WideCharToMultiByte(CP_UTF8, 0, out.name.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    snprintf(lg, sizeof(lg), "ResolveTarget: \"%s\" %s%s hp=%u havePos=%d",
+             utf8, out.browsing ? "BROWSING" : (out.acting ? "committed/acting" : "committed/queued"),
+             out.ally ? " ally" : " enemy", curHP, out.havePos ? 1 : 0);
     Log::Write("TARGET", lg);
-
-    // Fresh position from the cached BtlChr (scene node -> actor+0xE0 fallback). The cached-pos
-    // fallback is safe now: we only get here with a confirmed-live target.
-    *bcOut     = bc;
-    nameOut    = live.empty() ? label : live;
-    allyOut    = ally;
-    posOut     = havePos ? fresh : cachedPos;
-    havePosOut = havePos;
     return true;
 }
 
-// Input-thread accessor for `p` (route to the selected target).
+// Input-thread accessor for `p` (route to the target). Now routes to the COMMITTED target, so `p`
+// and `;` always agree on which unit they mean.
 bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
-    void* bc = nullptr; bool ally = false, havePos = false;
-    std::wstring name;
-    if (!ResolveLiveTarget(&bc, name, ally, posOut, havePos)) return false;
-    labelOut = name;
+    ResolvedTarget t;
+    if (!ResolveTarget(t) || !t.havePos) return false;
+    posOut = t.pos;
+    labelOut = t.name;
     return true;
 }
 
-// Input-thread accessor for `;` (speak the selected target's status). Same liveness rules as `p`, so
-// a dead target says "No target" rather than reporting a corpse. Reuses the announce formatting, so
-// the readout matches what the target-change announcement says (enemy = HP %, ally = HP numbers).
+// Input-thread accessor for `;` (speak the target's status).
+//
+// Says WHICH KIND of target it is, because the difference matters: a committed target is what the
+// character will actually hit, while a browsed one is only what the cursor is over. Collapsing the
+// two is precisely the bug this replaced.
 void SpeakTargetStatus() {
-    void* bc = nullptr; bool ally = false, havePos = false;
-    std::wstring name; FVec3 pos;
-    if (!ResolveLiveTarget(&bc, name, ally, pos, havePos) || name.empty()) {
+    ResolvedTarget t;
+    if (!ResolveTarget(t)) {
         Speech::Output(L"No target", /*interrupt=*/true);
         return;
     }
-    AnnounceTargetBc(bc, name, ally);
+
+    uint32_t curHPu = 0, maxHPu = 0;
+    MemRead::SafeReadU32(t.bc, BC_CURHP, &curHPu);
+    MemRead::SafeReadU32(t.bc, BC_MAXHP, &maxHPu);
+    const int32_t curHP = static_cast<int32_t>(curHPu), maxHP = static_cast<int32_t>(maxHPu);
+
+    std::wstring text = t.name;
+    if (maxHP > 0) {
+        if (t.ally) {
+            // Allies show real numbers; enemies show a percentage, mirroring the gauge the game
+            // draws (there is no pre-Libra HP-visible flag to read).
+            text += L", HP " + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
+        } else {
+            const int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
+            text += L", HP " + std::to_wstring(pct) + L" percent";
+        }
+    }
+    // Mod-emitted qualifiers: the game has no text for these states.
+    if (t.browsing)   text += L", browsing";
+    else if (!t.acting) text += L", queued";
+
+    Speech::Output(text, /*interrupt=*/true);
 }
 
 } // namespace BattleTargetReader

@@ -15,9 +15,10 @@
 // legitimate. Instead we read exactly what their bodies read.
 namespace PartyStatus {
 
-// Active party slots (3 active + 1 guest). The game bounds this at 4 in six independent functions;
-// we still test every slot for emptiness rather than trusting the constant.
-constexpr int kMaxSlots = 4;
+// Roster list 3 holds NINE slots: 0-2 the active party, 3 the guest, 4-8 the reserve. The game's
+// own bound check for this list (FUN_00322c50 category 0x17) is literally `slot < 9`, so every one
+// is a legal read; occupancy is decided by the >= 0x28 sentinel per slot.
+constexpr int kMaxSlots = 9;
 
 struct SlotVitals {
     bool     present = false;   // false = empty slot (speak nothing at all)
@@ -27,16 +28,18 @@ struct SlotVitals {
     int16_t  curMP   = 0;
     int16_t  maxMP   = 0;
     bool     haveMP  = false;   // MP gauge disabled for this character
-    uint32_t status  = 0;       // status bitfield (statusA | statusB) — unused for now
+    uint32_t status  = 0;       // status bitfield (statusA | statusB)
     std::wstring name;
+    std::wstring statusNames;   // e.g. "Poison, Slow" — resolved from the game's own status table
 };
 
-// Read one party slot (0-based). Returns false if the slot is empty or unreadable — in which case the
-// caller speaks NOTHING (an empty slot is silent, not "empty slot").
+// Read one party slot (0-based). Returns false if the slot is empty or unreadable.
 bool ReadSlot(int slot, SlotVitals& out);
 
-// Speak one party slot's vitals: "<name>, HP <cur> of <max>, MP <cur> of <max>". Silent when the slot
-// is empty. `slot` is 0-based (key 4 -> 0, 5 -> 1, 6 -> 2).
+// Speak one party slot's vitals: "<name>, HP <cur> of <max>, MP <cur> of <max>, <statuses>".
+// An empty slot now says "Empty slot" rather than staying silent -- silence made a broken mod
+// indistinguishable from an empty party slot, which is what hid the missing-dereference bug for
+// two sessions. `slot` is 0-based (key 4 -> 0, 5 -> 1, 6 -> 2).
 void SpeakSlot(int slot);
 
 } // namespace PartyStatus

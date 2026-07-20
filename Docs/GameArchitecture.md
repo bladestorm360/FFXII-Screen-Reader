@@ -369,17 +369,40 @@ functions in source-level form.
 
 ## Damage / Heal / Status Event Funnel
 
+> ### ⇒ SUPERSEDED 2026-07-20 (Session 48 research). See **`Docs/combat_system.md`**.
+>
+> The entire combat system — messaging, committed-vs-browsed target, damage/heal/MP/status pipeline,
+> faction + Neutral, battle lifecycle, ATB, chain, rewards, pause — was RE'd offline in one pass and is
+> documented in `combat_system.md` with per-claim confidences and a probe gate. Nothing is implemented
+> yet. Read that file before touching anything below.
+>
+> **Headline results:** damage applier chokepoint `FUN_003112f0` (RVA `0x1F12F0`); flying-number spawn
+> `FUN_003283d0` (RVA `0x2083D0`, args `(work, signedDelta, isPositive, isMP)` = all four damage
+> categories); HP/MP writers `FUN_00300530`/`FUN_00300ce0` (RVA `0x1E0530`/`0x1E0CE0`) are a **closed
+> set**; status+KO `FUN_0030e360` (RVA `0x1EE360`).
+>
+> **STRIKE — the "Replacement strategy" below is obsolete.** "Frida-watch HP writes and walk the
+> callers" is unnecessary: the writer set is closed and small, and was recovered offline.
+>
+> **STRIKE — "no textual combat strings exist in the game"** (asserted in
+> `memory/project_combat_log_design.md`). FFXII composes **full localized combat sentences** from
+> `battle_message.bin` (table `DAT_02ebf018`, RVA `0x2D9F018`) and keeps its **own scrollable battle
+> log** at `*(u64*)(P + 0x9FF8) + 0x4098` (`P` = `DAT_0209be80`). Finished string hookable at
+> `FUN_0028e110` (RVA `0x16E110`). The string-grep failed because the text is codec-encoded master
+> data, not ASCII in the binary — the observation "numeric IDs, not strings" below was right, the
+> conclusion drawn from it was wrong. **The mod reads this text; it does not synthesize combat lines.**
+
 **STRATEGY UPDATE (2026-05-05):** the static "find functions referencing
 'damage'/'miss'/'critical' strings" approach in
 `find_damage_candidates.java` returned only 3 hits. FFXII uses **numeric
 IDs** for damage / status events, not strings. String xrefs are not
 viable for finding the funnel.
 
-**Replacement strategy:** Frida-watch HP writes via memory access monitor,
+~~**Replacement strategy:** Frida-watch HP writes via memory access monitor,
 walk callers (per `probe_damage_event.js`). Seed pointer chain from
 DrummerIX's CE table (the table's PermStatusBitsAOB resolves to the active
 character's struct base). Once we have leader's HP write site, walk the
-caller stack to find the damage funnel.
+caller stack to find the damage funnel.~~ — **STRUCK, see the box above.**
 
 DrummerIX's `DamageModAOB` pattern (`49 8B C8 44 8B F2 E8 ?? ?? ?? ?? 48 8B
 CE 48 8B E8`, line 1047 of FFXII_TZA.CT) is the **direct candidate** — it

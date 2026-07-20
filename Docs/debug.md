@@ -7,6 +7,51 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: combat_system.md struck claims S49 FUN_0028e110 no message id FUN_00536410 outcome 9
+not preview result+0x00 0x20 DAT_0209a1f0 not leader P-E cancelled row+0x00 not action name
+neutral foes group 0 only aggression actor+0x6A0 pointer deref actor+0xEA4 not hostility
+FUN_00313b30 per action FUN_0035c7b0 0x17 dead FUN_00312280 no reward args** (Session 49) —
+**eleven claims in `Docs/combat_system.md` were disproved offline and are STRUCK there.** Do not
+rebuild on them. The eight that would have shipped a bug:
+
+1. ~~Hook `FUN_0028e110` for the game's combat sentences~~ — **it never receives the message id**,
+   only a dwell class, so the realtime-vs-log-only policy has nothing to key on. Use
+   **`FUN_00536410`** (RVA `0x416410`): id at `RCX+4 & 0x7FFF`, finished string into `RDX`, one
+   frame, and upstream of the toast fork where the ticker is never called.
+2. ~~`result+0x04 == 9` is the AI preview, filter it~~ — 9 is the **default seed**. Preview is
+   `result+0x00 & 0x20` (`FUN_00308b90`), which **never calls the applier**. No filter needed.
+3. ~~Filter status ticks on `attacker == 0`~~ — **filter `actionId == 0xFFFF`**; `FUN_00310db0`
+   makes two *real* calls with a null attacker.
+4. ~~`DAT_0209a1f0[3]` is the party leader~~ — it is 4 × `sceneObj*` in roster order. Leader is
+   `*(u8*)(W + 0x5AA4)` → BtlChr → pool scan (`FUN_00327150`). **Probe P-E cancelled.** Also note
+   the shipped `*(u8*)(bc+5) == 0` test matches *every* roster member, not the leader.
+5. ~~Ability name is the id at `row+0x00`~~ — that is a **description** id; `Attack` and every
+   `Reserve` row share `4000`. The name is **`row+0x34`** → the `word.bin` pool.
+6. ~~The engine files Neutrals under Foes, so a Neutral is a legal attack target~~ — **backwards.**
+   The emit gate is `(g & ~2) == 0`: foes = group **0 only**, and Neutrals reach neither list.
+7. ~~Aggression: `f = *(u32*)(actor+0x6A0)`, radius `+0x6A4`~~ — **`+0x6A0` is a POINTER.** Same
+   missing-deref class as the `4`/`5`/`6` bug. Use `*(u32*)(*(u64*)(actor+0x6A0))`, radius at
+   `aiData+0x04`. Still only 0.97 structurally, so it does **not** ship.
+8. ~~"In battle" = any party actor with `+0xEA4 != 0`~~ — that mask is "who has an action aimed at
+   me", **not gated on hostility**, so an out-of-combat Cure trips it. Use
+   `*(u32*)(actor+4) & 0x100000` (`FUN_002fead0`).
+
+Plus three lifecycle mislabels: `FUN_00313b30` fires ~2× **per action**, not per battle;
+`FUN_0035c7b0` never receives `0x17` from any caller (use **`FUN_0035c8a0`**); and `FUN_00312280`
+passes **none** of EXP/LP/gil/loot as arguments (gil → `FUN_00469e80`, loot → `FUN_003180f0`).
+
+**KEYWORDS: game_text.cpp high-bit fallback wrong 75 of 102 codec escape 0x29 eats punctuation
+0x2d numeric slot missing level number 0x10-0x1f two-byte glyph stray letter icon family 0x40
+ffxii_codec.py** (Session 49) — the decoder's *"after `0x0f <sel>`, consume every following byte
+`>= 0x80`"* fallback is **wrong on 75 of the 102 battle messages**, not just the one apostrophe
+previously documented. Digits (`0x85`–`0x8e`) and punctuation (`0x99`/`0x9a`/`0xa0`–`0xaf`) are all
+`>= 0x80`, so sentence-final `.` and `!` are eaten as parameters. Additionally: `0x2d` is the
+**numeric substitution slot** (why the level-up line lost its number), `0x10`–`0x1f` are **2-byte
+extended glyphs** whose trailing byte the mod renders as a stray letter, and the `0x40`–`0x6b` icon
+family takes exactly **1** parameter byte. The complete table is
+`..\FFXII-Decompile\tools\ffxii_codec.py`, regression-tested to **zero structurally-unexplained
+bytes**. Port `game_text.cpp` from it; do not re-derive.
+
 **KEYWORDS: exit destination door pairing getmapdestposbyindex nowjumpindex lastjumpindex jump-index
 dispatch gateway record arrival symmetry routine table 2 entries 0x5C routine index __MJ_CTRL
 mapData+0x54 +0x84 +0x70 +0x8c** — the long hunt for "which door goes where" (Session 46). Everything
@@ -420,3 +465,76 @@ becomes a real blocker (it touches the game's device).
 Index of session log files (split into `sessions_*.md` every 50 sessions).
 
 - `sessions_001_current.md` — sessions 1–N (current)
+
+**KEYWORDS: FUN_003112f0 call volume 1275 vs 20 real damage applier not one call per hit tick
+actionId 0xFFFF Tier 2 source filter per-frame hook risk FUN_00310db0 FUN_00233f70** (Session 49,
+tester-reported) — **`FUN_003112f0` fires FAR more often than there are damage events.** A live
+messages run counted **1275+ calls against only ~10-20 actual damage instances**. Do NOT report a
+raw count of this function as "damage events" — an earlier note in this session did exactly that
+and the conclusion drawn from it was wrong.
+
+This matters because `FUN_003112f0` is the designated **Tier-2 source** for the mod's own attack
+lines (`combat_system.md` §9.1.3b) — the game composes no message for a basic attack, so the log
+must synthesise one from this call. If the function fires ~100x per real hit then:
+1. the filter is load-bearing, not cosmetic — see the **F2** correction (filter `actionId ==
+   0xFFFF` for ticks, NOT `attacker == 0`, because `FUN_00310db0` makes two real calls with a null
+   attacker); and
+2. hooking it may approach the **no-per-frame-hooks** rule and needs a deliberate decision.
+
+Suspected driver: `FUN_00310db0(actor)` does per-actor periodic work and is one of the three tick
+callers; its own caller `FUN_00233f70` sits in the battle-update band. **Not yet proven** —
+`probe_combat_damage.js` now buckets every call (real hit / tick / zero-delta / invalid / null
+attacker) and prints the ratio, which answers it directly. Settle before building Phase 5.
+
+**KEYWORDS: FUN_003112f0 is PER-FRAME FUN_00310db0 FUN_00233f70 callback +0x38 frame loop
+FUN_00265a20 FUN_0026ce60 status tick actionId 0xFFFF attacker 0 Tier 2 source per-frame hook rule
+combat log damage line** (Session 49, tester-caught) — **`FUN_003112f0` is called PER ACTOR PER
+FRAME, not once per damage event.** `combat_system.md` §9.1.3b presents it as "one call = one
+fully-resolved outcome", which is true of its *content* but badly wrong about its *rate*.
+
+Chain, confirmed: the frame loop (`FUN_0026ce60` → `FUN_00265a20`) registers **`FUN_00233f70` as a
+per-object update callback** (`*(code **)(obj + 0x38) = FUN_00233f70`). That callback runs a
+battery of per-actor updates including **`FUN_00310db0`**, which does:
+
+```c
+memset(local_1a8, 0, 0x148);
+FUN_00385df0(bc, local_1a8);
+FUN_003112f0(local_1a8, 0, bc, 0xffff);      // attacker = 0, actionId = 0xFFFF
+```
+
+Live evidence: a session with only ~10-20 real hits logged **1275+** applier calls, essentially all
+with a **null attacker**, climbing steadily with playtime (~20/sec). Confidence 0.97.
+
+**Consequences:**
+1. The tick filter (`actionId == 0xFFFF`, per the **F2** correction — NOT `attacker == 0`, because
+   the loop just below makes real calls with a null attacker) is **load-bearing**, not cosmetic.
+2. Hooking `FUN_003112f0` means a detour on the game's per-frame path, which engages the
+   **no-per-frame-hooks** rule. It is not on §5.7's never-hook list, but it belongs in that
+   conversation. Cost per call is small (trampoline + 2 reads + compare) and there is precedent —
+   `battle_target_reader.cpp` already hooks the per-render `FUN_002bfd20` with a cheap early-out —
+   but this must be a **deliberate, recorded decision**, not an assumption.
+3. Any claim that "N applier calls" means "N damage events" is wrong. Do not repeat it.
+
+**KEYWORDS: never ask the user to read the screen blind tester visual confirmation invalid probe
+design reaction words sprites result+0x04 backtrace processing code FUN_00384e50 equipment mask
+FUN_00389370 gate FUN_003896b0 roll ladder parry block evade** (Session 49) — **a probe step that
+required the tester to read an on-screen word was authored, and it is invalid by construction: the
+tester is blind.** Probe P3 and the reaction-word instructions in `probe_combat_damage.js` both did
+this and are struck.
+
+**The correct method, and the one to reach for by default: backtrace the processing code to the
+condition that produced the value** (the approach used on DQ7R). Applied here it resolved the
+question completely and offline:
+
+- `FUN_00384e50(bc)` → equipment mask: bit0 = main-hand (`bc+0x50 != 0x1000`), bit1 = off-hand
+  (`bc+0x52 != 0x1000`), bit2 = animation-set hash `0x2902032b`.
+- `FUN_00389370:73-81` zeroes each defensive rate unless its gate bit is set — `DAT_02aedff0` needs
+  off-hand, `DAT_02aedff4` needs main-hand, `DAT_02aedfec` needs the animation set.
+- `FUN_003896b0:38-70` rolls them in order and writes the result into **`result+0x04`**.
+
+⇒ **`result+0x04` names the mechanic** (1/2 parry · 3/4 block · 5 evade · 6 no-effect ·
+7 nullified · 8 reflected · 10 absorbed · 0xB avoided), identified by which equipment slot gated
+the roll. Confidence 0.98. **`FUN_00328480` is dropped from the design** — one hook, not two.
+
+**Rule going forward: if a value has no text behind it, do NOT ask for a visual reading — trace the
+code path that set it.**

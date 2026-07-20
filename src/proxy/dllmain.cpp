@@ -9,6 +9,7 @@
 #include "ui/title_reader.h"
 #include "ui/message_reader.h"
 #include "navigation/navigation.h"
+#include "battle/combat_events.h"
 
 #include <Windows.h>
 #include <Psapi.h>
@@ -82,6 +83,9 @@ static void DeferredInitImpl() {
         // diagnostic on the `\` key. Installs the map-load ctx-capture hook only —
         // no interpreter/action hooks (announce-only, non-interfering).
         Navigation::Init();
+        // Combat log: the game's own battle sentences (Tier 1) plus synthesized
+        // damage lines (Tier 2). Installs exactly two hooks.
+        CombatEvents::Init();
     } else {
         Log::Write("INIT", "MinHook init failed — menu reading disabled this session");
     }
@@ -126,6 +130,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH: {
+            CombatEvents::Shutdown();
             Navigation::Shutdown();
             MessageReader::Shutdown();
             TitleReader::Shutdown();

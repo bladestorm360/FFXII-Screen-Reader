@@ -170,9 +170,14 @@ void Write(const char* category, const char* message) {
     fprintf(g_logFile, "[%02d:%02d:%02d.%03d +%llums] [%s] %s\n",
             h, m, s, ms, (unsigned long long)elapsed, category, message);
 
+    // Flush categories whose loss would hide a bug. PARTY and COMBAT were added after a diagnostic
+    // line sat in an unflushed stdio buffer and vanished on a hard exit -- which is what made the
+    // silent 4/5/6 keys look like an input-path failure for two sessions.
     if (category && (strcmp(category, "ERROR") == 0 ||
                      strcmp(category, "INIT") == 0 ||
-                     strcmp(category, "HOOK_HEALTH") == 0)) {
+                     strcmp(category, "HOOK_HEALTH") == 0 ||
+                     strcmp(category, "PARTY") == 0 ||
+                     strcmp(category, "COMBAT") == 0)) {
         fflush(g_logFile);
     }
 }

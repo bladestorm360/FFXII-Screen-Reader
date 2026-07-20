@@ -78,36 +78,41 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `-` | Nav: previous category | free |
 | `=` | Nav: next category | free |
 | `` ` `` | Nav: rescan + area name | free |
-| `;` | Battle: active target status (name + HP) | free |
+| `;` | Battle: **committed** target status (name + instance letter + HP) | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
 | `'` | Nav: diagnostic dump | free |
-| `4` | Party: slot 1 status (HP / MP with maximums) — **NOT WORKING, see below** | free |
-| `5` | Party: slot 2 status — **NOT WORKING** | free |
-| `6` | Party: slot 3 status — **NOT WORKING** | free |
+| `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) | free |
+| `5` | Party: slot 2 status | free |
+| `6` | Party: slot 3 status | free |
+| `7` | Party: **guest** slot status (silent when there is no guest) | free |
 
-> **`4`/`5`/`6` DO NOT FIRE (Session 45, tester-confirmed).** Not listed in the end-user
-> `README.md`. The log shows **zero** `[PARTY]` lines, i.e. `PartyStatus::SpeakSlot` is never
-> reached — so this is the **input path**, not the BtlChr reads (those are ≥0.98 offline and
-> untested precisely because the key never arrives).
+> **`4`/`5`/`6` FIXED (Session 49, implemented).** `party_status.cpp` treated `DAT_02ebf190`
+> (RVA `0x2D9F190`) as the BtlWork struct; **it is a POINTER**. Every roster read landed in
+> unrelated memory, so `bcIdx >= 0x28`, the lookup returned null, and `SpeakSlot` returned
+> silently. The deref + the engine's own magic check (`0x5071901`) now live in
+> `battle/battle_state.cpp`. Also fixed in the same pass: an empty slot now says **"Empty slot"**
+> instead of nothing (silence made a broken mod indistinguishable from an empty slot, which is
+> what hid this for two sessions), `PARTY` was added to the logger's flush list so its diagnostics
+> survive a hard exit, and the readout now speaks **status names** read from the game's own table.
+> Roster list 3 has **nine** slots (0-2 active, 3 guest, 4-8 reserve) and the game's own bound
+> check is literally `slot < 9`; only 0-2 are currently bound to keys.
 >
-> **Already eliminated:** (a) *not* a build/deploy miss — the `"party slot"` log literal is present
-> in the **deployed** `dinput8.dll`, so the code shipped; (b) *not* the scan codes being unreadable
-> in general — `DIK_MINUS` (`0x0C`) sits in the same number row as `DIK_4`-`DIK_6` (`0x05`-`0x07`)
-> and `-`/`=` work fine; (c) *not* a `SpeakSlot` early-return — the empty-slot path logs before it
-> returns, so even an empty slot would leave a `[PARTY]` line.
+> ~~Remaining suspects: the `g_extraDown[6]` -> `[9]` array growth~~ — **STRUCK.** The input path
+> was correct end to end all along.
+
+| `,` | Combat log: back one entry, older | free |
+| `.` | Combat log: forward one entry, newer | free |
+| `Home` | Combat log: jump to oldest entry | free |
+| `End` | Combat log: jump to newest entry | free |
+
+> **The combat log is NOT modal (decided Session 48).** ~~`F4` to open / `Esc` to close~~ is **STRUCK**
+> — there is no overlay to open, no `WH_KEYBOARD_LL` modal intercept, and the game is never paused.
+> The four keys above read a 100-entry continuous FIFO on demand. See `Docs/combat_system.md` §9.
 >
-> **Remaining suspects, in order:** the `g_extraDown[6]` → `[9]` array growth (this is the sharpest
-> lead — `;` uses the pre-existing `[2]` and the *newly added* `[6]`/`[7]`/`[8]` are the ones that
-> fail); the `'4'`/`'5'`/`'6'` VK tokens through `WM_NAVKEY` → `OnNavKey`; log buffering (`[PARTY]`
-> is not in the flush list — `logger.cpp` flushes only ERROR/INIT/HOOK_HEALTH — so a hard exit could
-> in principle drop the lines, though `[MSGTEXT]` from the same session did survive).
-> **Add a first-fire diagnostic in `DInputEdge` before theorising further** — the input path logs
-> nothing today, so there is no way to distinguish "key never seen" from "seen, dispatch dropped it".
-> `DIAG_KEYS` (`input_tracker.cpp:21`) already exists for exactly this and is currently `false`.
-> Possibly shares a root cause with the still-undiagnosed "`[` failing in-game is a scan-code/read
-> bug" note below.
-| `F4` | Combat log open (planned) | free (F1–F3 are game speed; F4 unbound) |
-| `Esc` | Combat log close (planned) | game Pause — handled by modal intercept |
+> **`Shift` is deliberately NOT used.** The game binds **Left Shift → Toggle Walk/Run**, and the mod
+> cannot swallow keys (it passes the DirectInput buffer as `const`, per the read-only rule), so
+> `Shift+,`/`Shift+.` would silently flip walk/run on every press — an invisible state change. `Home`
+> and `End` are unbound and have no side effects.
 
 > **`p` target source (Session 44):** `p` routes to the battle **target the game is currently
 > selecting**, read from the target-selection object at `DAT_0209be80 + 0x9FD8`

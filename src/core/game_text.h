@@ -15,6 +15,15 @@ namespace GameText {
 // returns an empty string on fault or null input.
 std::wstring Decode(const uint8_t* p, size_t maxBytes = 512);
 
+// Apply FUN_002b58b0's variant selector before decoding a SHARED-POOL string.
+// Pool strings (DAT_02ebf170 / word.bin -- ability, status, item and combatant
+// names) are stored with a two-byte 00 00 prefix; decoding one without this skip
+// reads the 00 as a terminator and returns an EMPTY string. Returns `p` unchanged
+// when there is no prefix. SEH-guarded.
+//
+// Do NOT apply to actor+0x18 -- the binder stores that already variant-selected.
+const uint8_t* SkipVariantPrefix(const uint8_t* p);
+
 // Cheap heuristic: is `s` mostly printable text (>=60% ASCII 0x20-0x7e, and at
 // least one letter)? Rejects decoded garbage from stale/non-text pointers.
 bool IsMostlyPrintable(const std::wstring& s);

@@ -2076,3 +2076,741 @@ the binding name is what is established; the audio cue is not identified and is 
 A tester's plain description of what they hear beat a memory-instrumentation plan outright. When a
 report smells like an input bug, **read `Controls.md` before writing a diagnostic** — the game's own
 bindings are captured there precisely so this class of "bug" is a lookup, not an investigation.
+
+## Session 48 — 2026-07-20 — [battle] Combat-system RE: messaging, committed target, damage, Neutral, log plan
+
+**KEYWORDS: combat log battle_message.bin FUN_0028e110 game composes own sentences own battle log
+committed target actor 0x710 0xBB8 FUN_00311cf0 browse P+0x9FD8 damage FUN_003283d0 FUN_003112f0
+FUN_00300530 neutral faction FUN_00263be0 party_status missing deref DAT_02ebf190 pointer 0x5071901
+Home End walk run shift conflict auto-speech KO 20 percent probe P-DUMP research only**
+
+**RESEARCH ONLY — NOTHING IMPLEMENTED.** Deliverable: **`Docs/combat_system.md`** (~1100 lines).
+Five parallel decompile research passes + one follow-up. Raw reports archived as
+`..\FFXII-Decompile\notes\combat_re_2026_07_20_*.md` (6 files).
+
+### The five things that changed what we believed
+
+1. **FFXII composes its OWN localized combat sentences, and keeps its own scrollable battle log.**
+   `battle_message.bin` = table `DAT_02ebf018` (RVA `0x2D9F018`), format strings at `hdr+0x14`, args
+   bound by `FUN_005369c0` → codec-sprintf `FUN_00536410` → route `FUN_0035b990`. The game's log is a
+   linked list at `*(u64*)(P + 0x9FF8) + 0x4098` (0x198-byte nodes, newest at TAIL, text at `node+0x00`).
+   Finished string hookable at **`FUN_0028e110` (RVA `0x16E110`)**, arg0. Conf 0.93-0.97.
+   ⇒ **STRIKES** `project_combat_log_design.md`'s "no textual combat strings exist in the game" and the
+   whole 12-locale synthesized-template phrasebook built on it. The old grep failed because the text is
+   codec-encoded master data, not ASCII. **We read the game's text; we synthesize nothing.** Combo
+   aggregation dropped with it.
+2. **The committed target is on the ACTOR, not the HUD** — the cause of the `;`/`p` bug. `P+0x9FD8` is
+   written ONLY by two *browse* UIs (`FUN_0027b880` menu highlight, `FUN_003c9420` free cursor).
+   Committed: queued `actor+0xBB8` (gate `*(u64*)actor & 0x4000`), active `actor+0x710` (gate
+   `actor+0x714 != 0xFFFF`). Commit hook **`FUN_00311cf0` (RVA `0x1F1CF0`)**, player-only — gambits/AI
+   bypass it. Must **post-verify** after calling the original (it no-ops on Stop/Sleep/Confuse).
+   Conf 0.98-0.99.
+3. **`4`/`5`/`6` silence = a missing dereference, NOT the input path.** `party_status.cpp:58` treats
+   `DAT_02ebf190` (RVA `0x2D9F190`) as the struct; it is a POINTER (`= FUN_002ef640() + 0x4e68c`, magic
+   `0x5071901` at `+0x00`). Three independent write sites, conf 0.99. `[PARTY]` also isn't in the
+   logger's flush list, which destroyed the evidence. **`Controls.md`'s "g_extraDown array growth is the
+   sharpest lead" is STRUCK** — the input path is correct end to end. Same class as the S40 `mapData`
+   missing deref.
+4. **The engine has a literal NEUTRAL faction** — `FUN_00263be0` (RVA `0x143BE0`): {1,2,7}→foe, 3→ally,
+   **everything else→neutral** — and the target-select **Foes list already accepts neutrals**, so the
+   category is faithful to the engine. Conf 0.99 on the partition, but **only 0.55 that the bucket is
+   non-empty in real play — measure before shipping the label.** Also resolves an old puzzle: **for a
+   player character the scene-kind nibble is 1 or 8 and is NEVER a faction**, which is why solo-Reks
+   wasn't kind 3. `battle_target_reader`'s faction test is byte-for-byte correct.
+5. **The community RVA CSV's address convention is not uniform.** Proven counter-example:
+   `SetCurrentMpAndMistChargesMax` at **abs** `0x30F5A0`, body matches label exactly. But the seeder
+   applied every value as absolute, so index labels prove nothing about a source's convention.
+   DrummerIX's `ChainLevelPtr`/`ChainCountPtr`/`GilPtr`/`StealPtr*` are stale under **both** readings;
+   his **AOBs are fine** (`DamageModAOB` → `FUN_00300530`, 0.97).
+
+### Damage pipeline (all ≥0.98)
+
+Applier chokepoint `FUN_003112f0` (`0x1F12F0`). HP/MP writers `FUN_00300530`/`FUN_00300ce0`
+(`0x1E0530`/`0x1E0CE0`) are a **closed set** — the old "Frida-watch HP writes and walk callers" plan is
+obsolete. Flying-number spawn **`FUN_003283d0` (`0x2083D0`)**, args `(work, signedDelta, isPositive,
+isMP)` — that is all four requested categories directly; drain/absorb arrives as two events. Status+KO
+`FUN_0030e360` (`0x1EE360`). **No critical-hit flag exists anywhere** (0.85 negative). **No element
+survives to the apply site.** Reaction words (Miss/Block/Immune) are **pixels, not text** — use message
+bus ids `0x17`/`0x1C`. Battle status names = `FUN_0035d330(0x1A, bit)`, table `DAT_02ebf118`.
+Two RVA arithmetic errors in the source reports were caught and corrected (`DAT_02ebb560` →
+`0x2D9B560`, `DAT_02ebf018` → `0x2D9F018`).
+
+### User decisions
+
+- Combat-log keys **`,` / `.` / `Home` / `End`**. `Shift` rejected: the game binds Left Shift to Toggle
+  Walk/Run and the mod cannot swallow keys (`const` DirectInput buffer), so a chord would silently flip
+  walk/run every press. Capacity 100, continuous FIFO, **no modal overlay and no pause** — which
+  supersedes the F4/Esc/50-entry/`WH_KEYBOARD_LL` design in `CLAUDE.md` and `project_combat_log_design`.
+- **Critical-event auto-speech KEPT** — party KO + crossing below 20 % HP, edge-triggered, party-side
+  only. No new hooks (both are already needed by the log).
+
+### Files
+
+- `Docs/combat_system.md` — **NEW**, the deliverable.
+- `Docs/GameArchitecture.md` — "Damage / Heal / Status Event Funnel" superseded-box + two strikes.
+- `Docs/Controls.md` — the `4`/`5`/`6` diagnosis block replaced with the real root cause.
+- `..\FFXII-Decompile\notes\combat_re_2026_07_20_*.md` — 6 raw reports.
+- No source files touched. No build, no deploy.
+
+
+### Addendum — the message table decoded offline, and the "log" claim struck
+
+**`battle_message.bin` was already in the VBF extract** (`extracted/ps2data/image/ff12/test_battle/us/
+binaryfile/`). Parsed with a new `tools/parse_battle_message.py` → `notes/battle_message_table_us.txt`:
+**exactly 102 messages, ids `0x00`-`0x65`, full text**. Header self-validates (count `0x66` at `+0x04`,
+records `0x20`, `0x20 + 102*8 = 0x350` = the pool offset at `+0x14`). Conf 0.99. **Probe P-DUMP is
+cancelled — it was answered without touching the game.** Also confirms: **no Miss/Block/Critical string
+exists anywhere in the table**, and §4.1's emitter-inferred id map was largely wrong (`0x17` = HP *and
+MP* restored; `0x18`-`0x1B` = statuses *cured/faded*, not inflicted; `0x1C` = regains consciousness;
+`0x4F`-`0x62` = field on/off pairs, not stat up/down).
+
+**STRUCK: "FFXII keeps its own scrollable battle log."** `mgr+0x4098` is the **PENDING queue**, not a
+log — 40 inline nodes at `mgr+0xD8` stride `0x198`, siblings `+0x40A0` displayed / `+0x40A8` free
+(`40 * 0x198 + 0xD8 = 0x4098` — the arithmetic proves the layout). It is a **two-line transient ticker**
+(`FUN_002bf230`, state machine `FUN_002beac0`); entries leave the moment they display and
+`FUN_002be8d0` **drops messages outright** under load. **No viewer, no menu option, no Config setting**
+(0.98, earned: complete 11-function xref set on the manager offsets + full decode of `menu00..04`,
+`menu_command`, `menu_message`, `help_menu`, `word` — zero log/history labels; Config label set
+`10064`-`10107`/`10259`-`10285` has nothing about messages). ⇒ **Hook the message, never walk the list.
+The mod's `,`/`.` log is genuinely new functionality.** Hook `FUN_0028e110` (RVA `0x16E110`) promoted to
+**0.98** — exactly one caller. Style byte solved: low 5 bits = dwell class (rate x {12,15,20,25,30}
+frames), bit `0x20` = bypass the 24-unit distance cull.
+
+**NEW BUG FOUND — `GameText::Decode` eats punctuation (affects ALL mod text, not just combat).**
+Selector `0x29` returns -1 → the ">= 0x80 run" fallback swallows the next literal character
+(`{0}'s HP...` → `{0}s HP...`; raw `0f 29 80 80 | ac | 4c`, `0xac` = apostrophe). Real rule from
+`FUN_002ac5f0` case 0x29 → **`FUN_003ffbc0`** (RVA `0x2DFBC0`): `n = (byte after selector) & 7`;
+`n==0` → 2 param bytes (a colour), `n>0` → `1+n`. Call convention confirmed (`bVar3 = *local_1a0;
+switch(bVar3)` + `*param_2 += ret` ⇒ the pointer is the SELECTOR, so return 3 = selector + 2 params),
+which also resolves 13 more selectors as 2-param. Applying it cut unmapped bytes across all 102 strings
+to **two**. Partially closes the S45 "icon family still broken" item. **Added to Phase 1.**
+
+### Content strategy for the log — CONFIRMED with the user
+
+**Read the game's own 102 messages as the primary content; cherry-pick which of them also interrupt in
+realtime; synthesize our own entries ONLY where no game message exists.** Written up as
+`combat_system.md` §9.1.1-§9.1.4.
+
+**The decisive gap: there is NO "X deals N damage to Y" message anywhere in the 102** (verified against
+the full decoded table). Per-hit damage and healing are numeric **sprites only**. So the single most
+important stream in a combat log is Tier 2 (synthesized from `FUN_003283d0`, RVA `0x2083D0`), while
+KO / restores / cures / steal / poach / loot / level-up / boss mechanics / party-wide fields all come
+from the game verbatim. Other Tier-2 gaps: Miss/Block/Immune (**pixels** — needs probe P3, do not guess
+the words), status **inflicted** (the table only has *cured*/*faded*), EXP/LP amounts, and the three
+mod-only concepts (target confirmed, battle start/end, below-20% HP).
+
+Realtime allow-list (default, tunable): action failed/cancelled `0x05`-`0x0C`, party KO `0x10`-`0x12`,
+revive `0x1C`, Paling/Shield/White Wind `0x3E`-`0x43`, party-wide fields `0x4F`-`0x5C`, "Back attack!"
+`0x61`, level-up `0x04`, loot/steal/poach `0x24`-`0x26`/`0x2D`-`0x34`/`0x37`-`0x38`/`0x64`-`0x65`, boss
+mechanics `0x44`-`0x4E`. Log-only: action announces `0x0D`-`0x0F` and routine restores `0x13`-`0x1B`
+(the spam tiers), and **the per-hit damage numbers** — that stream is exactly what made linear
+narration unusable. Ship it as a `static const` id→policy table, not `if` statements.
+
+**Phase 4 is now "log skeleton + Tier 1"** — one hook (`FUN_0028e110`), no formatter, real localized
+combat text immediately. **Phase 5 is Tier 2, damage numbers first.**
+
+### Attack lines — the game will NEVER say them (decisive for the log)
+
+Read firsthand from **`FUN_00469af0`** (abs `0x469AF0` / RVA `0x349AF0`):
+
+1. **No "X attacks Y" message exists**, and **no announce ever names a target**. The only three announce
+   forms in all 102 are `0x0D` "{0} begins casting {1}.", `0x0E` "{0} readies {1}.", `0x0F` "{0} uses
+   {1}." — arg lists `[attacker, action]`, no target slot. Conf 0.99.
+2. **The announce fires only for GUESTS and FOES, never for your own party.** First statement is
+   `uVar3 = FUN_002f8e90(); if ((uVar3 & 10) == 0) return;` — `10` decimal = `0x0A` = guest `0x02` |
+   foe `0x08`. A normal party character is bucket `0x01`, so it returns. Category map (conf 0.98):
+   `actionRec+0x1e` 1 -> 0x0D, 2/7/9 -> 0x0E, 3 -> 0x0F, **anything else -> no message at all**.
+   ⚠️ That the gate tests the ATTACKER's faction is **0.90** — Ghidra dropped the register arg
+   (`FUN_002f8e90()` shows none), the classic hazard from `feedback_resolve_natives_by_behaviour`.
+   **Probe P-ANN** added.
+
+⇒ **The whole attack line is Tier 2.** We synthesize `"<attacker> <verb> <target>"`, mirroring the
+game's own category→verb vocabulary so wording matches when both appear.
+
+### Pairing the number to its action — ONE hook, no heuristics
+
+**`FUN_003112f0` (RVA `0x1F12F0`) gives the complete line in a single call**: args
+`(result, attackerBc, targetBc, actionId, flags)`, and the result struct already holds every number —
+`+0x24` target HP delta, `+0x2a` target MP, `+0x20`/`+0x28` attacker side (drain), `+0x04` outcome
+(9 = AI preview, discard), `+0x1c` valid. So one call = one `(action, attacker, target, number)` tuple =
+one log entry:
+
+```
+Vaan attacks dire rat. 25
+Vaan casts Cure on Penelo. 50
+Vaan uses Ether on Vaan. 25
+```
+
+**No timing window, no correlation buffer, no dedup** — which matters, since pairing by timestamp would
+have been a debounce in disguise (house rule). AoE fires once per target, so each of three Cure targets
+gets its own numbered entry — **which is why the target belongs in the line** even though the user's
+example omitted it; without it the three entries are identical. `FUN_003283d0` demoted to SECONDARY,
+still needed for regen/poison/doom ticks (no action, no attacker, never reaches the applier).
+**Phase 5's priority hook is now `FUN_003112f0`, not `FUN_003283d0`.** Probe **P-PAIR** added.
+
+### CORRECTION (tester challenge) — message emitters gate PER FAMILY, and one is party-EXCLUSIVE
+
+The tester pushed back on "the game never narrates party members", citing message `0x08`
+("{0}'s target is too far from the party leader") — obviously about a party member. **They were right,
+and the real picture is more useful than either framing.** The faction gate lives in the *announce*
+emitter only; each family has its own emitter with its own gate (all three read firsthand, conf 0.98):
+
+| emitter | abs / RVA | ids | gate |
+|---|---|---|---|
+| `FUN_004697c0` | `0x4697C0` / `0x3497C0` | `0x05`-`0x07` cancel/interrupt/out-of-range | `if (FUN_002f8e90(param_1) != 1) return;` = **PARTY ONLY** |
+| `FUN_00469a50` | `0x469A50` / `0x349A50` | `0x08`, `0x0A` target-too-far | **no gate** — anyone |
+| `FUN_00469af0` | `0x469AF0` / `0x349AF0` | `0x0D`-`0x0F` announce | `(FUN_002f8e90() & 0x0A)` = guest \| foe |
+
+So the game DOES narrate party members — just never their action *announce*. Bonus: `FUN_004697c0`
+calls `FUN_002f8e90(param_1)` with the arg **visible**, the same idiom as the argument-less call in
+`FUN_00469af0`, which lifts "the gate tests the ATTACKER" from 0.90 to **0.95**.
+
+**The attack line is still Tier 2 anyway**, for the simpler reason: no "attacks" message exists in the
+102 and **no announce carries a target slot** (args are `[attacker, action]`).
+
+**"Does the game dump finished text or templates?" — finished text, already established (0.95).**
+`FUN_005369c0` binds args -> `FUN_00536410` codec-sprintfs into a 0x180 buffer -> `FUN_0035b990` routes;
+names via `FUN_00536280(nameIdx, isPc)` incl. the player-entered name. `FUN_0028e110` arg0 is a fully
+substituted sentence. **P-MSG verifies live and is the first probe to run.**
+
+### Design changes from the tester
+
+1. **Ticks are OUT of the combat log** (regen/poison/doom). They surface in the `4`/`5`/`6` vitals
+   readout as concise state — `"Vaan, HP 412 of 690, poisoned"` — using the status word `ReadSlot`
+   already reads but never speaks, with names from `FUN_0035d330(0x1A, bit)`.
+   **Consequence: `FUN_003283d0` is no longer needed as a log source at all** — ticks were its only
+   unique contribution over the applier. Drops us to ONE Tier-2 hook.
+2. **Multi-target actions AGGREGATE into one entry**, not one per target:
+   `"Ashe casts Cure on party. 403 average"` / `"Fran casts Firaga on all enemies. 2900 average"`.
+   Key on `(attacker, actionId)` (calls may interleave), average the numbers, always say "average",
+   and state a count when it is not the whole set. **Completion must be deterministic** (count down
+   `actor+0x77C`), never a timer — a timer would be a debounce in disguise.
+   Use **"party" / "all enemies"**, not "Group A", unless entry-groups turn out to carry a real label.
+3. Phase 5 split: 5 = single-target line, **5b = AoE aggregation (blocked on the §9.1.3d research)**,
+   5c = status-inflicted + EXP/LP.
+
+### AoE aggregation mechanics — RESOLVED (and 2 more RVA slips caught)
+
+**STRIKE — two RVAs in `combat_system.md` were wrong by `0x60000`** (inherited from the hostility pass,
+never shipped): `FUN_0030ab40` relation test = RVA **`0x1EAB40`** (~~0x18AB40~~); `FUN_0030bd00` target
+filter = RVA **`0x1EBD00`** (~~0x18BD00~~). Verified against `decompile_index.csv`. **Third arithmetic
+slip in this document** — always add `0x120000` back and confirm the abs exists in the index.
+
+- **Target vector** `actor+0x778` = 0x208-byte inline vector: `+0x04` i32 count (= `+0x77C`),
+  `+0x08 + i*0x10` sceneObj, 32 slots (`8 + 32*0x10 = 0x208` = the memset size). Conf 0.99.
+- ⚠️ **`+0x77C` is 1 until PHASE 9.** `FUN_0030f760` appends only the primary target; `FUN_00304850`
+  phase 9 calls `FUN_0030d160` which clears and rebuilds with the full AoE set. Reading it earlier
+  reports a false "single target".
+- ⚠️ **Do NOT count down.** The count includes immune/missed (0.98, no `return` on any outcome branch),
+  but a target killed by earlier splash yields N-1 calls, so a countdown hangs. **Flush on
+  `FUN_003105d0` (RVA `0x1F05D0`)** — deterministic, once per action, no timer.
+- ⚠️ **Attacker can be NULL** (`attacker == 0`, `actionId == 0xFFFF`) — those are **status ticks/DoT**
+  from `FUN_0030e130`/`FUN_0030e360`/`FUN_00310db0`. **Filter them**, or ticks fold into the preceding
+  cast. Doubles as the clean discriminator that keeps ticks out of the log entirely.
+- ⚠️ **Calls DO interleave** — a synchronous burst (`FUN_00325260`, RVA `0x205260`) *and* per-target
+  animation events (`FUN_002eb740` -> `FUN_00319f50` -> `FUN_003191b0`, RVA `0x1F91B0`) spread across
+  frames. **Key on `(attackerBc, actionId)`, never adjacency.** Reflect/counter re-enter and can make
+  `received > expected` — tolerate, do not assert.
+- **"Group A" is OFF the table.** `actor+0x54` is written only by `FUN_00239170` (RVA `0x119170`,
+  `setentrygroup`) and AI opcodes `0x4048`-`0x404F`; read only by `FUN_0030bd00` and `FUN_00301ad0`.
+  **No name, text id, string or bestiary link exists anywhere** (0.97, grep-complete). Say **"4 enemies"
+  / "party"**.
+- **Target scope from the action row** (`FUN_003230e0`, RVA `0x2030E0`): `row+0x0C` bit0 self, bit1
+  whole active party (no distance test), bit2 allies, bit3 foes, bit21 area-on-caster, bit24 cone,
+  bit25 line; `row+0x06` = area radius, **0 = single target**; `row+0x2C` `0x40`/`0x80` = may target
+  KO'd/petrified. ⚠️ **There is NO "all foes" bit** — "all enemies" is a big radius + relation filter,
+  so we say **"N enemies"** and never assert totality (0.96).
+- ⚠️ **Attack decodes against the wrong row** unless the id is substituted: the list is built with
+  `FUN_00387090`'s id (RVA `0x267090`), which swaps in a per-character id when `actor+0x714 == 0x9F`,
+  while `FUN_003112f0` gets the raw `0x714`.
+- **"party" is verifiable:** `FUN_0030d160`'s party branch walks roster **list 1** (`W+0x5A5A`, charIds
+  — NOT the mod's list 3 at `+0x5A7E`) and skips KO'd/petrified; guests excluded. Compare `+0x77C`
+  against occupied active slots; say "on party" only on a match, else "on 2 allies" (0.98).
+
+### Next session
+
+**Start with probe P-MSG** — confirm `FUN_0028e110` (RVA `0x16E110`) fires once per displayed message
+with the finished string in `arg0`. ~~P-DUMP~~ and ~~P-LOG~~ are **CANCELLED**: the message table was
+decoded offline (102 entries) and there is no game-side log to read — see the addendum above.
+Then the phased plan in `combat_system.md` §10 — **Phase 1 (the `4`/`5`/`6` deref fix + the `0x29`
+codec fix) needs no probe at all.**
+
+---
+
+## Session 49 — 2026-07-20 — [battle] Combat implementation plan: decompile exhausted, 11 claims struck, probes authored
+
+**KEYWORDS: combat implementation plan decompile exhausted strike FUN_00536410 message id RCX+4
+codec escape table complete ffxii_codec.py 75 of 102 leader W+0x5AA4 FUN_00327150 P-E cancelled
+DAT_0209a1f0 not leader row+0x34 action name not row+0x00 neutral foes group 0 only aggression
+pointer deref actor+0x6A0 outcome 9 not preview result+0x00 0x20 tick actionId 0xFFFF
+FUN_0035c8a0 game over FUN_00313b30 per action not battle actor+4 0x100000 in battle
+probe_combat_state probe_combat_target probe_combat_messages probe_combat_damage
+dump_combat_unknowns DAT_01e09ee8 guest slot W+0x5AD4 status names 32 decoded**
+
+**PLANNING + RE ONLY — NO C++ WRITTEN.** Task: read `Docs/combat_system.md` and plan implementation,
+exhausting the decompile offline before any confirmation probing. Deliverables: the plan
+(`~/.claude/plans/find-the-document-labelled-hazy-summit.md`), `tools/ffxii_codec.py`, one Ghidra
+script, four Frida probes, and **11 strikes applied to `combat_system.md`**.
+
+### Method
+
+Five parallel offline sweeps over the 33,128-function corpus **and over the shipped master data**,
+which turned out to be extractable and parseable — that is what settled the name questions without
+a probe. Every sub-0.98 claim in the S48 document was re-mined.
+
+### The strikes (all applied inline in `combat_system.md`, indexed in its new header block)
+
+1. **Tier-1 hook moves: `FUN_0028e110` → `FUN_00536410` (RVA `0x416410`).** The ticker never
+   receives the message **id**, only a dwell class — so §9.1.4's id-keyed realtime policy table had
+   nothing to key on. The codec-sprintf sees id (`RCX+4 & 0x7FFF`) *and* finished string (`RDX`) in
+   one frame, and sits **upstream of the toast fork** where the ticker is not called at all. 0.97.
+2. **"outcome `+0x04 == 9` is the AI preview" — REFUTED.** 9 is the default "run the formula" seed.
+   Preview = `result+0x00 & 0x20`, emitted by `FUN_00308b90`, which never calls the applier ⇒ the
+   planned filter is unnecessary. Read firsthand. 0.99.
+3. **Tick filter is `actionId == 0xFFFF`, not `attacker == 0`** — `FUN_00310db0` makes two real
+   calls with `attacker == 0`. 0.99.
+4. **Leader: `DAT_0209a1f0[3]` REFUTED; probe P-E CANCELLED.** That array is 4 × `sceneObj*` in
+   roster order. Real getter `*(u8*)(W + 0x5AA4)` → BtlChr → pool scan (`FUN_00327150`, read
+   firsthand). Strictly better than the shipped `bc[5]==0` test, which matches every roster member.
+5. **Ability name is `row+0x34`, not `row+0x00`** — the latter is a description id, and `Attack`
+   plus every `Reserve` row share `4000` there. Verified against `action_data.bin`. 0.99.
+6. **"Neutrals are legal attack targets" — BACKWARDS.** Emit gate `(g & ~2) == 0` ⇒ foes = group 0
+   only; Neutrals appear in **neither** list. This was the entire justification for Phase 3.
+7. **Aggression reads are wrong by a dereference** — `actor+0x6A0` is a POINTER. *Same bug class as
+   the `4`/`5`/`6` bug this document was written to fix.* Does not ship.
+8. **In-battle test**: `actor+0xEA4` is "who has an action aimed at me", not hostility (an
+   out-of-combat Cure sets it). Use `*(u32*)(actor+4) & 0x100000` (`FUN_002fead0`).
+9. **`FUN_00313b30` fires ~2× per ACTION**, not per battle.
+10. **Game over: use `FUN_0035c8a0`** — no caller ever passes `0x17` to `FUN_0035c7b0`.
+11. **`FUN_00312280` passes none of EXP/LP/gil/loot** — gil → `FUN_00469e80`, loot →
+    `FUN_003180f0` (a ground pickup), EXP/LP → before/after diff.
+
+### The codec fix is four times bigger than §1.7 said
+
+Complete escape table derived; **`tools/ffxii_codec.py`** is now the reference implementation with a
+regression: **zero structurally-unexplained bytes across all 102 messages**. Reimplementing the
+mod's current `game_text.cpp` in Python and diffing shows it is **wrong on 75 of 102** — it eats the
+character after every `0x29`, so sentence-final `.` and `!` vanish, not just apostrophes. Newly
+explained: `0x2d` is the **numeric** substitution slot (the cause of `"{0} is now level !"`),
+`0x10`–`0x1f` are 2-byte glyphs the mod renders as stray letters, and the icon family takes 1 byte.
+`notes/battle_message_table_us.txt` regenerated (prior kept as `.pre-codec-fix`).
+
+### Confirmed and raised
+
+`+0x2c` all 19 bits (0.99) · no-critical-hit 0.85 → 0.95, **and FFXII's real Combo is readable at
+`result+0x18 & 2`** · **all 32 status names decoded offline** (so "bit 5 = Confuse" 0.85 → 0.99) ·
+guest slot reachable (`list3[3]`, `W+0x5AD4`) · roster gate is literally `slot < 9` · the `4`/`5`/`6`
+fix verified as byte-offset arithmetic, firsthand.
+
+### Artifacts (user-run — Claude never executes Ghidra or Frida)
+
+- `..\FFXII-Decompile\ghidra\dump_combat_unknowns.java` — **G1** dumps `DAT_01e09ee8`
+  (abs `0x1E09EE8`), which **decides Phase 3 offline**: side 4 + never-engage is the one authored
+  Neutral generator, so if `4` is absent from that 4-entry table the category must not ship.
+  **G2** dumps raw disassembly for the ~8 dropped-argument call sites. **G3** enumerates the
+  `0x0f` jump table to settle selectors `0x30`/`0x5f`.
+- `..\FFXII-Decompile\frida\probe_combat_{state,target,messages,damage}.js` — one per phase gate,
+  attach-mode, read-only, console output O(unique).
+
+### Next
+
+Run `dump_combat_unknowns` first (it is offline and decides Phase 3), then `probe_combat_messages`
+(one hook, unblocks the whole Phase-4 log). **No C++ until each phase's probe passes and explicit
+permission to port is given.** Phase 3 is **deferred** — both its rationale (strike 6) and its
+fallback (strike 7) are gone.
+
+### Session 49 addendum — Ghidra `dump_combat_unknowns` run (results)
+
+**KEYWORDS: DAT_01e09ee8 1 5 3 4 neutral authorable side 4 never engage arg3 P-NEUTRAL resolved
+P-DWELL cancelled node+0x184 DAT_0209e610 mgr P+0x8FA0+0x1058 G3 inconclusive MSVC sparse switch
+byte index table**
+
+**G1 — PASSED.** `DAT_01e09ee8 = {1, 5, 3, 4}`, only two xrefs, both in `FUN_002396b0`. The script
+native's four selectable side values are `arg0→1 foe · arg1→5 removed · arg2→3 ally · arg3→4
+NEUTRAL`. **Neutral is a deliberately authorable faction**, so Phase 3's gate passes — but strike
+F20 still stands, so ship it as **"will never engage"**, not "a legal attack target"
+(`FUN_002396b0` sets the never-engage bit exactly when side==4, and `FUN_00238bf0` normalises side
+4 → foe when that bit is clear ⇒ a neutral that can fight is impossible by construction). Still
+open: whether any shipped map authors arg 3 — a frequency question `probe_combat_state.js` answers.
+
+**G2 — PASSED, and it cancelled a probe.** Dwell passthrough traced end to end:
+`FUN_0028e110` → `FUN_002bdb20(dwellClass,&A,&B)` gives `A = DAT_0209e610[dwellClass-1]`
+(the `{12,15,20,25,30}` table) → passed as `R9D` to `FUN_002bdb00` → shuffled into `FUN_002be8d0`'s
+5th stack arg → `MOVZX EAX, word ptr [RSP+0x70]; MOV word ptr [RBX+0x184],AX`. **`node+0x184` is
+the per-style dwell, not the 150-frame cap. P-DWELL CANCELLED (0.98).** Also literally confirmed
+`mgr = *(u64*)(P + 0x8FA0 + 0x1058)` (`MOV RCX,[RCX+0x1058]`) and §4.5's free-list → steal-oldest →
+**drop** structure, `memset(node,0,0x198)`, `FUN_00254f30(node,text,0x180)`.
+
+**G3 — INCONCLUSIVE; my script was at fault. Re-run DEFERRED by decision.** It printed `sel 0x20+i`
+labels that were an *assumption, not measured data*, and the run disproved the assumption: 34
+unique targets cannot cover selectors `0x20`–`0x70` one-to-one. It is MSVC's two-level sparse
+switch (`movzx eax, byte [BYTETAB+reg]` → `jmp [JMPTAB+rax*8]`), so index `i` is the i-th *unique
+target*. `dump_combat_unknowns.java` G3 has been rewritten to dump the setup instructions plus
+`BYTETAB`.
+
+**Decision (user, 2026-07-20): leave selectors `0x30`/`0x5f` documented at 0.97 and do NOT spend a
+Ghidra pass on them; fold the re-run into a later session that needs Ghidra anyway.** Costs
+nothing: both occur **zero times** across all 102 messages, `ffxii_codec.py` treats them as 0-param
+(what a missing case implies), and the codec regression already reaches zero
+structurally-unexplained bytes without them. They simply stay below the ship bar, unused.
+First-run raw output preserved as `output/combat_unknowns_run1_G1G2.txt`.
+
+### Session 49 addendum 2 — first live capture from `probe_combat_messages.js`
+
+**KEYWORDS: FUN_00536410 confirmed live msgId RCX+4 isPc Dire RatC Rat Pelt word.bin variant
+prefix 00 00 FUN_002b58b0 pool_string chunk 8 combatant names chunk 11 loot chunk 0 actions
+chunk 5 status probe file handle append mode plain attack composes no message**
+
+**F8 CONFIRMED LIVE.** `FUN_00536410` (RVA `0x416410`) fires, and one call carries both the id and
+the finished sentence exactly as predicted:
+
+```
+[1] msg 0x2e isPc=1  "Vaan stole a Rat Pelt\nfrom Dire RatC!"
+```
+
+The offline table has `0x2E` as `{0} stole \nfrom {1}!` with a blank where the item goes — live,
+the item is substituted in place. **The hook choice is validated; Phase 4's Tier 1 is unblocked.**
+
+**Tier-2 name chain validated against live text.** Both substituted names resolve out of the shared
+pool exactly as the S49 sweep predicted: `word.bin` **chunk 8 [409] = "Dire Rat"**, **chunk 11
+[96] = "Rat Pelt"**. Chunk map confirmed by sampling: 0 actions · 1 equipment · 3 Quickenings ·
+4 battle commands · 5 status (32) · 6 gambit labels · 8 combatant names (629) · 9 shop packages ·
+11 key items/loot · 12 area names · 13 genus · 14 family.
+
+**NEW, and required for the implementation: shared-pool strings carry a 2-byte `00 00` variant
+prefix.** `00 00 | 22 4e 4b 3e 00` = `"Cure"`. This is `FUN_002b58b0`'s variant selector
+(combat_system.md §1.4) and **without skipping it every pool string decodes to EMPTY** — which is
+exactly what happened on the first scan here, making all 15 chunks look blank. Added to
+`tools/ffxii_codec.py` as `variant_skip()` / `pool_string()`, both verified to reproduce the live
+strings. NOTE `actor+0x18` needs **no** skip — the binder `FUN_0023a570` stores it already
+variant-selected, which is why the shipped `party_status.cpp` name read works.
+
+**"Dire RatC" is GAME text, not a decoder artifact.** The data holds `"Dire Rat"` clean; both the
+article `"a "` and the instance letter `"C"` are appended at substitution time. Whether a space
+belongs before the letter is unresolved and cosmetic — Tier 1 is read verbatim, so the mod speaks
+whatever the game composed either way. Raw-hex logging now captures the bytes to settle it.
+
+**Two probe defects found and fixed:**
+1. *Instructions were wrong.* A plain physical attack composes **no message at all** (the announce
+   is gated to guests/foes), so "fight normally" captured nothing on the first run. Steal is the
+   right trigger and exercises the whole codec fix by itself.
+2. *File logging destroyed its own output.* `new File(path,'w')` + Frida's auto-reload meant two
+   handles both truncating to offset 0; the log ended up with two headers and a NUL gap, and the
+   captured lines were lost (console had them). **Now opens in APPEND mode with a RUN START
+   banner**, and writes raw hex for every message, not just the first per id.
+
+**Still UNCONFIRMED live (one message is not enough):** the apostrophe fix needs `0x33`/`0x34`
+(steal failures), and the numeric slot needs `0x31` (gil steal) or `0x04` (level-up). F9 remains
+validated offline (zero unexplained bytes, 75/102 differing) but only PARTIALLY in-game.
+
+### Session 49 addendum 3 — F9 CONFIRMED LIVE, and a new decoder bug found via the instance letters
+
+**KEYWORDS: apostrophe confirmed live Vaan's steal failed 0x33 codec fix validated in game
+control byte 0x06 is a SPACE FUN_002ac5f0 case 0x01 0x04 0x06 0x07 fall through Dire Rat B
+instance letter sceneObj+0x100 +0x102 FUN_00263a10 FUN_002b58f0 targeting readout**
+
+**F9 (the codec fix) is CONFIRMED LIVE on the exact failure case.** Captured:
+
+```
+[1] msg 0x33 isPc=1  "Vaan's steal failed!\nDire RatC has nothing to steal."
+[2] msg 0x2e isPc=1  "Vaan stole a Rat Pelt\nfrom Dire RatB!"
+```
+
+`Vaan's` — **the apostrophe survives**, as do the sentence-final `.` and the `!`. That is precisely
+what the shipped decoder mangles (it would give `Vaans steal failed` and eat the period). The full
+chain fired 1:1 as predicted: bus → binder → sprintf → router (`routeSel=0`) → ticker, camera cull
+passing. **Phase 4 Tier 1 and Phase 1's decoder change are both validated in-game.**
+
+~~**Striking ratio worth remembering: 1275+ damage applications produced only TWO messages.**~~
+⛔ **STRUCK immediately — the counter was MISLABELLED (tester correction).** It counted every call
+to `FUN_003112f0`, not damage events; the tester reports only ~10-20 actual damage instances in
+that session. **Never report a raw count of that function as "damage".**
+
+What *does* stand: the game composed only **two** messages in a full play session, and a basic
+attack composes none at all. So Tier 2 (§9.1.3) is still the core of the combat log rather than a
+supplement — but that conclusion rests on the message count, which was measured, not on the
+applier count, which was misread.
+
+**This opened a real question — see the Tried & Failed entry.** `FUN_003112f0` is the designated
+Tier-2 source, so a ~100:1 call-to-real-hit ratio decides both how load-bearing the tick filter is
+and whether hooking it is acceptable under the no-per-frame-hooks rule.
+`probe_combat_damage.js` now buckets every call and prints the ratio.
+
+**NEW BUG FOUND — control byte `0x06` is a SPACE, and the mod drops it.** Chasing the user's
+instance-letter request through the raw capture:
+
+```
+... 31 3a 4d | 06 | 21 | 0f 29 80 80 | 99
+     R  a  t   ^^   B                   !
+```
+
+`FUN_002ac5f0:115-118` lists `case '\x01': case '\x04': case '\x06': case '\a':` as **one
+fall-through group**, and `0x04` is the known space — so all four render identically. The decoder
+mapped only `0x04`, producing `"Dire RatB"` where the game draws `"Dire Rat B"`. Confidence 0.99.
+Fixed in `tools/ffxii_codec.py` (`SPACE_CONTROLS`); re-decoding the captured live buffer now gives
+`"Vaan stole a Rat Pelt\nfrom Dire Rat B!"`, and the 102-message regression still passes at zero
+structurally-unexplained bytes. **`0x05` deliberately NOT included** — it has its own case and the
+`0x0a` handler scans for it as a structural delimiter, so it is not plain whitespace.
+
+**Enemy instance letters — REQUESTED FEATURE, mechanism fully traced (user, 2026-07-20).**
+To be implemented **alongside combat messaging**. The letter is *not* part of the name:
+`FUN_00536280` is pure pool lookup and `word.bin` chunk 8 [409] is `"Dire Rat"` clean. It is
+appended by `FUN_00536410:85-95` from the arg slot's `+1` byte, whose source is
+`FUN_00263a10(sceneObj)`:
+
+```c
+if (*(i16*)(so + 0x102) < 0) return *(u16*)(so + 0x100);   return 0;
+```
+
+⇒ the mod reads it with two loads off a sceneObj it already holds. Neat cross-check:
+`sceneObj+0x102` is the **same field `entity_list.cpp` already uses as the npcdic name key**, so
+that field's sign bit is the "has an instance letter" flag. Still open: the value→letter mapping
+(`FUN_002b58f0` indexes `value - 1` into a locale table at `reloc(cfg+0x14)`/`+0x18`,
+`cfg = FUN_0039c4a0(0)`), so `probe_combat_target.js` now logs the raw `inst` value to pin it
+empirically. ⚠️ `FUN_005369c0:87` calls `FUN_00263a10()` with the arg dropped by Ghidra — the guard
+above it tests `actor+0x10`, so it is near-certainly the sceneObj, but confirm before shipping.
+
+### Session 49 addendum 4 — damage probe results: Tier 2 is VIABLE, call rate settled
+
+**KEYWORDS: 1400 applier calls 3 real hits 1397 ticks 99.8 percent actionId 0xFFFF filter
+essential act=0x96 Attack chunk0[150] row+0x34 idx150 variant skip previews=0 confirmed
+Dire Rat Vaan tgtHP -3 -40 Tier 2 viable**
+
+**The call-rate question is ANSWERED.** Final counters: **1400 applier calls, 3 REAL HITS, 1397
+ticks (`actionId == 0xFFFF`), 0 previews, 0 invalid.** That is **99.8% ticks** — the
+`actionId == 0xFFFF` filter is not a nicety, it is the entire hook. `nullAttacker` tracked `ticks`
+exactly (1397/1397) in this session, but the filter must still key on the **action id** (F2): the
+loop in `FUN_00310db0` makes real calls with a null attacker, and keying on the attacker would drop
+them.
+
+**Tier 2 is VIABLE — the applier delivers the whole line in one call, both directions:**
+
+```
+[605]  act=0x96  Dire Rat -> Vaan     tgtHP=-3   rc=0 [normal hit] valid=1 f0=0x0 bits=0x40141
+[1250] act=0x96  Vaan     -> Dire Rat tgtHP=-40  rc=0 [normal hit] valid=1 f0=0x0 bits=0x40141
+[1371] act=0x96  Dire Rat -> Vaan     tgtHP=-3   rc=0 [normal hit] valid=1 f0=0x0 bits=0x40141
+```
+
+Attacker name, target name, action id and signed damage — all present, no correlation needed,
+exactly as §9.1.3b promised. `bits=0x40141` has `0x100` set = target HP delta valid ✓.
+
+**F19's open contradiction is RESOLVED: a plain swing reports `act=0x96`**, and
+`word.bin` chunk 0 [150] = **"Attack"** (150 == 0x96, i.e. `row+0x34 == actionId` for this row).
+So **`0x9F` is NOT the basic attack id** — whatever `FUN_00385f60:69` uses it for, it is not this.
+Always read `row+0x34`; never assume it equals the id.
+
+**F1 confirmed live: `previews=0` across 1400 calls** — previews never reach the applier, so the
+planned outcome-9 filter really is unnecessary.
+
+**Probe bug found and fixed:** action names printed as `"idx150"` because the probe's `poolString`
+lacked the `00 00` variant skip (`FUN_002b58b0`) that had been added to `tools/ffxii_codec.py` but
+never back-ported. Fixed; the next run should print `"Attack"`. `actor+0x18` needs no skip, which
+is why the combatant names resolved correctly all along.
+
+**Not observed this session:** any rc other than 0 (no parry/block/evade — the early-game Dire Rats
+carry no shields), and no combo (`result+0x18 & 2` never set; the `0x8` seen is the knockback bit).
+Neither blocks anything: §14.2 derives the rc→mechanic mapping from the processing code, so it does
+not depend on observing one.
+
+### Session 49 addendum 5 — target probe: commit CONFIRMED, instance letters PINNED, divergence test still pending
+
+**KEYWORDS: COMMIT +0xBA0 +0xBB8 queuedFlag confirmed instance letter inst=1 2 3 A B C
+sceneObj+0x100 FUN_002b58f0 value-1 actor+0x714 AI opcode 0x4000 band guard id < count
+browse divergence not tested**
+
+**Commit mechanism CONFIRMED (§3.2/§3.3).** One confirm produced exactly one commit, and the queue
+read back correctly:
+
+```
+COMMIT#1 actor=Vaan argTgt=0x20000e argCmd=0x96 ret=0x0 -> queuedFlag=1 +0xBA0=0x96 +0xBB8=0x20000e
+```
+
+`+0xBA0` = the command, `+0xBB8` = the target handle, flag bit `0x4000` set. **Zero PHANTOM commits**
+(no `cmdId == 0x113` from the idle timer / party-change path) during normal play.
+
+**★ Instance letters PINNED.** Three simultaneous Dire Rats reported **`inst=1`, `inst=2`,
+`inst=3`** from `sceneObj+0x100` (gated on the sign of `+0x102`). Combined with the earlier message
+captures showing `"Dire RatB"` and `"Dire RatC"`, and with `FUN_002b58f0` indexing `value - 1`, the
+mapping is **`letter = 'A' + (inst - 1)`** — 1→A, 2→B, 3→C. Confidence 0.97. The targeting readout
+can therefore append the letter with two memory reads and no game call.
+
+**⚠️ NEW — `actor+0x714` is NOT always an ability id.** Enemy activations reported ids in a
+**`0x4000`+ band** (`0x4000, 0x4002, 0x4021, 0x4117, 0x4118, 0x4119, 0x4125`) with `argTgt = 0`,
+alongside ordinary ability ids (`0x96` Attack). Those are AI/behaviour opcodes, not entries in the
+ability table (which has 543 rows, ids `< 0x21F`). **Any ability-row lookup MUST be guarded with
+`id < count`** or it indexes far out of the table. The probes already guard; the C++ must too.
+
+**⛔ STILL NOT TESTED: the browse-vs-committed divergence, which is the whole point of Phase 2.**
+The tester selected a single target without scrolling, so the cursor never moved — all three BROWSE
+samples read `cursor=0x20000e`, identical to the committed target, which cannot discriminate. The
+`*** CONFIRMED ***` divergence line never fired.
+
+**To close it:** in a fight with 2+ enemies (three Dire Rats were present), open Attack and **scroll
+the target cursor across at least two enemies WITHOUT confirming**. Pass = the BROWSE cursor value
+changes on each scroll while `QUEUED`/`ACTIVE` stay unchanged, and the `*** CONFIRMED ***` line
+appears.
+
+### Session 49 addendum 6 — Phase 2 gate PASSED
+
+**KEYWORDS: browse divergence confirmed cursor 0x20000f 0x200010 committed 0x20000e third enemy
+P+0x9FD8 browse only proven ACTIVE 0x4021 AI opcode tgt 0 resolution order correction guard
+id < count queued flag retains stale values**
+
+**The Phase-2 gate is closed — the divergence is demonstrated live:**
+
+```
+*** CONFIRMED: cursor moved 0x20000f -> 0x200010 while the committed target did NOT change. ***
+```
+
+17 browse events alternating the cursor between two enemies; `+0xBB8` never moved off `0x20000e`.
+**And `0x20000e` is a THIRD enemy**, so the shipped `;` readout does not merely lag the commitment —
+it names a unit the character is not acting on, while the real target is one the cursor never
+visited. `P+0x9FD8` is browse-only, 0.99. Same run: one commit per confirm, zero phantom commits.
+
+**⛔ §3.4's resolution order is WRONG as written and is corrected in §14.3.** The leader's ACTIVE
+slot held `act=0x4021, tgt=0x0` — an **AI/behaviour opcode**, not an ability id. "Active first,
+else queued" would have returned a null target. Correct order: prefer ACTIVE **only** when
+`act != 0xFFFF && act < abilityCount && tgt != 0`, else fall back to the queued pair, and test the
+`0x4000` flag because `+0xBA0`/`+0xBB8` **retain stale values after it clears**.
+
+**Guard every ability-row lookup with `id < count`** — `actor+0x714` is not exclusively an ability
+id (a whole `0x4000`+ opcode band was observed).
+
+### Session 49 addendum 7 — Phase 3 DEFERRED (no reachable neutral mob); all other gates passed
+
+**KEYWORDS: phase 3 deferred neutral mob unreachable trait table opportunistic capture
+probe_combat_state two jobs phase 1 gate BtlWork leader aggression aiData 0x20 never engages
+FUN_00308040 gambit predicate not a trait**
+
+**Decision (user, 2026-07-20): Phase 3 is DEFERRED — the tester cannot reach a neutral mob yet.**
+It is the only phase blocked on data that cannot currently be obtained, so it does **not** gate the
+rest. Phases 1, 2, 4 and 5 have all passed their gates.
+
+**`probe_combat_state.js` has TWO jobs; only one needs a neutral:**
+1. **Phase-1 gate** — `BtlWork` deref + magic `0x5071901`, the five roster lists, and the
+   `W+0x5AA4` leader getter. Needs no special monster and is still wanted before Phase-1 C++.
+2. **Phase-3 gate** — the per-creature trait table. Needs a neutral.
+
+The probe now accumulates traits **keyed by creature name** across a whole session, so it will pick
+up a neutral opportunistically during ordinary play; no dedicated expedition is required.
+
+**Offline progress on the aggression axis while Phase 3 waits:**
+- `aiData` is at `*(u64*)(actor + 0x6A0)` — a **POINTER**. `flags = *(u32*)aiData`,
+  `radius = *(f32*)(aiData + 4)`. (F21; the doc's `*(u32*)(actor+0x6A0)` / `+0x6A4` were wrong.)
+- **`aiData & 0x20` = "never engages" is CONFIRMED at 0.98** — `FUN_002396b0` sets exactly that bit
+  when the authored side is 4, and `FUN_00308040` returns false on it immediately. Two independent
+  sites.
+- ⚠️ **`FUN_00308040` is NOT a trait getter.** It is a **gambit condition predicate**
+  (`FUN_00301830:113` XORs its result into a condition) that blends the authored flag with *current*
+  engagement via `FUN_0030b050` — which walks the actor's target list (`+0xBC4`/`+0xBC8`) testing
+  each entry with `FUN_0030ab40` for hostility. So "attacks on sight" remains **inferred** and must
+  not be spoken as such.
+
+**Expectation to test when a neutral is reachable:** the tester describes monsters that *do not
+attack unless attacked first*. Engine-NEUTRAL means **never engages at all**, so a creature that
+retaliates is more likely a **foe with a passive aggression trait** than an engine-Neutral. If the
+data lands that way, ship §6.5's two-axis wording (`"Enemy, Wolf, not yet aware"`) rather than a
+third faction name.
+
+### Session 49 addendum 8 — Phases 1 and 2 IMPLEMENTED in C++ (builds clean)
+
+**KEYWORDS: phase 1 phase 2 implemented battle_state.cpp game_text.cpp escape table party_status
+deref magic 0x5071901 Empty slot status names logger flush PARTY COMBAT committed target
+ResolveTarget browsing queued instance letter DisplayNameForActor build clean**
+
+User gave explicit permission to port (FRIDA-FIRST rule (b) satisfied). Both phases build with no
+errors or warnings.
+
+**New shared module `src/battle/battle_state.{h,cpp}`** — required by the centralization rule, since
+`NameForBtlChr` was duplicated in `party_status.cpp` and `battle_target_reader.cpp` and both
+re-declared actor-pool constants `nav_rva.h` already owned. It holds: `Work()` (the BtlWork deref +
+magic), `BtlChrForSlot`, `LeaderBtlChr`/`LeaderActor` (the `W+0x5AA4` getter), `ActorForBtlChr` /
+`ActorForHandle` / `BtlChrForActor`, `NameForActor`, `InstanceIndex` + `DisplayNameForActor`,
+`FactionOf`, `CommittedTargetOf`, `AbilityName`, `StatusName(s)`. **Every function is pure reads** —
+`FUN_0035d330` and `FUN_002f8e90` are reimplemented rather than called, because both write process
+globals and the latter also calls the banned full-pool scan.
+
+**Phase 1:**
+- `game_text.cpp` — the complete escape table ported from `tools/ffxii_codec.py`; the high-bit
+  fallback is **deleted**. Adds the three variable-length escapes, the 1-byte icon family, the
+  `0x10`-`0x1f` two-byte glyph rule, terminators/sub-`0x10` lengths, and `0x01/0x04/0x06/0x07` as
+  spaces. New `GameText::SkipVariantPrefix` for shared-pool strings.
+- `party_status.cpp` — reads through `BattleState::BtlChrForSlot` (the fix), speaks **"Empty slot"**
+  instead of nothing, and appends **status names** from the game's own table. `kMaxSlots` 4 -> 9.
+- `logger.cpp` — `PARTY` and `COMBAT` added to the flush list.
+
+**Phase 2:** `battle_target_reader.cpp`'s resolution is replaced by `ResolveTarget()`, which takes
+the **committed** target from `BattleState::CommittedTargetOf(LeaderActor())` and falls back to the
+browse cursor **only while the select UI is open, explicitly labelled "browsing"**. A queued (not
+yet acting) commitment is labelled "queued". `p` and `;` now share it, so they always agree.
+**The nameplate cache is gone from the resolution path** — it existed only because `FUN_003588b0`
+was unreliable to call, and handle→actor is now a direct scan of `actor+0x08`. The two nameplate
+hooks remain, demoted to driving the browse announcement. Names include the **instance letter**
+("Dire Rat B").
+
+**Not yet built:** Phases 4/5/6 (the combat log itself) — next increment. Phase 3 remains deferred.
+
+### Session 49 addendum 9 — Phases 4/5/6 implemented; guest slot on `7`; empty slots now SILENT
+
+**KEYWORDS: combat_log.cpp combat_events.cpp combat_format.cpp ring 100 seq cursor auto-follow
+FUN_00536410 Tier 1 FUN_003112f0 Tier 2 monitor only actionId 0xFFFF first compare guest slot 7
+silent empty KO below 20 percent latch build clean x64**
+
+Implemented and building clean (x64, machine 0x8664).
+
+**User decisions applied this pass:**
+- **`7` reads the guest slot** (roster list 3 index 3).
+- **Empty/unavailable slots are now SILENT**, reversing combat_system.md §8.2's "Empty slot"
+  speech. §8.2's argument was that silence lets a broken mod masquerade as an empty slot — but that
+  reasoning came from a session where the mod WAS broken, and announcing an empty guest slot on
+  every press is noise. The diagnostic moved to the log, and `PARTY` is flushed so it survives a
+  hard exit.
+
+**`combat_log.{h,cpp}`** — 100-entry ring, continuous across battles, cursor keyed on a monotonic
+`seq` (so an eviction that passes it is detectable rather than silently shifting the read
+position), auto-follow while parked at the newest entry, and speech performed OUTSIDE the mutex
+because Tolk can block and the game thread appends under it. Only the genuinely-empty log speaks an
+explanation; boundaries re-speak the edge entry.
+
+**`combat_events.{h,cpp}`** — the only file with combat RVAs. Two hooks:
+- **Tier 1 `FUN_00536410`** (RVA `0x416410`): id read from `RCX+4 & 0x7FFF` BEFORE the call, the
+  finished sentence decoded from `RDX` after. The buffer is raw codec bytes in the caller's frame
+  and dies on return, so it is decoded and copied in the hook.
+- **Tier 2 `FUN_003112f0`** (RVA `0x1F12F0`), **monitor-only per §14.1**: rejects on
+  `actionId != 0xFFFF` as the FIRST test — one compare, ~99.8% of calls exit there with no
+  allocation, lock, SEH read or string work — then the `+0x1c == 1` emission gate.
+
+**`combat_format.{h,cpp}`** — owns every mod-emitted word. The realtime policy is a **data table
+keyed by message id** (not `if` chains), which is only possible because the Tier-1 hook carries the
+id. Outcome words come from the mechanic identified in the processing code (§14.2), never a sprite.
+
+**Phase 6 folded into the applier hook — no extra hooks.** KO and the below-20% crossing are
+computed from the pre-apply HP plus the delta, latched edge-triggered per BtlChr and re-armed on
+recovery. ⚠️ **Known gap:** a KO caused purely by a status TICK is not caught, because ticks are
+filtered out before this point. Accepted for now rather than adding a second hot hook; revisit if
+it matters in play.
+
+**Not built:** the 12-locale phrasebook (mod-emitted strings are English literals centralized in
+`combat_format.cpp`), AoE aggregation (5b), status-inflicted / EXP / LP (5c), and mod-owned entries
+(Phase 7). Phase 3 still deferred.
+
+### Session 49 addendum 10 — KO gap CLOSED (it never existed), tick monitoring, readout order
+
+**KEYWORDS: KO already narrated FUN_00469bb0 FUN_002fa390 party guest ally gate HP writer any cause
+poison doom message 0x10 has fallen no mod KO line duplicate tick monitored never logged
+result+0x24 one read status order name statuses HP MP**
+
+**The KO gap I flagged does not exist.** `FUN_00300530`'s KO path calls `FUN_00469bb0` → message
+`0x10` "{0} has fallen", gated by `FUN_002fa390` = `(FUN_002f8e90(bc) & 7) != 0` = party|guest|ally.
+It hangs off the **HP writer**, so it fires for **any** cause — hit, poison tick, or doom — and the
+message is cull-exempt, not dedup-eligible, and already in the Tier-1 realtime list.
+
+⇒ **Removed the mod's own "is KO'd" line**: it would have been a duplicate announcement of text the
+game supplies. `0x11`/`0x12` (void / stone) ride the same path.
+
+**Tick handling split** in `HookedApply`: ticks never produce a log entry, but a single read of
+`result+0x24` catches poison/doom draining a party member. Zero delta exits immediately.
+The 20% warning remains mod-emitted because the game has no text for it.
+
+**Readout order changed to name, STATUSES, HP, MP** — statuses must be reachable the instant the
+line starts speaking. Builds clean.

@@ -57,13 +57,20 @@ constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x
               DIK_GRAVE = 0x29, DIK_BACKSLASH = 0x2B, DIK_LSHIFT = 0x2A, DIK_RSHIFT = 0x36,
               DIK_MINUS = 0x0C, DIK_EQUALS = 0x0D, DIK_SEMICOLON = 0x27, DIK_APOSTROPHE = 0x28,
               DIK_SLASH = 0x35, DIK_P = 0x19;
-// Party-status keys. DIK number row is 1..0 == 0x02..0x0B, so 4/5/6 = 0x05/0x06/0x07.
-// Free in this game: it binds 1/2/3 to Game Speed and nothing to 4/5/6 (Docs/Controls.md).
-constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07;
+// Party-status keys. DIK number row is 1..0 == 0x02..0x0B, so 4/5/6/7 = 0x05/0x06/0x07/0x08.
+// Free in this game: it binds 1/2/3 to Game Speed and nothing to 4-7 (Docs/Controls.md).
+// 7 reads roster slot 3, the GUEST slot (list 3 has nine slots: 0-2 active, 3 guest, 4-8 reserve).
+constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07, DIK_7 = 0x08;
+// Combat-log navigation. Shift is deliberately NOT used: the game binds Left Shift to Toggle
+// Walk/Run and the mod cannot swallow keys, so a Shift chord would silently flip walk/run on every
+// press. Home/End are unbound and have no side effects.
+constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0xCF;
 
-// Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6  (standalone, no Shift).
+// Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6 7 , . Home End (no Shift).
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
-std::atomic<bool> g_extraDown[9]{};
+// Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
+// pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
+std::atomic<bool> g_extraDown[14]{};
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -255,6 +262,11 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('4',           g_extraDown[6],(dik[DIK_4]          & 0x80) != 0, true,  false);  // 4  party slot 1 status
     DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true,  false);  // 5  party slot 2 status
     DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true,  false);  // 6  party slot 3 status
+    DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true,  false);  // 7  guest slot status
+    DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true,  false);  // ,  log: older
+    DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true,  false);  // .  log: newer
+    DInputEdge(VK_HOME,       g_extraDown[12],(dik[DIK_HOME]      & 0x80) != 0, true,  false);  // Home log: oldest
+    DInputEdge(VK_END,        g_extraDown[13],(dik[DIK_END]       & 0x80) != 0, true,  false);  // End  log: newest
 }
 
 uint64_t LastInputTimestampMs() {

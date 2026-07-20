@@ -8,6 +8,7 @@
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
 #include "battle/party_status.h"
+#include "battle/combat_log.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/logger.h"
@@ -229,6 +230,11 @@ void OnNavKey(int vk, bool /*shift*/) {
         case '4':           PartyStatus::SpeakSlot(0);        break;  // 4  party slot 1 status
         case '5':           PartyStatus::SpeakSlot(1);        break;  // 5  party slot 2 status
         case '6':           PartyStatus::SpeakSlot(2);        break;  // 6  party slot 3 status
+        case '7':           PartyStatus::SpeakSlot(3);        break;  // 7  guest slot (silent if none)
+        case VK_OEM_COMMA:  CombatLog::StepBack();            break;  // ,  combat log: older
+        case VK_OEM_PERIOD: CombatLog::StepForward();         break;  // .  combat log: newer
+        case VK_HOME:       CombatLog::JumpOldest();          break;  // Home  oldest entry
+        case VK_END:        CombatLog::JumpNewest();          break;  // End   newest entry
         default:            break;
     }
 }
