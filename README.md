@@ -12,8 +12,6 @@ Multi-page dialogue is read all at once instead of a page at a time. Longer stor
 
 Button prompts inside tutorial text are skipped. A line like "press [button] to save" reads as "press to save" — the button icon, and often the punctuation right after it, is dropped.
 
-Exits do not say where they lead. They are found, listed, and can be routed to, but they read as "Exit" rather than naming the destination area.
-
 There is no party status readout yet. Reading each party member's HP and MP with a keypress is being worked on, but it does not function in this build, so it is not listed under Keys.
 
 The target status key (semicolon) is new and has not yet been confirmed in play. If it says nothing at all, that is worth reporting.
@@ -65,7 +63,7 @@ Check the log the mod writes next to the game executable: FFXII-Screen-Reader-La
 - C or Backspace: cancel.
 - F: battle menu.
 - R: party menu.
-- Left Ctrl: escape (flee from battle).
+- Left Ctrl: escape. This one is a toggle, and it is worth knowing about — pressing it plays a sound and locks the menus, so the battle menu and party menu will not open. Pressing it again plays another sound and unlocks them. If your menus suddenly stop opening, press Left Ctrl once.
 - Esc: pause game.
 - M, Numpad Plus, or Z: display map.
 - H, Numpad 0, or X: reset camera.
@@ -89,6 +87,8 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 - P: turn-by-turn directions to the target the game currently has selected.
 
 Categories cycle with minus and equals: All, Exit, Save Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy.
+
+Exits now name where they lead, for example "Exit, Nalbina Fortress: The Highhall, 15 steps north". This is new in this build — please report any exit that names the wrong place.
 
 Directions are given relative to the way you are facing — "north" means straight ahead, not world north.
 
