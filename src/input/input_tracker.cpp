@@ -239,6 +239,45 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     }
     if (anyRising) g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
 
+    // --- Battle-menu / stuck-Ctrl diagnostic (READ-ONLY). Bug: the game sees Ctrl+<key> instead of the
+    //     bare key, so the battle menu won't open. The mod's input path is passive, so this pins WHERE the
+    //     stuck Ctrl lives: log the modifier bits from the game's OWN DIK buffer + the OS async Ctrl on
+    //     change, and warn if Ctrl looks stuck (held >3 s with no other key). Logs O(changes), not per-frame.
+    {
+        const bool ctrlL = (dik[0x1D] & 0x80) != 0, ctrlR = (dik[0x9D] & 0x80) != 0;   // DIK_L/RCONTROL
+        const bool ctrlD  = ctrlL || ctrlR;
+        const bool shiftD = (dik[DIK_LSHIFT] & 0x80) != 0 || (dik[DIK_RSHIFT] & 0x80) != 0;
+        const bool altD   = (dik[0x38] & 0x80) != 0 || (dik[0xB8] & 0x80) != 0;         // DIK_L/RMENU (Alt)
+        const bool asyncCtrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        static bool s_lastCtrl = false, s_lastShift = false, s_lastAlt = false, s_lastAsync = false;
+        static uint64_t s_ctrlSinceMs = 0, s_lastWarnMs = 0;
+        if (ctrlD != s_lastCtrl || shiftD != s_lastShift || altD != s_lastAlt || asyncCtrl != s_lastAsync) {
+            char m[128];
+            snprintf(m, sizeof(m), "modifiers: Ctrl=%d(L%d R%d) Shift=%d Alt=%d asyncCtrl=%d",
+                     ctrlD, ctrlL, ctrlR, shiftD, altD, asyncCtrl);
+            Log::Write("INPUT-DIAG", m);
+            s_lastCtrl = ctrlD; s_lastShift = shiftD; s_lastAlt = altD; s_lastAsync = asyncCtrl;
+        }
+        const uint64_t now = GetTickCount64();
+        if (ctrlD || asyncCtrl) {
+            if (s_ctrlSinceMs == 0) s_ctrlSinceMs = now;
+            bool otherKey = false;
+            for (int i = 0; i < 256; ++i) {
+                if (i == 0x1D || i == 0x9D || i == DIK_LSHIFT || i == DIK_RSHIFT || i == 0x38 || i == 0xB8) continue;
+                if (dik[i] & 0x80) { otherKey = true; break; }
+            }
+            if (!otherKey && (now - s_ctrlSinceMs) > 3000 && (now - s_lastWarnMs) > 5000) {
+                s_lastWarnMs = now;
+                char m[128];
+                snprintf(m, sizeof(m), "CTRL STUCK? held %llums, no other key (bufCtrl=%d asyncCtrl=%d)",
+                         static_cast<unsigned long long>(now - s_ctrlSinceMs), ctrlD, asyncCtrl);
+                Log::Write("INPUT-DIAG", m);
+            }
+        } else {
+            s_ctrlSinceMs = 0;
+        }
+    }
+
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false, false);

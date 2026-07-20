@@ -402,6 +402,18 @@ sees no keys). This is the game's own acquisition / a focus loss, **not** our re
 mitigation: a mod-side re-`Acquire()` nudge when we detect the failure — defer unless it
 becomes a real blocker (it touches the game's device).
 
+### Battle menu won't open — game sees `Ctrl+<key>` instead of the bare key (OPEN — diagnostic shipped S47)
+The tester cannot open the battle menu; the game behaves as though **Ctrl is held** on every
+keypress. The mod is **not** a candidate cause: the `GetDeviceState` hook takes the DIK buffer
+as `const` and never mutates it, and the mod synthesizes no input at all (read-only guarantee,
+Session 44). Shipped in `V0.02-shotgun-build`: an `INPUT-DIAG modifiers:` line (emitted on
+modifier **change**, not per-frame) plus a `CTRL STUCK?` warning after >3 s of Ctrl-down with no
+other key. It logs the game's own buffer bits **and** `GetAsyncKeyState(VK_CONTROL)` side by
+side, which splits the fault: both set = OS/physical (sticky keys, a remap utility, a real stuck
+key); buffer only = engine-side stale device state; async only = something outside the mod.
+**Next:** read `INPUT-DIAG modifiers` in the tester's log and pick the branch. Do not "fix" this
+mod-side before the log says where it lives.
+
 ## Session Log
 
 Index of session log files (split into `sessions_*.md` every 50 sessions).

@@ -2027,3 +2027,45 @@ Phyre-encoded on disk; plain only in the loaded blob).
 The generality demand was the thing that cracked it. Repeatedly insisting this be **one global system**,
 never per-map, is what pushed past single-map inference to the five-map test that exposed the wrong
 `NNN = slot` reading and produced the correct `N+1` rule.
+
+## Session 47 — 2026-07-20 — [input] Stuck-Ctrl diagnostic for the battle menu that won't open
+
+**KEYWORDS: INPUT-DIAG modifiers ctrl stuck battle menu won't open Ctrl+key DIK_LCONTROL 0x1D DIK_RCONTROL
+0x9D DIK_LMENU 0x38 DIK_RMENU 0xB8 GetAsyncKeyState VK_CONTROL asyncCtrl input_tracker FeedDInputKeyboard
+read-only diagnostic O(changes) shotgun build 0.02**
+
+**SHIPPED (diagnostic only, no behaviour change).** The tester reports the battle menu will not open
+because the game sees **`Ctrl+<key>` instead of the bare key**. The mod's input path is entirely passive
+— the `GetDeviceState` hook copies the game's buffer and never mutates it (`const`) — so the mod cannot
+be the source. This block exists to pin **where** the stuck Ctrl lives, not to fix it.
+
+### What it logs
+
+In `FeedDInputKeyboard` (`src/input/input_tracker.cpp`), reading the game's **own** DIK buffer:
+
+- `INPUT-DIAG modifiers: Ctrl=n(Ln Rn) Shift=n Alt=n asyncCtrl=n` — emitted **only on change**, so the
+  log is O(modifier transitions), not per-frame (console-budget rule).
+- `INPUT-DIAG CTRL STUCK? held Nms, no other key (bufCtrl=n asyncCtrl=n)` — when Ctrl reads down for
+  >3 s with no other key pressed; rate-limited to one line per 5 s.
+
+The pairing is the whole point: `bufCtrl` is what the **game's DirectInput buffer** says, `asyncCtrl` is
+what the **OS** says via `GetAsyncKeyState(VK_CONTROL)`. That splits the fault three ways —
+
+| bufCtrl | asyncCtrl | Conclusion |
+|---|---|---|
+| 1 | 1 | Physically/OS-level held — sticky key, remap utility, or a real stuck key. Not the game. |
+| 1 | 0 | The game's DInput device state is stale/wrong while the OS sees Ctrl up — engine-side. |
+| 0 | 1 | OS thinks Ctrl is down but the game doesn't — an overlay/hook outside the mod. |
+
+Read-only throughout: buffer reads and `GetAsyncKeyState` only, no writes, no synthesized input
+(read-only guarantee, Session 44).
+
+### Files
+
+- `src/input/input_tracker.cpp` — +39 lines in `FeedDInputKeyboard`, above the standalone-hotkey edges.
+
+### Note
+
+Precedent: the previous `INPUT-DIAG` block is what caught the Enter-key drop as
+`DIERR_INPUTLOST` (Session 33) — upstream, not the mod. Same shape, same purpose. Shipped in release
+`V0.02-shotgun-build` so the tester's next log answers the question.
