@@ -3,6 +3,7 @@
 #include "navigation/nav_common.h"
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
+#include "navigation/map_script.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
@@ -33,6 +34,8 @@ struct Entity {
     FVec3        pos;
     float        dist2D   = 0.0f;      // to player, refreshed per command
     bool         fixed    = false;     // exit/map-jump: fixed world pos, no scene node (don't refresh via +0xB8)
+    bool         noBearing = false;    // pos is NOT world-space (connection-DB exits carry map-atlas offsets)
+                                       // -> speak the label only, never a fabricated direction
 };
 
 std::mutex             g_mutex;
@@ -106,14 +109,9 @@ std::wstring ResolveObjectName(void* sceneObj) {
     return GameText::IsMostlyPrintable(s) ? s : std::wstring();
 }
 
-// FUN_003778b0() -> current-area name codec*. POD-only SEH wrapper.
-typedef const uint8_t* (__fastcall* Pfn_AreaName)();
-const uint8_t* CallAreaName() {
-    Pfn_AreaName fn = reinterpret_cast<Pfn_AreaName>(Hooks::ResolveRva(NavRva::CURRENT_AREA_NAME));
-    if (!fn) return nullptr;
-    __try { return fn(); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
-}
+// (The current-area name is resolved via MapQuery::CurrentMapId + ResolveMapName/ResolveRegionName —
+//  FUN_003778b0 takes a MAP ID it was being called without, which returned the empty sentinel. See
+//  CurrentAreaName below.)
 
 // True when an npcdic name key falls in the field gimmick-object band (433-469:
 // treasure, urn, crystals, anchor). Used so a named gimmick is always listed even if
@@ -218,6 +216,7 @@ void SetFocusLocked(const Entity& e) {
 void ClearFocusLocked() { g_cursor = CursorId{}; }
 
 void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
+    if (e.noBearing) { Speech::Output(e.label); return; }       // map-atlas pos: name only, no direction
     float facingRad = 0.0f;
     PlayerState::ReadCameraForward(facingRad);                  // "North" = forward = where UP takes you
     std::wstring phrase = e.label;
@@ -290,67 +289,90 @@ void ScanCombatantsLocked() {
     }
 }
 
-// Append the current map's EXITS — the intra-map "Mapjump" transitions that move the party between areas
-// (Inner Ward -> Upper Apartments). These are NOT scene objects in the handle table, so the interaction
-// scanner is blind to them; they come from the per-map map-jump point table (mapData+0x54, behind
-// getmapjumpposbyindex). Each is a FIXED-position Category::Exit entity (no scene node) with a synthetic
-// stable identity so the cursor can lock to it.
+// Append the current map's EXITS — the transitions that move the party between areas (Inner Ward ->
+// Upper Apartments). These are NOT scene objects in the handle table, so the interaction scanner is blind
+// to them; they come from the per-map FIELD-SIGN array (mapData+0x70) via the game's own getters. Each is
+// a FIXED-position Category::Exit entity (no scene node) with a synthetic stable identity so the cursor
+// can lock to it.
 //
-// Destination names come from a SEPARATE table: the +0x70 field-sign array is the only thing that carries
-// a destination area id (the +0x54 records are position-only — see map_query.h). So we enumerate both and
-// attach a sign's name to the jump point it sits on. A sign with no matching jump point is listed in its
-// own right; a jump point with no sign keeps the generic "Exit" word.
-//
-// Strict sanity gates live in the enumerators, so a wrong offset yields no exits, never garbage.
+// Destination names come from the game itself: FUN_002648f0 walks the record's +0x1d -> the +0x8c dest
+// table -> a destination MAP ID, which ResolveFullAreaName renders as "<region>: <sub-area>". Because the
+// same record also holds the world X/Y/Z, one record yields the whole format — name AND bearing — with no
+// join between unrelated tables. An exit whose destination doesn't resolve is dropped, not spoken as a
+// bare "Exit". Strict gates live in the enumerator, so a wrong offset yields no exits, never garbage.
 // Caller holds g_mutex.
-constexpr float kExitMaxDist   = 2000.0f;   // generous sanity bound (reject garbage positions)
-constexpr float kSignMatchDist = 3.0f;      // XZ radius: field sign <-> its map-jump point
+constexpr float kExitMaxDist = 2000.0f;   // generous sanity bound (reject garbage positions)
 
 void ScanExitsLocked() {
-    FVec3 p; const FVec3* pp = PlayerState::ReadPlayerPos(p) ? &p : nullptr;
-
-    std::vector<MapQuery::ExitRec> jumps, signs;
+    // Exits come from the +0x54 map-jump table — the REAL, WALKABLE world positions, so the player can
+    // route to one. The destination NAME now comes from the map's own field script (see below), giving
+    // "Exit, <region>: <sub-area>" + live bearing/steps: enough to choose an exit by where it goes and
+    // walk to it. Only slots owned by a `__MJ_CTRL` controller are listed; the rest are arrival points.
+    //
+    // (The connection DB was dropped as the exit source: it is the region's FLOOR LIST — all sub-areas of the
+    //  region, most not reachable from this room — which is why it reported 4 where there are 2. It has names
+    //  but only map-atlas coords, so it can never be walked to. See MapQuery::EnumerateMapConnections.)
+    FVec3 p{}; const FVec3* pp = PlayerState::ReadPlayerPos(p) ? &p : nullptr;
+    std::vector<MapQuery::ExitRec> jumps;
     MapQuery::EnumerateMapJumps(pp, kExitMaxDist, jumps, /*logRaw=*/false);
-    MapQuery::EnumerateExits(pp, kExitMaxDist, signs, /*logRaw=*/false);
 
-    std::vector<bool> signUsed(signs.size(), false);
+    // Destinations come from the map's OWN script. The toolchain emits one routine per map-jump door
+    // named `__MJ_CTRL<N>`, owning `+0x54` slot N+1, with the destination as a `mapjump` literal — so a
+    // door's destination is readable on the first frame of any map, with no cross-map data, no cache and
+    // no learning. (Walk-tested across five Nalbina maps, and cross-checked against the arrival relation.)
+    //
+    // Match by POSITION, never by slot number: the `+0x54` table repeats records (one map's slot 1 is
+    // byte-identical to slot 0) and EnumerateMapJumps de-duplicates them, so a surviving entry's index can
+    // differ from the owning slot while naming the same physical doorway. Position matching also fails
+    // safe — a mismatch drops the exit rather than mislabelling it.
+    static int s_loggedMap = -1;
+    const int  mapId     = MapQuery::CurrentMapId();
+    const bool logDetail = (mapId != s_loggedMap);   // once per map, not once per rescan
+    if (logDetail) s_loggedMap = mapId;
 
-    for (const auto& jp : jumps) {
-        // Nearest field sign in XZ, if any, names this jump point.
-        const MapQuery::ExitRec* best = nullptr;
-        size_t bestIdx = 0;
-        float bestD2 = kSignMatchDist * kSignMatchDist;
-        for (size_t s = 0; s < signs.size(); ++s) {
-            if (signs[s].destName.empty()) continue;
-            const float dx = signs[s].pos.x - jp.pos.x, dz = signs[s].pos.z - jp.pos.z;
-            const float d2 = dx * dx + dz * dz;
-            if (d2 <= bestD2) { bestD2 = d2; best = &signs[s]; bestIdx = s; }
+    std::vector<MapScript::ExitDest> dests;
+    MapScript::ReadExitDests(dests, logDetail);
+
+    for (const auto& j : jumps) {
+        const MapScript::ExitDest* d = nullptr;
+        for (const auto& c : dests) {
+            if (!c.posOk || c.destName.empty()) continue;
+            if (std::fabs(c.pos.x - j.pos.x) < 0.05f &&
+                std::fabs(c.pos.y - j.pos.y) < 0.05f &&
+                std::fabs(c.pos.z - j.pos.z) < 0.05f) { d = &c; break; }
+        }
+        // No controller owns this position: it is an arrival/spawn point the party is placed on, not a
+        // door the player can leave through. Listing it sends the player walking to a dead end, so skip it.
+        if (!d) {
+            if (logDetail) {
+                char m[160];
+                snprintf(m, sizeof(m), "  door +0x54[%d] (%.1f,%.1f,%.1f) -> no controller (arrival point)",
+                         j.index, j.pos.x, j.pos.y, j.pos.z);
+                Log::Write("NAV-DIAG", m);
+            }
+            continue;
         }
 
         Entity e;
-        e.sceneObj = nullptr;
-        e.fixed    = true;
-        e.flags    = 0;
-        e.nameIdx  = static_cast<int16_t>(-(1000 + jp.index));   // distinct stable id
-        e.pos      = jp.pos;
-        e.category = Category::Exit;
-        e.label    = best ? best->destName : CategoryWord(Category::Exit);
-        if (best) signUsed[bestIdx] = true;
+        e.sceneObj  = nullptr;
+        e.fixed     = true;                                      // fixed world pos, no scene node
+        e.flags     = 0;
+        e.nameIdx   = static_cast<int16_t>(-(1000 + j.index));   // distinct stable id for the cursor
+        e.pos       = j.pos;                                     // WORLD -> bearing/steps are honest
+        e.category  = Category::Exit;
+        // "Exit, <region>: <sub-area>" — SpeakEntityLocked appends the live steps/bearing.
+        e.label     = std::wstring(CategoryWord(Category::Exit)) + L", " + d->destName;
         g_entities.push_back(e);
-    }
 
-    // Field signs that didn't land on a jump point are still real, named exits — list them too.
-    for (size_t s = 0; s < signs.size(); ++s) {
-        if (signUsed[s] || signs[s].destName.empty()) continue;
-        Entity e;
-        e.sceneObj = nullptr;
-        e.fixed    = true;
-        e.flags    = 0;
-        e.nameIdx  = static_cast<int16_t>(-(2000 + signs[s].index));
-        e.pos      = signs[s].pos;
-        e.category = Category::Exit;
-        e.label    = signs[s].destName;
-        g_entities.push_back(e);
+        if (logDetail) {
+            char n8[96] = {};
+            for (size_t k = 0; k < d->destName.size() && k < 95; ++k)
+                n8[k] = (d->destName[k] < 128) ? static_cast<char>(d->destName[k]) : '?';
+            char m[224];
+            snprintf(m, sizeof(m), "  door +0x54[%d] (%.1f,%.1f,%.1f) -> __MJ_CTRL%03d \"%s\"",
+                     j.index, j.pos.x, j.pos.y, j.pos.z, d->ctrlIndex, n8);
+            Log::Write("NAV-DIAG", m);
+        }
     }
 }
 
@@ -509,26 +531,68 @@ void OnFieldFrame() {
     if (n == 0 && hadObjects && mask != 0)
         g_entities = std::move(prev);
 
-    // One-shot per-area exit-table dump (baked confirmation of the map-jump + field-sign recipes): fires
-    // once when the container set changes (area load), so we get the raw mapData/tag/tableOff/count
-    // + records in the log without the tester having to press the diagnostic key. The +0x70 dump also
-    // does a DIRECT memory read of the group table, which is the first honest measurement of whether
-    // that array is populated (every prior "count=0" came from a getter called with no group argument).
-    if (mask != 0) {
+    // Announce the area just entered ("Entering <name>") — ONLY on a real field area, and only when the
+    // area actually changed (edge-triggered on the name; re-entering the same-named area after a menu
+    // won't re-announce).
+    //
+    // CONTEXT GATE: IsFieldActive() alone is NOT enough — its 0x10 bit is already set at boot (the log
+    // caught this block running pre-title with "no sub-map index"). NavSafeFailMask bits 0/1/2 = field sim
+    // live + field module STARTED (only 1 after the first field entry) + valid area id (not mid-transition);
+    // all three clear == we are genuinely on a field area. We deliberately do NOT use the full
+    // IsFieldNavSafe(), which also demands the Bullet world — the prologue never builds one, so that would
+    // suppress the announcement entirely.
+    constexpr uint8_t kFieldContextBits = 0x07;   // 0 field, 1 field-started, 2 areaId
+    if (mask != 0 && (PlayerState::NavSafeFailMask() & kFieldContextBits) == 0) {
+        static std::wstring s_lastArea;
+        std::wstring area = CurrentAreaName();
+        if (!area.empty() && area != s_lastArea) {
+            s_lastArea = area;
+            std::wstring phrase = L"Entering ";
+            phrase += area;
+            // The spoken text itself is logged by Speech (SPEAK-OUT). Log the map id + each half here,
+            // since those are what the speech log can't show — and they are exactly what distinguishes a
+            // region-only announcement from a full one when a name looks wrong.
+            const int aid = MapQuery::CurrentMapId();
+            const std::wstring sub = MapQuery::ResolveAreaName(aid);
+            const std::wstring reg = MapQuery::ResolveRegionName(aid);
+            char s8[64] = {}, r8[64] = {};
+            for (size_t k = 0; k < sub.size() && k < 63; ++k) s8[k] = (sub[k] < 128) ? static_cast<char>(sub[k]) : '?';
+            for (size_t k = 0; k < reg.size() && k < 63; ++k) r8[k] = (reg[k] < 128) ? static_cast<char>(reg[k]) : '?';
+            char m[192];
+            snprintf(m, sizeof(m), "announce: mapId=%d sub=\"%s\" region=\"%s\"", aid, s8, r8);
+            Log::Write("NAV", m);
+            Speech::Output(phrase);
+        }
+
+        // Per-area dump: the field-sign exits we now list (world pos + resolved destination), plus the
+        // +0x54 map-jump world points for cross-reference. The +0x70 count is the number this session's
+        // ABI fix unblocked — it read 0 on every map while the group index was being passed in junk.
+        std::vector<MapQuery::ExitRec> fs;
+        MapQuery::EnumerateFieldSignExits(fs, /*logRaw=*/true);                 // named exits (WORLD pos)
         FVec3 pep; const FVec3* ppp = PlayerState::ReadPlayerPos(pep) ? &pep : nullptr;
+        if (ppp) {
+            char m[96];
+            snprintf(m, sizeof(m), "map-exits: player world=(%.1f,%.1f,%.1f)", pep.x, pep.y, pep.z);
+            Log::Write("NAV-DIAG", m);
+        }
+        char fsm[64];
+        snprintf(fsm, sizeof(fsm), "map-exits(+0x70) usable+named: %zu", fs.size());
+        Log::Write("NAV-DIAG", fsm);
         std::vector<MapQuery::ExitRec> jp;
-        MapQuery::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true);   // map-jump points (+0x54)
-        std::vector<MapQuery::ExitRec> sg;
-        MapQuery::EnumerateExits(ppp, kExitMaxDist, sg, /*logRaw=*/true);      // field signs + dest (+0x70)
+        MapQuery::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true);    // +0x54 world points (diag)
+
+        // The destination is a LITERAL in the loaded field script: scan for mapjump(dest,entrance,flags)
+        // calls and log each with its resolved name + dispatch context. This is the real exit-dest source;
+        // the log pins the source-door<->dest pairing for wiring.
+        MapQuery::DiagScanScriptMapjumps();
     }
 }
 
 std::wstring CurrentAreaName() {
-    const uint8_t* p = CallAreaName();
-    if (!p || reinterpret_cast<void*>(const_cast<uint8_t*>(p)) == Hooks::ResolveRva(NavRva::EMPTY_STRING))
-        return L"";
-    std::wstring s = GameText::Decode(p, 128);
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+    // "<region>: <sub-area>" for the current map id, e.g. "Nalbina Fortress: Lower Apartments".
+    const int id = MapQuery::CurrentMapId();
+    if (id <= 0) return L"";
+    return MapQuery::ResolveFullAreaName(id);
 }
 
 void CmdRescan() {
@@ -774,10 +838,18 @@ void LogDiagnostic() {
         Log::Write("NAV-DIAG", line);
     }
 
-    // EXIT dump (baked confirmation of both recipes). +0x54 logs the raw rel-offset / computed base /
-    // count / each {x,y,z,angle}; +0x70 direct-reads the group table and then walks it via the getters,
-    // logging destIdx-resolved areaId + name per sign. A single ' press by an area transition confirms
-    // (or corrects) both layouts, and settles whether +0x70 carries data on this map.
+    // EXIT dump: the field-sign array (+0x70) is the exit source — each record's world pos + the game's own
+    // resolved destination. +0x54 (below) logs the raw map-jump points for cross-reference, and the region's
+    // floor list (map-connection DB) is logged last since it is NOT an exit list. A single ' press near an
+    // exit pins the source and confirms it matches the "Entering X" heard on arrival.
+    Log::Write("NAV-DIAG", "==== map exits (+0x70 field signs — world pos + destination) ====");
+    {
+        std::vector<MapQuery::ExitRec> fs;
+        MapQuery::EnumerateFieldSignExits(fs, /*logRaw=*/true);
+        char es[72];
+        snprintf(es, sizeof(es), "  named exits: %zu", fs.size());
+        Log::Write("NAV-DIAG", es);
+    }
     Log::Write("NAV-DIAG", "==== map-jump points (+0x54) ====");
     {
         std::vector<MapQuery::ExitRec> jumps;
@@ -787,16 +859,16 @@ void LogDiagnostic() {
         snprintf(es, sizeof(es), "  map-jumps accepted (sanity-gated): %zu", jumps.size());
         Log::Write("NAV-DIAG", es);
     }
-    Log::Write("NAV-DIAG", "==== field signs + destinations (+0x70) ====");
+    // The region's floor list — logged for reference only. NOT exits: these are the sub-areas of the
+    // current REGION as the map screen stacks them (atlas coords, includes the area you're standing in).
+    Log::Write("NAV-DIAG", "==== region sub-area list (map-screen DB — NOT exits) ====");
     {
-        std::vector<MapQuery::ExitRec> signs;
-        const FVec3* pep = haveP ? &pp : nullptr;
-        MapQuery::EnumerateExits(pep, kExitMaxDist, signs, /*logRaw=*/true);
+        std::vector<MapQuery::ExitRec> conns;
+        MapQuery::EnumerateMapConnections(conns, /*logRaw=*/true);
         char es[72];
-        snprintf(es, sizeof(es), "  signs accepted (sanity-gated): %zu", signs.size());
+        snprintf(es, sizeof(es), "  region sub-areas: %zu", conns.size());
         Log::Write("NAV-DIAG", es);
     }
-
     Log::Write("NAV-DIAG", "==== end handle-table diag ====");
 }
 

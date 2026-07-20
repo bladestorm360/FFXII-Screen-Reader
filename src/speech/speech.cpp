@@ -40,6 +40,24 @@ static std::string WideToUtf8(const std::wstring& wide) {
     return utf8;
 }
 
+// ---- Speech diagnostic -------------------------------------------------------------------------------
+// EVERY speech path logs, spoken or not. Output() — the PREFERRED entry point (speech + braille), and so
+// the one most of the mod actually calls — was the only path that logged nothing, so no log ever recorded
+// what the mod said. That made "what did it announce?" answerable only from memory and easy to confuse
+// with an identical string from another subsystem (the Load screen's "Nalbina Fortress: Lower Apartments"
+// save-slot label vs. the area announcement). Suppressed calls log their REASON too: silence with no
+// record is indistinguishable from a bug that never fired.
+static void LogSpoken(const char* tag, const std::wstring& text) {
+    Log::Write(tag, WideToUtf8(text).c_str());
+}
+static void LogSuppressed(const char* tag, const std::wstring& text, const char* why) {
+    std::string m = "[not spoken: ";
+    m += why;
+    m += "] ";
+    m += WideToUtf8(text);
+    Log::Write(tag, m.c_str());
+}
+
 namespace Speech {
 
 bool Init() {
@@ -89,30 +107,35 @@ bool Init() {
 }
 
 void Speak(const std::wstring& text, bool interrupt) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) return;
-    if (!g_Tolk_Output) return;
+    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK", text, "muted"); return; }
+    if (!g_Tolk_Output) { LogSuppressed("SPEAK", text, "Tolk unavailable"); return; }
     {
         std::lock_guard<std::mutex> lock(g_tolkMutex);
         g_Tolk_Output(text.c_str(), interrupt);
     }
-    Log::Write("SPEAK", WideToUtf8(text).c_str());
+    LogSpoken("SPEAK", text);
 }
 
 void SpeakQueued(const std::wstring& text) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) return;
-    if (!g_Tolk_Output) return;
+    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-Q", text, "muted"); return; }
+    if (!g_Tolk_Output) { LogSuppressed("SPEAK-Q", text, "Tolk unavailable"); return; }
     {
         std::lock_guard<std::mutex> lock(g_tolkMutex);
         g_Tolk_Output(text.c_str(), false);
     }
-    Log::Write("SPEAK-Q", WideToUtf8(text).c_str());
+    LogSpoken("SPEAK-Q", text);
 }
 
 void Output(const std::wstring& text, bool interrupt) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) return;
-    if (!g_Tolk_Output) return;
-    std::lock_guard<std::mutex> lock(g_tolkMutex);
-    g_Tolk_Output(text.c_str(), interrupt);
+    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-OUT", text, "muted"); return; }
+    if (!g_Tolk_Output) { LogSuppressed("SPEAK-OUT", text, "Tolk unavailable"); return; }
+    {
+        // Scope the lock so the file write happens OUTSIDE it (matches Speak) — logging every Output call
+        // must not serialize behind the Tolk mutex.
+        std::lock_guard<std::mutex> lock(g_tolkMutex);
+        g_Tolk_Output(text.c_str(), interrupt);
+    }
+    LogSpoken("SPEAK-OUT", text);
 }
 
 void Silence() {
@@ -151,12 +174,12 @@ void ToggleEnabled() {
 
 void Raw(const std::wstring& text, bool interrupt) {
     // Bypasses mute guard — always outputs (e.g., "Speech off" announcement)
-    if (!g_Tolk_Output) return;
+    if (!g_Tolk_Output) { LogSuppressed("SPEAK-RAW", text, "Tolk unavailable"); return; }
     {
         std::lock_guard<std::mutex> lock(g_tolkMutex);
         g_Tolk_Output(text.c_str(), interrupt);
     }
-    Log::Write("SPEAK-RAW", WideToUtf8(text).c_str());
+    LogSpoken("SPEAK-RAW", text);
 }
 
 bool MaybeAnnounce(const std::wstring& text, std::wstring& cached, bool interrupt) {

@@ -198,16 +198,62 @@ The script-side API for map transitions is fully named:
 | Function | Use |
 |---|---|
 | `getmapid` / `getmaptype` / `getmapgroundtype` | Current map info |
-| `getmapjumpposbyindex` | Position of exit N on current map |
+| `getmapjumpposbyindex` | Position of exit N on current map (`mapData+0x54`) |
 | `getmapjumpanglebyindex` | Facing direction of exit N |
-| `getmapdestposbyindex` | Destination map ID for exit N |
+| ~~`getmapdestposbyindex`~~ | ~~Destination map ID for exit N~~ — **STRUCK (Session 46).** It returns an arrival **POSITION**, not a map id: it is `FUN_00264b90` with selector 1, reading the `mapData+0x84` table, and yields the same four floats (x/y/z/angle) as the selector-0 `+0x54` read. **`+0x54` = departure triggers; `+0x84` = arrival positions** — two different tables, which is why entrance indices never lined up with door positions. This line cost a session: it reads as "a getter exists that maps door → destination", and **no such getter exists anywhere in the 33,105 functions.** The destination is not in any table — see *Exit destinations = the map's own field script* below. |
 | `getmapjumpmode` / `setmapjumpmode` | Map-jump mode |
 | `setmapjumpgroup` / `setmapjumpgroupflag` | Exit group control |
 | `mapload` / `mapdispose` | Map lifecycle |
 | `mapjumpresult` / `mapjumppos` / `mapjumpstatus` | Per-jump state |
 
-This is exactly the surface a screen reader needs to enumerate exits, get
-their positions, look up destination names, and announce them.
+This surface gives exit **positions** and jump state. It does **not** give destination names — see below.
+
+## Exit destinations = the map's own FIELD SCRIPT (`__MJ_CTRL<N>`) — Session 46, SHIPPED
+
+**The problem this solves:** an exit's destination is stored on *nothing* the mod can index. The `+0x54`
+record is x/y/z/angle followed by zero bytes; the `+0x70` field-sign records carry positions with an empty
+destination slot on interior maps; the `+0x8c` dest table is keyed by a field-sign byte, not a jump index;
+and **no engine getter returns "destination for door N"** (every `mapData` accessor was traced). The
+destination lives in the map's compiled script.
+
+**The mechanism (one global system — prologue and non-prologue maps are identical):** the map toolchain
+emits **one routine per map-jump door**, named **`__MJ_CTRL<NNN>`**, whose body calls the `mapjump` native
+with its destination as a literal.
+
+| Blob offset | Structure |
+|---|---|
+| `hdr+0x18` | **Routine table**: `[u32 count][count records of 0x30]`; record `{+0x00 nameOff, +0x08 codeOff}` |
+| `hdr+0x4c` | **Name pool**: NUL-terminated names. A routine's name is **`pool + nameOff`** |
+| `hdr+0x54` | Map-jump door table: `[u32 count][records of 0x20]`, four floats x/y/z/angle at record+0 |
+
+- A routine's code **span** is `codeOff` → next-highest `codeOff` (the record's other fields are label /
+  variable sub-tables, **not** a byte length — two controllers on one map had byte-identical sub-tables
+  because they are the same compiled template differing only in the destination literal).
+- `mapjump(dest, entrance, flags)` compiles to `4f <destU16> 4f <entU16> 4f <flagsU16> 5d 8d 00`
+  (`0x4F` push-u16, `0x5D` CALLACTPOPA, native `0x8D` = `mapjump`). **`flags==0` = field door**;
+  `flags==0x0A` = the world-map teleport menu (a long run of these sits in every map — exclude them).
+
+**THE DOOR RULE — `__MJ_CTRL<N>` owns `+0x54` slot `N + 1`.** Slot 0 is the default/cutscene arrival and is
+never an exit; a slot with no controller is an arrival point, not a door. Walk-tested across five maps
+(274/275/279/280/282, routine tables of 22/25/31/24/37) and independently cross-checked by the arrival
+relation — *if M jumps to D with entrance E, D's door back to M is D's slot E* — which agrees on every
+measured pair with no exceptions.
+
+**Match doors to controllers BY POSITION, not slot number.** The `+0x54` table repeats records (one map's
+slot 1 is byte-identical to slot 0) and `EnumerateMapJumps` de-duplicates them, so a surviving entry's index
+can differ from the owning slot while naming the same doorway. Position matching also fails safe: a mismatch
+drops the exit rather than mislabelling it.
+
+Implemented in `src/navigation/map_script.{h,cpp}` (`MapScript::ReadExitDests`), consumed by
+`ScanExitsLocked` in `entity_list.cpp`. Nothing map-specific is baked in — only blob/VM format constants and
+the `__MJ_CTRL` prefix — so it resolves on the first frame of any map with no cross-map data, no cache and
+nothing learned by playing.
+
+**STRUCK by this work:** the routine table does **not** have "2 entries" (word 0 is a **count**; reading it
+as a record truncated a 24-routine table to 2). `nowjumpindex` (native `0x8f`) has **zero** call sites, and
+`lastjumpindex` (`0x90`) returns a **map id** (compared against the teleport-list ids), not a door index —
+so there is no jump-index dispatch. Operand of `0x5C` is **not** a routine index (values exceed the routine
+count); it is a label/target, so "routine X calls routine Y" cannot be read off `5c <n>`.
 
 ## World MAP screen (`page+0x138` = map id) — RE'd Session 45, KEEP for map-transition speech
 

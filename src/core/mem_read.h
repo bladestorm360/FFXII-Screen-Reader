@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <cstdint>
+#include <cstring>
 
 // SEH-guarded raw memory reads. Game objects can be destructed asynchronously and
 // pointer chains can dangle, so every dereference of a game address goes through one
@@ -69,6 +70,16 @@ inline bool SafeReadF32(void* base, uint32_t off, float* out) {
 inline bool SafeReadInt(void* p, int* out) {
     if (!p) return false;
     __try { *out = *reinterpret_cast<int*>(p); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// Bulk copy of `n` bytes. Returns false (dst possibly partially written) on fault, so callers
+// page-walk a region and stop at the first unmapped page. Used to snapshot a game-owned blob
+// into a local buffer once, then parse the copy with ordinary C++ (which cannot live inside a
+// __try scope). Lives here rather than in a caller so the SEH guard stays in one place.
+inline bool SafeReadBytes(const void* src, void* dst, size_t n) {
+    if (!src || !dst) return false;
+    __try { memcpy(dst, src, n); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 

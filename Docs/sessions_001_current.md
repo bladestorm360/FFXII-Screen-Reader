@@ -1965,3 +1965,65 @@ difference is itself a clue: it points at the array growth rather than at `DInpu
   built on repeatedly. The rule has two halves: (a) read before you dig, and if the file contradicts
   the runtime, **the runtime wins and you fix the file**; (b) when you disprove something there,
   **STRIKE it — don't just append a newer entry** — or the stale claim gets re-derived and re-shipped.
+
+## Session 46 — 2026-07-20 — [pathfinder] Exit DESTINATIONS shipped — `__MJ_CTRL<N>` owns `+0x54[N+1]`
+
+**KEYWORDS: exit destination name __MJ_CTRL routine table name pool hdr+0x18 hdr+0x4c hdr+0x54 mapjump
+literal flags=0 field door door rule N+1 arrival slot 0 map_script.cpp ReadExitDests SafeReadBytes
+getmapdestposbyindex struck nowjumpindex lastjumpindex 0x5C label not routine index gateway record**
+
+**SHIPPED:** exits now speak their real destination — *"Exit, Nalbina Fortress: The Highhall, 15 steps
+north"* — with the existing bearing/steps, on any map, resolved on the first frame from that map's own
+data. User-confirmed working.
+
+### The problem
+
+The destination is stored on **nothing the mod can index**. `+0x54` records are x/y/z/angle then zero
+bytes; `+0x70` field-signs have an empty destination slot on interior maps; `+0x8c` is keyed by a
+field-sign byte, not a jump index; and **no engine getter maps door → destination** (all 33,105 functions
+traced). A stale line in `GameArchitecture.md` claimed `getmapdestposbyindex` returned a destination map
+id — it returns an arrival *position* — and that one wrong line cost most of the session. Struck.
+
+### The mechanism
+
+The map toolchain emits **one routine per map-jump door**, named **`__MJ_CTRL<NNN>`**, carrying its
+destination as a `mapjump` literal (`4f<dest> 4f<ent> 4f<flags> 5d 8d 00`, `flags==0` = field door;
+`0x0A` = teleport menu). Routine table at `hdr+0x18` (`[u32 count][0x30 records]`, `{nameOff@+0, codeOff@+8}`),
+name pool at `hdr+0x4c`, **name = pool + nameOff**. Routine span = `codeOff` → next-highest `codeOff`.
+
+**DOOR RULE: `__MJ_CTRL<N>` owns `+0x54` slot `N+1`.** Slot 0 is the default/cutscene arrival; a slot with
+no controller is an arrival point, not a door. Walk-tested on five maps (274/275/279/280/282; routine
+tables 22/25/31/24/37) and independently cross-checked by the arrival relation (*M jumps to D with entrance
+E ⇒ D's door back to M is D's slot E*) — agrees on every measured pair.
+
+Doors are matched to controllers **by position, not slot index**: `+0x54` repeats records and the
+enumerator de-duplicates them, so a surviving entry's index can differ from the owning slot for the same
+doorway. Position matching also fails safe — a mismatch drops the exit instead of mislabelling it.
+
+This also fixed a real bug: Upper Apartments was announcing **three** exits when it has two. Slot 0
+`(59.7, 39.5)` has no controller — an arrival point the mod was sending the player to walk to.
+
+### Wrong turns (all struck in `debug.md`)
+
+Claimed a "jump-index dispatcher" mid-session and had to retract it within minutes: `nowjumpindex` has
+**zero** call sites, `lastjumpindex` returns a **map id**, and `0x5C`'s operand is a label — not a routine
+index (values 221 vs 24 routines), which invalidated the call-graph it rested on. Also dead: the "gateway
+record" (a denormalized mirror nothing reads), cross-map arrival-symmetry as a *blocker*, the routine
+table's "2 entries" (word 0 is a **count**), and offline `.mpk` literal extraction (bytecode is
+Phyre-encoded on disk; plain only in the loaded blob).
+
+### Files
+
+- **NEW** `src/navigation/map_script.{h,cpp}` — `MapScript::ReadExitDests`, generic script reader. New file
+  because `map_query.cpp` is already 747 lines, past the 500 limit.
+- `src/core/mem_read.h` — `SafeReadBytes` promoted here from a private static so the SEH guard lives once.
+- `src/navigation/entity_list.cpp` — `ScanExitsLocked` labels `Exit, <region>: <sub-area>`, skips
+  controller-less slots, logs once per map change (the detail dump was running every rescan → 28k-line log).
+- `src/navigation/map_query.cpp` — diagnostic widened to `+0x0..+0x9000`; the old `+0x400` start had never
+  captured the routine table or name pool, which is why this took so long to find.
+
+### Lesson
+
+The generality demand was the thing that cracked it. Repeatedly insisting this be **one global system**,
+never per-map, is what pushed past single-map inference to the five-map test that exposed the wrong
+`NNN = slot` reading and produced the correct `N+1` rule.

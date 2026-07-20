@@ -7,6 +7,35 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: exit destination door pairing getmapdestposbyindex nowjumpindex lastjumpindex jump-index
+dispatch gateway record arrival symmetry routine table 2 entries 0x5C routine index __MJ_CTRL
+mapData+0x54 +0x84 +0x70 +0x8c** — the long hunt for "which door goes where" (Session 46). Everything
+below was tried and is **DEAD**; the answer was the map's own field script (`__MJ_CTRL<N>` owns `+0x54`
+slot `N+1` — see `GameArchitecture.md`, *Exit destinations = the map's own FIELD SCRIPT*).
+
+- **Looking for a `destination-by-door-index` getter — there is none.** Every `mapData` accessor was
+  traced across all 33,105 functions. `getmapdestposbyindex` is `FUN_00264b90` selector 1 and returns an
+  arrival **position** from `mapData+0x84`, not a map id. The doc table said otherwise and **sent this
+  session chasing a getter that does not exist** — now struck.
+- **Expecting the destination to be a FIELD on the exit record.** It is not. `+0x54` records are
+  x/y/z/angle then zero bytes (raw dump confirms); `+0x70` field-sign records hold positions with an
+  empty destination slot on interior maps (`destIdx=0`, `areaId=0xffff`); `+0x8c` is keyed by a
+  field-sign `+0x1d` byte, never a jump index.
+- **"The routine table has 2 entries."** A parse bug, not data: **word 0 is an entry COUNT**. Reading it
+  as a record, plus a "stop on zero offset" guard, truncated a 24-routine table to 2.
+- **A jump-index dispatch in the script.** `nowjumpindex` (native `0x8f`) has **ZERO** call sites in the
+  whole script; `lastjumpindex` (`0x90`) returns a **map id** (compared against the teleport-menu ids
+  306/630/66…), not a door index. There is no `switch(jumpIndex)`.
+- **Reading `0x5C`'s operand as a routine index.** It is a label/target — observed values (221) exceed
+  the routine count (24). Any "routine X calls routine Y" conclusion drawn from `5c <n>` is invalid.
+- **The "gateway record"** (`{dest, entrance, ptr}` around `+0x5E00`) is a denormalized mirror of the
+  script literal; **no engine code reads its fields**, and it carries no source-door position.
+- **Cross-map arrival-symmetry as a *blocker*.** The relation is real and was used to cross-check the
+  door rule, but it needs every neighbour's data, so it is not a way to label the map you are standing
+  in. The in-map `__MJ_CTRL` naming makes it unnecessary.
+- **Offline `.mpk` extraction of mapjump literals** finds zero hits — on disk the bytecode is
+  Phyre-encoded/relocated; plain bytecode exists only in the **loaded** blob.
+
 **KEYWORDS: message read-point spec refuted FUN_0057c480 menu system message DAT_0209ac30 0x328
 obtained item field chest e5f0 FUN_003c02b0 FUN_002baf80 world map screen page+0x138 map id
 mini_face_c texture bundle 0.90 0.98 below bar** — `notes/message_text_readpoints_spec.md` §A and
