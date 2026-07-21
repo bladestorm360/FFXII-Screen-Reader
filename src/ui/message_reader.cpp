@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 
 // Message-text reader. Surfaces, all decoded from the game's own codec bytes:
@@ -25,9 +26,22 @@
 //     It is a timed toast — case 2 self-destructs when the animation ends — so it never paginates
 //     and fires exactly once per popup.
 //
-//  B. Telop / on-screen tutorial overlay — FUN_002e16b0. WORKS. Note it is a whole-message content
-//     setter: it hands us speaker + EVERY page in one string, which is why multi-page screens read
-//     all at once. Paginating it needs the consumer-side page state (not yet located).
+//  B. Telop / on-screen tutorial overlay — FUN_002e16b0. WORKS, and is now PAGINATED. It is a
+//     whole-message content setter: it hands over speaker + EVERY page in one string. Decoding that
+//     flat concatenated the pages with nothing between them ("...miss out on the bounty.You gotta
+//     talk to...") and read an entire multi-screen conversation in one breath while the game was
+//     still showing page 1.
+//
+//     RESOLVED without the consumer-side page state that was previously thought necessary: the
+//     PAGE BREAK IS IN THE TEXT. Codec control 0x03 is it — in the game's own codec handler
+//     FUN_002ac5f0 it is the only control case that RETURNS 0 (ending the draw pass) after storing
+//     the resume position in *param_2 and calling FUN_0017fae0(0). 0x02 does line-advance maths and
+//     continues (newline, not page); 0x09 only skips itself; 0x0A does layout and continues. So we
+//     split on 0x03 (GameText::DecodePages), speak page 1, and advance on the player's Confirm —
+//     the same press that advances the game's box — via InputTracker's observed Confirm callback.
+//
+//     The byte cap also went 512 -> 4096: 512 was sized for one screen and cut the 4-page hunt
+//     tutorial off mid-sentence ("...Then you hunt it, ").
 //
 //  C. Menu system messages — the FUN_0057c480 surface ("cannot equip", "sold"). Kept, but it is
 //     MENU-ONLY: its case 1 does *(longlong*)(DAT_0209ac30 + 0x328) = surface, i.e. it registers
@@ -82,6 +96,13 @@ Pfn_Telop     s_origTelop     = nullptr;
 // Last spoken line, for the `t` re-read key. Written on the game thread, read on the input thread.
 std::mutex   g_lastMutex;
 std::wstring g_lastLine;
+
+// Pages of the message currently on screen, and which one we have spoken. Written on the game
+// thread (the content setter), read+advanced on the input thread (Confirm), so it needs its own
+// lock -- g_lastMutex guards the `t` re-read line and nothing else.
+std::mutex                g_pageMutex;
+std::vector<std::wstring> g_pages;
+size_t                    g_pageIdx = 0;
 
 bool g_initialized = false;
 
@@ -147,12 +168,33 @@ void OnPanelSurface(void* surface, void* msg) {
 // button-icon inserts (0x0f escapes) currently decode to nothing, so key/button glyphs are
 // dropped for now — a follow-up will map them to names.
 void OnTelop(void* text, int slot) {
-    if (!text) return;  // null = clear
-    std::wstring s = GameText::Decode(reinterpret_cast<const uint8_t*>(text), 512);
-    if (!GameText::IsMostlyPrintable(s)) return;
-    char hdr[48];
-    snprintf(hdr, sizeof(hdr), "telop[slot=%d]: ", slot);
-    SpeakAndStash(s, hdr);
+    if (!text) {                                   // null = clear: the box closed
+        std::lock_guard<std::mutex> lk(g_pageMutex);
+        g_pages.clear();
+        g_pageIdx = 0;
+        return;
+    }
+
+    // PAGINATED. This setter hands over the WHOLE message -- every page in one string -- so
+    // decoding it flat and speaking it read an entire multi-screen conversation in a single breath
+    // while the game was still showing page 1. Split on the codec's 0x03 page break and speak only
+    // what is on screen; NextPage() advances with the player's Confirm.
+    //
+    // 4096, not 512: the 4-page hunt-tutorial message was being cut off mid-sentence
+    // ("...Then you hunt it, ") because the cap was sized for one screen, not the whole message.
+    std::vector<std::wstring> pages;
+    GameText::DecodePages(reinterpret_cast<const uint8_t*>(text), 4096, pages);
+    if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
+
+    {
+        std::lock_guard<std::mutex> lk(g_pageMutex);
+        g_pages = std::move(pages);
+        g_pageIdx = 0;
+    }
+
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "telop[slot=%d] page 1/%zu: ", slot, g_pages.size());
+    SpeakAndStash(g_pages.front(), hdr);
 }
 
 // ---- detours (all: run the original first, then read the now-populated state) ----
@@ -199,12 +241,29 @@ void OnRereadKey() {
 
 namespace MessageReader {
 
+void NextPage() {
+    std::wstring page;
+    size_t idx = 0, total = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_pageMutex);
+        if (g_pageIdx + 1 >= g_pages.size()) return;   // last page (or none): the box is closing
+        ++g_pageIdx;
+        page  = g_pages[g_pageIdx];
+        idx   = g_pageIdx;
+        total = g_pages.size();
+    }
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "telop page %zu/%zu: ", idx + 1, total);
+    SpeakAndStash(page, hdr);
+}
+
 bool Init() {
     if (g_initialized) {
         Log::Write("MSGTEXT", "MessageReader::Init called twice — ignoring");
         return true;
     }
     InputTracker::SetRereadCallback(&OnRereadKey);
+    InputTracker::SetConfirmCallback(&NextPage);   // page the telop with the game's own Confirm
     bool ok = Hooks::InstallTyped(RVA_ITEMPOPUP, &HookedItemPopup, &s_origItemPopup);
     ok     &= Hooks::InstallTyped(RVA_PANEL,     &HookedPanel,     &s_origPanel);
     ok     &= Hooks::InstallTyped(RVA_TELOP,     &HookedTelop,     &s_origTelop);
@@ -219,6 +278,7 @@ bool Init() {
 void Shutdown() {
     if (!g_initialized) return;
     InputTracker::SetRereadCallback(nullptr);
+    InputTracker::SetConfirmCallback(nullptr);
     Hooks::Uninstall(RVA_TELOP);
     Hooks::Uninstall(RVA_PANEL);
     Hooks::Uninstall(RVA_ITEMPOPUP);

@@ -12,6 +12,7 @@ namespace {
 // message loop, so speech never runs inside the low-level hook callback.
 constexpr UINT WM_DESCRIBE  = WM_APP + 1;
 constexpr UINT WM_REREAD    = WM_APP + 2;
+constexpr UINT WM_CONFIRM   = WM_APP + 6;   // game's Confirm (Space/Enter) -- observed, never sent
 constexpr UINT WM_NAVKEY    = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
 constexpr UINT WM_DIAG      = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
 constexpr UINT WM_UNHOOK_LL = WM_APP + 5;   // retire the WH_KEYBOARD_LL hook once DInput owns input
@@ -29,6 +30,7 @@ std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore au
 std::atomic<bool> g_tDown{false};      // edge-detect for the 't' key (ignore auto-repeat)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
+InputTracker::HotkeyCallback g_confirmCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
 
 // Navigation keys (edge-detected independently so auto-repeat is suppressed).
@@ -69,12 +71,18 @@ constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0x
 // speed and nothing to F4 (Docs/Controls.md), and the struck F4 modal combat-log design was never
 // built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
 constexpr int DIK_F4 = 0x3E;
+// The game's Confirm (Docs/Controls.md: Space / Enter / Left Mouse). Observed only -- the mod is
+// read-only on input and never swallows these, so the game's own text box advances exactly as it
+// always did; we just learn that it did. Mouse confirm is not observed (no hook for it), so a
+// mouse-only player simply gets no page advance rather than a wrong one.
+constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
 
 // Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6 7 , . Home End F4 (no Shift).
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
 std::atomic<bool> g_extraDown[15]{};
+std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -88,6 +96,8 @@ void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
             if (isNav)              PostThreadMessageW(g_threadId, WM_NAVKEY, (WPARAM)vk, 0);
             else if (vk == 'O')     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
             else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
+            else if (vk == VK_SPACE || vk == VK_RETURN)
+                                    PostThreadMessageW(g_threadId, WM_CONFIRM, 0, 0);
         }
     } else {
         downFlag.store(false);
@@ -161,6 +171,9 @@ DWORD WINAPI InputThread(LPVOID) {
         } else if (m.message == WM_REREAD) {
             InputTracker::HotkeyCallback cb = g_rereadCb;
             if (cb) cb();
+        } else if (m.message == WM_CONFIRM) {
+            InputTracker::HotkeyCallback cb = g_confirmCb;
+            if (cb) cb();
         } else if (m.message == WM_NAVKEY) {
             InputTracker::NavKeyCallback cb = g_navKeyCb;
             if (cb) cb(static_cast<int>(m.wParam));
@@ -223,6 +236,7 @@ void Shutdown() {
 }
 
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
+void SetConfirmCallback(HotkeyCallback cb) { g_confirmCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 
@@ -256,6 +270,8 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
+    DInputEdge(VK_SPACE,      g_confirmDown[0],(dik[DIK_SPACE]    & 0x80) != 0, false);  // Confirm (observed)
+    DInputEdge(VK_RETURN,     g_confirmDown[1],(dik[DIK_RETURN]   & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true);  // \  route
     DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true);  // [  prev object
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object

@@ -7,6 +7,25 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: telop burst ambient NPC lines area load 18 messages 140ms FUN_002e16b0 slot 0
+ambient chatter spoken on entry OPEN ISSUE**
+
+**OPEN — the telop setter fires for EVERY ambient NPC line at area load, and we speak them all.**
+Found 2026-07-21 while fixing multi-page dialogue. At Rabanastre entry the log shows **18 telop
+messages in 140 ms** (+28641 .. +28781), all `slot=0`, all different NPCs: *"There you are,
+Kytes."*, *"Creature spotted in the Estersand."*, *"Ah, Vaan. Migelo send you, too, did he?"*,
+*"Quite the affair, throwing a banquet..."* — the area's whole ambient chatter table.
+
+Each is spoken with `interrupt=true`, so they cancel one another and the player hears fragments of
+the last one. This is SEPARATE from the multi-page fix (that one was a single message containing
+several pages, now split on codec 0x03).
+
+Not yet known: whether these calls are the game registering the table or genuinely displaying each
+line for a frame. `FUN_002e16b0` param_2 is the slot (0-7, clamped) and all 18 use slot 0, which
+argues for sequential replacement rather than 18 simultaneous displays. Needs the display-vs-set
+distinction settled before any gating — do NOT simply rate-limit it, that would be a dedup in
+disguise (see the no-dedup rule).
+
 **KEYWORDS: dialogue choice pop-up options not spoken Tomaj hunt bill yes no selectable
 conversation branch cursor pointing hand R Log Space Confirm OPEN ISSUE**
 

@@ -80,6 +80,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `t` | Re-read last spoken line | free |
 | `\` | Nav: turn-by-turn route to current selection | free |
 | `F4` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — game binds F1/F2/F3 only |
+| `Space` / `Enter` | *(observed only)* advances the spoken dialogue page with the game's own Confirm | the game's Confirm — never swallowed or injected |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |

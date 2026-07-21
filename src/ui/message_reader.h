@@ -15,4 +15,15 @@ namespace MessageReader {
 bool Init();
 void Shutdown();
 
+// Advance to the next page of the message currently on screen and speak it. Called on the input
+// thread when the player presses the game's own Confirm key -- the same press that advances the
+// game's text box -- so our page pointer tracks the box instead of running ahead of it.
+//
+// A multi-page message arrives from the content setter as ONE string containing every page, which
+// is why it used to be read out in a single breath. Pages are split on the codec's 0x03 break.
+//
+// Silent when no page remains (the box is closing) and when no message is active: announcing
+// anything there would be filler.
+void NextPage();
+
 } // namespace MessageReader

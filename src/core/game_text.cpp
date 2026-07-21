@@ -82,6 +82,11 @@ int EscapeParamCount(const uint8_t* buf, size_t n, size_t sel) {
     return -1;
 }
 
+// Codec-buffer cap. Was 1024 with callers passing 512, which cut the 4-page hunt-tutorial message
+// off mid-sentence ("...Then you hunt it, "). A multi-page conversation arrives as ONE string, so
+// the cap has to cover the whole thing, not one screen.
+constexpr size_t kMaxCodecBytes = 4096;
+
 // Bytes consumed by a sub-0x10 control code, INCLUDING the control byte itself.
 // 0 means "this terminates the string". -1 means "length unknown -- stop, do not guess".
 int ControlLength(uint8_t c) {
@@ -111,18 +116,23 @@ inline bool IsSpaceControl(uint8_t c) {
     return c == 0x01 || c == 0x04 || c == 0x06 || c == 0x07;
 }
 
-} // namespace
+// Shared decode loop, used by BOTH Decode and DecodePages so the codec is understood in exactly
+// one place. Always splits at the 0x03 page break; a message without one yields a single page, and
+// Decode simply concatenates -- which reproduces the previous behaviour exactly, since 0x03 used to
+// fall through the `default: return 1` arm and emit nothing.
+bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>& pages) {
+    pages.clear();
+    if (!p) return false;
+    if (maxBytes > kMaxCodecBytes) maxBytes = kMaxCodecBytes;
 
-std::wstring Decode(const uint8_t* p, size_t maxBytes) {
-    if (!p) return std::wstring();
-    if (maxBytes > 1024) maxBytes = 1024;
-
-    uint8_t buf[1024];
+    uint8_t buf[kMaxCodecBytes];
     size_t n = 0;
-    if (!SafeCopy(p, maxBytes, buf, &n)) return std::wstring();
+    if (!SafeCopy(p, maxBytes, buf, &n)) return false;
 
-    std::wstring out;
-    out.reserve(n);
+    pages.emplace_back();
+    std::wstring* cur = &pages.back();
+    cur->reserve(n);
+    
 
     size_t i = 0;
     while (i < n) {
@@ -137,8 +147,8 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
         }
 
         if (c < 0x10) {                                   // control byte
-            if (IsSpaceControl(c)) out.push_back(L' ');
-            else if (c == 0x02)    out.push_back(L'\n');
+            if (IsSpaceControl(c)) cur->push_back(L' ');
+            else if (c == 0x02)    cur->push_back(L'\n');
             const int len = ControlLength(c);
             if (len <= 0) break;                          // terminator, or length unknown
             i += static_cast<size_t>(len);
@@ -153,9 +163,9 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
             continue;
         }
 
-        if (c >= 0x20 && c <= 0x39)      out.push_back(static_cast<wchar_t>(L'A' + (c - 0x20)));
-        else if (c >= 0x3A && c <= 0x53) out.push_back(static_cast<wchar_t>(L'a' + (c - 0x3A)));
-        else if (c >= 0x85 && c <= 0x8E) out.push_back(static_cast<wchar_t>(L'0' + (c - 0x85)));
+        if (c >= 0x20 && c <= 0x39)      cur->push_back(static_cast<wchar_t>(L'A' + (c - 0x20)));
+        else if (c >= 0x3A && c <= 0x53) cur->push_back(static_cast<wchar_t>(L'a' + (c - 0x3A)));
+        else if (c >= 0x85 && c <= 0x8E) cur->push_back(static_cast<wchar_t>(L'0' + (c - 0x85)));
         else {
             // Extended glyphs. The font atlas IS the character map (FUN_002ac2f0:75 computes the
             // glyph slot as `byte - 0x20`), so these can only ever be established empirically.
@@ -163,26 +173,59 @@ std::wstring Decode(const uint8_t* p, size_t maxBytes) {
             // rest carry their prior observational status. Unmapped bytes are dropped, never
             // guessed.
             switch (c) {
-                case 0x99: out.push_back(L'!');  break;
-                case 0x9A: out.push_back(L'?');  break;
-                case 0xA4: out.push_back(L'+');  break;   // "New Game+" glyph
-                case 0xA5: out.push_back(L'-');  break;
-                case 0xA7: out.push_back(L',');  break;
-                case 0xA8: out.push_back(L'.');  break;
-                case 0xAA: out.push_back(L':');  break;
-                case 0xAC: out.push_back(L'\''); break;
-                case 0xAE: out.push_back(L'(');  break;
-                case 0xAF: out.push_back(L')');  break;
-                case 0xA2: out.push_back(L'/');  break;
-                case 0xA0: out.push_back(L'&');  break;   // "Magicks & Technicks"
-                case 0x9E: out.push_back(L'%');  break;
-                case 0x8F: out.push_back(L'-');  break;   // em-dash
+                case 0x99: cur->push_back(L'!');  break;
+                case 0x9A: cur->push_back(L'?');  break;
+                case 0xA4: cur->push_back(L'+');  break;   // "New Game+" glyph
+                case 0xA5: cur->push_back(L'-');  break;
+                case 0xA7: cur->push_back(L',');  break;
+                case 0xA8: cur->push_back(L'.');  break;
+                case 0xAA: cur->push_back(L':');  break;
+                case 0xAC: cur->push_back(L'\''); break;
+                case 0xAE: cur->push_back(L'(');  break;
+                case 0xAF: cur->push_back(L')');  break;
+                case 0xA2: cur->push_back(L'/');  break;
+                case 0xA0: cur->push_back(L'&');  break;   // "Magicks & Technicks"
+                case 0x9E: cur->push_back(L'%');  break;
+                case 0x8F: cur->push_back(L'-');  break;   // em-dash
                 default:   break;                         // unmapped extended glyph: drop
             }
         }
         ++i;
     }
+    return true;
+}
+
+// Trim leading/trailing whitespace. A page routinely starts with the newline that followed the
+// previous page's break, and a lone blank line read aloud is just a stumble.
+std::wstring Trimmed(const std::wstring& t) {
+    static const wchar_t kWs[] = { L' ', L'\t', L'\r', L'\n', L'\0' };
+    const wchar_t* ws = kWs;
+    const size_t b = t.find_first_not_of(ws);
+    if (b == std::wstring::npos) return std::wstring();
+    const size_t e = t.find_last_not_of(ws);
+    return t.substr(b, e - b + 1);
+}
+
+} // namespace
+
+std::wstring Decode(const uint8_t* p, size_t maxBytes) {
+    std::vector<std::wstring> pages;
+    if (!DecodeToPages(p, maxBytes, pages)) return std::wstring();
+    // Concatenate: 0x03 previously fell through the `default: return 1` arm and emitted nothing, so
+    // every existing caller sees byte-identical output to before.
+    std::wstring out;
+    for (const auto& pg : pages) out += pg;
     return out;
+}
+
+void DecodePages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>& out) {
+    out.clear();
+    std::vector<std::wstring> pages;
+    if (!DecodeToPages(p, maxBytes, pages)) return;
+    for (auto& pg : pages) {
+        std::wstring t = Trimmed(pg);
+        if (!t.empty()) out.push_back(std::move(t));
+    }
 }
 
 const uint8_t* SkipVariantPrefix(const uint8_t* p) {

@@ -24,6 +24,11 @@ void SetDescribeCallback(HotkeyCallback cb);
 // handler that repeats the last spoken dialogue/panel line.
 void SetRereadCallback(HotkeyCallback cb);
 
+// Fired when the player presses the game's own CONFIRM key (Space / Enter). PURELY OBSERVED: the
+// mod never swallows or injects it, the game still receives it exactly as before. It exists so the
+// dialogue reader can advance its page pointer on the same press that advances the game's text box.
+void SetConfirmCallback(HotkeyCallback cb);
+
 // Navigation hotkeys. Fired (on the input thread) when the user presses a nav key
 // while the game window is foregrounded: `\` (VK_OEM_5), `[` (VK_OEM_4),
 // `]` (VK_OEM_6), or `` ` `` (VK_OEM_3). `vk` is the virtual-key code; `shift` is
