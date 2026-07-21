@@ -65,6 +65,20 @@ void    AddWait(const char* name, int64_t startTicks);
 // stall on the game's own path. O(unique pairs), never per call.
 void NoteThread(const char* name);
 
+// FRAME HEARTBEAT. Call from a hook the game runs every frame (the DirectInput poll, which keeps
+// running while the game's own menus are open). Measures wall time since the previous call and,
+// when a frame takes longer than `gapWarnMs`, logs the gap AND dumps that window's per-hook
+// breakdown immediately -- so a stall is captured together with what was running during it.
+//
+// This is the measurement that distinguishes "one of our hooks is slow" from "the frame is long and
+// our hooks are barely in it". The second case still means WE caused it (vanilla is instant) -- it
+// just means the cost is somewhere we are not yet timing, e.g. the painter callback swap or a write
+// into a game structure -- and it tells us to widen coverage, never to blame the game.
+//
+// Spurious fires after alt-tab, a load screen or a breakpoint are expected; judge by whether the
+// gap coincides with the reported symptom.
+void FrameTick(double gapWarnMs);
+
 // Log every counter with calls > 0, then zero them. `reason` brackets the window, e.g. "menu entry".
 // Output is O(unique hooks) (~30 lines), within the console/log budget.
 //

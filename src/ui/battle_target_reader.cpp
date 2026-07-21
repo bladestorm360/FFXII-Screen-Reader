@@ -6,6 +6,7 @@
 #include "core/phyre_types.h"
 #include "speech/speech.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "navigation/player_state.h"   // ReadSceneObjectPos (target world pos)
 
 #include <Windows.h>
@@ -195,6 +196,7 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
 // FUN_002bfd20 render. If this call is drawing the CURRENT target (panel+0x288 == P+0x9FD8) while
 // target selection is active, flag it so the nested FUN_00329220 grabs the real BtlChr.
 void HookedNameplate(void* panel, int flag) {
+    STALL_SCOPE("BattleTarget::HookedNameplate");
     g_wantTargetBc = false;
     void* P = Pstate();
     if (P) {
@@ -222,6 +224,7 @@ void HookedNameplate(void* panel, int flag) {
 // per-frame guard documented on g_lastHandle above.
 void* HookedSnapshot(void* bc, int p2, void* outBuf, int p4) {
     void* r = s_origSnapshot ? s_origSnapshot(bc, p2, outBuf, p4) : nullptr;
+    STALL_SCOPE("BattleTarget::HookedSnapshot");
     if (g_wantTargetBc && bc) {
         g_wantTargetBc = false;                 // take only the first (the target) per render
         bool ally = false; FVec3 pos; bool havePos = false; PosDiag pd;

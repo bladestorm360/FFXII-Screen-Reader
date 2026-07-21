@@ -6,6 +6,7 @@
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
 
@@ -169,6 +170,7 @@ void OnRealHit(void* result, void* atkBc, void* tgtBc, uint16_t actionId) {
 
 // ---- Tier 1: the game's own sentence -----------------------------------------------------------
 void HookedSprintf(void* argBlock, void* dest, uint32_t size, uint32_t flag) {
+    STALL_SCOPE("CombatEvents::HookedSprintf");
     // The id must be read BEFORE the call; the string only exists after it.
     uint32_t idRaw = 0;
     const bool haveId = MemRead::SafeReadU32(argBlock, 4, &idRaw);
@@ -188,6 +190,7 @@ void HookedSprintf(void* argBlock, void* dest, uint32_t size, uint32_t flag) {
 
 // ---- Tier 2: the applier. HOT PATH -- see the RVA note above. ----------------------------------
 void HookedApply(void* result, void* atkBc, void* tgtBc, uint32_t actionId, uint32_t flags) {
+    STALL_SCOPE("CombatEvents::HookedApply");
     // Reject on the cheapest possible test FIRST. ~99.8% of calls are status ticks and die here on
     // a single compare, with no allocation, no lock, no SEH read and no string work.
     //

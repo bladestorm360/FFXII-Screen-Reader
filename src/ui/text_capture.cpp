@@ -155,6 +155,7 @@ void HookObj2(void* p1) { Capture(p1, /*listCapable=*/false); if (s_origObj2) s_
 
 const uint8_t* HookResolve(int id) {
     const uint8_t* ret = s_origResolve ? s_origResolve(id) : nullptr;
+    STALL_SCOPE("TextCapture::HookResolve");
     if (ret && (id == 1000 || id == 1001 || (id >= BIND_ID_LO && id <= BIND_ID_HI))) {
         std::wstring s = GameText::Decode(ret);               // SEH-guarded inside
         if (GameText::IsMostlyPrintable(s)) {
@@ -170,6 +171,7 @@ const uint8_t* HookResolve(int id) {
 // buttons feed their descriptions the same way. Cache it, tagged with the current
 // focus generation so the `i` hotkey attributes it to exactly this focus.
 void HookedDesc(void* codecText, uintptr_t flag) {
+    STALL_SCOPE("TextCapture::HookedDesc");
     if (codecText) {
         std::wstring s = GameText::Decode(reinterpret_cast<const uint8_t*>(codecText));  // SEH-guarded inside
         if (GameText::IsMostlyPrintable(s)) {
@@ -196,6 +198,7 @@ void HookedItemDescDisplay(int p1, uint32_t p2, int p3, int p4) {
 // focused item's description (for the `o` key), tagged with the current focus generation.
 uint64_t HookedItemDescFmt(void* outBuf, void* params) {
     uint64_t r = s_origItemDescFmt ? s_origItemDescFmt(outBuf, params) : 0;
+    STALL_SCOPE("TextCapture::HookedItemDescFmt");
     if (s_inItemDesc && r && outBuf) {
         const uint8_t* codec = reinterpret_cast<const uint8_t*>(outBuf) + OFF_ITEMDESC_TEXT;
         std::wstring s = GameText::Decode(codec);   // SEH-guarded inside
@@ -267,7 +270,8 @@ void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
             intercept = true;
         }
     }
-    if (intercept) WriteSlot(slot, reinterpret_cast<void*>(&CellWrapper));  // swap in our wrapper
+    { STALL_SCOPE("TextCapture::PainterSwap");
+      if (intercept) WriteSlot(slot, reinterpret_cast<void*>(&CellWrapper)); }  // swap in our wrapper
     if (s_origPainter) s_origPainter(param_1, param_2, subwidget);
     if (intercept) {
         WriteSlot(slot, realCb);   // restore the game's callback

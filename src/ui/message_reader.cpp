@@ -4,6 +4,7 @@
 #include "core/hooks.h"
 #include "speech/speech.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "input/input_tracker.h"
 
 #include <Windows.h>
@@ -157,6 +158,7 @@ void OnTelop(void* text, int slot) {
 // ---- detours (all: run the original first, then read the now-populated state) ----
 uintptr_t HookedItemPopup(void* widget, void* msg) {
     uintptr_t ret = s_origItemPopup ? s_origItemPopup(widget, msg) : 0;
+    STALL_SCOPE("MessageReader::ItemPopup");
     static bool s_firstFire = true;
     if (s_firstFire) { s_firstFire = false; Log::Write("MSGTEXT", "diag: item popup proc FUN_0035e070 fired"); }
     int msgCase = 0;
@@ -167,6 +169,7 @@ uintptr_t HookedItemPopup(void* widget, void* msg) {
 
 uintptr_t HookedPanel(void* surface, void* msg) {
     uintptr_t ret = s_origPanel ? s_origPanel(surface, msg) : 0;
+    STALL_SCOPE("MessageReader::Panel");
     static bool s_firstFire = true;
     if (s_firstFire) { s_firstFire = false; Log::Write("MSGTEXT", "diag: panel proc FUN_0057c480 fired"); }
     OnPanelSurface(surface, msg);
@@ -175,6 +178,7 @@ uintptr_t HookedPanel(void* surface, void* msg) {
 
 int HookedTelop(void* ctx, int slot, void* text, void* p4) {
     int ret = s_origTelop ? s_origTelop(ctx, slot, text, p4) : 0;
+    STALL_SCOPE("MessageReader::Telop");
     static bool s_firstFire = true;
     if (s_firstFire) { s_firstFire = false; Log::Write("MSGTEXT", "diag: telop setter FUN_002e16b0 fired"); }
     OnTelop(text, slot);

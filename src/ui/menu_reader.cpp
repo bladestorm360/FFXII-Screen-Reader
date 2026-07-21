@@ -359,6 +359,7 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
 // batch write (many configs; focused row is a button) never speaks, and no per-row
 // dedup is needed (FUN_0023d6b0 calls this only on a genuine change).
 void HookedStoreWrite(uintptr_t configId, void* pIdx) {
+    STALL_SCOPE("MenuReader::HookedStoreWrite");
     void* owner; int idx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
@@ -389,6 +390,7 @@ void HookedStoreWrite(uintptr_t configId, void* pIdx) {
 // announce it from OnMenuPainted once it has settled.
 uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
     uint32_t newVal = s_origGfxWrite ? s_origGfxWrite(configId, curVal, dir) : 0;
+    STALL_SCOPE("MenuReader::HookedGfxWrite");
     void* owner; int idx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);

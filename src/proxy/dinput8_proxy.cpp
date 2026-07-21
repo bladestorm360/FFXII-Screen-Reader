@@ -1,5 +1,6 @@
 #include "proxy/dinput8_proxy.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "input/input_tracker.h"
 #include <Windows.h>
 #include <atomic>
@@ -129,6 +130,9 @@ static void PatchVtableEntry(void* comObj, int index, void* detour, void** origO
 // thread each frame; we read the freshly-filled DIK buffer and feed the mod's keys.
 static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, void* lpvData) {
     HRESULT hr = g_origGetDeviceState(self, cbData, lpvData);
+    // Frame heartbeat: the game polls this every frame, menus included, so it is the one place that
+    // can see a stall from outside our own hook bodies.
+    if (cbData >= 256 && IsKeyboardDev(self)) StallProbe::FrameTick(/*gapWarnMs=*/100.0);
     if (cbData >= 256 && IsKeyboardDev(self)) {
         // Diagnostic (rate-limited to transitions): a sustained keyboard GetDeviceState
         // failure (DIERR_INPUTLOST / DIERR_NOTACQUIRED) means the device is UNACQUIRED — the

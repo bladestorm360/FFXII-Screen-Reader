@@ -115,6 +115,21 @@ void NoteThread(const char* name) {
     }
 }
 
+void FrameTick(double gapWarnMs) {
+    static int64_t s_last = 0;
+    const int64_t now = Now();
+    if (s_last != 0) {
+        const double gap = MsOf(static_cast<uint64_t>(now - s_last));
+        if (gap >= gapWarnMs) {
+            char line[160];
+            snprintf(line, sizeof(line), "FRAME GAP %.1fms -- breakdown of that window follows", gap);
+            Log::Write("PERF", line);
+            DumpAndReset("frame gap", 0.0);
+        }
+    }
+    s_last = now;
+}
+
 void DumpAndReset(const char* reason, double minTotalMs) {
     // Cheap pre-pass: is this window even worth reporting? Reading is enough -- the reset happens
     // below either way, so a quiet window is zeroed without touching the log.

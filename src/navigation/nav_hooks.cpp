@@ -6,6 +6,7 @@
 #include "navigation/entity_list.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "core/mem_read.h"
 
 #include <cstdint>
@@ -20,6 +21,7 @@ Pfn_BuildWorld s_origBuildWorld = nullptr;
 void* s_lastLoggedCtx = nullptr;
 
 uint64_t __fastcall HookedBuildWorld(void* ctx) {
+    STALL_SCOPE("NavHooks::HookedBuildWorld");
     uint64_t r = s_origBuildWorld ? s_origBuildWorld(ctx) : 0;
     BulletQuery::SetContext(ctx);
     if (ctx != s_lastLoggedCtx) {   // O(unique map load), not per-call spam
@@ -49,6 +51,7 @@ void* s_lastRayCtx = nullptr;
 
 uint64_t __fastcall HookedRayCast(void* ctx, const float* from, const float* to,
                                   float* out, int filter) {
+    STALL_SCOPE("NavHooks::HookedRayCast");
     if (ctx && !BulletQuery::HasWorld()) {
         void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
         if (world) {
@@ -73,6 +76,7 @@ Pfn_CharGround s_origCharGround = nullptr;
 void* s_lastGroundCtx = nullptr;
 
 uint64_t __fastcall HookedCharGround(void* p1, float* p2, float p3) {
+    STALL_SCOPE("NavHooks::HookedCharGround");
     if (p1 && !BulletQuery::HasWorld()) {
         void* ctx = MemRead::PtrAt(p1, 8);
         if (ctx) {
@@ -102,6 +106,7 @@ Pfn_WorldStep s_origWorldStep = nullptr;
 void* s_lastStepCtx = nullptr;
 
 uint64_t __fastcall HookedWorldStep(void* ctx, void* stepCtx) {
+    STALL_SCOPE("NavHooks::HookedWorldStep");
     if (ctx) {
         BulletQuery::SetContext(ctx);
         if (ctx != s_lastStepCtx) {   // O(unique world), not per-frame spam
@@ -127,6 +132,7 @@ typedef uint64_t(__fastcall* Pfn_FieldFrame)();
 Pfn_FieldFrame s_origFieldFrame = nullptr;
 
 uint64_t __fastcall HookedFieldFrame() {
+    STALL_SCOPE("NavHooks::HookedFieldFrame");
     EntityList::OnFieldFrame();   // auto-rescan when handle-table containers stream in (fixes empty list after a save-load)
     PathPlanner::OnGameFrame();
     return s_origFieldFrame ? s_origFieldFrame() : 1;
@@ -140,6 +146,7 @@ typedef void(__fastcall* Pfn_Teardown)();
 Pfn_Teardown s_origTeardown = nullptr;
 
 void __fastcall HookedTeardown() {
+    STALL_SCOPE("NavHooks::HookedTeardown");
     BulletQuery::Invalidate();
     PathPlanner::OnMapTeardown();
     if (s_origTeardown) s_origTeardown();

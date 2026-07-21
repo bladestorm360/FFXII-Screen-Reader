@@ -326,7 +326,8 @@ bool ReadStatusSlot(int slot, StatusVitals* out, void** outCtrl) {
 //
 // NOTE: "Level"/"HP"/"MP" are mod-emitted labels matching the on-screen columns (English for now).
 void HookedStatusCursor(int slot) {
-    if (s_origStatusCursor) s_origStatusCursor(slot);              // let the game set +0x114/+0x117 first
+    if (s_origStatusCursor) s_origStatusCursor(slot);
+    STALL_SCOPE("IngameMenu::HookedStatusCursor");              // let the game set +0x114/+0x117 first
     if (slot < 0) return;
 
     StatusVitals v;
