@@ -3,6 +3,7 @@
 #include "battle/battle_state.h"
 #include "../core/logger.h"
 #include "../core/mem_read.h"
+#include "../core/phyre_types.h"
 #include "../speech/speech.h"
 
 #include <cstdio>
@@ -10,20 +11,8 @@
 namespace PartyStatus {
 namespace {
 
-// BtlChr fields. NOTE the width asymmetry, confirmed in the natives' own bodies: HP is i32, MP is
-// i16. Reading MP as i32 pulls in the neighbouring field as garbage in the high half.
-constexpr uint32_t BC_CHARID     = 0x04;   // u8
-constexpr uint32_t BC_MAXHP      = 0x24;   // i32   (btlAtelGetHpMaxFromPartySlot)
-constexpr uint32_t BC_MAXMP      = 0x28;   // i16   (btlAtelGetMpMaxFromPartySlot)
-constexpr uint32_t BC_STATUS_A   = 0x3c;   // u32
-constexpr uint32_t BC_CURHP      = 0x48;   // i32   (btlAtelGetHpNowFromPartySlot)
-constexpr uint32_t BC_CURMP      = 0x4c;   // i16   (btlAtelGetMpNowFromPartySlot)
-constexpr uint32_t BC_STATUS_B   = 0x64;   // u32
-// MP-enabled guard: btlAtelGetMpMaxFromPartySlot returns 0 unless BOTH of these have their sign bit
-// clear. The same guard appears independently in the HUD builder FUN_00329220 and the MP clamp
-// FUN_00300ce0, so it is the game's own "does this character have an MP gauge" test.
-constexpr uint32_t BC_MP_GUARD_A = 0x6c;   // i8
-constexpr uint32_t BC_MP_GUARD_B = 0x7c;   // i8
+// BtlChr field offsets (widths, the MP guard and their provenance): core/phyre_types.h.
+using namespace PhyreTypes;
 
 } // namespace
 
@@ -104,8 +93,8 @@ void SpeakSlot(int slot) {
     if (v.haveMP)
         text += L", MP " + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
 
-    char utf8[256] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    char utf8[256];
+    Log::ToUtf8(text, utf8, sizeof(utf8));
     char line[320];
     snprintf(line, sizeof(line), "slot %d charId=%u status=0x%08X \"%s\"",
              slot + 1, v.charId, v.status, utf8);

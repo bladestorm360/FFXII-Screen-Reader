@@ -1,5 +1,6 @@
 #include "ui/title_reader.h"
 #include "core/hooks.h"
+#include "core/mem_read.h"
 #include "core/logger.h"
 #include "speech/speech.h"
 
@@ -62,18 +63,13 @@ const wchar_t* AtlasRowLabel(int row) {
     }
 }
 
-// SEH-guarded reads — title menu objects can be destructed asynchronously.
-template <typename T>
-bool SafeRead(const void* p, T* out) {
-    if (!p) return false;
-    __try { *out = *reinterpret_cast<const T*>(p); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-void* PtrAt(void* base, uint32_t off) {
-    if (!base) return nullptr;
-    void* v = nullptr;
-    return SafeRead(reinterpret_cast<char*>(base) + off, &v) ? v : nullptr;
-}
+// SEH-guarded reads — title menu objects can be destructed asynchronously. The guard logic lives
+// once in core/mem_read.h; this file used to carry a private copy.
+using MemRead::PtrAt;
+using MemRead::SafeReadU8;
+using MemRead::SafeReadU16;
+using MemRead::SafeReadU32;
+using MemRead::SafeReadU64;
 
 std::atomic<void*> g_cellTable{nullptr};   // title list's shared cell node cell-table
 // One-shot: armed when a command-menu session starts, consumed by the FIRST row-draw that has a
@@ -94,13 +90,13 @@ Pfn_RowDecorate  s_origRow   = nullptr;
 void OnTitleFocus(void* window, int index) {
     void* wlist = PtrAt(window, OFF_WINDOW_LIST);
     uint16_t count = 0;
-    if (!wlist || !SafeRead(reinterpret_cast<char*>(wlist) + OFF_LIST_COUNT, &count)) return;
+    if (!wlist || !SafeReadU16(wlist, OFF_LIST_COUNT, &count)) return;
     if (index < 0 || index >= static_cast<int>(count)) return;  // drop OOB wrap-transients
 
     void* cellTable = g_cellTable.load();
     uint16_t y = 0;
     if (!cellTable ||
-        !SafeRead(reinterpret_cast<char*>(cellTable) + index * CELL_STRIDE + OFF_CELL_Y, &y)) {
+        !SafeReadU16(cellTable, index * CELL_STRIDE + OFF_CELL_Y, &y)) {
         return;
     }
     int row = (y + ATLAS_ROW_PITCH / 2) / ATLAS_ROW_PITCH;  // nearest atlas row
@@ -120,11 +116,11 @@ void OnTitleFocus(void* window, int index) {
 uintptr_t HookedTitle(void* window, void* packet) {
     uintptr_t ret = s_origTitle ? s_origTitle(window, packet) : 0;
     uint32_t cat = 0;
-    if (SafeRead(reinterpret_cast<char*>(packet) + PKT_CAT, &cat)) {
+    if (SafeReadU32(packet, PKT_CAT, &cat)) {
         if (cat == CAT_NOTIFY) {
             uint64_t msg = 0, val = 0;
-            if (SafeRead(reinterpret_cast<char*>(packet) + PKT_MSG, &msg) && msg == MSG_FOCUS &&
-                SafeRead(reinterpret_cast<char*>(packet) + PKT_VAL, &val)) {
+            if (SafeReadU64(packet, PKT_MSG, &msg) && msg == MSG_FOCUS &&
+                SafeReadU64(packet, PKT_VAL, &val)) {
                 int idx = static_cast<int>(static_cast<int64_t>(val));
                 g_titleWindow.store(window);
                 g_pendingIndex.store(idx);
@@ -140,7 +136,7 @@ uintptr_t HookedTitle(void* window, void* packet) {
             g_titleWindow.store(window);
             uint8_t sel = 0;
             g_pendingIndex.store(
-                SafeRead(reinterpret_cast<char*>(window) + OFF_WINDOW_SELIDX, &sel)
+                SafeReadU8(window, OFF_WINDOW_SELIDX, &sel)
                     ? static_cast<int>(sel) : 0);
         }
     }

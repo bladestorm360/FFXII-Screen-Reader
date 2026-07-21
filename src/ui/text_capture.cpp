@@ -331,8 +331,8 @@ void DumpRingToLog(const char* reason) {
     for (size_t k = 0; k < g_count; ++k) {
         size_t idx = (g_head + RING_MAX - g_count + k) % RING_MAX;
         const RingEntry& e = g_ring[idx];
-        char utf8[400] = {};
-        WideCharToMultiByte(CP_UTF8, 0, e.text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+        char utf8[400];
+        Log::ToUtf8(e.text, utf8, sizeof(utf8));
         char line[512];
         snprintf(line, sizeof(line), "  framing[%s] \"%s\"", e.imm ? "imm" : "obj", utf8);
         Log::Write("TEXT", line);
@@ -341,7 +341,7 @@ void DumpRingToLog(const char* reason) {
         for (const auto& kv : o->second) {
             std::wstring joined = JoinFields(kv.second);
             char utf8[400] = {};
-            WideCharToMultiByte(CP_UTF8, 0, joined.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+            Log::ToUtf8(joined, utf8, sizeof(utf8));
             char line[512];
             snprintf(line, sizeof(line), "  item[%d] \"%s\"", kv.first, utf8);
             Log::Write("TEXT", line);

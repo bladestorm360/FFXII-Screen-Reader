@@ -114,15 +114,6 @@ void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus
 void* g_diagFocus = nullptr;
 bool  g_initialized = false;
 
-void LogLine(const char* prefix, const std::wstring& text) {
-    char utf8[512] = {};
-    if (!text.empty())
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
-    char line[640];
-    snprintf(line, sizeof(line), "%s\"%s\"", prefix, utf8);
-    Log::Write("READER", line);
-}
-
 // ---- SEH-guarded raw reads (game objects can be destructed asynchronously) ---
 // The guard logic lives once in core/mem_read.h (shared with the message reader).
 using MemRead::SafeReadPtr;
@@ -368,7 +359,7 @@ std::wstring ConfigRowValueAtNewValue(void* row, int nv) {
 void DescribeHotkey() {
     std::wstring desc = TextCapture::CurrentHelpText();
     if (desc.empty()) return;
-    LogLine("  describe: ", desc);
+    Log::WriteW("READER", "  describe: ", desc);
     Speech::Output(desc, /*interrupt=*/true);
 }
 
@@ -443,7 +434,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     if (ownerChanged && isPopup) {
         std::wstring body = ReadPopupBody(owner);
         if (!body.empty()) {
-            LogLine("  body: ", body);
+            Log::WriteW("READER", "  body: ", body);
             Speech::Output(body, /*interrupt=*/true);
             preambleSpoken = true;
         }
@@ -463,7 +454,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         return;
     }
 
-    LogLine("  item: ", text);
+    Log::WriteW("READER", "  item: ", text);
     Speech::Output(text, /*interrupt=*/!preambleSpoken);
 }
 
@@ -499,7 +490,7 @@ void OnMenuPainted(void* owner) {
         if (IsActiveConfig(owner)) {
             std::wstring val = ConfigRowValue(ConfigRowWidget(owner, vcIdx));
             if (!val.empty()) {
-                LogLine("  value: ", val);
+                Log::WriteW("READER", "  value: ", val);
                 Speech::Output(val, /*interrupt=*/true);
             }
         }
@@ -597,7 +588,7 @@ void HookedStoreWrite(uintptr_t configId, void* pIdx) {
             std::wstring val = ConfigRowValueAtNewValue(row, newVal);
             if (val.empty()) val = ConfigRowValue(row);  // fallback to current state
             if (!val.empty()) {
-                LogLine("  value: ", val);
+                Log::WriteW("READER", "  value: ", val);
                 Speech::Output(val, /*interrupt=*/true);
             }
         }

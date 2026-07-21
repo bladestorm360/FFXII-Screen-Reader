@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "core/phyre_types.h"
+
 // Confirmed pathfinder / field-navigation RVAs and struct offsets.
 //
 // RVAs are relative to FFXII_TZA.exe's image base and resolve via
@@ -10,6 +12,10 @@
 // Verify any change by adding 0x120000 back and matching the decompile symbol.
 // Source: Docs/GameArchitecture.md "Pathfinder / Field Navigation (Phase 4)".
 namespace NavRva {
+
+// The actor-pool / BtlChr / scene-kind offsets this module reads live in core/phyre_types.h
+// (shared with the battle readers). Pulled in unqualified so existing uses read unchanged.
+using namespace PhyreTypes;
 
 // ---- Field leader → player-position chain (from FUN_00317e60) ----------------
 // DAT_022c7fe0 (ABS 0x022c7fe0): the field-controlled character's scene handle
@@ -206,37 +212,11 @@ constexpr uint32_t ACTOR_FACING_CACHE = 0x15C;  // actor+0x15C
 constexpr uint32_t XFORM_FACING_YAW   = 0xA4;   // node+0xA4 (class-3 leader facing)
 
 // ---- Field-actor pool (the game's own actor walk; from FUN_00236820/00236300)
-// The authoritative live field-object list. `*ACTOR_POOL_BASE` is a pointer to
-// ACTOR_POOL_COUNT actors of ACTOR_STRIDE bytes each.
-constexpr uint32_t ACTOR_POOL_BASE  = 0x1F6E688;  // DAT_0208e688 (ptr to pool)
-constexpr uint32_t ACTOR_POOL_COUNT = 0x1F6E6A0;  // DAT_0208e6a0 (u32 slot count)
+// MOVED: the actor-pool globals, the per-actor offsets, the BtlChr layout and the scene-kind
+// faction nibble now live in core/phyre_types.h, which this header pulls in -- the battle readers
+// need the same offsets, and keeping a navigation-owned copy is what let four versions drift apart.
+// `using namespace PhyreTypes` below keeps every existing unqualified use in the nav module working.
 constexpr uint32_t FIELD_ACTIVE2    = 0x1F69300;  // DAT_02089300 (field/battle-active flag)
-constexpr uint32_t ACTOR_STRIDE     = 0xF50;
-// Per-actor offsets:
-constexpr uint32_t ACTOR_SCENEOBJ   = 0x10;   // *(actor+0x10) = scene object (== leader sceneObj for the leader)
-constexpr uint32_t ACTOR_NAME_STR   = 0x18;   // *(codec*)(actor+0x18) = localized combatant name (FUN_002b58b0 result, decode w/ GameText)
-constexpr uint32_t ACTOR_ACTIVE_OFF = 0x00;   // *(u8)(actor+0x00) & ACTOR_ACTIVE_BIT = active / has model
-constexpr uint32_t ACTOR_ACTIVE_BIT = 0x10;
-constexpr uint32_t ACTOR_POS_X      = 0xE0;   // cached world X
-constexpr uint32_t ACTOR_POS_Y      = 0xE4;   // cached world Y (elevation)
-constexpr uint32_t ACTOR_POS_Z      = 0xE8;   // cached world Z
-constexpr uint32_t ACTOR_YAW        = 0x160;  // cached facing yaw (radians)
-constexpr uint32_t ACTOR_DEF_PTR    = 0x698;  // source definition ptr (null => empty slot)
-// *(u8)(def+5) is PLAYER-vs-AI, NOT faction (runtime-disproven 2026-07-09: in the Reks prologue
-// only Reks — the player-controlled leader — is 0; allies AND enemies are 1). Use it only to skip
-// the player-controlled unit. Enemy-vs-ally = the def-attribute bit below.
-constexpr uint32_t DEF_KIND_BYTE     = 0x05;
-constexpr uint8_t  PLAYER_DEF_KIND   = 0;      // def+5 == 0 => player-controlled (the leader) — skip
-// Enemy-vs-ally discriminator: the game's OWN faction test — identical in the damage path
-// (FUN_0030ab40), the HUD builder (FUN_00329220), and the target classifier (FUN_002f8e90) — is
-// the "scene-kind" nibble on the scene object: kind = *(u8)(sceneObj + 0x0e) & 0x0f (accessor
-// FUN_00263c20). kind==3 => ally/party-side; kind in {1,2,7} => enemy; kind==5 => dead/removed.
-// This is what def+5 CANNOT do in the guest/prologue setup (there every non-leader is def+5==1).
-// (def+0x3c/0x64 are status-flag words, NOT faction — the earlier bit-24 test was wrong.)
-constexpr uint32_t SCENEOBJ_KIND_OFF = 0x0E;   // *(u8)(sceneObj+0x0e) & KIND_MASK = scene-kind nibble
-constexpr uint8_t  KIND_MASK         = 0x0F;
-constexpr uint8_t  KIND_ALLY         = 3;      // party-side (guests + AI party)
-constexpr uint8_t  KIND_DEAD         = 5;      // dead/removed — exclude from the scan
 constexpr uint32_t DEF_CHARID        = 0x04;   // def+4 = roster char-id (0-6 party/7-25 guest/27-39 enemy) — diag only
 constexpr uint32_t DEF_ID_U16       = 0x04;   // *(u16)(def+4): entity/definition id
 // Pool (re)fill sites — hook one for a post-transition rescan (event-driven):

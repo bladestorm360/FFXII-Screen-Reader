@@ -84,21 +84,12 @@ std::wstring g_lastLine;
 
 bool g_initialized = false;
 
-void LogLine(const char* prefix, const std::wstring& text) {
-    char utf8[600] = {};
-    if (!text.empty())
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
-    char line[720];
-    snprintf(line, sizeof(line), "%s\"%s\"", prefix, utf8);
-    Log::Write("MSGTEXT", line);
-}
-
 void SpeakAndStash(const std::wstring& text, const char* logPrefix) {
     {
         std::lock_guard<std::mutex> lk(g_lastMutex);
         g_lastLine = text;
     }
-    LogLine(logPrefix, text);
+    Log::WriteW("MSGTEXT", logPrefix, text);
     Speech::Output(text, /*interrupt=*/true);
 }
 
@@ -145,7 +136,7 @@ void OnPanelSurface(void* surface, void* msg) {
     char hdr[96];
     snprintf(hdr, sizeof(hdr), "panel[muted confirm/choice count=%u flags=0x%x]: ",
              (unsigned)count, (unsigned)flags);
-    LogLine(hdr, text);
+    Log::WriteW("MSGTEXT", hdr, text);
     if (kSpeakSurfaceConfirms) SpeakAndStash(text, "panel(confirm): ");
 }
 

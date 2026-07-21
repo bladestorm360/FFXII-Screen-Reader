@@ -2,6 +2,7 @@
 
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "core/phyre_types.h"
 #include "core/game_text.h"
 #include "navigation/nav_rva.h"
 
@@ -27,7 +28,8 @@ constexpr uint32_t OFF_BC_ARRAY  = 0x08;
 constexpr uint32_t BC_STRIDE     = 0x1C8;
 constexpr uint32_t BC_COUNT      = 0x28;
 
-constexpr uint32_t BC_CHARID = 0x04, BC_KIND = 0x05;
+// BC_CHARID / BC_KIND and the actor-pool / scene-kind layout: core/phyre_types.h
+using namespace PhyreTypes;
 
 // actor fields
 constexpr uint32_t A_FLAGS = 0x00, A_HANDLE = 0x08, A_PHASE = 0x6B4,

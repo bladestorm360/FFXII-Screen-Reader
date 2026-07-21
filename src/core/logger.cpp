@@ -182,6 +182,34 @@ void Write(const char* category, const char* message) {
     }
 }
 
+// Game text can be long (the telop hands us every page of a tutorial in one string), so the UTF-8
+// buffer is generously sized and the result is truncated rather than dropped -- a clipped line still
+// tells you which surface fired.
+void ToUtf8(const std::wstring& text, char* out, size_t cap) {
+    out[0] = '\0';
+    if (text.empty()) return;
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out, static_cast<int>(cap) - 1,
+                        nullptr, nullptr);
+    out[cap - 1] = '\0';
+}
+
+void WriteW(const char* category, const char* prefix, const std::wstring& text) {
+    char utf8[1024];
+    ToUtf8(text, utf8, sizeof(utf8));
+    char line[1200];
+    snprintf(line, sizeof(line), "%s\"%s\"", prefix ? prefix : "", utf8);
+    Write(category, line);
+}
+
+void WriteW(const char* category, const char* prefix, const void* owner,
+            const std::wstring& text) {
+    char utf8[1024];
+    ToUtf8(text, utf8, sizeof(utf8));
+    char line[1240];
+    snprintf(line, sizeof(line), "%s owner=%p \"%s\"", prefix ? prefix : "", owner, utf8);
+    Write(category, line);
+}
+
 uint64_t GetStartTick() {
     return g_startTick;
 }

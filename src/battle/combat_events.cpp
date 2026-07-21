@@ -7,6 +7,7 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/mem_read.h"
+#include "core/phyre_types.h"
 
 #include <Windows.h>
 #include <cstdio>
@@ -32,8 +33,8 @@ constexpr uint32_t RVA_APPLY = 0x1F12F0;
 
 // result struct fields
 constexpr uint32_t R_OUTCOME = 0x04, R_VALID = 0x1C, R_TGT_HP = 0x24;
-// BtlChr fields
-constexpr uint32_t BC_MAXHP = 0x24, BC_CURHP = 0x48;
+// BtlChr fields: core/phyre_types.h
+using namespace PhyreTypes;
 
 typedef void (*Pfn_Sprintf)(void*, void*, uint32_t, uint32_t);
 typedef void (*Pfn_Apply)(void*, void*, void*, uint32_t, uint32_t);

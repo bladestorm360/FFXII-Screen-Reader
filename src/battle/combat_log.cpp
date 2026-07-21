@@ -101,8 +101,8 @@ void Append(Kind kind, const std::wstring& text, bool speakNow) {
         if (g_following) g_cursorSeq = g_ring.back().seq;
     }
 
-    char utf8[512] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    char utf8[512];
+    Log::ToUtf8(text, utf8, sizeof(utf8));
     char line[576];
     snprintf(line, sizeof(line), "%s | %s",
              kind == Kind::GameMessage ? "GAME" : (kind == Kind::Damage ? "DMG " : "SYS "), utf8);

@@ -1,5 +1,6 @@
 #include "ui/menu_observer.h"
 #include "core/hooks.h"
+#include "core/mem_read.h"
 #include "core/logger.h"
 
 #include <Windows.h>
@@ -53,17 +54,13 @@ std::atomic<MenuObserver::FocusChangeCallback> g_focusCb{nullptr};
 
 bool g_initialized = false;
 
-// SEH-safe field reads (the game can — and does — destruct menu objects
-// asynchronously; reading their fields from our detour after lifecycle
-// changes could fault otherwise).
-uint8_t  SafeReadU8 (void* p) { __try { return *reinterpret_cast<uint8_t*>(p);  } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; } }
-uint16_t SafeReadU16(void* p) { __try { return *reinterpret_cast<uint16_t*>(p); } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; } }
-int16_t  SafeReadS16(void* p) { __try { return *reinterpret_cast<int16_t*>(p);  } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; } }
-void*    SafeReadPtr(void* p) { __try { return *reinterpret_cast<void**>(p);    } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; } }
-
-void* BytePtr(void* base, uint32_t off) {
-    return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + off);
-}
+// SEH-safe field reads (the game can — and does — destruct menu objects asynchronously; reading
+// their fields from our detour after lifecycle changes could fault otherwise). The guard logic
+// lives once in core/mem_read.h; this file used to carry a private copy. These thin wrappers keep
+// the "0 on fault" call style the snapshot code below is written around.
+uint8_t  ReadU8 (void* base, uint32_t off) { uint8_t  v = 0; MemRead::SafeReadU8 (base, off, &v); return v; }
+uint16_t ReadU16(void* base, uint32_t off) { uint16_t v = 0; MemRead::SafeReadU16(base, off, &v); return v; }
+int16_t  ReadS16(void* base, uint32_t off) { int16_t  v = 0; MemRead::SafeReadS16(base, off, &v); return v; }
 
 // Snapshot a menu_obj's state and update the latest cache. Fires the focus
 // callback when (X, Y) changes for the same menuObj.
@@ -73,13 +70,13 @@ void SnapshotAndDispatch(uint32_t controllerRva, void* menuObj) {
     MenuObserver::MenuSnapshot snap;
     snap.menuObj       = menuObj;
     snap.controllerRva = controllerRva;
-    snap.typeByte      = SafeReadU8 (BytePtr(menuObj, OFF_TYPE));
-    uint16_t xPos      = SafeReadU16(BytePtr(menuObj, OFF_X_POS));
-    uint16_t xAdj      = SafeReadU16(BytePtr(menuObj, OFF_X_ADJ));
+    snap.typeByte      = ReadU8 (menuObj, OFF_TYPE);
+    uint16_t xPos      = ReadU16(menuObj, OFF_X_POS);
+    uint16_t xAdj      = ReadU16(menuObj, OFF_X_ADJ);
     snap.cursorX       = static_cast<uint16_t>(xPos + xAdj);
-    snap.cursorY       = SafeReadS16(BytePtr(menuObj, OFF_Y_POS));
-    snap.cursorVisible = SafeReadU8 (BytePtr(menuObj, OFF_VIS)) != 0;
-    snap.subWidget     = SafeReadPtr(BytePtr(menuObj, OFF_SUB));
+    snap.cursorY       = ReadS16(menuObj, OFF_Y_POS);
+    snap.cursorVisible = ReadU8 (menuObj, OFF_VIS) != 0;
+    snap.subWidget     = MemRead::PtrAt(menuObj, OFF_SUB);
     snap.timestampMs   = GetTickCount64();
     snap.frameId       = ++g_frameCounter;
 
@@ -221,9 +218,9 @@ void ReadRegistry(void** outType1, void** outType2, void** outType4) {
         if (outType4) *outType4 = nullptr;
         return;
     }
-    if (outType1) *outType1 = SafeReadPtr(BytePtr(reg, SLOT_TYPE1));
-    if (outType2) *outType2 = SafeReadPtr(BytePtr(reg, SLOT_TYPE2));
-    if (outType4) *outType4 = SafeReadPtr(BytePtr(reg, SLOT_TYPE4));
+    if (outType1) *outType1 = MemRead::PtrAt(reg, SLOT_TYPE1);
+    if (outType2) *outType2 = MemRead::PtrAt(reg, SLOT_TYPE2);
+    if (outType4) *outType4 = MemRead::PtrAt(reg, SLOT_TYPE4);
 }
 
 } // namespace MenuObserver

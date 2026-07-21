@@ -3,6 +3,7 @@
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "core/phyre_types.h"
 #include "speech/speech.h"
 #include "core/logger.h"
 #include "navigation/player_state.h"   // ReadSceneObjectPos (target world pos)
@@ -45,25 +46,10 @@ constexpr uint32_t OFF_TARGETID  = 0x9FD8;    // *(int)(P+0x9FD8) = highlighted 
 constexpr uint32_t OFF_GATE      = 0x10F78;   // *(P+0x10f78) != 0 = target selection active
 constexpr uint32_t OFF_PANEL_ID  = 0x288;     // *(u32)(panel+0x288) = the unit this nameplate draws
 
-// actor pool -> combatant name + faction (mirrors src/navigation/nav_rva.h).
-constexpr uint32_t ACTOR_POOL_BASE  = 0x1F6E688;
-constexpr uint32_t ACTOR_POOL_COUNT = 0x1F6E6A0;
-constexpr uint32_t ACTOR_STRIDE     = 0xF50;
-constexpr uint32_t ACTOR_DEF_PTR    = 0x698;   // *(actor+0x698) = BtlChr
-constexpr uint32_t ACTOR_NAME_STR   = 0x18;    // *(actor+0x18) = name codec
-constexpr uint32_t ACTOR_SCENEOBJ   = 0x10;    // *(actor+0x10) = scene object
-constexpr uint32_t ACTOR_POS_X      = 0xE0;    // cached world X on the actor (GameArchitecture.md:728)
-constexpr uint32_t ACTOR_POS_Y      = 0xE4;    // cached world Y (elevation)
-constexpr uint32_t ACTOR_POS_Z      = 0xE8;    // cached world Z
-constexpr uint32_t SCENEOBJ_KIND    = 0x0E;    // *(u8)(sceneObj+0x0e) & 0x0f: 3 = ally, {1,2,7} = enemy
-constexpr uint8_t  KIND_MASK        = 0x0F;
-constexpr uint8_t  KIND_ALLY        = 3;
-constexpr uint8_t  KIND_DEAD        = 5;       // dead/removed — same test the nav scanner uses
-constexpr uint32_t DEF_KIND_BYTE    = 0x05;    // *(u8)(bc+5): 0 = player-controlled leader (self-target)
-constexpr uint8_t  PLAYER_DEF_KIND  = 0;       // matches nav_rva.h; the leader's scene-kind is NOT 3
-
-constexpr uint32_t BC_CURHP = 0x48;            // real current HP (confirmed vs Reks 135)
-constexpr uint32_t BC_MAXHP = 0x24;            // real max HP
+// Actor pool, BtlChr and scene-kind layout: core/phyre_types.h owns them (this file used to keep
+// its own copy that "mirrored" nav_rva.h -- two mirrors of the same offsets is how they drift).
+using namespace PhyreTypes;
+constexpr uint32_t SCENEOBJ_KIND = PhyreTypes::SCENEOBJ_KIND_OFF;   // local spelling kept for the reads below
 
 typedef void  (*Pfn_Nameplate)(void*, int);
 typedef void* (*Pfn_Snapshot)(void*, int, void*, int);
@@ -197,8 +183,8 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
         }
     }
 
-    char utf8[256] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    char utf8[256];
+    Log::ToUtf8(text, utf8, sizeof(utf8));
     char line[320];
     snprintf(line, sizeof(line), "handle=0x%x %s \"%s\"", g_targetHandle, ally ? "ally" : "enemy", utf8);
     Log::Write("TARGET", line);
@@ -373,8 +359,8 @@ bool ResolveTarget(ResolvedTarget& out) {
     out.havePos = ResolveActorPos(actor, sceneObj, out.pos, nullptr);
 
     char lg[224];
-    char utf8[128] = {};
-    WideCharToMultiByte(CP_UTF8, 0, out.name.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    char utf8[128];
+    Log::ToUtf8(out.name, utf8, sizeof(utf8));
     snprintf(lg, sizeof(lg), "ResolveTarget: \"%s\" %s%s hp=%u havePos=%d",
              utf8, out.browsing ? "BROWSING" : (out.acting ? "committed/acting" : "committed/queued"),
              out.ally ? " ally" : " enemy", curHP, out.havePos ? 1 : 0);

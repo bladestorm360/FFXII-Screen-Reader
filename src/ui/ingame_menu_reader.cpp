@@ -119,15 +119,6 @@ Pfn_StatusCursor s_origStatusCursor = nullptr;
 std::mutex   g_mutex;
 std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (cached from FUN_00276be0)
 
-void LogLine(const char* tag, void* owner, const std::wstring& text) {
-    char utf8[512] = {};
-    if (!text.empty())
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
-    char line[640];
-    snprintf(line, sizeof(line), "%s owner=%p \"%s\"", tag, owner, utf8);
-    Log::Write("INGAME", line);
-}
-
 // The focused row's NAME codec pointer, or null. POD-only under __try (no objects), so the SEH
 // guard is legal; decoding happens outside. The game always sends a valid focus index.
 const uint8_t* ReadRowName(void* owner, uint32_t rowOff, int index) {
@@ -184,7 +175,7 @@ bool ReadBcmdDraw(void* panel, int index, int* outCmdId, const uint8_t** outCode
 // call path is firing; find it, don't filter here.
 void SpeakRow(void* owner, const std::wstring& text, const char* tag) {
     if (text.empty()) return;
-    LogLine(tag, owner, text);
+    Log::WriteW("INGAME", tag, owner, text);
     Speech::Output(text, /*interrupt=*/true);
 }
 
@@ -327,7 +318,7 @@ void HookedStatusCursor(int slot) {
     line += L", Level " + std::to_wstring(v.level);
     line += L", HP " + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
     line += L", MP " + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
-    LogLine("status:", ctrl, line);
+    Log::WriteW("INGAME", "status:", ctrl, line);
     Speech::Output(line, /*interrupt=*/true);
 }
 
@@ -380,7 +371,7 @@ void OnBattleCommandFocus(void* owner, int index) {
     if (cmdId < 0) return;
     std::wstring text = BattleCommandName(owner, index, cmdId);   // resolves by list type; locks internally
     if (text.empty()) return;
-    LogLine("command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
+    Log::WriteW("INGAME", "command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
     Speech::Output(text, /*interrupt=*/true);
 }
 
