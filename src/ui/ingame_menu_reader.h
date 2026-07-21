@@ -42,4 +42,11 @@ void OnRowChainFocus(void* owner, uint32_t rowOff, int index);
 bool IsBattleCommandOwner(void* owner);
 void OnBattleCommandFocus(void* owner, int index);
 
+// Field pause menu command column (owner class FUN_00280de0). Its entry announce is DEFERRED, unlike
+// every other pane: FUN_00244830 fires at the start of construction, so MenuReader::HookedFocusSet
+// stashes the entry focus via ArmPaneEntry instead of speaking, and the menu's own SHOW message
+// (cat 0x13, handled by this reader's window hook) releases it -- speech then lands with the menu.
+bool IsFieldPaneOwner(void* owner);
+void ArmPaneEntry(void* owner, uint32_t rowOff, int index);
+
 } // namespace IngameMenuReader

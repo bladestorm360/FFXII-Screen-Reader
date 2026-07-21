@@ -358,29 +358,30 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             g_stashOwner = nullptr; g_stashIndex = -1; g_stashRowOff = 0;
         }
     }
-    // SPEAK THE ENTERED PANE. Do not defer this. Four "wait until the menu is ready" designs were
-    // tried and all four were refuted by measuring the game rather than reading it:
+    // ANNOUNCE THE ENTERED PANE. This replay is what makes the FIRST row of an entered pane speak at
+    // all: the pane's own initial 0x8000 is gated out in HookedDispatch (the game has not yet assigned
+    // DAT_0208ebc0), so if this does not speak it, nothing does.
     //
-    //   first UI string drawn      the field HUD paints text every frame -> fires next frame
-    //   the focused row's own text measured 31ms after this hook
-    //   window ACTIVATE 0x11f      NEVER SENT -- 0 occurrences in a full session; this is the one
-    //                              that shipped as silence
-    //   a timeout fallback         a band-aid that speaks at the wrong time and hides which
+    // WHEN to speak splits by pane, exactly mirroring the battle command menu. FUN_00244830 fires at
+    // the START of menu construction, so for the field/party menu (FUN_00280de0) speaking here lands
+    // "Status" in the player's ear before the menu is visible -- the reported "speaks then lags". For
+    // that ONE class we stash the focus and let the menu's own SHOW message (cat 0x13, in
+    // IngameMenuReader) release it, so speech coincides with the menu appearing -- just as the battle
+    // menu waits for its own row draw (FUN_00276be0). Every OTHER pane (submenus, config, pop-ups)
+    // opens with the shell already up, has no such lag, and still speaks immediately here.
     //
-    // What the window's own message stream shows (bounded log, since removed): the pane receives
-    // cat 0x10 / 0x1 construction at +0ms and begins its per-frame tick (cat 0x3/0x4/0x2/0xD/0xB/
-    // 0x19, every 16ms) at +32ms. There is no later "now I am live" event to wait for, and every
-    // menu-open bracket measured 0-85ms end to end (mostly 16-35ms) with in-our-hook at 0.0ms. So
-    // "when the menu is ready" and "now" differ by about two frames -- there is no window to wait
-    // through, and any deferral only risks silence.
-    //
-    // Silence is the real failure mode: this replay is what makes the FIRST row of an entered pane
-    // speak at all. The pane's own initial 0x8000 is gated out in HookedDispatch because the game
-    // has not yet assigned DAT_0208ebc0, so if this does not speak it, nothing does -- the player
-    // gets a menu with no idea where the cursor is until they move it.
+    // (History: four "wait until the menu is ready" signals were refuted by measurement before landing
+    // on 0x13 -- first-string-drawn fired next frame, the row's own text at 31ms, 0x11f ACTIVATE was
+    // never sent, and a timeout fallback spoke at the wrong time. See IngameMenuReader's field-pane
+    // hook for why 0x13 is the game's own visible-open event.)
     if (o && o == newWin && idx >= 0) {
-        if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
-        else        OnFocus(o, idx, /*fromPaint=*/true);
+        if (IngameMenuReader::IsFieldPaneOwner(o)) {
+            IngameMenuReader::ArmPaneEntry(o, rowOff, idx);   // released on the SHOW message (cat 0x13)
+        } else if (rowOff) {
+            IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
+        } else {
+            OnFocus(o, idx, /*fromPaint=*/true);
+        }
     }
 }
 

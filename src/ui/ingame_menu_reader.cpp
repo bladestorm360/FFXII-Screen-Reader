@@ -31,14 +31,28 @@ constexpr RowChainClass ROW_CHAIN[] = {
 constexpr uint32_t ROW_STRIDE   = 0x20;   // row record size
 constexpr uint32_t OFF_ROW_NAME = 0x10;   // NAME codec* (built by FUN_002cd3c0)
 
-// The field pause menu's own window handler FUN_00280de0 (== ROW_CHAIN[0]) was hooked observe-only
-// to find a "menu is ready" event to delay the entry announce until. It answered the question and
-// was removed. What a full session of its messages showed, so nobody hooks it for this again:
-//   +0ms   cat 0x10, 0x1 (init), 0x2, 0xD, 0xB, 0x19   one-shot construction
-//   +32ms  cat 0x3, 0x4, 0x2, 0xD, 0xB, 0x19           per-frame tick, every 16ms thereafter
-// cat 0x11f ACTIVATE, which the decompile suggested was "the menu is now live", is NEVER SENT --
-// 0 occurrences in a whole session. There is no late readiness event; the pane is running frames
-// 32ms after the focus-set, so there is nothing to wait for. See MenuReader::HookedFocusSet.
+// ---- The field pause menu's OWN window handler (drives the entry announce) -------------------
+// FUN_00280de0 == ROW_CHAIN[0]. The field/party menu announces its first row the SAME WAY the battle
+// command menu does: the entry focus is STASHED (see MenuReader::HookedFocusSet -> ArmPaneEntry) and
+// released by the menu's own "show" event, so speech lands WITH the menu instead of during its
+// construction. The battle menu releases on its row DRAW (FUN_00276be0); this window has no per-row
+// draw we hook, but it has the direct equivalent -- case 0x13 is the SHOW path: it creates the info
+// window, plays the open SE FUN_00249c60(4) ONCE, and clears the "hidden" bit (0x80) on the menu's UI
+// resources (battle_4_p / s_font_c / targetline_p / shape / mini_face_c). That is the frame the menu
+// becomes visible; we trigger on the MESSAGE, the SE call is only corroboration.
+//   msg map (from the decompile): 1 init, 2 close, 0xa teardown, 0xc notify (0x8000 row focus /
+//   0x8001 confirm / 0x8002 cancel), 0x13 SHOW, 0x10 destroy. (0x11f ACTIVATE is NEVER sent -- a
+//   full session showed 0 occurrences; do not wait on it.)
+// Four earlier "menu is ready" signals were each refuted by measurement -- first-string-drawn (next
+// frame), the row's own text (31ms), 0x11f ACTIVATE (never), and a timeout fallback (spoke at the
+// wrong time). 0x13 is the game's own visible-open event, which is why we use it.
+constexpr uint32_t RVA_FIELD_PANE_WND = 0x160DE0;   // FUN_00280de0 (== ROW_CHAIN[0].rva)
+constexpr uint32_t PKT_CAT_OFF        = 0x00;       // *(int*)packet       = category
+constexpr uint32_t PKT_MSG_OFF        = 0x08;       // *(int64*)(packet+8) = message
+constexpr uint32_t WND_CAT_SHOW       = 0x13;       // the menu-visible frame (see above)
+
+typedef uint64_t (*Pfn_FieldPaneWnd)(void*, void*);
+Pfn_FieldPaneWnd s_origFieldPaneWnd = nullptr;
 
 // ---- Battle command menu (CONFIRMED 2026-07-10 via probe) ------------------------------------
 // The in-battle command list (Attack / Magicks & Technicks / Items / ...) routes cursor moves
@@ -139,6 +153,31 @@ std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (c
 void* g_bcmdPendingPanel = nullptr;
 int   g_bcmdPendingIndex = -1;
 
+// Entry-announce stash for the FIELD pane (FUN_00280de0) -- the exact analogue of g_bcmdPending*.
+// FUN_00244830 fires at the START of menu construction, so speaking the entered row there lands it in
+// the player's ear before the menu is up. Instead we stash it here and let the menu's own SHOW
+// message (cat 0x13, HookedFieldPaneWnd) release it, so speech coincides with the menu appearing.
+void*    g_panePendingOwner  = nullptr;
+uint32_t g_panePendingRowOff = 0;
+int      g_panePendingIndex  = -1;
+uint64_t g_panePendingArmMs  = 0;    // arm time, for the "shown after Nms" log only
+
+// First-seen category logging for ONE open: log each cat once (with Δt from the arm) so the whole
+// SHOW sequence is visible without a per-frame flood. Reset by ArmPaneEntry, appended in the wnd hook.
+// Keyed on category alone (not msg) so pointer-valued msgs cannot flood it -- there are ~10 cats.
+constexpr int kPaneSeenMax = 24;
+uint32_t g_paneSeen[kPaneSeenMax];
+int      g_paneSeenCount = 0;
+
+// True + records `cat` if this is the first time it has been seen since the last arm; false otherwise
+// (already seen, or the set is full). Caller holds g_mutex.
+bool MarkPaneSeen(uint32_t cat) {
+    for (int i = 0; i < g_paneSeenCount; ++i) if (g_paneSeen[i] == cat) return false;
+    if (g_paneSeenCount >= kPaneSeenMax) return false;
+    g_paneSeen[g_paneSeenCount++] = cat;
+    return true;
+}
+
 // The focused row's NAME codec pointer, or null. POD-only under __try (no objects), so the SEH
 // guard is legal; decoding happens outside. The game always sends a valid focus index.
 const uint8_t* ReadRowName(void* owner, uint32_t rowOff, int index) {
@@ -225,6 +264,52 @@ void HookedBcmdDraw(void* panel, void* geom, int row) {
     }
     // Outside the lock: the speak path re-enters BattleCommandName, which takes g_mutex itself.
     if (replayPanel) SpeakBattleCommand(replayPanel, replayIndex);
+}
+
+// FUN_00280de0(window, packet): the field pause menu's own message proc. OBSERVE ONLY -- runs the
+// original first, then reads; alters nothing. Two jobs:
+//   (1) release the stashed entry announce on the SHOW message (cat 0x13), so the first row speaks
+//       WITH the menu -- the field-pane analogue of HookedBcmdDraw releasing the battle stash;
+//   (2) log each category once per open (Δt from the arm) so the open sequence stays visible.
+// Both are gated to the pane we are actually waiting on (window == g_panePendingOwner), so this is a
+// cheap pointer compare on every message when nothing is armed.
+uint64_t HookedFieldPaneWnd(void* window, void* packet) {
+    const uint64_t ret = s_origFieldPaneWnd ? s_origFieldPaneWnd(window, packet) : 0;
+    STALL_SCOPE("IngameMenu::HookedFieldPaneWnd");
+
+    uint32_t cat = 0; uint64_t msg = 0;
+    if (!MemRead::SafeReadU32(packet, PKT_CAT_OFF, &cat)) return ret;
+    MemRead::SafeReadU64(packet, PKT_MSG_OFF, &msg);
+
+    void* releaseOwner = nullptr; uint32_t rowOff = 0; int idx = -1;
+    bool logSeen = false; uint64_t waited = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (g_panePendingOwner != window) return ret;   // only the pane whose entry we stashed
+        waited  = GetTickCount64() - g_panePendingArmMs;
+        logSeen = MarkPaneSeen(cat);
+        if (cat == WND_CAT_SHOW) {
+            // Consume one-shot under the lock (the sanctioned per-frame guard -- 0x13 may repeat).
+            releaseOwner = g_panePendingOwner;
+            rowOff = g_panePendingRowOff; idx = g_panePendingIndex;
+            g_panePendingOwner = nullptr; g_panePendingRowOff = 0; g_panePendingIndex = -1;
+        }
+    }
+    if (logSeen) {
+        char m[128];
+        snprintf(m, sizeof(m), "wnd-first: cat=0x%X msg=0x%llX +%llums",
+                 cat, (unsigned long long)msg, (unsigned long long)waited);
+        Log::Write("INGAME", m);
+    }
+    if (releaseOwner) {
+        char m[80];
+        snprintf(m, sizeof(m), "pane entry announce: shown after %llums", (unsigned long long)waited);
+        Log::Write("INGAME", m);
+        // Outside the lock. Speaks only if the row resolves -- if it never does, stay silent (no
+        // fallback), exactly like the battle menu only replays on a successful draw.
+        IngameMenuReader::OnRowChainFocus(releaseOwner, rowOff, idx);
+    }
+    return ret;
 }
 
 // Replicate FUN_002b58b0(src, 0): a 2-byte-marker-prefixed codec block; index 0 -> src+2 if it
@@ -377,16 +462,18 @@ void SpeakBattleCommand(void* panel, int index) { TrySpeakBattleCommand(panel, i
 namespace IngameMenuReader {
 
 bool Init() {
-    bool ok = Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
+    bool ok = Hooks::InstallTyped(RVA_FIELD_PANE_WND, &HookedFieldPaneWnd, &s_origFieldPaneWnd);
+    ok     &= Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
     ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
-    Log::Write("INGAME", ok ? "IngameMenuReader: battle command-draw + status-chooser hooks installed"
-                            : "IngameMenuReader: a battle/status hook FAILED to install");
+    Log::Write("INGAME", ok ? "IngameMenuReader: field-pane show + battle command-draw + status-chooser hooks installed"
+                            : "IngameMenuReader: a field/battle/status hook FAILED to install");
     return ok;
 }
 
 void Shutdown() {
     Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);
+    Hooks::Uninstall(RVA_FIELD_PANE_WND);
     std::lock_guard<std::mutex> lk(g_mutex);
     g_bcmdPendingPanel = nullptr;
     g_bcmdPendingIndex = -1;
@@ -412,6 +499,25 @@ void OnRowChainFocus(void* owner, uint32_t rowOff, int index) {
 // True if `owner` is the battle command panel (window class FUN_0027ad70).
 bool IsBattleCommandOwner(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_BCMD_PANEL);
+}
+
+// True if `owner` is the field pause menu's command column (window class FUN_00280de0). This is the
+// ONE class whose entry announce is deferred to the SHOW message; every other pane speaks on entry.
+bool IsFieldPaneOwner(void* owner) {
+    return owner && Obj0(owner) == Hooks::ResolveRva(RVA_FIELD_PANE_WND);
+}
+
+// Stash the field pane's entry focus, released by HookedFieldPaneWnd on cat 0x13. Mirrors the battle
+// menu's g_bcmdPending* handoff. Overwrites any un-released prior arm (each open is a fresh pane
+// object, so a lingering one can never match a new window's pointer anyway) and resets the per-open
+// first-seen category set.
+void ArmPaneEntry(void* owner, uint32_t rowOff, int index) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_panePendingOwner  = owner;
+    g_panePendingRowOff = rowOff;
+    g_panePendingIndex  = index;
+    g_panePendingArmMs  = GetTickCount64();
+    g_paneSeenCount     = 0;
 }
 
 // Battle command focus (0x8000): read the highlighted command id from the panel (owner+0x510+
