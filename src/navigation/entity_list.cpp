@@ -9,10 +9,12 @@
 #include "navigation/map_names.h"
 #include "navigation/map_exits.h"
 #include "navigation/map_script.h"
+#include "ui/menu_state.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "speech/speech.h"
 
 #include <Windows.h>
@@ -169,6 +171,13 @@ void OnFieldFrame() {
     // we auto-rebuild the moment the active-container SET changes. The builder writes each
     // container's entries+count BEFORE flipping its active bit last, so one rescan on the
     // change captures the just-streamed objects. O(1) (a 5-byte mask read) while stable.
+    // Not while a menu is up. Opening the field menu churns the active-container set, which used to
+    // drag a full RescanLocked() + the diagnostic dump below onto the game thread mid-menu-open.
+    // Nothing here is navigable from inside a menu, and the next mask change (or the `` ` `` key)
+    // rescans, so deferring costs nothing.
+    if (MenuState::IsAnyMenuOpen()) return;
+    STALL_SCOPE("EntityList::OnFieldFrame");
+
     static uint32_t s_lastMask = 0;
     uint32_t mask = EntityScan::ActiveContainerMask();
     if (mask == s_lastMask) return;          // container set unchanged — nothing to do
@@ -221,29 +230,35 @@ void OnFieldFrame() {
             snprintf(m, sizeof(m), "announce: mapId=%d sub=\"%s\" region=\"%s\"", aid, s8, r8);
             Log::Write("NAV", m);
             Speech::Output(phrase);
-        }
 
-        // Per-area dump: the field-sign exits we now list (world pos + resolved destination), plus the
-        // +0x54 map-jump world points for cross-reference. The +0x70 count is the number this session's
-        // ABI fix unblocked — it read 0 on every map while the group index was being passed in junk.
-        std::vector<MapExits::ExitRec> fs;
-        MapExits::EnumerateFieldSignExits(fs, /*logRaw=*/true);                 // named exits (WORLD pos)
-        FVec3 pep; const FVec3* ppp = PlayerState::ReadPlayerPos(pep) ? &pep : nullptr;
-        if (ppp) {
-            char m[96];
-            snprintf(m, sizeof(m), "map-exits: player world=(%.1f,%.1f,%.1f)", pep.x, pep.y, pep.z);
-            Log::Write("NAV-DIAG", m);
-        }
-        char fsm[64];
-        snprintf(fsm, sizeof(fsm), "map-exits(+0x70) usable+named: %zu", fs.size());
-        Log::Write("NAV-DIAG", fsm);
-        std::vector<MapExits::ExitRec> jp;
-        MapExits::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true);    // +0x54 world points (diag)
+            // PER-AREA dump — and it must stay INSIDE this area-changed branch. It sat outside,
+            // so it ran on every container-mask change instead: the log showed ONE area entered
+            // and FIVE full dumps, each ~1,181 NAV-DIAG lines plus EnumerateFieldSignExits,
+            // EnumerateMapJumps with per-record name resolution, and a 98 KB bytecode scan --
+            // all on the game thread. It is a diagnostic; it may run once when the area changes
+            // and never on a menu open.
+            //
+            // The field-sign exits we list (world pos + resolved destination), plus the +0x54
+            // map-jump world points for cross-reference. The +0x70 count is the number the ABI
+            // fix unblocked — it read 0 on every map while the group index was passed in junk.
+            std::vector<MapExits::ExitRec> fs;
+            MapExits::EnumerateFieldSignExits(fs, /*logRaw=*/true);              // named exits (WORLD pos)
+            FVec3 pep; const FVec3* ppp = PlayerState::ReadPlayerPos(pep) ? &pep : nullptr;
+            if (ppp) {
+                char pm[96];
+                snprintf(pm, sizeof(pm), "map-exits: player world=(%.1f,%.1f,%.1f)", pep.x, pep.y, pep.z);
+                Log::Write("NAV-DIAG", pm);
+            }
+            char fsm[64];
+            snprintf(fsm, sizeof(fsm), "map-exits(+0x70) usable+named: %zu", fs.size());
+            Log::Write("NAV-DIAG", fsm);
+            std::vector<MapExits::ExitRec> jp;
+            MapExits::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true); // +0x54 world points (diag)
 
-        // The destination is a LITERAL in the loaded field script: scan for mapjump(dest,entrance,flags)
-        // calls and log each with its resolved name + dispatch context. This is the real exit-dest source;
-        // the log pins the source-door<->dest pairing for wiring.
-        MapExits::DiagScanScriptMapjumps();
+            // The destination is a LITERAL in the loaded field script: scan for
+            // mapjump(dest,entrance,flags) and log each with its resolved name + dispatch context.
+            MapExits::DiagScanScriptMapjumps();
+        }
     }
 }
 

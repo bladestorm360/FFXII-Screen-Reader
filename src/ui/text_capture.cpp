@@ -2,6 +2,7 @@
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 
 #include <Windows.h>
 #include <array>
@@ -126,18 +127,25 @@ bool WriteSlot(void** slot, void* val) {
 // listCapable: only the immediate glyph sink (FUN_002b0280) draws list-row
 // labels; object draws are always framing (never attributed to an item).
 void Capture(void* structPtr, bool listCapable) {
+    STALL_SCOPE("TextCapture::Capture");
     const uint8_t* strp = nullptr;
     if (!ReadStrPtr(structPtr, &strp) || !strp) return;
     std::wstring text = GameText::Decode(strp);
     if (!GameText::IsMostlyPrintable(text)) return;
 
-    std::lock_guard<std::mutex> lk(g_mutex);
-    if (listCapable && g_curIdx >= 0 && g_paintOwner) {
-        g_itemsByOwner[g_paintOwner][g_curIdx].push_back(std::move(text));  // list row: read on focus
-    } else {
-        g_ring[g_head] = RingEntry{ listCapable, std::move(text) };          // framing (diagnostics)
-        g_head = (g_head + 1) % RING_MAX;
-        if (g_count < RING_MAX) ++g_count;
+    // Once per STRING DRAWN, on the game's paint path. Decode already happened above, off the lock;
+    // the evicted ring entry is carried out and destroyed off it too.
+    std::wstring evicted;
+    {
+        StallProbe::TimedLock<std::mutex> lk(g_mutex, "lock:textcapture");
+        if (listCapable && g_curIdx >= 0 && g_paintOwner) {
+            g_itemsByOwner[g_paintOwner][g_curIdx].push_back(std::move(text));  // list row: read on focus
+        } else {
+            evicted.swap(g_ring[g_head].text);                                  // framing (diagnostics)
+            g_ring[g_head] = RingEntry{ listCapable, std::move(text) };
+            g_head = (g_head + 1) % RING_MAX;
+            if (g_count < RING_MAX) ++g_count;
+        }
     }
 }
 
@@ -205,11 +213,18 @@ uint64_t HookedItemDescFmt(void* outBuf, void* params) {
 // pointer). Attributes this row's draws to `index`, then runs the real callback.
 int64_t CellWrapper(void* ctx, int64_t rowDrawCtx, void* geom, int64_t indexArg) {
     int index = static_cast<int>(indexArg);
+    // This runs once per ROW of every menu paint, on the game's own paint path. Anything held here
+    // delays the menu's own drawing, so the critical section is kept to pointer swaps: the old
+    // row's strings are moved out under the lock and FREED after releasing it (clear() used to run
+    // every wstring destructor while the lock was held).
+    std::vector<std::wstring> discard;
     {
-        std::lock_guard<std::mutex> lk(g_mutex);
+        STALL_SCOPE("TextCapture::CellWrapper");
+        StallProbe::TimedLock<std::mutex> lk(g_mutex, "lock:textcapture");
         g_curIdx = index;              // sticky: stays set through the post-callback glyph draw
-        if (g_paintOwner) g_itemsByOwner[g_paintOwner][index].clear();  // fresh for this paint
+        if (g_paintOwner) g_itemsByOwner[g_paintOwner][index].swap(discard);   // fresh for this paint
     }
+    discard.clear();                   // destructors run off the lock
     Pfn_Cell real = g_realCb;          // read outside the lock (single game thread)
     return real ? real(ctx, rowDrawCtx, geom, indexArg) : 0;
 }
@@ -217,22 +232,30 @@ int64_t CellWrapper(void* ctx, int64_t rowDrawCtx, void* geom, int64_t indexArg)
 // Runs after the full paint: reset state, then notify the reader that `owner`'s
 // item map is now populated (drives the menu-entry focus replay).
 void FinishPaint(void* owner) {
+    // Runs at the end of every menu paint, on the game's paint path. The eviction used to call
+    // g_itemsByOwner.clear() while holding g_mutex -- destroying every cached string of every
+    // surface inside the critical section the paint itself contends for. Swap the map out and let
+    // it destruct after the lock is released.
+    std::unordered_map<void*, std::unordered_map<int, std::vector<std::wstring>>> discard;
     {
-        std::lock_guard<std::mutex> lk(g_mutex);
+        STALL_SCOPE("TextCapture::FinishPaint");
+        StallProbe::TimedLock<std::mutex> lk(g_mutex, "lock:textcapture");
         g_curIdx = -1;
         g_intercepting = false;
         if (g_itemsByOwner.size() > OWNER_MAP_CAP) {
-            auto keep = g_itemsByOwner.find(owner);
             std::unordered_map<int, std::vector<std::wstring>> saved;
+            auto keep = g_itemsByOwner.find(owner);
             if (keep != g_itemsByOwner.end()) saved = std::move(keep->second);
-            g_itemsByOwner.clear();
+            g_itemsByOwner.swap(discard);
             if (!saved.empty()) g_itemsByOwner[owner] = std::move(saved);
         }
     }
+    discard.clear();                   // destructors run off the lock
     if (g_paintedCb) g_paintedCb(owner);
 }
 
 void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
+    StallProbe::NoteThread("TextCapture::HookedPainter");
     void* owner = nullptr; void** slot = nullptr; void* realCb = nullptr;
     bool intercept = false;
     if (subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
@@ -319,33 +342,50 @@ void NotifyFocusChanged() {
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
 
+// SNAPSHOT UNDER THE LOCK, LOG OUTSIDE IT. This used to hold g_mutex across ~257 Log::Write calls
+// -- and g_mutex is the lock the game's own menu paint needs on every row (CellWrapper) and every
+// string (Capture), so a dump stalled the paint for as long as the logging took. Even as a
+// deliberate diagnostic that is unacceptable: a debug facility must never be able to slow the game.
+// The copy costs one allocation per line, paid on the caller's thread, off the lock.
 void DumpRingToLog(const char* reason) {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    size_t items = 0;
-    auto o = g_itemsByOwner.find(g_paintOwner);
-    if (o != g_itemsByOwner.end()) items = o->second.size();
+    struct Line { bool imm; std::wstring text; };
+    std::vector<Line>                     framing;
+    std::vector<std::pair<int, std::wstring>> items;
+    void*  paintOwner = nullptr;
+    size_t count = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        paintOwner = g_paintOwner;
+        count      = g_count;
+        framing.reserve(g_count);
+        for (size_t k = 0; k < g_count; ++k) {
+            const RingEntry& e = g_ring[(g_head + RING_MAX - g_count + k) % RING_MAX];
+            framing.push_back(Line{ e.imm, e.text });
+        }
+        auto o = g_itemsByOwner.find(g_paintOwner);
+        if (o != g_itemsByOwner.end()) {
+            items.reserve(o->second.size());
+            for (const auto& kv : o->second) items.emplace_back(kv.first, JoinFields(kv.second));
+        }
+    }
+
     char hdr[176];
     snprintf(hdr, sizeof(hdr), "dump (%s): %zu framing strings, paintOwner=%p %zu item slots",
-             reason ? reason : "", g_count, g_paintOwner, items);
+             reason ? reason : "", count, paintOwner, items.size());
     Log::Write("TEXT", hdr);
-    for (size_t k = 0; k < g_count; ++k) {
-        size_t idx = (g_head + RING_MAX - g_count + k) % RING_MAX;
-        const RingEntry& e = g_ring[idx];
+    for (const auto& e : framing) {
         char utf8[400];
         Log::ToUtf8(e.text, utf8, sizeof(utf8));
         char line[512];
         snprintf(line, sizeof(line), "  framing[%s] \"%s\"", e.imm ? "imm" : "obj", utf8);
         Log::Write("TEXT", line);
     }
-    if (o != g_itemsByOwner.end()) {
-        for (const auto& kv : o->second) {
-            std::wstring joined = JoinFields(kv.second);
-            char utf8[400] = {};
-            Log::ToUtf8(joined, utf8, sizeof(utf8));
-            char line[512];
-            snprintf(line, sizeof(line), "  item[%d] \"%s\"", kv.first, utf8);
-            Log::Write("TEXT", line);
-        }
+    for (const auto& kv : items) {
+        char utf8[400];
+        Log::ToUtf8(kv.second, utf8, sizeof(utf8));
+        char line[512];
+        snprintf(line, sizeof(line), "  item[%d] \"%s\"", kv.first, utf8);
+        Log::Write("TEXT", line);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "speech/speech.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include <Windows.h>
 #include <mutex>
 #include <atomic>
@@ -129,6 +130,9 @@ void SpeakQueued(const std::wstring& text) {
 void Output(const std::wstring& text, bool interrupt) {
     if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-OUT", text, "muted"); return; }
     if (!g_Tolk_Output) { LogSuppressed("SPEAK-OUT", text, "Tolk unavailable"); return; }
+    // Tolk_Output is a synchronous IPC to the screen reader, called from GAME-THREAD hooks. Measured
+    // so "is speech blocking the game?" is answered by data and never re-argued.
+    STALL_SCOPE("Speech::Output");
     {
         // Scope the lock so the file write happens OUTSIDE it (matches Speak) — logging every Output call
         // must not serialize behind the Tolk mutex.

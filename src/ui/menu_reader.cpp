@@ -9,6 +9,7 @@
 #include "core/mem_read.h"
 #include "speech/speech.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include "input/input_tracker.h"
 
 #include <Windows.h>
@@ -126,6 +127,7 @@ void DescribeHotkey() {
 }
 
 void OnFocus(void* owner, int index, bool fromPaint) {
+    STALL_SCOPE("MenuReader::OnFocus");
     if (index < 0) return;
     if (IsTitleMenu(owner)) return;               // TitleReader handles the title command menu
 
@@ -202,14 +204,17 @@ void OnFocus(void* owner, int index, bool fromPaint) {
             g_pendingOwner = owner;
             g_pendingIndex = index;
         }
+        // NO ring dump here. This branch is the NORMAL entry sequence -- the focus routinely beats
+        // the painter, which is the entire reason for the replay above -- and TextCapture's dump
+        // holds TextCapture::g_mutex across 257 Log::Write calls. That is the same mutex the menu's
+        // first paint needs on EVERY row (CellWrapper) and EVERY string (Capture), so the dump
+        // serialized the menu's own paint behind our logging and the field menu took ~0.5s to open
+        // while the battle menu -- which never reaches OnFocus -- stayed instant.
+        //
+        // Gating it to once-per-surface did not help: initial open is exactly when ownerChanged is
+        // true. The dump is a development aid for "text NEVER arrived"; the one-liner below records
+        // the event, and TextCapture::DumpRingToLog remains callable for deliberate diagnosis.
         Log::Write("READER", "  (text not ready — awaiting paint)");
-        // The 257-line ring dump is a heavy diagnostic on a path that is NORMAL, not an error --
-        // the entry focus routinely beats the painter, which is the whole reason for the replay
-        // above. Log-only volume control (the CONSOLE OUTPUT BUDGET rule): dump once per surface,
-        // not once per event. Previously the speech dedup was incidentally throttling this; with
-        // that gone it fired on every empty focus, writing hundreds of fprintf calls on the game
-        // thread while a menu opened.
-        if (ownerChanged) TextCapture::DumpRingToLog("focus text empty");
         return;
     }
 
@@ -220,6 +225,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
 // Fired right after the painter fills an owner's item map — replay a menu-entry
 // focus whose text wasn't ready yet.
 void OnMenuPainted(void* owner) {
+    STALL_SCOPE("MenuReader::OnMenuPainted");
     // Focus-pending replay (deferred focus speech, incl. the 1-frame settle).
     void* pend; int idx;
     {
@@ -258,6 +264,7 @@ void OnMenuPainted(void* owner) {
 
 uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
     if (msg == MSG_FOCUS) {
+        STALL_SCOPE("MenuReader::HookedDispatch");
         // Bump the tooltip focus generation BEFORE the game handles the focus, so
         // the description it sets (FUN_00291d80) during s_origDispatch is attributed
         // to this focus for the `o` key.
@@ -325,6 +332,9 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 // makes the first item on entering a submenu speak.
 void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
+    // Brackets each menu-open window: everything since the previous pane entry.
+    StallProbe::DumpAndReset("menu entry", /*minTotalMs=*/3.0);
+    STALL_SCOPE("MenuReader::HookedFocusSet");
     void* o; int idx; uint32_t rowOff;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
@@ -435,6 +445,7 @@ void Shutdown() {
     Hooks::Uninstall(RVA_STORE_WRITE);
     Hooks::Uninstall(RVA_DISPATCH);
     g_initialized = false;
+    StallProbe::DumpAndReset("session total");
     Log::Write("READER", "MenuReader shut down");
 }
 

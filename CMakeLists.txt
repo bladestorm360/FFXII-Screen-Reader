@@ -27,6 +27,7 @@ add_library(${PROJECT_NAME} SHARED
     src/proxy/dllmain.cpp
     src/proxy/dinput8_proxy.cpp
     src/core/logger.cpp
+    src/core/stall_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
     src/speech/speech.cpp

@@ -4,6 +4,7 @@
 #include "core/mem_read.h"
 #include "speech/speech.h"
 #include "core/logger.h"
+#include "core/stall_probe.h"
 
 #include <Windows.h>
 #include <cstdint>
@@ -195,6 +196,7 @@ void SpeakRow(void* owner, const std::wstring& text, const char* tag) {
 void SpeakBattleCommand(void* panel, int index);   // defined below; replayed from here
 void HookedBcmdDraw(void* panel, void* geom, int row) {
     if (s_origBcmdDraw) s_origBcmdDraw(panel, geom, row);
+    STALL_SCOPE("IngameMenu::HookedBcmdDraw");
     int cmdId = -1; const uint8_t* codec = nullptr;
     if (!ReadBcmdDraw(panel, row, &cmdId, &codec) || !codec || cmdId < 0 || cmdId >= 256) return;
     std::wstring text = GameText::Decode(codec, 256);   // SEH-guarded inside GameText
@@ -388,6 +390,7 @@ uint32_t RowChainOff(void* owner) {
 }
 
 void OnRowChainFocus(void* owner, uint32_t rowOff, int index) {
+    STALL_SCOPE("IngameMenu::OnRowChainFocus");
     const uint8_t* codec = ReadRowName(owner, rowOff, index);
     if (!codec) return;
     std::wstring text = GameText::Decode(codec, 256);   // SEH-guarded inside GameText
