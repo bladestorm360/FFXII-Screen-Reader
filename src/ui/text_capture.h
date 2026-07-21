@@ -47,6 +47,20 @@ void NotifyFocusChanged();
 typedef void (*MenuPaintedCallback)(void* owner);
 void SetMenuPaintedCallback(MenuPaintedCallback cb);
 
+// Fired from the per-string draw the moment ANY UI text is drawn -- the earliest proof that a menu
+// has actually started rendering, as opposed to merely having been handed the input focus.
+//
+// Why this and not SetMenuPaintedCallback: that one is driven from FinishPaint, i.e. the list
+// painter FUN_002d28e0, and the FIELD MENU never goes through it. Measured: PainterSwap/CellWrapper/
+// FinishPaint appeared in ONE dump window of a session where Capture appeared in 29. So the painter
+// callback cannot time the field menu, and this can.
+//
+// Deliberately parameterless -- Capture has no owner to report (g_paintOwner is only set during
+// painter interception, which the field menu never enters). Callers that need an owner keep their
+// own pending record, which they already do.
+typedef void (*DrawCallback)();
+void SetDrawCallback(DrawCallback cb);
+
 // Diagnostic: dump the framing ring + the per-owner item map to the log.
 void DumpRingToLog(const char* reason);
 

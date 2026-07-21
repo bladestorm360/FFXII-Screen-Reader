@@ -15,6 +15,7 @@
 #include <Windows.h>
 #include <cstdint>
 #include <cstdio>
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -83,6 +84,18 @@ int   g_valueChangeIndex = -1;
 void* g_stashOwner = nullptr;
 int   g_stashIndex = -1;
 uint32_t g_stashRowOff = 0;
+// Menu-ENTRY announce, held back until the menu actually draws (see HookedFocusSet / OnFirstDraw).
+// Distinct from g_stashOwner, which is the 0x8000 -> FUN_00244830 handoff and is consumed there.
+void*    g_entryOwner  = nullptr;
+int      g_entryIndex  = -1;
+uint32_t g_entryRowOff = 0;
+// Lock-free arm flag. OnFirstDraw is called from TextCapture::Capture -- once per STRING DRAWN, so
+// thousands of times a second on the game's paint path. Taking g_mutex there would put mod lock
+// traffic straight back into the hot path we just cleaned out of it. This is a plain atomic read in
+// the overwhelmingly common "nothing armed" case; the mutex is only touched when an entry is
+// actually waiting.
+std::atomic<bool> g_entryArmed{false};
+
 void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus) pair
 void* g_diagFocus = nullptr;
 bool  g_initialized = false;
@@ -353,10 +366,44 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             g_stashOwner = nullptr; g_stashIndex = -1; g_stashRowOff = 0;
         }
     }
+    // ARM, DO NOT SPEAK. FUN_00244830 fires when the game assigns the input-focus window, which is
+    // the START of menu construction -- measured, the menu then takes another 16ms to ~600ms (a hard
+    // cluster at ~134ms = 8 frames at 60Hz) before it draws its first string. Announcing here put the
+    // row in the player's ear well before the menu was up, which is what the "menu speaks then lags"
+    // report actually was.
+    //
+    // The announce now waits for OnFirstDraw() -- the first UI string actually rendered. Cursor
+    // moves inside an open menu are untouched: they speak from HookedDispatch with the menu already
+    // drawing, and were never the complaint.
     if (o && o == newWin && idx >= 0) {
-        if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
-        else        OnFocus(o, idx, /*fromPaint=*/true);
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (g_entryOwner) {   // a previous entry never saw a draw -- say so rather than lose it silently
+            char m[96];
+            snprintf(m, sizeof(m), "entry announce dropped un-spoken (owner=%p never drew)", g_entryOwner);
+            Log::Write("READER", m);
+        }
+        g_entryOwner  = o;
+        g_entryIndex  = idx;
+        g_entryRowOff = rowOff;
+        g_entryArmed.store(true, std::memory_order_release);
     }
+}
+
+// First UI string drawn since an entry was armed: the menu is genuinely rendering now, so speak the
+// row we held back. One-shot -- disarmed before speaking, so the very next string of the same paint
+// cannot re-trigger it. Runs on the game thread, from TextCapture::Capture.
+void OnFirstDraw() {
+    if (!g_entryArmed.load(std::memory_order_acquire)) return;   // hot path: one atomic, no lock
+    void* o = nullptr; int idx = -1; uint32_t rowOff = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (!g_entryOwner || g_entryIndex < 0) { g_entryArmed.store(false, std::memory_order_release); return; }
+        o = g_entryOwner; idx = g_entryIndex; rowOff = g_entryRowOff;
+        g_entryOwner = nullptr; g_entryIndex = -1; g_entryRowOff = 0;
+        g_entryArmed.store(false, std::memory_order_release);
+    }
+    if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
+    else        OnFocus(o, idx, /*fromPaint=*/true);
 }
 
 // FUN_00240750(configId, &newDisplayIdx): the config store is written when a value
@@ -428,6 +475,7 @@ bool Init() {
         return true;
     }
     TextCapture::SetMenuPaintedCallback(&OnMenuPainted);
+    TextCapture::SetDrawCallback(&OnFirstDraw);   // entry announce fires when the menu really draws
     InputTracker::SetDescribeCallback(&DescribeHotkey);
     bool ok = Hooks::InstallTyped(RVA_DISPATCH,    &HookedDispatch,   &s_origDispatch);
     ok     &= Hooks::InstallTyped(RVA_STORE_WRITE, &HookedStoreWrite, &s_origStoreWrite);
@@ -446,6 +494,7 @@ bool Init() {
 void Shutdown() {
     if (!g_initialized) return;
     TextCapture::SetMenuPaintedCallback(nullptr);
+    TextCapture::SetDrawCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
     IngameMenuReader::Shutdown();
     BattleTargetReader::Shutdown();

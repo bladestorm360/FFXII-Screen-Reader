@@ -90,6 +90,7 @@ uint32_t g_helpGen = 0;
 uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is set for a focus
 
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
+std::atomic<TextCapture::DrawCallback> g_drawCb{nullptr};   // fired on the first string of any draw
 
 bool g_initialized = false;
 std::atomic<bool> g_interceptEnabled{true};   // Shift+` A/B; see TextCapture::ToggleInterception
@@ -137,6 +138,9 @@ void Capture(void* structPtr, bool listCapable) {
     // measurement at all. Capture fires for EVERY menu (2519 times in one party-menu window), so it
     // is the signal that actually means "the menu drew something". One-shot per mark, inside.
     StallProbe::NoteFirstPaint();
+    // "A menu is actually rendering now." MenuReader defers its menu-ENTRY announce to this, so the
+    // row is spoken with the menu rather than ~134ms before it drew anything.
+    if (TextCapture::DrawCallback cb = g_drawCb.load(std::memory_order_relaxed)) cb();
     const uint8_t* strp = nullptr;
     if (!ReadStrPtr(structPtr, &strp) || !strp) return;
     std::wstring text = GameText::Decode(strp);
@@ -379,6 +383,8 @@ void NotifyFocusChanged() {
 }
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
+
+void SetDrawCallback(DrawCallback cb) { g_drawCb.store(cb, std::memory_order_relaxed); }
 
 bool InterceptionEnabled() { return g_interceptEnabled.load(std::memory_order_relaxed); }
 
