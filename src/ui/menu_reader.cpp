@@ -96,9 +96,11 @@ typedef void (*Pfn_FocusSet)(void*, void*, int);   // FUN_00244830(old, new, fla
 Pfn_FocusSet s_origFocusSet = nullptr;
 
 std::mutex g_mutex;
-void* g_lastOwner = nullptr;
-int   g_lastIndex = -1;
-std::wstring g_lastText;
+// The CURRENTLY-focused row. NOT a dedup key — the config value-change hooks
+// (HookedStoreWrite / HookedGfxWrite) get no focus message of their own, so they read these to
+// learn which row the value belongs to.
+void* g_focusOwner = nullptr;
+int   g_focusIndex = -1;
 void* g_pendingOwner = nullptr;   // focus whose text wasn't painted yet (menu-entry replay)
 int   g_pendingIndex = -1;
 void* g_valueChangeOwner = nullptr;   // Graphics value change awaiting a settled paint to announce
@@ -418,14 +420,18 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         }
     }
 
-    bool ownerChanged, dup;
+    // Record the focus and speak it. NO dedup: this used to drop a focus matching the cached
+    // (owner, index, text), which made leaving a pane and returning to the same row SILENT — the
+    // pane gate above returns early without updating the cache, so the stale entry survived the
+    // excursion and swallowed the re-entry. `ownerChanged` is kept only to gate the pop-up body
+    // preamble below, never to suppress the row itself.
+    bool ownerChanged;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        ownerChanged = (owner != g_lastOwner);
-        dup = (!ownerChanged && index == g_lastIndex && text == g_lastText);
-        if (!dup) { g_lastOwner = owner; g_lastIndex = index; g_lastText = text; }
+        ownerChanged = (owner != g_focusOwner);
+        g_focusOwner = owner;
+        g_focusIndex = index;
     }
-    if (dup) return;
 
     char hdr[160];
     snprintf(hdr, sizeof(hdr), "focus owner=%p index=%d%s%s",
@@ -578,8 +584,8 @@ void HookedStoreWrite(uintptr_t configId, void* pIdx) {
     void* owner; int idx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        owner = g_lastOwner;
-        idx   = g_lastIndex;
+        owner = g_focusOwner;
+        idx   = g_focusIndex;
     }
     if (IsActiveConfig(owner) && idx >= 0) {
         void* row = ConfigRowWidget(owner, idx);
@@ -608,8 +614,8 @@ uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
     void* owner; int idx;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        owner = g_lastOwner;
-        idx   = g_lastIndex;
+        owner = g_focusOwner;
+        idx   = g_focusIndex;
     }
     if (idx >= 0 && IsActiveConfig(owner) && Obj0(owner) == Hooks::ResolveRva(RVA_GFX_CTRL)) {
         void* row = ConfigRowWidget(owner, idx);

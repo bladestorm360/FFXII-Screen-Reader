@@ -117,12 +117,7 @@ typedef void (*Pfn_StatusCursor)(int);
 Pfn_StatusCursor s_origStatusCursor = nullptr;
 
 std::mutex   g_mutex;
-void*        g_lastOwner = nullptr;
-std::wstring g_lastText;
 std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (cached from FUN_00276be0)
-std::wstring g_lastBcmdText;               // dedup for the battle command focus (by spoken text)
-void*        g_lastStatusCtrl = nullptr;   // dedup for the Status chooser (announce on (ctrl,slot) change)
-int          g_lastStatusSlot = -1;
 
 void LogLine(const char* tag, void* owner, const std::wstring& text) {
     char utf8[512] = {};
@@ -183,16 +178,12 @@ bool ReadBcmdDraw(void* panel, int index, int* outCmdId, const uint8_t** outCode
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
-// Speak once per (owner, text). Mirrors menu_reader's focus dedup.
-void SpeakIfNew(void* owner, const std::wstring& text, const char* tag) {
+// Speak a focused row. NO dedup: FUN_00247510's 0x8000 is event-driven (one message per genuine
+// focus change), so every fire is a real move the player needs to hear -- including landing back on
+// the row they left when they re-enter a pane. If this ever speaks twice for one keypress, a second
+// call path is firing; find it, don't filter here.
+void SpeakRow(void* owner, const std::wstring& text, const char* tag) {
     if (text.empty()) return;
-    bool dup;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        dup = (owner == g_lastOwner && text == g_lastText);
-        if (!dup) { g_lastOwner = owner; g_lastText = text; }
-    }
-    if (dup) return;
     LogLine(tag, owner, text);
     Speech::Output(text, /*interrupt=*/true);
 }
@@ -275,7 +266,7 @@ std::wstring BattleCommandName(void* panel, int index, int cmdId) {
     return GameText::IsMostlyPrintable(text) ? text : std::wstring();
 }
 
-// Read the highlighted Status-chooser slot's vitals + the active controller (for dedup). Returns
+// Read the highlighted Status-chooser slot's vitals + the active controller (log tag only). Returns
 // false on empty slot / fault. POD-only under __try (decode happens outside). Mirrors FUN_00283e40.
 struct StatusVitals { int charId; int curHP; int maxHP; int curMP; int maxMP; int level; };
 bool ReadStatusSlot(int slot, StatusVitals* out, void** outCtrl) {
@@ -310,24 +301,22 @@ bool ReadStatusSlot(int slot, StatusVitals* out, void** outCtrl) {
 }
 
 // FUN_00285a10(slot): the Status chooser's cursor-set. Fires on each highlight (and on open) with
-// `slot` = the highlighted portrait (< 0 = cleared). Speak name + Level + HP + MP. Dedup on
-// (controller, slot) so re-opening the chooser re-announces but a same-slot redraw doesn't.
+// `slot` = the highlighted portrait (< 0 = cleared). Speak name + Level + HP + MP.
+//
+// NO dedup. All 8 call sites in the decompile live in FUN_00284ec0 / FUN_00285190 / FUN_00285290 /
+// FUN_00285b20 -- open, cursor-set and close handlers, none of them per-frame -- so every fire is a
+// real highlight change. Re-opening the chooser on the same slot therefore re-announces, which is
+// the point. If a single highlight ever produces TWO `status:` lines, two of those handlers are
+// firing for one input: narrow the hook to the one that owns the event, do NOT re-add a filter.
+//
 // NOTE: "Level"/"HP"/"MP" are mod-emitted labels matching the on-screen columns (English for now).
 void HookedStatusCursor(int slot) {
     if (s_origStatusCursor) s_origStatusCursor(slot);              // let the game set +0x114/+0x117 first
     if (slot < 0) return;
 
     StatusVitals v;
-    void* ctrl = nullptr;
+    void* ctrl = nullptr;                                          // used for the log tag only
     if (!ReadStatusSlot(slot, &v, &ctrl)) return;
-
-    bool dup;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        dup = (ctrl == g_lastStatusCtrl && slot == g_lastStatusSlot);
-        if (!dup) { g_lastStatusCtrl = ctrl; g_lastStatusSlot = slot; }
-    }
-    if (dup) return;
 
     const uint8_t* codec = ResolveDefName(CAT_CHARNAME, static_cast<uint32_t>(v.charId));
     if (!codec) return;
@@ -372,7 +361,7 @@ void OnRowChainFocus(void* owner, uint32_t rowOff, int index) {
     if (!codec) return;
     std::wstring text = GameText::Decode(codec, 256);   // SEH-guarded inside GameText
     if (!GameText::IsMostlyPrintable(text)) return;
-    SpeakIfNew(owner, text, "menu:");
+    SpeakRow(owner, text, "menu:");
 }
 
 // True if `owner` is the battle command panel (window class FUN_0027ad70).
@@ -382,19 +371,15 @@ bool IsBattleCommandOwner(void* owner) {
 
 // Battle command focus (0x8000): read the highlighted command id from the panel (owner+0x510+
 // index*8) and speak its name — cached by the FUN_00276be0 draw hook (the game's own localized text).
-// Dedup on cmdId.
+//
+// NO dedup. This used to compare against the last spoken text, which made backing out of the Attack
+// list and reopening it SILENT (same first command, same string). 0x8000 is event-driven, so every
+// fire is a real highlight the player must hear.
 void OnBattleCommandFocus(void* owner, int index) {
     int cmdId = ReadBcmdCmdId(owner, index);
     if (cmdId < 0) return;
     std::wstring text = BattleCommandName(owner, index, cmdId);   // resolves by list type; locks internally
     if (text.empty()) return;
-    bool dup;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        dup = (text == g_lastBcmdText);
-        g_lastBcmdText = text;
-    }
-    if (dup) return;
     LogLine("command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
     Speech::Output(text, /*interrupt=*/true);
 }

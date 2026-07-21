@@ -76,7 +76,11 @@ void* PtrAt(void* base, uint32_t off) {
 }
 
 std::atomic<void*> g_cellTable{nullptr};   // title list's shared cell node cell-table
-std::atomic<int>   g_lastRow{-1};          // last atlas row spoken (edge-trigger)
+// One-shot: armed when a command-menu session starts, consumed by the FIRST row-draw that has a
+// usable cell table. This is what keeps HookedRow — a PER-DRAW hook — from announcing every frame.
+// It replaced a `lastRow != row` check that also sat on the event path and made re-focusing the
+// same row silent. The per-frame guard belongs on the per-frame path only.
+std::atomic<bool>  g_replayPending{false};
 std::atomic<void*> g_titleWindow{nullptr}; // live command window (for initial-focus replay)
 std::atomic<int>   g_pendingIndex{-1};     // starting focus index to announce once cellTable is cached
 bool g_initialized = false;
@@ -108,7 +112,6 @@ void OnTitleFocus(void* window, int index) {
         Log::Write("TITLE", dbg);
         return;
     }
-    if (g_lastRow.exchange(row) == row) return;  // state-change detection: speak only on change
     snprintf(dbg, sizeof(dbg), "focus idx=%d y=%u row=%d -> \"%ls\"", index, y, row, label);
     Log::Write("TITLE", dbg);
     Speech::Output(label, /*interrupt=*/true);
@@ -133,7 +136,7 @@ uintptr_t HookedTitle(void* window, void* packet) {
             // row-draw caches g_cellTable, so OnTitleFocus early-returns; stash the
             // starting index + window so HookedRow can replay the announce once the cell
             // table is ready — announcing the initial option without a cursor move.
-            g_lastRow.store(-1);
+            g_replayPending.store(true);
             g_titleWindow.store(window);
             uint8_t sel = 0;
             g_pendingIndex.store(
@@ -153,10 +156,11 @@ int HookedRow(void* a, void* drawCtx, void* c, int cellIndex) {
     void* cellTable = PtrAt(disp, OFF_DISP_CELLTABLE);
     if (cellTable) {
         g_cellTable.store(cellTable);
-        // Initial-focus announce: on a fresh session g_lastRow == -1 and the initial
-        // 0x8000 already fired (before the cell table existed), so replay it now that the
-        // labels are readable. OnTitleFocus's edge-trigger guarantees it speaks once.
-        if (g_lastRow.load() == -1) {
+        // Initial-focus announce: the session's first 0x8000 already fired (before the cell
+        // table existed), so OnTitleFocus early-returned. Replay it now that the labels are
+        // readable. `exchange(false)` disarms it in the same breath, so this per-draw hook
+        // announces at most ONCE per menu session no matter how many frames render.
+        if (g_replayPending.exchange(false)) {
             void* win = g_titleWindow.load();
             int idx = g_pendingIndex.load();
             if (win && idx >= 0) OnTitleFocus(win, idx);
@@ -191,6 +195,7 @@ void Shutdown() {
     g_cellTable.store(nullptr);
     g_titleWindow.store(nullptr);
     g_pendingIndex.store(-1);
+    g_replayPending.store(false);
     g_initialized = false;
     Log::Write("TITLE", "TitleReader shut down");
 }

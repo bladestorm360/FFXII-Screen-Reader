@@ -1537,9 +1537,9 @@ real time so emergencies are not missed.
 | party member crosses below 20 % HP | `FUN_00300530` (RVA `0x1E0530`) | read `curHP` **pre-call**, compare post-call against `maxHP / 5` | `"<name> below 20 percent"` |
 
 Both are **edge-triggered — once per crossing**, latched until the unit rises back above the threshold
-(or is revived). That latch is a state machine, **not** a debounce or dedup, so it does not fall under
-the "no dedup without permission" rule — but say so explicitly in the commit message, because it will
-look like one.
+(or is revived). That latch is a state machine, **not** a debounce or dedup: it detects a transition
+rather than suppressing a repeated event, and it is an explicit carve-out of the no-dedup rule (see
+CLAUDE.md, "Code quality") — but say so in the commit message, because it will look like one.
 
 Both hooks are already needed by the log (§9.4), so this costs no additional hooks. Gate to **party-side
 units only** (`BtlChr[5] == 0` or scene-kind 3, §6.3) — an enemy dropping below 20 % must not fire it.
@@ -1550,8 +1550,11 @@ already implies a real transition (0.98) — do not add your own change-detectio
 ### 9.5 What must NOT be built
 
 - **No polling, no per-frame ticks.** Every entry originates from an event hook.
-- **No dedup / debounce** without explicit permission. Repeats mean a hook fires more than once per
-  event — fix the hook.
+- **No dedup / debounce of speech.** Two exceptions only: the user asked for it in the current
+  conversation, or the announcement hangs off a **per-frame / per-draw** function (and the comment
+  names that function). Everything in this design is event-driven, so **none of it qualifies** —
+  repeats mean a hook fires more than once per event; fix the hook. See CLAUDE.md for the full rule
+  and its carve-outs (state-machine latches, collection dedup, log-only volume control).
 - **No writes to game memory**, including the pause/time-scale globals.
 - **No fabricated game text.**
 - **No modal overlay and no `WH_KEYBOARD_LL` input intercept** — this design has no modal state.

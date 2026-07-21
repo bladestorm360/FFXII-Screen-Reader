@@ -74,7 +74,12 @@ Pfn_Snapshot  s_origSnapshot  = nullptr;
 // Set by FUN_002bfd20 while it renders the CURRENT target; consumed by the nested FUN_00329220.
 bool     g_wantTargetBc = false;
 int32_t  g_targetHandle = 0;
-int32_t  g_lastHandle   = 0;   // dedup: announce once per target change; reset when selection ends
+// PERMITTED per-frame change-check (the no-dedup rule's one exception; see CLAUDE.md).
+// GUARDS: FUN_002bfd20 (nameplate render) -> FUN_00329220 (vitals build), both called EVERY frame
+// a target nameplate is on screen. Without this the reader would speak the target once per frame.
+// It is keyed on the target HANDLE, not on the spoken text, and HookedNameplate resets it to 0 the
+// moment selection ends — so leaving targeting and coming back re-announces.
+int32_t  g_lastHandle   = 0;
 
 // Target cache for the `p`-key route. Written on the render/game thread whenever the target
 // nameplate redraws (HookedSnapshot — EVENT-driven, NOT per-frame); read on the input thread
@@ -208,7 +213,7 @@ void HookedNameplate(void* panel, int flag) {
     void* P = Pstate();
     if (P) {
         if (!PtrAt(P, OFF_GATE)) {
-            g_lastHandle = 0;   // not selecting -> reset dedup (so re-entry re-announces)
+            g_lastHandle = 0;   // not selecting -> disarm the per-frame guard (re-entry re-announces)
             ClearCache();       // ...and drop the target itself, not just the dedup key
         } else {
             uint32_t th = 0, ph = 0;
@@ -227,7 +232,8 @@ void HookedNameplate(void* panel, int flag) {
 
 // FUN_00329220 vitals build. When invoked for the flagged target, `bc` is the real target BtlChr.
 // Resolve name+faction+world-pos once: refresh the p-key cache EVERY render while a target is live
-// (so `p` always has the current target), but announce only on a target CHANGE (the dedup).
+// (so `p` always has the current target), but announce only on a target CHANGE — the permitted
+// per-frame guard documented on g_lastHandle above.
 void* HookedSnapshot(void* bc, int p2, void* outBuf, int p4) {
     void* r = s_origSnapshot ? s_origSnapshot(bc, p2, outBuf, p4) : nullptr;
     if (g_wantTargetBc && bc) {

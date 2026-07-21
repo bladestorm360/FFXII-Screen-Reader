@@ -541,6 +541,11 @@ void OnFieldFrame() {
     // all three clear == we are genuinely on a field area. We deliberately do NOT use the full
     // IsFieldNavSafe(), which also demands the Bullet world — the prologue never builds one, so that would
     // suppress the announcement entirely.
+    //
+    // PERMITTED per-frame change-check (the no-dedup rule's one exception; see CLAUDE.md).
+    // GUARDS: FUN_0022a770, the per-field-frame tick this whole function hangs off. The area name
+    // is ambient state, not an event — without the check there is no "you entered somewhere" edge
+    // to announce, only a value that is true on every frame.
     constexpr uint8_t kFieldContextBits = 0x07;   // 0 field, 1 field-started, 2 areaId
     if (mask != 0 && (PlayerState::NavSafeFailMask() & kFieldContextBits) == 0) {
         static std::wstring s_lastArea;

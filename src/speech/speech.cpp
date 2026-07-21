@@ -182,13 +182,6 @@ void Raw(const std::wstring& text, bool interrupt) {
     LogSpoken("SPEAK-RAW", text);
 }
 
-bool MaybeAnnounce(const std::wstring& text, std::wstring& cached, bool interrupt) {
-    if (text.empty() || text == cached) return false;
-    cached = text;
-    Speak(text, interrupt);
-    return true;
-}
-
 void Shutdown() {
     std::lock_guard<std::mutex> lock(g_tolkMutex);
     if (g_Tolk_Unload) {

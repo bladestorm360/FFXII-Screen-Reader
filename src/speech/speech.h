@@ -39,10 +39,11 @@ void ToggleEnabled();  // flips + announces state (announcement bypasses mute)
 // heard/brailled (e.g. mute-toggle confirmations).
 void Raw(const std::wstring& text, bool interrupt = true);
 
-// Polled-monitor dedup helper: speak `text` only if it differs from `cached`,
-// then update `cached`. Returns true if a new announcement was made.
-// Use ONLY for unavoidably polled monitors that have no event-driven hook.
-bool MaybeAnnounce(const std::wstring& text, std::wstring& cached, bool interrupt = true);
+// NOTE: there is deliberately no MaybeAnnounce()/"speak only if changed" helper here. Speech is
+// never deduplicated — see the no-dedup rule in CLAUDE.md. The one legitimate exception (a
+// change-check guarding a per-frame game function) is written inline at the call site with a
+// comment naming that function, so it stays visible and reviewable instead of hiding behind a
+// convenience helper.
 
 void Shutdown();
 
