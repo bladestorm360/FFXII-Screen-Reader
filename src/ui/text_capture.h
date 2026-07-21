@@ -49,9 +49,10 @@ void SetMenuPaintedCallback(MenuPaintedCallback cb);
 
 // (There was a per-string DrawCallback here, used to time the menu-entry announce off "the row we
 // are waiting for was drawn". Measurement killed it: the row is rasterized 31ms after the focus
-// event, long before the menu is presented, so it announced at effectively key-press. The trigger
-// is now the menu window's own ACTIVATE message -- see MenuReader::OnMenuActivated. Do not
-// reintroduce a draw-based readiness signal; drawing is not presentation.)
+// event. Chasing a later "menu is ready" signal then failed three more ways -- the menu's own
+// window proc turned out to be running per-frame 32ms after the focus-set, with no activation
+// event at all, so there was never anything to wait for. The announce is immediate again; see
+// MenuReader::HookedFocusSet. Do not reintroduce a draw-based readiness signal.)
 
 // Diagnostic: dump the framing ring + the per-owner item map to the log.
 void DumpRingToLog(const char* reason);

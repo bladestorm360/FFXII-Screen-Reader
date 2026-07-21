@@ -84,24 +84,9 @@ int   g_valueChangeIndex = -1;
 void* g_stashOwner = nullptr;
 int   g_stashIndex = -1;
 uint32_t g_stashRowOff = 0;
-// Menu-ENTRY announce, held back until the game's window proc says the menu is live
-// (see HookedFocusSet -> OnMenuActivated).
-// Distinct from g_stashOwner, which is the 0x8000 -> FUN_00244830 handoff and is consumed there.
-void*        g_entryOwner  = nullptr;
-int          g_entryIndex   = -1;
-uint32_t     g_entryRowOff  = 0;
-uint64_t     g_entryArmedMs = 0;   // when we started waiting, for the sequence log's delta stamps
-// Open-sequence logging bounds. This runs on the game thread from the window proc, so it is capped
-// hard -- an unbounded diagnostic there is the exact defect that was cleaned out of this build.
-constexpr int      kSeqMaxLines = 40;
-constexpr uint64_t kSeqWindowMs = 2000;
-int                g_seqLines   = 0;
-
-// Defined below; called from the ACTIVATE trigger.
-void SpeakArmedEntry(const char* why, uint64_t waitedMs);
-// Lock-free arm flag, so the window proc costs one atomic read in the overwhelmingly common
-// "nothing armed" case and only touches the mutex when an entry is actually waiting.
-std::atomic<bool> g_entryArmed{false};
+// (There is deliberately no deferred/armed menu-entry announce here any more. Holding the row back
+// for a "menu is ready" signal was tried four ways and every one was refuted by measurement -- see
+// the note on HookedFocusSet below for what the game's own window messages actually show.)
 
 void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus) pair
 void* g_diagFocus = nullptr;
@@ -373,47 +358,30 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             g_stashOwner = nullptr; g_stashIndex = -1; g_stashRowOff = 0;
         }
     }
-    // ARM, DO NOT SPEAK. FUN_00244830 fires when the game assigns the input-focus window, which is
-    // the START of menu construction -- measured, the menu then takes another 16ms to ~600ms (a hard
-    // cluster at ~134ms = 8 frames at 60Hz) before it draws its first string. Announcing here put the
-    // row in the player's ear well before the menu was up, which is what the "menu speaks then lags"
-    // report actually was.
+    // SPEAK THE ENTERED PANE. Do not defer this. Four "wait until the menu is ready" designs were
+    // tried and all four were refuted by measuring the game rather than reading it:
     //
-    // The announce now waits for the menu's own window ACTIVATE (OnMenuActivated). Cursor moves
-    // inside an open menu are untouched: they speak from HookedDispatch with the menu already up,
-    // and were never the complaint.
+    //   first UI string drawn      the field HUD paints text every frame -> fires next frame
+    //   the focused row's own text measured 31ms after this hook
+    //   window ACTIVATE 0x11f      NEVER SENT -- 0 occurrences in a full session; this is the one
+    //                              that shipped as silence
+    //   a timeout fallback         a band-aid that speaks at the wrong time and hides which
+    //
+    // What the window's own message stream shows (bounded log, since removed): the pane receives
+    // cat 0x10 / 0x1 construction at +0ms and begins its per-frame tick (cat 0x3/0x4/0x2/0xD/0xB/
+    // 0x19, every 16ms) at +32ms. There is no later "now I am live" event to wait for, and every
+    // menu-open bracket measured 0-85ms end to end (mostly 16-35ms) with in-our-hook at 0.0ms. So
+    // "when the menu is ready" and "now" differ by about two frames -- there is no window to wait
+    // through, and any deferral only risks silence.
+    //
+    // Silence is the real failure mode: this replay is what makes the FIRST row of an entered pane
+    // speak at all. The pane's own initial 0x8000 is gated out in HookedDispatch because the game
+    // has not yet assigned DAT_0208ebc0, so if this does not speak it, nothing does -- the player
+    // gets a menu with no idea where the cursor is until they move it.
     if (o && o == newWin && idx >= 0) {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        if (g_entryOwner) {   // a previous entry never activated -- say so rather than lose it silently
-            char m[96];
-            snprintf(m, sizeof(m), "entry announce dropped un-spoken (owner=%p never activated)", g_entryOwner);
-            Log::Write("READER", m);
-        }
-        g_entryOwner   = o;
-        g_entryIndex   = idx;
-        g_entryRowOff  = rowOff;
-        g_entryArmedMs = GetTickCount64();
-        g_seqLines     = 0;
-        g_entryArmed.store(true, std::memory_order_release);
+        if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
+        else        OnFocus(o, idx, /*fromPaint=*/true);
     }
-}
-
-// Speak the held-back entry row. Disarms under the lock BEFORE speaking, so a repeat ACTIVATE
-// cannot double-fire one entry.
-void SpeakArmedEntry(const char* why, uint64_t waitedMs) {
-    void* o = nullptr; int idx = -1; uint32_t rowOff = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        if (!g_entryOwner || g_entryIndex < 0) return;
-        o = g_entryOwner; idx = g_entryIndex; rowOff = g_entryRowOff;
-        g_entryOwner = nullptr; g_entryIndex = -1; g_entryRowOff = 0;
-        g_entryArmed.store(false, std::memory_order_release);
-    }
-    char m[144];
-    snprintf(m, sizeof(m), "entry announce: %s after %llums", why, (unsigned long long)waitedMs);
-    Log::Write("READER", m);
-    if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
-    else        OnFocus(o, idx, /*fromPaint=*/true);
 }
 
 // FUN_00240750(configId, &newDisplayIdx): the config store is written when a value
@@ -478,41 +446,6 @@ uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
 } // namespace
 
 namespace MenuReader {
-
-bool NoteWindowMessage(void* window, uint32_t cat, uint64_t msg, uint32_t state) {
-    if (!g_entryArmed.load(std::memory_order_acquire)) return false;
-    void* armed = nullptr; uint64_t waited = 0; int line = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        if (!g_entryOwner) return false;
-        armed  = g_entryOwner;
-        waited = GetTickCount64() - g_entryArmedMs;
-        line   = g_seqLines;
-        if (line < kSeqMaxLines && waited <= kSeqWindowMs) ++g_seqLines;
-    }
-    // The open sequence, delta-stamped from the arm. THIS is what identifies the event that
-    // coincides with the menu actually appearing -- read it off the log rather than guessing a
-    // fourth signal. Bounded in both count and time; it runs on the game thread.
-    if (line < kSeqMaxLines && waited <= kSeqWindowMs) {
-        char m[160];
-        snprintf(m, sizeof(m), "wnd: cat=0x%X msg=0x%llX state=%d %s +%llums",
-                 cat, (unsigned long long)msg, static_cast<int>(state),
-                 window == armed ? "[entered]" : "[other]", (unsigned long long)waited);
-        Log::Write("READER", m);
-    }
-    return window == armed;
-}
-
-void OnMenuActivated(void* window) {
-    if (!g_entryArmed.load(std::memory_order_acquire)) return;
-    uint64_t waited = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        if (g_entryOwner != window || g_entryIndex < 0) return;
-        waited = GetTickCount64() - g_entryArmedMs;
-    }
-    SpeakArmedEntry("window ACTIVATE", waited);
-}
 
 bool Init() {
     if (g_initialized) {
