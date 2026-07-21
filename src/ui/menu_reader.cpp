@@ -86,9 +86,15 @@ int   g_stashIndex = -1;
 uint32_t g_stashRowOff = 0;
 // Menu-ENTRY announce, held back until the menu actually draws (see HookedFocusSet / OnFirstDraw).
 // Distinct from g_stashOwner, which is the 0x8000 -> FUN_00244830 handoff and is consumed there.
-void*    g_entryOwner  = nullptr;
-int      g_entryIndex  = -1;
-uint32_t g_entryRowOff = 0;
+void*        g_entryOwner  = nullptr;
+int          g_entryIndex   = -1;
+uint32_t     g_entryRowOff  = 0;
+std::wstring g_entryText;          // the row we are waiting to SEE drawn
+uint64_t     g_entryArmedMs = 0;   // when we started waiting, for the safety net below
+// If the row never turns up in the draw stream we must NOT stay silent -- a missed announce is far
+// worse for the player than an early one. After this long, speak regardless and log that we did, so
+// a mismatch shows up in the log instead of as a mute menu.
+constexpr uint64_t kEntryWaitMaxMs = 400;
 // Lock-free arm flag. OnFirstDraw is called from TextCapture::Capture -- once per STRING DRAWN, so
 // thousands of times a second on the game's paint path. Taking g_mutex there would put mod lock
 // traffic straight back into the hot path we just cleaned out of it. This is a plain atomic read in
@@ -385,6 +391,10 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
         g_entryOwner  = o;
         g_entryIndex  = idx;
         g_entryRowOff = rowOff;
+        g_entryText   = rowOff ? IngameMenuReader::RowChainText(o, rowOff, idx) : std::wstring();
+        g_entryArmedMs = GetTickCount64();
+        // Nothing to wait FOR if the row name is not readable yet (or this is not a row-chain pane):
+        // fall back to speaking on the next draw rather than going silent.
         g_entryArmed.store(true, std::memory_order_release);
     }
 }
@@ -392,14 +402,35 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
 // First UI string drawn since an entry was armed: the menu is genuinely rendering now, so speak the
 // row we held back. One-shot -- disarmed before speaking, so the very next string of the same paint
 // cannot re-trigger it. Runs on the game thread, from TextCapture::Capture.
-void OnFirstDraw() {
+// A UI string was drawn. Speak the held-back entry row ONLY once the menu has drawn THAT row.
+//
+// Matching on the text is the whole point. An unconditional "something was drawn" fires on the very
+// next frame, because the field HUD draws text continuously -- which is indistinguishable from
+// announcing at key-press, and is exactly what the first attempt did.
+void OnFirstDraw(const std::wstring& drawn) {
     if (!g_entryArmed.load(std::memory_order_acquire)) return;   // hot path: one atomic, no lock
     void* o = nullptr; int idx = -1; uint32_t rowOff = 0;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_entryOwner || g_entryIndex < 0) { g_entryArmed.store(false, std::memory_order_release); return; }
+        // Still waiting for our row to appear on screen -- unless we have waited too long, in which
+        // case speak anyway rather than swallow the announce.
+        const bool matched = g_entryText.empty() || drawn == g_entryText;
+        const uint64_t waited = GetTickCount64() - g_entryArmedMs;
+        if (!matched) {
+            if (waited < kEntryWaitMaxMs) return;
+            char m[160];
+            snprintf(m, sizeof(m), "entry announce: row never drawn within %llums -- speaking anyway",
+                     (unsigned long long)waited);
+            Log::Write("READER", m);
+        } else if (!g_entryText.empty()) {
+            char m[96];
+            snprintf(m, sizeof(m), "entry announce: row drawn after %llums", (unsigned long long)waited);
+            Log::Write("READER", m);
+        }
         o = g_entryOwner; idx = g_entryIndex; rowOff = g_entryRowOff;
         g_entryOwner = nullptr; g_entryIndex = -1; g_entryRowOff = 0;
+        g_entryText.clear();
         g_entryArmed.store(false, std::memory_order_release);
     }
     if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
@@ -475,7 +506,7 @@ bool Init() {
         return true;
     }
     TextCapture::SetMenuPaintedCallback(&OnMenuPainted);
-    TextCapture::SetDrawCallback(&OnFirstDraw);   // entry announce fires when the menu really draws
+    TextCapture::SetDrawCallback(&OnFirstDraw);   // entry announce fires when the ROW is drawn
     InputTracker::SetDescribeCallback(&DescribeHotkey);
     bool ok = Hooks::InstallTyped(RVA_DISPATCH,    &HookedDispatch,   &s_origDispatch);
     ok     &= Hooks::InstallTyped(RVA_STORE_WRITE, &HookedStoreWrite, &s_origStoreWrite);

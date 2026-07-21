@@ -138,13 +138,15 @@ void Capture(void* structPtr, bool listCapable) {
     // measurement at all. Capture fires for EVERY menu (2519 times in one party-menu window), so it
     // is the signal that actually means "the menu drew something". One-shot per mark, inside.
     StallProbe::NoteFirstPaint();
-    // "A menu is actually rendering now." MenuReader defers its menu-ENTRY announce to this, so the
-    // row is spoken with the menu rather than ~134ms before it drew anything.
-    if (TextCapture::DrawCallback cb = g_drawCb.load(std::memory_order_relaxed)) cb();
+
     const uint8_t* strp = nullptr;
     if (!ReadStrPtr(structPtr, &strp) || !strp) return;
     std::wstring text = GameText::Decode(strp);
     if (!GameText::IsMostlyPrintable(text)) return;
+
+    // Report WHAT was drawn. MenuReader holds its menu-entry announce until the row it is waiting
+    // for turns up here -- i.e. until the menu really has that row on screen.
+    if (TextCapture::DrawCallback cb = g_drawCb.load(std::memory_order_relaxed)) cb(text);
 
     // Once per STRING DRAWN, on the game's paint path. Decode already happened above, off the lock;
     // the evicted ring entry is carried out and destroyed off it too.

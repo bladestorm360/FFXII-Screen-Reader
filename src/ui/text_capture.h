@@ -55,10 +55,11 @@ void SetMenuPaintedCallback(MenuPaintedCallback cb);
 // FinishPaint appeared in ONE dump window of a session where Capture appeared in 29. So the painter
 // callback cannot time the field menu, and this can.
 //
-// Deliberately parameterless -- Capture has no owner to report (g_paintOwner is only set during
-// painter interception, which the field menu never enters). Callers that need an owner keep their
-// own pending record, which they already do.
-typedef void (*DrawCallback)();
+// Carries the DECODED string that was just drawn. "Some text was drawn" is useless on its own --
+// the field HUD draws text every frame, so a bare notification fires on the very next frame and is
+// indistinguishable from announcing at key-press. The caller matches this against the row it is
+// waiting for, which turns it into "the menu has actually put that row on screen".
+typedef void (*DrawCallback)(const std::wstring& drawn);
 void SetDrawCallback(DrawCallback cb);
 
 // Diagnostic: dump the framing ring + the per-owner item map to the log.
