@@ -7,8 +7,6 @@
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
 #include "navigation/map_names.h"
-#include "navigation/map_exits.h"
-#include "navigation/map_script.h"
 #include "ui/menu_state.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -36,7 +34,6 @@ namespace {
 // and the commands over it.
 using EntityScan::Entity;
 using EntityScan::CategoryWord;
-using EntityScan::kExitMaxDist;
 
 
 std::mutex             g_mutex;
@@ -232,33 +229,12 @@ void OnFieldFrame() {
             Log::Write("NAV", m);
             Speech::Output(phrase);
 
-            // PER-AREA dump — and it must stay INSIDE this area-changed branch. It sat outside,
-            // so it ran on every container-mask change instead: the log showed ONE area entered
-            // and FIVE full dumps, each ~1,181 NAV-DIAG lines plus EnumerateFieldSignExits,
-            // EnumerateMapJumps with per-record name resolution, and a 98 KB bytecode scan --
-            // all on the game thread. It is a diagnostic; it may run once when the area changes
-            // and never on a menu open.
-            //
-            // The field-sign exits we list (world pos + resolved destination), plus the +0x54
-            // map-jump world points for cross-reference. The +0x70 count is the number the ABI
-            // fix unblocked — it read 0 on every map while the group index was passed in junk.
-            std::vector<MapExits::ExitRec> fs;
-            MapExits::EnumerateFieldSignExits(fs, /*logRaw=*/true);              // named exits (WORLD pos)
-            FVec3 pep; const FVec3* ppp = PlayerState::ReadPlayerPos(pep) ? &pep : nullptr;
-            if (ppp) {
-                char pm[96];
-                snprintf(pm, sizeof(pm), "map-exits: player world=(%.1f,%.1f,%.1f)", pep.x, pep.y, pep.z);
-                Log::Write("NAV-DIAG", pm);
-            }
-            char fsm[64];
-            snprintf(fsm, sizeof(fsm), "map-exits(+0x70) usable+named: %zu", fs.size());
-            Log::Write("NAV-DIAG", fsm);
-            std::vector<MapExits::ExitRec> jp;
-            MapExits::EnumerateMapJumps(ppp, kExitMaxDist, jp, /*logRaw=*/true); // +0x54 world points (diag)
-
-            // The destination is a LITERAL in the loaded field script: scan for
-            // mapjump(dest,entrance,flags) and log each with its resolved name + dispatch context.
-            MapExits::DiagScanScriptMapjumps();
+            // (The per-area map-exit dump that lived here wrote ~1,250 NAV-DIAG lines SYNCHRONOUSLY
+            // on the game thread at EVERY area change -- a real stall on every transition, and one the
+            // exit FEATURE never needs: it was pure diagnostic (results discarded; the exit reader
+            // enumerates on demand with logRaw=false). It moved to the ` diagnostic key --
+            // NavCommands::DiagnosticDump -- where it runs OPT-IN, in whatever area the player is
+            // standing in. The one-line area-change context ("announce: mapId=...") above stays.)
         }
     }
 }

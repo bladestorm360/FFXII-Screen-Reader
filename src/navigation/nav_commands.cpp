@@ -1,5 +1,7 @@
 #include "navigation/nav_commands.h"
 #include "navigation/entity_list.h"
+#include "navigation/entity_scan.h"
+#include "navigation/map_exits.h"
 #include "ui/text_capture.h"
 #include "navigation/player_state.h"
 #include "navigation/nav_common.h"
@@ -208,6 +210,24 @@ void DiagnosticDump() {
         } else {
             Log::Write("NAV-DIAG", "grid: GetGridInfo failed (no grid header)");
         }
+    }
+
+    // Map-exit diagnostics. This ran on the per-area-change path, where it dumped ~1,250 NAV-DIAG
+    // lines synchronously on the game thread at EVERY transition -- a real stall. It is pure
+    // diagnostic (results discarded; the exit reader enumerates on demand with logRaw=false), so it
+    // lives here now: opt-in, in whatever area the player is standing in. Field-sign exits (world pos
+    // + resolved destination), the +0x54 map-jump world points, and the script's own
+    // mapjump(dest,entrance,flags) literals. Player world pos is already logged above.
+    {
+        const FVec3* ppp = haveP ? &p : nullptr;
+        std::vector<MapExits::ExitRec> fs;
+        MapExits::EnumerateFieldSignExits(fs, /*logRaw=*/true);
+        char fsm[64];
+        snprintf(fsm, sizeof(fsm), "map-exits(+0x70) usable+named: %zu", fs.size());
+        Log::Write("NAV-DIAG", fsm);
+        std::vector<MapExits::ExitRec> jp;
+        MapExits::EnumerateMapJumps(ppp, EntityScan::kExitMaxDist, jp, /*logRaw=*/true);
+        MapExits::DiagScanScriptMapjumps();
     }
 
     EntityList::Rescan();
