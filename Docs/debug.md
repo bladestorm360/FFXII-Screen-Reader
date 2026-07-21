@@ -7,6 +7,52 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: tutorial popup item name missing substitution slot 0x0f 2e escape dropped
+Orrachea Armlet Try equipping button glyph icon insert rbn_a16 msg 156 OPEN ISSUE**
+
+**OPEN — `0x0f` SUBSTITUTION SLOTS are dropped, so injected names go unspoken.** Reported
+2026-07-21 for the blue tutorial box:
+
+    Try equipping the Orrachea Armlet.
+    Use the Licenses command in the Party Menu
+    to obtain the Accessories 1 license,
+    then use the Equip command to equip it.
+
+The item name is not spoken. The user identified this as the same class as the button/control glyphs
+being dropped in tutorial pop-ups, and that is exactly right.
+
+**Root cause is already pinned, offline** -- `rbn_a16.ebp` message 156 (found via the extracted
+scripts in `FFXII-Decompile/extracted/`). It decodes to:
+
+    'Try equipping the 
+Use the Licenses command in the Party Menu
+...'
+                      ^^^ the name is simply absent
+
+and the raw codec bytes show why:
+
+    4d 41 3e 04   0f 2e 80 90   a8 02
+    t  h  e  SP   <-- HERE -->  .  
+
+
+**`0x0f 2e` is a runtime substitution slot** and the template does not contain the name at all -- the
+game fills it in at draw time. `EscapeParamCount` classifies `0x2e` under the generic
+`0x20..0x70 -> 2 params` arm, so `GameText::Decode` skips all four bytes and emits nothing. Compare
+`0x31`, which our own table already labels "the codec-sprintf STRING substitution slot" (3 params);
+`0x2e` is a sibling we have never resolved.
+
+Note `0x0f 29` also appears later in the same message -- that is the COLOUR escape (`FUN_003ffbc0`)
+that tints "Accessories 1" cyan. It is harmless: that text is literal and does get spoken. Do not
+confuse the two while fixing this.
+
+The work is: determine what `0x2e`'s two parameter bytes (`80 90` here) select, and where the game
+resolves them. Likely the same machinery behind the composed system banners (see the "system
+notification" entry) -- both are templates with coloured, injected tokens. If the runtime string
+handed to our telop hook is already substituted, the fix may instead be that we are reading the
+template rather than the composed buffer; check that first, it is cheaper than decoding the slot.
+
+DEFERRED by user instruction 2026-07-21: document now, fix in a later session.
+
 **KEYWORDS: system notification banner added to the Party Menu Clan Primer full-screen overlay
 desaturated blur icon escape not spoken st2e FUN_002f9860 OPEN ISSUE**
 
