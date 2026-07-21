@@ -435,13 +435,6 @@ uint32_t RowChainOff(void* owner) {
     return 0;
 }
 
-std::wstring RowChainText(void* owner, uint32_t rowOff, int index) {
-    const uint8_t* codec = ReadRowName(owner, rowOff, index);
-    if (!codec) return std::wstring();
-    std::wstring text = GameText::Decode(codec, 256);   // SEH-guarded inside GameText
-    return GameText::IsMostlyPrintable(text) ? text : std::wstring();
-}
-
 void OnRowChainFocus(void* owner, uint32_t rowOff, int index) {
     STALL_SCOPE("IngameMenu::OnRowChainFocus");
     const uint8_t* codec = ReadRowName(owner, rowOff, index);

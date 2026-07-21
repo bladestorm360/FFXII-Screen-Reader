@@ -90,7 +90,6 @@ uint32_t g_helpGen = 0;
 uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is set for a focus
 
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
-std::atomic<TextCapture::DrawCallback> g_drawCb{nullptr};   // fired on the first string of any draw
 
 bool g_initialized = false;
 std::atomic<bool> g_interceptEnabled{true};   // Shift+` A/B; see TextCapture::ToggleInterception
@@ -143,10 +142,6 @@ void Capture(void* structPtr, bool listCapable) {
     if (!ReadStrPtr(structPtr, &strp) || !strp) return;
     std::wstring text = GameText::Decode(strp);
     if (!GameText::IsMostlyPrintable(text)) return;
-
-    // Report WHAT was drawn. MenuReader holds its menu-entry announce until the row it is waiting
-    // for turns up here -- i.e. until the menu really has that row on screen.
-    if (TextCapture::DrawCallback cb = g_drawCb.load(std::memory_order_relaxed)) cb(text);
 
     // Once per STRING DRAWN, on the game's paint path. Decode already happened above, off the lock;
     // the evicted ring entry is carried out and destroyed off it too.
@@ -385,8 +380,6 @@ void NotifyFocusChanged() {
 }
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
-
-void SetDrawCallback(DrawCallback cb) { g_drawCb.store(cb, std::memory_order_relaxed); }
 
 bool InterceptionEnabled() { return g_interceptEnabled.load(std::memory_order_relaxed); }
 

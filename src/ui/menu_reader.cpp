@@ -84,30 +84,23 @@ int   g_valueChangeIndex = -1;
 void* g_stashOwner = nullptr;
 int   g_stashIndex = -1;
 uint32_t g_stashRowOff = 0;
-// Menu-ENTRY announce, held back until the menu actually draws (see HookedFocusSet / OnFirstDraw).
+// Menu-ENTRY announce, held back until the game's window proc says the menu is live
+// (see HookedFocusSet -> OnMenuActivated).
 // Distinct from g_stashOwner, which is the 0x8000 -> FUN_00244830 handoff and is consumed there.
 void*        g_entryOwner  = nullptr;
 int          g_entryIndex   = -1;
 uint32_t     g_entryRowOff  = 0;
-std::wstring g_entryText;          // the row we are waiting to SEE drawn
-uint64_t     g_entryArmedMs = 0;   // when we started waiting, for the safety net below
-// If the row never turns up in the draw stream we must NOT stay silent -- a missed announce is far
-// worse for the player than an early one. After this long, speak regardless and log that we did, so
-// a mismatch shows up in the log instead of as a mute menu.
-constexpr uint64_t kEntryWaitMaxMs = 400;
+uint64_t     g_entryArmedMs = 0;   // when we started waiting, for the sequence log's delta stamps
 // Open-sequence logging bounds. This runs on the game thread from the window proc, so it is capped
 // hard -- an unbounded diagnostic there is the exact defect that was cleaned out of this build.
 constexpr int      kSeqMaxLines = 40;
 constexpr uint64_t kSeqWindowMs = 2000;
 int                g_seqLines   = 0;
 
-// Defined below; used by both the ACTIVATE trigger and the timeout fallback.
+// Defined below; called from the ACTIVATE trigger.
 void SpeakArmedEntry(const char* why, uint64_t waitedMs);
-// Lock-free arm flag. OnFirstDraw is called from TextCapture::Capture -- once per STRING DRAWN, so
-// thousands of times a second on the game's paint path. Taking g_mutex there would put mod lock
-// traffic straight back into the hot path we just cleaned out of it. This is a plain atomic read in
-// the overwhelmingly common "nothing armed" case; the mutex is only touched when an entry is
-// actually waiting.
+// Lock-free arm flag, so the window proc costs one atomic read in the overwhelmingly common
+// "nothing armed" case and only touches the mutex when an entry is actually waiting.
 std::atomic<bool> g_entryArmed{false};
 
 void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus) pair
@@ -386,30 +379,27 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     // row in the player's ear well before the menu was up, which is what the "menu speaks then lags"
     // report actually was.
     //
-    // The announce now waits for OnFirstDraw() -- the first UI string actually rendered. Cursor
-    // moves inside an open menu are untouched: they speak from HookedDispatch with the menu already
-    // drawing, and were never the complaint.
+    // The announce now waits for the menu's own window ACTIVATE (OnMenuActivated). Cursor moves
+    // inside an open menu are untouched: they speak from HookedDispatch with the menu already up,
+    // and were never the complaint.
     if (o && o == newWin && idx >= 0) {
         std::lock_guard<std::mutex> lk(g_mutex);
-        if (g_entryOwner) {   // a previous entry never saw a draw -- say so rather than lose it silently
+        if (g_entryOwner) {   // a previous entry never activated -- say so rather than lose it silently
             char m[96];
-            snprintf(m, sizeof(m), "entry announce dropped un-spoken (owner=%p never drew)", g_entryOwner);
+            snprintf(m, sizeof(m), "entry announce dropped un-spoken (owner=%p never activated)", g_entryOwner);
             Log::Write("READER", m);
         }
-        g_entryOwner  = o;
-        g_entryIndex  = idx;
-        g_entryRowOff = rowOff;
-        g_entryText   = rowOff ? IngameMenuReader::RowChainText(o, rowOff, idx) : std::wstring();
+        g_entryOwner   = o;
+        g_entryIndex   = idx;
+        g_entryRowOff  = rowOff;
         g_entryArmedMs = GetTickCount64();
         g_seqLines     = 0;
-        // Nothing to wait FOR if the row name is not readable yet (or this is not a row-chain pane):
-        // fall back to speaking on the next draw rather than going silent.
         g_entryArmed.store(true, std::memory_order_release);
     }
 }
 
-// Speak the held-back entry row. Shared by the ACTIVATE trigger and the timeout fallback; disarms
-// under the lock BEFORE speaking, so the two paths can never both fire for one entry.
+// Speak the held-back entry row. Disarms under the lock BEFORE speaking, so a repeat ACTIVATE
+// cannot double-fire one entry.
 void SpeakArmedEntry(const char* why, uint64_t waitedMs) {
     void* o = nullptr; int idx = -1; uint32_t rowOff = 0;
     {
@@ -417,7 +407,6 @@ void SpeakArmedEntry(const char* why, uint64_t waitedMs) {
         if (!g_entryOwner || g_entryIndex < 0) return;
         o = g_entryOwner; idx = g_entryIndex; rowOff = g_entryRowOff;
         g_entryOwner = nullptr; g_entryIndex = -1; g_entryRowOff = 0;
-        g_entryText.clear();
         g_entryArmed.store(false, std::memory_order_release);
     }
     char m[144];
@@ -425,24 +414,6 @@ void SpeakArmedEntry(const char* why, uint64_t waitedMs) {
     Log::Write("READER", m);
     if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
     else        OnFocus(o, idx, /*fromPaint=*/true);
-}
-
-// A UI string was drawn. This is now ONLY the never-go-silent timeout, not a trigger.
-//
-// Matching on the row's own text was refuted by measurement: the row is rasterised 31ms after the
-// focus event, long before the menu is presented, so it announced at effectively key-press. The
-// real trigger is the window's own ACTIVATE message (OnMenuActivated). This path exists purely so
-// that if ACTIVATE never arrives, the player still hears the row instead of nothing.
-void OnFirstDraw(const std::wstring& /*drawn*/) {
-    if (!g_entryArmed.load(std::memory_order_acquire)) return;   // hot path: one atomic, no lock
-    uint64_t waited = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        if (!g_entryOwner || g_entryIndex < 0) return;
-        waited = GetTickCount64() - g_entryArmedMs;
-        if (waited < kEntryWaitMaxMs) return;
-    }
-    SpeakArmedEntry("ACTIVATE never arrived -- speaking anyway", waited);
 }
 
 // FUN_00240750(configId, &newDisplayIdx): the config store is written when a value
@@ -549,7 +520,6 @@ bool Init() {
         return true;
     }
     TextCapture::SetMenuPaintedCallback(&OnMenuPainted);
-    TextCapture::SetDrawCallback(&OnFirstDraw);   // entry announce fires when the ROW is drawn
     InputTracker::SetDescribeCallback(&DescribeHotkey);
     bool ok = Hooks::InstallTyped(RVA_DISPATCH,    &HookedDispatch,   &s_origDispatch);
     ok     &= Hooks::InstallTyped(RVA_STORE_WRITE, &HookedStoreWrite, &s_origStoreWrite);
@@ -568,7 +538,6 @@ bool Init() {
 void Shutdown() {
     if (!g_initialized) return;
     TextCapture::SetMenuPaintedCallback(nullptr);
-    TextCapture::SetDrawCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
     IngameMenuReader::Shutdown();
     BattleTargetReader::Shutdown();

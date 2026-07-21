@@ -36,12 +36,6 @@ uint32_t RowChainOff(void* owner);
 // row+0x10). Rows are pre-built at menu open, so this reads immediately — no dispatch deferral.
 void OnRowChainFocus(void* owner, uint32_t rowOff, int index);
 
-// The focused row's decoded name WITHOUT speaking it. MenuReader uses this to learn what the menu
-// is about to show, so it can wait until that exact string is actually DRAWN before announcing --
-// "the menu is on screen" rather than "the game just handed this pane the focus". Empty if the row
-// is not readable yet.
-std::wstring RowChainText(void* owner, uint32_t rowOff, int index);
-
 // Battle command menu (owner class FUN_0027ad70): recognise it, and speak the highlighted command
 // (owner+0x510+index*8 -> cmdId -> name cached from the FUN_00276be0 draw). Same FUN_00247510 0x8000
 // dispatch as the field menu, just an unmapped owner class.
