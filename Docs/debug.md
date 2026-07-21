@@ -7,6 +7,39 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: system notification banner added to the Party Menu Clan Primer full-screen overlay
+desaturated blur icon escape not spoken st2e FUN_002f9860 OPEN ISSUE**
+
+**OPEN — full-screen SYSTEM NOTIFICATION banners are not vocalized.** Observed 2026-07-21:
+
+    <wing icon> Clan Primer has been added to the Party Menu. <wing icon>
+
+drawn centred over the field with the whole scene desaturated and blurred behind it. The mod says
+nothing. Other notifications of this shape ("X has been added to...", feature/menu unlocks) are the
+same surface and equally silent.
+
+What is already known, so the next session does not start cold:
+
+- **It is NOT event dialogue.** Searched all 17,268 messages across the 617 extracted US `.ebp`
+  scripts (`FFXII-Decompile/extracted/`, see `tools/ebp_find_pagebreak.py` for the walk) for both
+  "added to the Party Menu" and "Clan Primer": **zero hits**. So the telop reader
+  (`FUN_002e16b0`) and the `.ebp` message table can never see it -- do not go looking there.
+- **So it is a system/UI string**, which points at the st2e tables the menu text uses --
+  `FUN_002f9860(id) -> codec byte*`, already hooked by `TextCapture::HookResolve` (that hook
+  currently only caches ids 1000/1001 and the key-binding block, so the id would be visible there
+  with the filter widened). `tools/st2e_decode.py` is the offline counterpart.
+- **The line is composed, not literal.** "Clan Primer" is coloured differently from the rest, so the
+  banner is a template with a substitution slot -- almost certainly the codec-sprintf STRING slot
+  `0x0f 31` (3 params) already in our table -- filled with the item/feature name.
+- **The flanking wings are icon escapes**, the `0x0f 0x40-0x6B` glyph family (1 parameter) in
+  `game_text.cpp`'s `EscapeParamCount`. They decode to nothing today, which is correct for speech.
+- The display surface is NOT identified. It is not the item toast (`FUN_0035e070`, which is the
+  "Obtained <item>" path and works), and not the menu system-message surface (`FUN_0057c480`, which
+  is menu-only). The screen-wide desaturation suggests its own overlay/effect object -- that effect
+  may be the easier thing to find first and work back from.
+
+DEFERRED by user instruction 2026-07-21: document now, fix in a later session.
+
 **KEYWORDS: telop burst ambient NPC lines area load 18 messages 140ms FUN_002e16b0 slot 0
 ambient chatter spoken on entry OPEN ISSUE**
 
