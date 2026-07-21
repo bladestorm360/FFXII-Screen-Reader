@@ -3,7 +3,6 @@
 #include "core/hooks.h"
 #include "speech/speech.h"
 #include "input/input_tracker.h"
-#include "ui/menu_observer.h"
 #include "ui/text_capture.h"
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
@@ -67,11 +66,10 @@ static void DeferredInitImpl() {
     // will speak on every cursor-field jitter, including animation.
     InputTracker::Init();
 
-    // Menu-reading pipeline. Order matters: hooks -> observer (installs
-    // controller hooks) -> text_capture (installs wrapper hooks) -> reader
-    // (subscribes to focus events; queries input_tracker on each event).
+    // Menu-reading pipeline. Order matters: hooks -> text_capture (installs
+    // wrapper hooks) -> reader (subscribes to focus events; queries
+    // input_tracker on each event).
     if (Hooks::Init()) {
-        MenuObserver::Init();
         TextCapture::Init();
         MenuReader::Init();
         // Title command menu (baked-sprite menu, separate from the in-game system).
@@ -136,7 +134,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             TitleReader::Shutdown();
             MenuReader::Shutdown();
             TextCapture::Shutdown();
-            MenuObserver::Shutdown();
             Hooks::Shutdown();
             InputTracker::Shutdown();
             Speech::Shutdown();

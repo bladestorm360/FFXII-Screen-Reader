@@ -79,9 +79,12 @@ party keys silent for two sessions. Re-run this after adding addresses.
    category tables" were the party roster misread. Same base/offset/stride/width as
    `BtlChrForSlot`, and `0x5A7E + 9*2 == 0x5A90` makes "table B" the next roster list. Struck in
    `nav_rva.h`, documented on `BTLWORK_PTR` in `core/phyre_types.h`.
-2. **`ui/menu_observer.cpp` is dormant.** It installs detours and snapshots cursor state, but no
-   focus callback is ever registered (`dllmain.cpp` calls `Init()` only), so nothing it observes
-   reaches the player. 226 lines of maintained-but-unused code. Decide: wire it up, or delete it.
+2. ~~`ui/menu_observer.cpp` is dormant.~~ **RESOLVED — deleted (Session 51).** Phase-0 scaffolding
+   that inferred menu focus from cursor X/Y. Only `Init`/`Shutdown` were ever called;
+   `SetFocusChangeCallback`, `LatestSnapshot`, `ReadRegistry` and `RegisterController` had **zero**
+   call sites, so it ran a detour on `FUN_00241d40` and dispatched to a callback that never existed.
+   Superseded by `menu_reader`'s `FUN_00247510` msg-`0x8000` path, which reads the focus INDEX
+   directly instead of inferring it from pixel coordinates. In git if ever needed.
 3. **Composite `__try` blocks stay as they are.** `ingame_menu_reader.cpp` (`ReadStatusSlot`,
    `ReadBcmdDraw`) and `map_query.cpp` keep multi-step pointer walks inside a single guard. That is
    a correctness constraint, not duplication — a walk split across guards can fault between them.

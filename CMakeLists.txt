@@ -31,7 +31,6 @@ add_library(${PROJECT_NAME} SHARED
     src/core/game_text.cpp
     src/speech/speech.cpp
     src/input/input_tracker.cpp
-    src/ui/menu_observer.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
     src/ui/config_reader.cpp
