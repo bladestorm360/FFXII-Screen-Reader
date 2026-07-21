@@ -16,6 +16,9 @@ namespace {
 
 // Architecture constants from Docs/MenuArchitecture.md (2026-05-12 update).
 constexpr uint32_t RVA_REGISTRY        = 0x1F6EA60;  // corrected 2026-07-01 (was 0x216EA60; abs 0x208EA60 = FUN_00241d40's DAT_0208ea60)
+// Same address as MenuState's RVA_CONFIRM_WND (FUN_00241d40) -- an intentional duplicate, not an
+// oversight: this module is dormant (no focus callback is ever registered) and is a candidate for
+// deletion, so it is deliberately NOT wired to MenuState. See Docs/PerformanceIssues.md open debt.
 constexpr uint32_t RVA_CONTROLLER_INGAME = 0x121D40;
 constexpr uint32_t OFF_TYPE            = 0x3c8;
 constexpr uint32_t OFF_X_POS           = 0x3b8;

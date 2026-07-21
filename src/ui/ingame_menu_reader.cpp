@@ -64,7 +64,9 @@ constexpr uint32_t OFF_LISTWIDGET  = 0x1510;   // panel+0x1510 = the list widget
 constexpr uint32_t OFF_DRAW_CB     = 0x120;    // listWidget+0x120 = per-row draw callback
 constexpr uint32_t OFF_DEF_CODEC   = 0x18;     // FUN_0035d330 record +0x18 = codec source
 constexpr uint32_t OFF_BCMD_FLAG   = 0x513;    // panel+0x513 + row*8 = per-row flag byte (bit2 in chooser)
-constexpr uint32_t RVA_DRAW_TOPCMD = 0x156BE0; // FUN_00276be0 (top-level command, cat 0x15)
+constexpr uint32_t RVA_DRAW_TOPCMD = 0x156BE0; // FUN_00276be0 -- SAME function as RVA_BCMD_DRAW
+                                              // above; two names on purpose, one is the hook target,
+                                              // the other the draw-callback identity we compare against.
 constexpr uint32_t RVA_DRAW_CHOOSER= 0x15D240; // FUN_0027d240 (Magicks/Technicks category chooser)
 constexpr uint32_t RVA_DRAW_MAGICK = 0x15CE70; // FUN_0027ce70 (spell/technick list, cat 0x14)
 constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 (items) — CONFIRMED working
