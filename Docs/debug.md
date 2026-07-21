@@ -7,6 +7,26 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: dedup deduplication debounce speech suppressed silent menu re-entry focus cache
+stale owner index text battle command Attack list status chooser MaybeAnnounce S51**
+
+**Dedup as the fix for repeated speech — WRONG, and it caused silence.** Whenever an announcement
+repeated, past sessions added a "same as last time, stay quiet" check. Every one of those was on an
+EVENT-DRIVEN hook, where each fire is a real event the player needs. The damage:
+
+- `menu_reader.cpp` `OnFocus` compared `(owner, index, text)`. The active-pane gate above it returns
+  early WITHOUT refreshing that cache, so the stale entry survived an excursion to another pane and
+  swallowed the return — leaving a pane and coming back said **nothing**.
+- `ingame_menu_reader.cpp` `OnBattleCommandFocus` compared spoken TEXT alone, with no owner: backing
+  out of the Attack list and reopening it was silent.
+- `title_reader.cpp` put its per-draw guard on the shared path, so re-focusing the same title row
+  was silent.
+
+A repeat is an annoyance; silence is a lost position. The rule is now: **no speech dedup**, except
+(1) the user asks in the current conversation, or (2) it guards a per-frame/per-draw function AND
+the comment names that function. A repeat from an event hook means a second call path — find it.
+Removed in Session 51. **Do not re-add a filter to quieten a repeat.**
+
 **KEYWORDS: combat_system.md struck claims S49 FUN_0028e110 no message id FUN_00536410 outcome 9
 not preview result+0x00 0x20 DAT_0209a1f0 not leader P-E cancelled row+0x00 not action name
 neutral foes group 0 only aggression actor+0x6A0 pointer deref actor+0xEA4 not hostility
@@ -195,6 +215,23 @@ so don't look for a lock flag.)
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
+
+**KEYWORDS: menu re-entry silent pane focus not spoken returning to pane dedup removed S51**
+
+**Re-entering a menu pane was silent.** SOLUTION: the `(owner, index, text)` dedup in
+`menu_reader.cpp`'s `OnFocus`. Because the pane-isolation gate returns before the cache is written,
+the cache still held the row you left, so the identical focus on return was dropped as a duplicate.
+Removed the gate; `g_lastOwner`/`g_lastIndex` survive (renamed `g_focusOwner`/`g_focusIndex`) purely
+as the "current row" the config value-change hooks read. See the Tried & Failed entry above for the
+general rule.
+
+**KEYWORDS: duplicate RVA different names aliased global BTLWORK PARTY_MGR_PTR FIELD_STATE_BLOCK
+value grep centralization S51**
+
+**Duplicate offsets hiding under different names.** SOLUTION: grep constant VALUES, not names — a
+name-based check misses `0x2D9F190` appearing as `RVA_BTLWORK`, `PARTY_MGR_PTR` and
+`FIELD_STATE_BLOCK` in three files. The exact command is in `Docs/PerformanceIssues.md`
+("How the duplicates were found"). Shared offsets now live in `src/core/phyre_types.h`.
 
 **KEYWORDS: read-only input controls game speed 1 2 3 mod not modifying no injection no
 SendInput no WriteProcessMemory DirectInput const buffer** (Session 44) SOLUTION: The tester's

@@ -130,11 +130,19 @@ and appears nowhere in the decompile). Controller `FUN_00241d40` (`0x121D40`). F
 `FUN_00394380` (`0x274380`) builds through this factory ⇒ it's a normal registry menu the
 universal reader reads for free; Yes/No ids `0x3e8`/`0x3e9`, footer help `0x4b42`.
 
+**Where these live in the mod (Session 51).** Offsets shared by more than one module — the
+field-actor pool, the BtlChr record, the scene-kind faction nibble, `BTLWORK_PTR` and the
+master-data reloc base — are owned by `src/core/phyre_types.h`. Menu surface identity lives in
+`src/ui/menu_state.h`; map/exit/planmapname addresses in `src/navigation/map_rva.h`; field-nav
+addresses in `src/navigation/nav_rva.h`. Grep those before re-deriving an offset.
+
 **Text capture hooks** (codec text, NOT UTF-16):
 - PRIMARY `FUN_002b3050` (RVA `0x18B050`) — read **param_2 (RDX) = codec `byte*` PRE-call**;
   28 callers; covers menus, item/ability names+descriptions, panels/prompts, battle-UI text.
 - FALLBACK `FUN_002af340` (RVA `0x18F340`) — param_2 codec `byte*` PRE-call (universal but
-  fires multiple measure passes → needs dedup).
+  fires multiple measure passes **per frame**, so anything hung off it needs a per-frame
+  change-check — one of the two sanctioned exceptions to the no-dedup rule, and the comment must
+  name this function. See CLAUDE.md "Code quality". This is why the PRIMARY hook is preferred.)
 - SAFETY NET `FUN_002f9860` (RVA `0x1D9860`) — id→leaf resolver; read **RETURN (RAX) POST-call**.
   st2e section table `DAT_02ec3d80` (`0x2DA3D80`), record table `DAT_02f973c0` (`0x2D973C0`).
 - Names/desc record `FUN_0035d330` (`0x23D330`) → `&DAT_022ca520`. Codec = `tools/st2e_decode.py`.
