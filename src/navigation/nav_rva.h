@@ -243,11 +243,13 @@ constexpr uint32_t MAPJUMP_ARRAY_LOOKUP   = 0x144B90;  // FUN_00264b90 (exit arr
 // ---- Gimmick tables (classification; from FUN_0031c2f0) ----------------------
 constexpr uint32_t GIMMICK_INSTANCE_TABLE = 0x2D9F120;  // DAT_02ebf120
 constexpr uint32_t GIMMICK_DEF_TABLE      = 0x2D9F150;  // DAT_02ebf150 (def id / model)
-// ⚠️ REMOVED: FIELD_STATE_BLOCK (0x2D9F190) + FIELDSIGN_CAT_A_OFF/B_OFF (0x5A7E/0x5A90), described
-// here as "field-sign category tables". That address is PhyreTypes::BTLWORK_PTR, and battle_state.cpp
-// reads BTLWORK + 0x5A7E as OFF_ROSTER_L3, the party roster list -- a reading that IS confirmed
-// working in play, whereas nothing ever used these. See the collision note on BTLWORK_PTR in
-// core/phyre_types.h before reviving the field-sign interpretation.
+// STRUCK: FIELD_STATE_BLOCK (0x2D9F190) + FIELDSIGN_CAT_A_OFF/B_OFF (0x5A7E/0x5A90), described here
+// as "field-sign category tables". They are the PARTY ROSTER lists. That address is
+// PhyreTypes::BTLWORK_PTR, and +0x5A7E is battle_state.cpp's OFF_ROSTER_L3 -- the removed field-sign
+// code read `SafeReadU8(mgr, 0x5A7E + slot*2)`, the same base/offset/stride/width BtlChrForSlot uses,
+// and 0x5A7E + 9*2 == 0x5A90, so "table B" is just the next 9-entry roster list. Do not revive this
+// reading; see the note on BTLWORK_PTR in core/phyre_types.h. Exits are solved by the map's own
+// __MJ_CTRL<N> script slots (Session 46), which need no category table.
 
 // ---- Field-nav game-thread lifecycle (turn-by-turn A* runs on the game thread) --
 // The route planner casts many walkability rays; doing that on the mod's input thread

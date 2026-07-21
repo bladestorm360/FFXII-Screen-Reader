@@ -75,11 +75,10 @@ party keys silent for two sessions. Re-run this after adding addresses.
 
 ## Open debt
 
-1. **The `0x2D9F190 + 0x5A7E` contradiction.** `nav_rva.h` called it a "field-sign category table";
-   `battle_state.cpp` reads it as `OFF_ROSTER_L3`, the party roster. The roster reading is confirmed
-   working in play; the field-sign reading was never used by any `.cpp`. Probably wrong, but
-   "probably" is below the 0.98 bar — recorded on `BTLWORK_PTR` in `core/phyre_types.h`, unresolved.
-   **Do not build on the field-sign reading.**
+1. ~~The `0x2D9F190 + 0x5A7E` contradiction.~~ **RESOLVED** — it is roster list 3; the "field-sign
+   category tables" were the party roster misread. Same base/offset/stride/width as
+   `BtlChrForSlot`, and `0x5A7E + 9*2 == 0x5A90` makes "table B" the next roster list. Struck in
+   `nav_rva.h`, documented on `BTLWORK_PTR` in `core/phyre_types.h`.
 2. **`ui/menu_observer.cpp` is dormant.** It installs detours and snapshots cursor state, but no
    focus callback is ever registered (`dllmain.cpp` calls `Init()` only), so nothing it observes
    reaches the player. 226 lines of maintained-but-unused code. Decide: wire it up, or delete it.

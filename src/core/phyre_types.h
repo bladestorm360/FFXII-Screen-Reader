@@ -44,15 +44,22 @@ constexpr uint32_t ACTOR_DEF_PTR    = 0x698;  // source definition / BtlChr ptr 
 // bug that made the 4/5/6 party keys silent, so the distinction is spelled out here rather than left
 // to each caller's comment.
 //
-// ⚠️ NAME COLLISION, UNRESOLVED. This same address carried THREE names across the codebase --
-// `RVA_BTLWORK` (battle_state.cpp, "POINTER to BtlWork"), `PARTY_MGR_PTR` and `FIELD_STATE_BLOCK`
-// (both nav_rva.h) -- i.e. three mental models of one global. The last two were unused and have been
-// deleted; this is now the only name. But note what fell out of merging them: nav_rva.h described
-// `FIELD_STATE_BLOCK + 0x5A7E` as a "field-sign category table", while battle_state.cpp reads the
-// SAME address as `OFF_ROSTER_L3`, the 9-entry party roster list -- and the roster reading is the one
-// that is confirmed working in play. The field-sign reading was never used by any .cpp. It is
-// probably wrong, but "probably" is below this project's 0.98 bar, so it is recorded here as a
-// question to settle with evidence, NOT silently resolved. Do not build on the field-sign reading.
+// NAME COLLISION -- RESOLVED (Session 51). This address carried THREE names: `RVA_BTLWORK`
+// (battle_state.cpp), `PARTY_MGR_PTR` and `FIELD_STATE_BLOCK` (both nav_rva.h). One global, three
+// mental models. The last two are deleted; this is the only name.
+//
+// STRUCK with it: nav_rva.h's "field-sign category tables" at `FIELD_STATE_BLOCK + 0x5A7E / +0x5A90`.
+// They are the PARTY ROSTER lists, misread. The evidence is arithmetic, not judgement:
+//   * The (since-removed) field-sign code read `SafeReadU8(mgr, 0x5A7E + slot*2)`. battle_state's
+//     `BtlChrForSlot` reads `SafeReadU8(W, OFF_ROSTER_L3 + slot*2)` -- the SAME base, offset, stride
+//     and width. One read, two labels.
+//   * `0x5A7E + 9*2 == 0x5A90`, i.e. "category table B" is exactly where roster list 3's nine u16
+//     entries end and the next 9-entry list begins. Two consecutive roster lists, not two tables.
+//     (`OFF_LEADER` 0x5AA4 sits just past the second, consistent with the same block.)
+//   * The roster reading drives the party-vitals keys and is confirmed working in play; the
+//     field-sign reading never worked, was deleted from entity_list.cpp, and map exits were solved
+//     a different way entirely (the map's own `__MJ_CTRL<N>` script slots, Session 46).
+// So `BTLWORK + 0x5A7E` is roster list 3. There is nothing left to settle and nothing to revive.
 constexpr uint32_t BTLWORK_PTR   = 0x2D9F190;  // DAT_02ebf190 -- POINTER to BtlWork
 constexpr uint32_t BTLWORK_MAGIC = 0x5071901;  // stamped at W+0x00 by FUN_002370c0; validates the deref
 
