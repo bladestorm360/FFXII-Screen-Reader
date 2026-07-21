@@ -95,6 +95,14 @@ uint64_t     g_entryArmedMs = 0;   // when we started waiting, for the safety ne
 // worse for the player than an early one. After this long, speak regardless and log that we did, so
 // a mismatch shows up in the log instead of as a mute menu.
 constexpr uint64_t kEntryWaitMaxMs = 400;
+// Open-sequence logging bounds. This runs on the game thread from the window proc, so it is capped
+// hard -- an unbounded diagnostic there is the exact defect that was cleaned out of this build.
+constexpr int      kSeqMaxLines = 40;
+constexpr uint64_t kSeqWindowMs = 2000;
+int                g_seqLines   = 0;
+
+// Defined below; used by both the ACTIVATE trigger and the timeout fallback.
+void SpeakArmedEntry(const char* why, uint64_t waitedMs);
 // Lock-free arm flag. OnFirstDraw is called from TextCapture::Capture -- once per STRING DRAWN, so
 // thousands of times a second on the game's paint path. Taking g_mutex there would put mod lock
 // traffic straight back into the hot path we just cleaned out of it. This is a plain atomic read in
@@ -393,48 +401,48 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
         g_entryRowOff = rowOff;
         g_entryText   = rowOff ? IngameMenuReader::RowChainText(o, rowOff, idx) : std::wstring();
         g_entryArmedMs = GetTickCount64();
+        g_seqLines     = 0;
         // Nothing to wait FOR if the row name is not readable yet (or this is not a row-chain pane):
         // fall back to speaking on the next draw rather than going silent.
         g_entryArmed.store(true, std::memory_order_release);
     }
 }
 
-// First UI string drawn since an entry was armed: the menu is genuinely rendering now, so speak the
-// row we held back. One-shot -- disarmed before speaking, so the very next string of the same paint
-// cannot re-trigger it. Runs on the game thread, from TextCapture::Capture.
-// A UI string was drawn. Speak the held-back entry row ONLY once the menu has drawn THAT row.
-//
-// Matching on the text is the whole point. An unconditional "something was drawn" fires on the very
-// next frame, because the field HUD draws text continuously -- which is indistinguishable from
-// announcing at key-press, and is exactly what the first attempt did.
-void OnFirstDraw(const std::wstring& drawn) {
-    if (!g_entryArmed.load(std::memory_order_acquire)) return;   // hot path: one atomic, no lock
+// Speak the held-back entry row. Shared by the ACTIVATE trigger and the timeout fallback; disarms
+// under the lock BEFORE speaking, so the two paths can never both fire for one entry.
+void SpeakArmedEntry(const char* why, uint64_t waitedMs) {
     void* o = nullptr; int idx = -1; uint32_t rowOff = 0;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        if (!g_entryOwner || g_entryIndex < 0) { g_entryArmed.store(false, std::memory_order_release); return; }
-        // Still waiting for our row to appear on screen -- unless we have waited too long, in which
-        // case speak anyway rather than swallow the announce.
-        const bool matched = g_entryText.empty() || drawn == g_entryText;
-        const uint64_t waited = GetTickCount64() - g_entryArmedMs;
-        if (!matched) {
-            if (waited < kEntryWaitMaxMs) return;
-            char m[160];
-            snprintf(m, sizeof(m), "entry announce: row never drawn within %llums -- speaking anyway",
-                     (unsigned long long)waited);
-            Log::Write("READER", m);
-        } else if (!g_entryText.empty()) {
-            char m[96];
-            snprintf(m, sizeof(m), "entry announce: row drawn after %llums", (unsigned long long)waited);
-            Log::Write("READER", m);
-        }
+        if (!g_entryOwner || g_entryIndex < 0) return;
         o = g_entryOwner; idx = g_entryIndex; rowOff = g_entryRowOff;
         g_entryOwner = nullptr; g_entryIndex = -1; g_entryRowOff = 0;
         g_entryText.clear();
         g_entryArmed.store(false, std::memory_order_release);
     }
+    char m[144];
+    snprintf(m, sizeof(m), "entry announce: %s after %llums", why, (unsigned long long)waitedMs);
+    Log::Write("READER", m);
     if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
     else        OnFocus(o, idx, /*fromPaint=*/true);
+}
+
+// A UI string was drawn. This is now ONLY the never-go-silent timeout, not a trigger.
+//
+// Matching on the row's own text was refuted by measurement: the row is rasterised 31ms after the
+// focus event, long before the menu is presented, so it announced at effectively key-press. The
+// real trigger is the window's own ACTIVATE message (OnMenuActivated). This path exists purely so
+// that if ACTIVATE never arrives, the player still hears the row instead of nothing.
+void OnFirstDraw(const std::wstring& /*drawn*/) {
+    if (!g_entryArmed.load(std::memory_order_acquire)) return;   // hot path: one atomic, no lock
+    uint64_t waited = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (!g_entryOwner || g_entryIndex < 0) return;
+        waited = GetTickCount64() - g_entryArmedMs;
+        if (waited < kEntryWaitMaxMs) return;
+    }
+    SpeakArmedEntry("ACTIVATE never arrived -- speaking anyway", waited);
 }
 
 // FUN_00240750(configId, &newDisplayIdx): the config store is written when a value
@@ -499,6 +507,41 @@ uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
 } // namespace
 
 namespace MenuReader {
+
+bool NoteWindowMessage(void* window, uint32_t cat, uint64_t msg, uint32_t state) {
+    if (!g_entryArmed.load(std::memory_order_acquire)) return false;
+    void* armed = nullptr; uint64_t waited = 0; int line = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (!g_entryOwner) return false;
+        armed  = g_entryOwner;
+        waited = GetTickCount64() - g_entryArmedMs;
+        line   = g_seqLines;
+        if (line < kSeqMaxLines && waited <= kSeqWindowMs) ++g_seqLines;
+    }
+    // The open sequence, delta-stamped from the arm. THIS is what identifies the event that
+    // coincides with the menu actually appearing -- read it off the log rather than guessing a
+    // fourth signal. Bounded in both count and time; it runs on the game thread.
+    if (line < kSeqMaxLines && waited <= kSeqWindowMs) {
+        char m[160];
+        snprintf(m, sizeof(m), "wnd: cat=0x%X msg=0x%llX state=%d %s +%llums",
+                 cat, (unsigned long long)msg, static_cast<int>(state),
+                 window == armed ? "[entered]" : "[other]", (unsigned long long)waited);
+        Log::Write("READER", m);
+    }
+    return window == armed;
+}
+
+void OnMenuActivated(void* window) {
+    if (!g_entryArmed.load(std::memory_order_acquire)) return;
+    uint64_t waited = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (g_entryOwner != window || g_entryIndex < 0) return;
+        waited = GetTickCount64() - g_entryArmedMs;
+    }
+    SpeakArmedEntry("window ACTIVATE", waited);
+}
 
 bool Init() {
     if (g_initialized) {

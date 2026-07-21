@@ -1,4 +1,5 @@
 #include "ui/ingame_menu_reader.h"
+#include "ui/menu_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -29,6 +30,26 @@ constexpr RowChainClass ROW_CHAIN[] = {
 };
 constexpr uint32_t ROW_STRIDE   = 0x20;   // row record size
 constexpr uint32_t OFF_ROW_NAME = 0x10;   // NAME codec* (built by FUN_002cd3c0)
+
+// ---- The field pause menu's OWN window handler (observe-only) --------------------------------
+// FUN_00280de0 == ROW_CHAIN[0] above; hooking it lets us watch the menu's whole open sequence
+// rather than guess when it is "ready". Message space read from the decompile:
+//   cat 1     init                      cat 2     close
+//   cat 0xa   teardown/return           cat 0xc   notify: 0x8000 row focus, 0x8001 confirm,
+//                                                 0x8002 cancel
+//   cat 0x11f WINDOW ACTIVATE (0x8000) / DEACTIVATE (0x8001) -- the activate branch resets
+//             +0x274=-1, sets +0xC0=0, raises bit 0x200000 on *(owner+0x260)+0xE0 and inits the
+//             cursor, which is the strongest candidate for "the menu is now live".
+// owner+0xC0 is a state enum: 0 on activate/select, 1, 3, and 5 on cancel.
+constexpr uint32_t RVA_ROWCHAIN_WND = 0x160DE0;
+constexpr uint32_t OFF_WND_STATE    = 0xC0;
+constexpr uint32_t PKT_CAT_OFF      = 0x00;   // *(int*)packet
+constexpr uint32_t PKT_MSG_OFF      = 0x08;   // *(int64*)(packet+8)
+constexpr uint64_t WND_MSG_ACTIVATE = 0x8000;
+constexpr uint32_t WND_CAT_ACTIVATE = 0x11F;
+
+typedef uint64_t (*Pfn_RowChainWnd)(void*, void*);
+Pfn_RowChainWnd s_origRowChainWnd = nullptr;
 
 // ---- Battle command menu (CONFIRMED 2026-07-10 via probe) ------------------------------------
 // The in-battle command list (Attack / Magicks & Technicks / Items / ...) routes cursor moves
@@ -217,6 +238,28 @@ void HookedBcmdDraw(void* panel, void* geom, int row) {
     if (replayPanel) SpeakBattleCommand(replayPanel, replayIndex);
 }
 
+// FUN_00280de0(window, packet): the field pause menu's own message proc. OBSERVE ONLY -- runs the
+// original first, then reads. We do not alter a single field.
+//
+// Two jobs: log the open sequence with a delta from the menu-entry arm (so the event that coincides
+// with the menu actually appearing is visible instead of guessed), and fire the held-back entry
+// announce on ACTIVATE.
+uint64_t HookedRowChainWnd(void* window, void* packet) {
+    const uint64_t ret = s_origRowChainWnd ? s_origRowChainWnd(window, packet) : 0;
+    STALL_SCOPE("IngameMenu::HookedRowChainWnd");
+
+    uint32_t cat = 0; uint64_t msg = 0; uint32_t state = 0xFFFFFFFF;
+    if (!MemRead::SafeReadU32(packet, PKT_CAT_OFF, &cat)) return ret;
+    MemRead::SafeReadU64(packet, PKT_MSG_OFF, &msg);
+    MemRead::SafeReadU32(window, OFF_WND_STATE, &state);
+
+    if (MenuReader::NoteWindowMessage(window, cat, msg, state) &&
+        cat == WND_CAT_ACTIVATE && msg == WND_MSG_ACTIVATE) {
+        MenuReader::OnMenuActivated(window);
+    }
+    return ret;
+}
+
 // Replicate FUN_002b58b0(src, 0): a 2-byte-marker-prefixed codec block; index 0 -> src+2 if it
 // starts with the 0x0000 marker, else src. Memory-only, SEH.
 const uint8_t* Resolve58b0(const uint8_t* src) {
@@ -367,7 +410,8 @@ void SpeakBattleCommand(void* panel, int index) { TrySpeakBattleCommand(panel, i
 namespace IngameMenuReader {
 
 bool Init() {
-    bool ok = Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
+    bool ok = Hooks::InstallTyped(RVA_ROWCHAIN_WND,  &HookedRowChainWnd, &s_origRowChainWnd);
+    ok     &= Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
     ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
     Log::Write("INGAME", ok ? "IngameMenuReader: battle command-draw + status-chooser hooks installed"
                             : "IngameMenuReader: a battle/status hook FAILED to install");
@@ -377,6 +421,7 @@ bool Init() {
 void Shutdown() {
     Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);
+    Hooks::Uninstall(RVA_ROWCHAIN_WND);
     std::lock_guard<std::mutex> lk(g_mutex);
     g_bcmdPendingPanel = nullptr;
     g_bcmdPendingIndex = -1;
