@@ -117,3 +117,97 @@ Builds clean and deploys after every phase (four separate commits, so a regressi
 re-enter a pane / reopen the Attack list / reopen the Status chooser should each speak again, the
 Status chooser should show exactly ONE `status:` line per highlight, and the per-frame exemptions
 (battle target, `Entering <area>`) must still fire once per change, not per frame.
+
+
+## Session 52 — 2026-07-21 — [menus] Field-menu entry announce on the menu's SHOW message; dialogue pagination; `;` restored; per-area NAV-DIAG stall moved off-thread-path
+
+**KEYWORDS:** field menu party menu entry announce speaks-on-keypress menu-not-ready
+FUN_00280de0 0x160DE0 cat 0x13 SHOW message cat 0x11f ACTIVATE never-sent ArmPaneEntry
+HookedFieldPaneWnd HookedFocusSet FUN_00244830 g_panePending battle-command parity
+OnRowChainFocus wnd-first diagnostic dialogue pagination 0x03 page-break message_reader
+telop NextPage semicolon `;` target HP battle_target_reader browsing acting NAV-DIAG
+per-area flood DiagnosticDump backtick opt-in EnumerateFieldSignExits EnumerateMapJumps
+DiagScanScriptMapjumps 400ms-fallback draw-callback removed
+
+Continues Session 51 the same day (the second, behavioural half after the centralization pass).
+Everything below is **play-tested and confirmed by the user** unless marked otherwise.
+
+### 1. Field/party-menu entry announce now fires when the menu is VISIBLE, not when it starts loading
+
+**Symptom:** opening the party/field menu spoke the focused row (`"Status"`) instantly on key-press,
+while the menu itself appeared noticeably later. The BATTLE command menu never had this problem.
+
+**Root cause (the one difference):** both menus stash the entry focus and replay it; they differ
+only in *what releases the stash*.
+- battle command: released by `HookedBcmdDraw` — the panel's own row draw (`FUN_00276be0`).
+- field pane (before): released by `HookedFocusSet` — `FUN_00244830`, the focus **assignment**,
+  which fires at the **start** of construction. That is why it spoke during load.
+
+**Fix — make the field pane wait for its own "menu is visible" event, mirroring the battle menu.**
+`FUN_00280de0` (RVA `0x160DE0`, == `ROW_CHAIN[0]`, the field command column, `rowOff 0xD8`) has a
+message **`case 0x13` = SHOW**: it creates the info window, plays the open SE `FUN_00249c60(4)` once,
+and clears the "hidden" bit `0x80` on the menu's UI resources (battle_4_p / s_font_c / targetline_p /
+shape / mini_face_c). That is the frame the menu becomes visible. We trigger on the **message**; the
+SE call is only corroboration. **Confirmed:** `"Status"` now lands with the menu.
+
+Implementation is a one-to-one mirror of the battle path (`src/ui/ingame_menu_reader.cpp`):
+`g_panePending{Owner,RowOff,Index}` ⇄ `g_bcmdPending*`; `IngameMenuReader::ArmPaneEntry` (called from
+`HookedFocusSet` only for `IsFieldPaneOwner(o)`) ⇄ the stash in `OnBattleCommandFocus`;
+`HookedFieldPaneWnd` releasing on `cat 0x13` ⇄ `HookedBcmdDraw`. Consume one-shot under the lock,
+speak outside it, on both. **Only the `0x160DE0` class defers**; every other pane (submenus, config,
+pop-ups) opens with the shell already up and still speaks immediately in `HookedFocusSet`. No
+fallback — if the row never resolves, silence, exactly like the battle menu only replaying on a real
+draw.
+
+**Four "menu is ready" signals were tried and refuted BY MEASUREMENT before landing on 0x13** — all
+recorded in `debug.md` so none is retried:
+1. first UI string drawn (`TextCapture` DrawCallback) — the field HUD paints text every frame, so it
+   fired the very next frame (`99ce38a`).
+2. the focused row's OWN text drawn — measured **31 ms** after the focus event; drawing ≠
+   presentation (`eaea451`).
+3. window ACTIVATE `cat 0x11f / msg 0x8000` — **NEVER SENT** (0 occurrences in a whole session). This
+   one SHIPPED AS SILENCE (`1600244` → user got no speech). A bounded `wnd:` sequence log is what
+   proved the absence.
+4. a 400 ms timeout fallback — removed as a band-aid that speaks at the wrong time and hides which
+   signal is right (`58071b2`); it also let a per-string DrawCallback sit on the game's paint path.
+
+The whole draw-callback plumbing (`TextCapture::SetDrawCallback` / `DrawCallback` /
+`IngameMenuReader::RowChainText`) was deleted with the fallback. The `wnd-first:` diagnostic that
+remains in `HookedFieldPaneWnd` logs each category **once per open** with Δt from the arm, keyed on
+category (so pointer-valued msgs can't flood it), count-capped but **NOT time-capped** — the old
+40-line/+110 ms cap is exactly what hid `0x13` last time.
+
+Commits: `1b821d3`, `5ff045b`, `216d8b2`, `99ce38a`, `eaea451`, `1600244`, `58071b2`, `991b323`,
+`6fd347a` (the SHIP).
+
+### 2. Multi-page dialogue is paginated, not read as one block
+
+The telop setter hands the reader an ENTIRE message (all pages concatenated), so it read a whole
+conversation in one breath. **Codec `0x03` is the page break** — proven from shipped data
+(`tools/ebp_find_pagebreak.py`: 95.6% of 3309 `0x03` occurrences sit at page boundaries across 17,268
+messages), NOT guessed from the decompile. `GameText::DecodeToPages` now splits on `0x03`;
+`message_reader` holds the page list and advances on the observed Confirm. **First attempt shipped
+inert** — the `0x03` branch was silently dropped by a scripted edit and only a data re-check caught
+it (`eeed6bc` fixed `a357354`). `kMaxCodecBytes` raised to 4096 (was truncating the hunt tutorial).
+
+### 3. `;` (target HP) restored
+
+Regressed earlier this session: `SpeakTargetStatus` bailed on `t.browsing`. Removed the
+`|| t.browsing` guard and gated the `", queued"` suffix on `!t.browsing && !t.acting`
+(`battle_target_reader.cpp`). Confirmed with a live Dire Rat + committed Attack. `71f43ee`.
+
+### 4. Per-area NAV-DIAG flood moved off the area-change path (a real game-thread stall)
+
+Every area transition wrote **~1,250 `NAV-DIAG` lines synchronously on the game thread** (one burst,
+single timestamp: `EnumerateFieldSignExits` + `EnumerateMapJumps` + a ~98 KB script scan, all under
+`Log::Write`). It was pure diagnostic — results discarded, and the exit FEATURE enumerates
+independently with `logRaw=false`. Moved verbatim into `NavCommands::DiagnosticDump` (the `` ` ``
+key, which already does rescan + object dump), so it is now **opt-in**, in whatever area the player is
+standing in. The area-change branch keeps only the `"Entering <area>"` announce and its one-line
+context. `entity_list.cpp` shed its now-unused `MapExits`/`kExitMaxDist` includes. `77c2b47`.
+
+### Documented-only (NOT fixed this session — see debug.md)
+
+Dialogue-choice pop-up options; full-screen system-notification banners; item name missing on
+tutorial item pop-ups (`0x0f 2e` substitution slots dropped by the decoder); pathfinding accuracy
+degrading near a target. Commits `371664c`, `2e5d8c3`, `7ec640d`.

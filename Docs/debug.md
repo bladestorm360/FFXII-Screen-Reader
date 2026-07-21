@@ -7,6 +7,28 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: field party menu entry announce speaks-on-keypress menu-not-ready readiness signal
+FUN_00280de0 0x160DE0 cat 0x11f ACTIVATE never-sent DrawCallback first-paint 31ms 400ms fallback
+draw-callback timeout Session 52 SOLVED-by-0x13**
+
+**FOUR "menu is ready" signals REFUTED before landing on `cat 0x13` (SHOW).** The field/party menu
+announced its focused row on key-press, before the menu was visible. Four attempts to detect
+"visible" failed BY MEASUREMENT — do not retry any:
+1. **first UI string drawn** (`TextCapture` per-string DrawCallback) — the field HUD paints text
+   every frame, so it fired the very next frame ≈ key-press. `99ce38a`.
+2. **the focused row's OWN text drawn** — measured **31 ms** after the focus event; the row is
+   rasterized long before the menu is presented. Drawing ≠ presentation. `eaea451`.
+3. **window ACTIVATE `cat 0x11f / msg 0x8000`** on `FUN_00280de0` — the decompile makes it look like
+   "menu is live", but it is **NEVER SENT** (0 occurrences in a full session). This SHIPPED AS
+   SILENCE. `1600244`.
+4. **a 400 ms timeout fallback** that speaks anyway — a band-aid that speaks at the wrong time and
+   hides which signal is right; also parked a per-string DrawCallback on the game's paint path.
+   `58071b2`.
+**SOLVED** by triggering on `FUN_00280de0` `cat 0x13` = the SHOW/menu-visible message (see Solved
+Problems below + `GameArchitecture.md`). The lesson: the trigger must be the game's OWN visible-open
+event, and "drawn" is not "shown". A bounded first-seen `wnd:` log is what proved 0x11f's absence —
+the earlier version capped at +110 ms and hid `0x13`, which lands after that.
+
 **KEYWORDS: tutorial popup item name missing substitution slot 0x0f 2e escape dropped
 Orrachea Armlet Try equipping button glyph icon insert rbn_a16 msg 156 OPEN ISSUE**
 
@@ -360,6 +382,29 @@ so don't look for a lock flag.)
 
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
+
+**KEYWORDS: field party menu entry announce speaks-on-keypress SHOW message cat 0x13
+FUN_00280de0 0x160DE0 ArmPaneEntry HookedFieldPaneWnd battle-menu parity FUN_00244830 S52**
+
+**Field/party menu spoke its focused row on key-press, before the menu was visible.** SOLUTION:
+release the stashed entry focus on the menu's OWN visible-open event, exactly as the battle command
+menu waits for its row draw. The field command column `FUN_00280de0` (RVA `0x160DE0`, `ROW_CHAIN[0]`)
+sends **`cat 0x13` = SHOW** (creates the info window, plays the open SE `FUN_00249c60(4)`, unhides the
+menu resources) — that is the announce trigger. `HookedFocusSet` now `ArmPaneEntry`s (stashes) for
+`IsFieldPaneOwner` panes instead of speaking, and `HookedFieldPaneWnd` speaks on `0x13`. One-to-one
+mirror of `g_bcmdPending*` / `HookedBcmdDraw`. Only that class defers; all other panes speak
+immediately. No fallback. Full message map + the four refuted signals: `GameArchitecture.md` →
+"Field pause-menu entry announce". Commit `6fd347a`. Confirmed in play.
+
+**KEYWORDS: NAV-DIAG per-area flood 1250 lines game-thread stall area change EnumerateFieldSignExits
+EnumerateMapJumps DiagScanScriptMapjumps DiagnosticDump backtick opt-in S52**
+
+**Every area transition stalled on a ~1,250-line `NAV-DIAG` dump written synchronously on the game
+thread.** SOLUTION: it was pure diagnostic (results discarded; the exit feature enumerates on demand
+with `logRaw=false`), so it moved off the automatic area-change path into `NavCommands::DiagnosticDump`
+— the `` ` `` key that already does rescan + object dump. Now opt-in, in whatever area the player is
+standing in. The area-change branch keeps only the `"Entering <area>"` announce + one context line.
+Commit `77c2b47`.
 
 **KEYWORDS: menu re-entry silent pane focus not spoken returning to pane dedup removed S51**
 

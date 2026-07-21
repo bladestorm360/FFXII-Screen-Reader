@@ -1111,6 +1111,45 @@ Built + deployed, pending integrated play-test. Optional aid: `..\FFXII-Decompil
 
 ---
 
+## Field pause-menu entry announce — SHOW message (Session 52, 2026-07-21) — CONFIRMED in play
+
+**Problem it solves:** the field/party menu spoke its focused row on key-press, before the menu was
+visible. The battle command menu did not. The difference was purely *when the stashed entry focus is
+released*: the battle menu waits for its own row draw (`FUN_00276be0`); the field menu was releasing
+at `FUN_00244830` (RVA `0x124830`), the focus **assignment**, which fires at the START of menu
+construction. Fixed by giving the field menu its own "menu is visible" event, mirroring the battle
+menu exactly. Confidence 0.98 (in-play confirmed).
+
+**The field pause-menu command column = `FUN_00280de0`** (RVA `0x160DE0`, == `ROW_CHAIN[0]`,
+`rowOff 0xD8`) — its own window/message proc. Message map (arg = `packet`, `cat = *(int)packet`,
+`msg = *(int64)(packet+8)`):
+- `cat 1` init · `cat 2` close · `cat 0xa` teardown · `cat 0x10` destroy
+- `cat 0xc` notify: `msg 0x8000` row focus (sets the description via `FUN_00291d80`), `0x8001` confirm,
+  `0x8002` cancel
+- **`cat 0x13` = SHOW — the menu-becomes-VISIBLE frame.** Guarded by `*(byte)(pane+0x280) & 1` so its
+  body runs once per open (each open is a fresh pane object, so `+0x280` starts clear): it creates the
+  info window (`FUN_002839b0` → `DAT_0209ac30+0x318`), plays the open SE **`FUN_00249c60(4)`** once,
+  and clears the hidden bit `0x80` on the menu's UI resources (battle_4_p / s_font_c / targetline_p /
+  shape / mini_face_c). **This is the announce trigger.** (We trigger on the message; the SE call only
+  corroborates that this branch is the visible-open moment.)
+- **`cat 0x11f` ACTIVATE (`msg 0x8000`) / DEACTIVATE (`0x8001`) is NEVER SENT** — 0 occurrences in a
+  full session. The decompile makes its activate branch (resets `+0x274=-1`, `+0xC0=0`, raises bit
+  `0x200000` on `*(pane+0x260)+0xE0`, inits cursor) *look* like "menu is live", but it does not fire
+  for a normal open. **STRUCK as a readiness signal — do not wait on it** (it shipped as silence).
+- `pane+0xC0` is a state enum (0 activate/select, 1, 3, 5 cancel).
+
+**Mod implementation (`src/ui/ingame_menu_reader.cpp`, one-to-one with the battle path):**
+`IsFieldPaneOwner(owner)` = `Obj0(owner)==ResolveRva(0x160DE0)`. `MenuReader::HookedFocusSet` calls
+`ArmPaneEntry(owner,rowOff,idx)` (stash `g_panePending*`) for that ONE class instead of speaking;
+`HookedFieldPaneWnd` (observe-only hook on `0x160DE0`) releases it on `cat 0x13` via
+`OnRowChainFocus`, consumed one-shot under the lock. Every other pane still speaks immediately in
+`HookedFocusSet`. No fallback — unresolved row = silence, like the battle menu.
+
+**Four refuted readiness signals (measured, in `debug.md` so they're not retried):** first-UI-string
+drawn (next frame), the row's own text drawn (31 ms — drawing ≠ presentation), `cat 0x11f` ACTIVATE
+(never sent), a 400 ms timeout fallback (spoke at the wrong time). Only `cat 0x13` is the game's own
+visible-open event.
+
 ## Battle Command Menu + Targeting (Session 30, 2026-07-10) — CONFIRMED
 
 **Battle command menu (the seamless-combat ATB list: Attack / Magicks & Technicks / Items / …).**
