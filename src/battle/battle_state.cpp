@@ -4,7 +4,10 @@
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
 #include "core/game_text.h"
+#include "core/logger.h"
 #include "navigation/nav_rva.h"
+
+#include <cstdio>
 
 namespace BattleState {
 namespace {
@@ -256,6 +259,74 @@ Committed CommittedTargetOf(void* actor) {
         out.valid = true;
     }
     return out;
+}
+
+void DiagnoseCommitment() {
+    char m[320];
+
+    void* w = Work();
+    if (!w) {
+        void* raw = PtrAt(Hooks::ResolveRva(BTLWORK_PTR), 0);
+        uint32_t magic = 0;
+        if (raw) MemRead::SafeReadU32(raw, 0, &magic);
+        snprintf(m, sizeof(m), "commit-diag: BtlWork REJECTED raw=%p magic=0x%X (want 0x%X)",
+                 raw, magic, BTLWORK_MAGIC);
+        Log::Write("TARGET", m);
+        return;
+    }
+
+    uint8_t leaderIdx = 0xFF;
+    const bool idxOk = MemRead::SafeReadU8(w, OFF_LEADER, &leaderIdx);
+    void* lbc = LeaderBtlChr();
+    void* lact = LeaderActor();
+
+    void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);
+    uint32_t poolCount = 0;
+    MemRead::SafeReadU32(Hooks::ResolveRva(NavRva::ACTOR_POOL_COUNT), 0, &poolCount);
+
+    snprintf(m, sizeof(m),
+             "commit-diag: W=%p leaderIdx=%u(read=%d,max=%u) leaderBc=%p leaderActor=%p pool=%p count=%u",
+             w, leaderIdx, idxOk ? 1 : 0, BC_COUNT, lbc, lact, pool, poolCount);
+    Log::Write("TARGET", m);
+
+    if (!lact) {
+        Log::Write("TARGET", "commit-diag: NO LEADER ACTOR -- the pool scan for actor+0x698 == leaderBc "
+                             "found nothing, so no commitment can ever resolve.");
+        return;
+    }
+
+    uint64_t flags = 0; uint8_t phase = 0;
+    uint16_t aAct = 0xFFFF, qAct = 0xFFFF;
+    uint32_t aTgt = 0, qTgt = 0;
+    MemRead::SafeReadU64(lact, A_FLAGS, &flags);
+    MemRead::SafeReadU8 (lact, A_PHASE, &phase);
+    SafeReadU16(lact, A_ACTIVE_ACT, &aAct);
+    SafeReadU32(lact, A_ACTIVE_TGT, &aTgt);
+    SafeReadU16(lact, A_QUEUED_ACT, &qAct);
+    SafeReadU32(lact, A_QUEUED_TGT, &qTgt);
+    const bool activeRow = (aAct != 0xFFFF) && (MasterRecord(RVA_ACTIONTBL, aAct) != nullptr);
+
+    snprintf(m, sizeof(m),
+             "commit-diag: flags=0x%llX queuedBit=%d phase=%u | active act=0x%X tgt=0x%X row=%d "
+             "| queued act=0x%X tgt=0x%X",
+             (unsigned long long)flags, (flags & A_FLAG_QUEUED) ? 1 : 0, phase,
+             aAct, aTgt, activeRow ? 1 : 0, qAct, qTgt);
+    Log::Write("TARGET", m);
+
+    // Name the failing condition explicitly rather than leaving it to be inferred from the numbers.
+    if (activeRow && aTgt != 0) {
+        Log::Write("TARGET", "commit-diag: ACTIVE path should have matched -- if `;` was silent the "
+                             "caller rejected it, not this test.");
+    } else if ((flags & A_FLAG_QUEUED) && qTgt != 0) {
+        Log::Write("TARGET", "commit-diag: QUEUED path should have matched -- see above.");
+    } else {
+        const char* why = (aTgt == 0 && qTgt == 0) ? "both target fields are 0"
+                        : (!activeRow && !(flags & A_FLAG_QUEUED)) ? "active id not in the action table AND queued bit clear"
+                        : (!activeRow) ? "active id not in the action table (AI opcode?), queued bit set but target 0"
+                                       : "queued bit clear";
+        snprintf(m, sizeof(m), "commit-diag: NO COMMITMENT -- %s", why);
+        Log::Write("TARGET", m);
+    }
 }
 
 std::wstring AbilityName(uint16_t actionId) {

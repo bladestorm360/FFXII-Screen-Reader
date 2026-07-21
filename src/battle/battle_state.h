@@ -84,6 +84,13 @@ struct Committed {
 Committed CommittedTargetOf(void* actor);
 void*     ActorForHandle(int32_t handle);
 
+// Why did the commitment lookup fail? `;` resolves BtlWork -> leader index -> leader BtlChr ->
+// actor-pool scan -> the active/queued fields, and today ANY broken link collapses to one silent
+// boolean, so a user pressing the key after confirming an attack just gets nothing. This logs every
+// link with its raw value, so a single press names the one that failed instead of leaving the whole
+// chain suspect. Log-only; speaks nothing and changes no state.
+void DiagnoseCommitment();
+
 // ---- master-data names (read-only reimplementations) ------------------------------------------
 // Ability/action name for an action id. Reads row+0x34 (the NAME index) -- NOT row+0x00, which is
 // a description id that "Attack" and every "Reserve" row share. Guarded with id < count: actor+0x714

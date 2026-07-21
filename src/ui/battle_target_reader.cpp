@@ -403,6 +403,10 @@ void SpeakTargetStatus() {
     // The browse fallback is deliberately left INSIDE ResolveTarget rather than deleted: `p`
     // (GetLockedTarget -> routing) is the other caller and its behaviour is unchanged.
     if (!ResolveTarget(t) || t.browsing) {
+        // Say WHY, every link of it. A confirmed attack that reports "no commitment" is a bug in the
+        // BtlWork -> leader -> actor-pool -> active/queued chain, and without this the whole chain
+        // fails as one silent boolean with nothing to grep.
+        BattleState::DiagnoseCommitment();
         Log::Write("TARGET", t.browsing ? "; SILENT: browsed cursor, no commitment"
                                         : "; SILENT: no committed combat target");
         return;
