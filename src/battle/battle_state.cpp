@@ -314,11 +314,19 @@ void DiagnoseCommitment() {
     Log::Write("TARGET", m);
 
     // Name the failing condition explicitly rather than leaving it to be inferred from the numbers.
+    // When a path DOES match, the commitment is fine and the failure is downstream -- in
+    // ActorForHandle -- so resolve the handle here too and say so. Reporting "should have matched"
+    // without checking that was the gap that made a working commitment look like no commitment.
     if (activeRow && aTgt != 0) {
-        Log::Write("TARGET", "commit-diag: ACTIVE path should have matched -- if `;` was silent the "
-                             "caller rejected it, not this test.");
+        void* ta = ActorForHandle(static_cast<int32_t>(aTgt));
+        snprintf(m, sizeof(m), "commit-diag: ACTIVE path MATCHED -> ActorForHandle(0x%X)=%p%s",
+                 aTgt, ta, ta ? "" : "  <-- HANDLE LOOKUP IS THE BUG");
+        Log::Write("TARGET", m);
     } else if ((flags & A_FLAG_QUEUED) && qTgt != 0) {
-        Log::Write("TARGET", "commit-diag: QUEUED path should have matched -- see above.");
+        void* tq = ActorForHandle(static_cast<int32_t>(qTgt));
+        snprintf(m, sizeof(m), "commit-diag: QUEUED path MATCHED -> ActorForHandle(0x%X)=%p%s",
+                 qTgt, tq, tq ? "" : "  <-- HANDLE LOOKUP IS THE BUG");
+        Log::Write("TARGET", m);
     } else {
         const char* why = (aTgt == 0 && qTgt == 0) ? "both target fields are 0"
                         : (!activeRow && !(flags & A_FLAG_QUEUED)) ? "active id not in the action table AND queued bit clear"

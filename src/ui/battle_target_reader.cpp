@@ -322,6 +322,18 @@ bool ResolveTarget(ResolvedTarget& out) {
         if (c.valid) {
             actor = BattleState::ActorForHandle(c.targetHandle);
             if (actor) { out.acting = c.active; out.actionId = c.actionId; }
+            else {
+                // THE BLIND SPOT. A commitment that resolves but whose handle does not map to a
+                // live actor falls through to the browse cursor below and is logged as "BROWSING"
+                // -- indistinguishable from "there was no commitment". That ambiguity is why the
+                // log appeared to show commitment almost never firing; it may in fact be firing
+                // and this lookup failing. Never let these two look the same again.
+                char m[160];
+                snprintf(m, sizeof(m),
+                         "commit: VALID but ActorForHandle(0x%X) FAILED -- falling back to browse",
+                         static_cast<unsigned>(c.targetHandle));
+                Log::Write("TARGET", m);
+            }
         }
     }
 

@@ -171,11 +171,12 @@ void OnFieldFrame() {
     // we auto-rebuild the moment the active-container SET changes. The builder writes each
     // container's entries+count BEFORE flipping its active bit last, so one rescan on the
     // change captures the just-streamed objects. O(1) (a 5-byte mask read) while stable.
-    // Not while a menu is up. Opening the field menu churns the active-container set, which used to
-    // drag a full RescanLocked() + the diagnostic dump below onto the game thread mid-menu-open.
-    // Nothing here is navigable from inside a menu, and the next mask change (or the `` ` `` key)
-    // rescans, so deferring costs nothing.
-    if (MenuState::IsAnyMenuOpen()) return;
+    // REMOVED: an `if (MenuState::IsAnyMenuOpen()) return;` gate. It was a speculative fix for the
+    // field-menu stall, it did NOT fix it (the probe measured this whole function at ~5 ms), and it
+    // was actively wrong: IsAnyMenuOpen is "any window holds the input focus", which in BATTLE is
+    // true almost continuously because the battle command window holds focus -- so it silently
+    // killed the field object scan for the entire fight. A speculative fix that breaks a working
+    // feature is worse than the problem it guessed at.
     STALL_SCOPE("EntityList::OnFieldFrame");
 
     static uint32_t s_lastMask = 0;
