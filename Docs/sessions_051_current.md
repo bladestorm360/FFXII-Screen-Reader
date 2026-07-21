@@ -89,6 +89,27 @@ Both `*_rva.h` headers stay over the 150-line rule **deliberately**: they are ~8
 comments recording which readings were struck and why, which is what stopped past sessions
 re-deriving the same wrong addresses. Recorded as a tracked exception, not ignored.
 
+### Follow-ups (same session, after review)
+
+**The `0x5A7E` "contradiction" was closed, not left open.** It was never a live conflict — it was a
+wrong label on dead code, which is worse than no label because the next session builds on it. The
+"field-sign category tables" ARE the party roster lists:
+- the removed field-sign code read `SafeReadU8(mgr, 0x5A7E + slot*2)`; `BtlChrForSlot` reads
+  `SafeReadU8(W, OFF_ROSTER_L3 + slot*2)` — identical base, offset, stride and width;
+- `0x5A7E + 9*2 == 0x5A90`, so "table B" is exactly where list 3's nine u16 entries end and the next
+  list starts (`OFF_LEADER` 0x5AA4 sits just past the second);
+- the roster reading drives the party-vitals keys and works in play; the field-sign reading never
+  did, was deleted from `entity_list.cpp` back in `e093c74`, and exits were solved a different way
+  entirely (`__MJ_CTRL<N>`, Session 46).
+STRUCK in `nav_rva.h`, documented on `BTLWORK_PTR`.
+
+**`ui/menu_observer.cpp` DELETED.** Phase-0 scaffolding that inferred menu focus from the cursor's
+X/Y pixel position. `Init`/`Shutdown` were its only call sites — `SetFocusChangeCallback`,
+`LatestSnapshot`, `ReadRegistry` and `RegisterController` had **zero** — so it paid for a detour on
+`FUN_00241d40` plus SEH reads and a map lookup per menu message, then dispatched to a callback that
+was never registered. Superseded by `menu_reader`'s `FUN_00247510` msg-`0x8000` path, which receives
+the focus INDEX rather than inferring it from pixels. In git if ever wanted.
+
 ### Status
 
 Builds clean and deploys after every phase (four separate commits, so a regression bisects to one).
