@@ -7,6 +7,53 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+**KEYWORDS: dialogue choice pop-up options not spoken Tomaj hunt bill yes no selectable
+conversation branch cursor pointing hand R Log Space Confirm OPEN ISSUE**
+
+**OPEN — dialogue CHOICE options are not vocalized.** Observed 2026-07-21 in the Rabanastre tavern
+(Tomaj, hunt-bill conversation). On screen:
+
+- Speaker nameplate **Tomaj** with a portrait icon.
+- Body: *"Do you want to hear all the details?"* — believed already spoken by the existing reader.
+- **Two selectable choices below it**, a pointing-hand cursor on the first:
+  *"Yeah, that would help."* and *"No, I think I got it."*
+  **Neither is announced when navigated.** This is the defect.
+- Footer hints: `R` = Log, `Space` = Confirm.
+
+What is known: this is a *choice* dialogue and is NOT any of the surfaces already handled.
+It is not the `FUN_0057c480` menu-message surface (that one is classified + logged but deliberately
+muted, and is menu-only — it never fires for field text), and it is not the title/new-game confirm
+(`FUN_00241d40`, handled via the 0x8000 focus path). The read-point for the choice LIST and its
+cursor index is **not yet identified** — that is the work. Start from the message-surface section of
+`GameArchitecture.md` and from whatever draws the pointing-hand cursor; the body text arriving
+correctly suggests the body and the choices come from different objects.
+
+DEFERRED by user instruction 2026-07-21: document now, fix in a later session.
+
+**KEYWORDS: pathfinding accuracy near target reroute sand sea legs increase expands zero
+recalculation oscillation fineCell 1.5m string-pull OPEN ISSUE**
+
+**OPEN — routing gets LESS accurate the closer you are to the target.** Reported 2026-07-21: while
+approaching a target the player was rerouted around the Sand Sea several times as the route
+recalculated. Log evidence, same target cell throughout (`tgtCell=(99,21)`):
+
+| seq | from (x,z)    | legs | expands | rays |
+|-----|---------------|------|---------|------|
+| 80  | 138.9, 35.4   | 3    | 16      | 454  |
+| 82  | 143.2, 38.3   | **4**| 7       | 182  |
+| 85  | 142.6, 39.8   | **4**| 8       | 210  |
+| 86  | 143.8, 32.9   | 2    | 4       | 140  |
+| 87  | 148.0, 30.8   | 3    | 1       | 28   |
+| 88  | 149.4, 32.2   | 2    | **0**   | 0    |
+
+The leg count RISES (3 -> 4) while search effort collapses (`expands` 16 -> 0), and the player's own
+position oscillates rather than converging. `fineCell=1.5m`: at close range the target is only a
+couple of cells away, so the coarse grid plus the string-pull can flip the chosen cell between
+recalcs — a plausible starting hypothesis, NOT a diagnosis.
+
+DEFERRED by user instruction 2026-07-21: recorded with the numbers; the planner was deliberately
+NOT changed this session.
+
 **KEYWORDS: dedup deduplication debounce speech suppressed silent menu re-entry focus cache
 stale owner index text battle command Attack list status chooser MaybeAnnounce S51**
 

@@ -11,6 +11,8 @@
 //   '          diagnostic dump to the log (walkmap grid + object identities)
 namespace NavCommands {
 
-void OnNavKey(int vk, bool shift);
+// No `shift` parameter: the game binds Left Shift to Toggle Walk/Run and the mod cannot swallow
+// keys, so a Shift chord would silently flip walk/run on every press. Use a plain unbound key.
+void OnNavKey(int vk);
 
 } // namespace NavCommands

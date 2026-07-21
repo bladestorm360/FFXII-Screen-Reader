@@ -29,7 +29,9 @@ void SetRereadCallback(HotkeyCallback cb);
 // `]` (VK_OEM_6), or `` ` `` (VK_OEM_3). `vk` is the virtual-key code; `shift` is
 // the Shift state at press time (so Shift+[ / Shift+] / Shift+\ resolve). Keys are
 // edge-triggered (auto-repeat suppressed) and passed through to the game.
-typedef void (*NavKeyCallback)(int vk, bool shift);
+// The `shift` argument was removed: it was passed `false` from every DInputEdge call site and could
+// never be honoured (Left Shift is the game's Toggle Walk/Run and the mod cannot swallow keys).
+typedef void (*NavKeyCallback)(int vk);
 void SetNavKeyCallback(NavKeyCallback cb);
 
 // Fed by the dinput8 proxy each frame with the game's own 256-byte DirectInput

@@ -65,20 +65,27 @@ constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07, DIK_7 = 0x08;
 // Walk/Run and the mod cannot swallow keys, so a Shift chord would silently flip walk/run on every
 // press. Home/End are unbound and have no side effects.
 constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0xCF;
+// F4: diagnostic A/B toggle for the menu-text painter interception. The game binds F1/F2/F3 to game
+// speed and nothing to F4 (Docs/Controls.md), and the struck F4 modal combat-log design was never
+// built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
+constexpr int DIK_F4 = 0x3E;
 
-// Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6 7 , . Home End (no Shift).
+// Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6 7 , . Home End F4 (no Shift).
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[14]{};
+std::atomic<bool> g_extraDown[15]{};
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
 // input thread) on the rising edge. `down` is this frame's state.
-void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav, bool shift) {
+// No `shift` parameter -- it was passed `false` by every caller and could never be honoured: the
+// game binds Left Shift to Toggle Walk/Run and the mod cannot swallow keys, so a Shift chord would
+// silently flip walk/run on every press. Diagnostic keys must be plain and unbound.
+void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
     if (down) {
         if (!downFlag.exchange(true) && GameIsForeground()) {
-            if (isNav)              PostThreadMessageW(g_threadId, WM_NAVKEY, (WPARAM)vk, (LPARAM)(shift ? 1 : 0));
+            if (isNav)              PostThreadMessageW(g_threadId, WM_NAVKEY, (WPARAM)vk, 0);
             else if (vk == 'O')     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
             else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
         }
@@ -156,7 +163,7 @@ DWORD WINAPI InputThread(LPVOID) {
             if (cb) cb();
         } else if (m.message == WM_NAVKEY) {
             InputTracker::NavKeyCallback cb = g_navKeyCb;
-            if (cb) cb(static_cast<int>(m.wParam), m.lParam != 0);
+            if (cb) cb(static_cast<int>(m.wParam));
         } else if (m.message == WM_DIAG) {
             char msg[96];
             snprintf(msg, sizeof(msg), "LL keydown vk=0x%02X fg=%d",
@@ -247,26 +254,27 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     if (anyRising) g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
 
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
-    DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false, false);
-    DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false, false);
-    DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true,  false);  // \  route
-    DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true,  false);  // [  prev object
-    DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true,  false);  // ]  next object
-    DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true,  false);  // `  rescan
-    DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true,  false);  // -  prev category
-    DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true,  false);  // =  next category
-    DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true,  false);  // '  diagnostic
-    DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true,  false);  // /  describe
-    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true,  false);  // ;  target status
-    DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true,  false);  // p  route to locked target
-    DInputEdge('4',           g_extraDown[6],(dik[DIK_4]          & 0x80) != 0, true,  false);  // 4  party slot 1 status
-    DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true,  false);  // 5  party slot 2 status
-    DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true,  false);  // 6  party slot 3 status
-    DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true,  false);  // 7  guest slot status
-    DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true,  false);  // ,  log: older
-    DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true,  false);  // .  log: newer
-    DInputEdge(VK_HOME,       g_extraDown[12],(dik[DIK_HOME]      & 0x80) != 0, true,  false);  // Home log: oldest
-    DInputEdge(VK_END,        g_extraDown[13],(dik[DIK_END]       & 0x80) != 0, true,  false);  // End  log: newest
+    DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false);
+    DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
+    DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true);  // \  route
+    DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true);  // [  prev object
+    DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object
+    DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true);  // `  rescan
+    DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 text-capture A/B
+    DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
+    DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
+    DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic
+    DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true);  // /  describe
+    DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true);  // ;  target status
+    DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true);  // p  route to locked target
+    DInputEdge('4',           g_extraDown[6],(dik[DIK_4]          & 0x80) != 0, true);  // 4  party slot 1 status
+    DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true);  // 5  party slot 2 status
+    DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true);  // 6  party slot 3 status
+    DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true);  // 7  guest slot status
+    DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true);  // ,  log: older
+    DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true);  // .  log: newer
+    DInputEdge(VK_HOME,       g_extraDown[12],(dik[DIK_HOME]      & 0x80) != 0, true);  // Home log: oldest
+    DInputEdge(VK_END,        g_extraDown[13],(dik[DIK_END]       & 0x80) != 0, true);  // End  log: newest
 }
 
 uint64_t LastInputTimestampMs() {

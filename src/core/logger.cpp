@@ -1,4 +1,5 @@
 #include "core/logger.h"
+#include "core/stall_probe.h"
 #include <Windows.h>
 #include <cstdio>
 #include <ctime>
@@ -164,7 +165,15 @@ void Write(const char* category, const char* message) {
     int s = (int)((dayMs % 60000) / 1000);
     int ms = (int)(dayMs % 1000);
 
-    std::lock_guard<std::mutex> lock(g_logMutex);
+    // MEASURED. This mutex + fprintf is the only shared resource BOTH the game thread and the input
+    // thread touch, and a buffered fprintf flushes to disk on whichever thread happens to fill the
+    // buffer -- while holding this lock. A game thread parked here goes completely silent with no
+    // scope reporting, which is exactly the signature of the party-menu freeze. Timed with raw QPC
+    // and surfaced only through StallProbe's aggregate dump; logging from inside the logger would
+    // recurse, since StallProbe reports THROUGH Log::Write.
+    const int64_t tWait0 = StallProbe::Now();
+    std::unique_lock<std::mutex> lock(g_logMutex);
+    const int64_t tWrite0 = StallProbe::Now();
     if (!g_logFile) return;
 
     fprintf(g_logFile, "[%02d:%02d:%02d.%03d +%llums] [%s] %s\n",
@@ -180,6 +189,10 @@ void Write(const char* category, const char* message) {
                      strcmp(category, "COMBAT") == 0)) {
         fflush(g_logFile);
     }
+
+    const int64_t tEnd = StallProbe::Now();
+    lock.unlock();
+    StallProbe::AddLoggerSample(tWrite0 - tWait0, tEnd - tWrite0);
 }
 
 // Game text can be long (the telop hands us every page of a tutorial in one string), so the UTF-8

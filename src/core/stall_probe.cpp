@@ -45,6 +45,27 @@ Counter g_counters[kMaxCounters];
 struct Crumb { const char* entered = nullptr; const char* exited = nullptr; int64_t enteredAt = 0; };
 thread_local Crumb t_crumb;
 
+// Gap anchors get their OWN storage. The first version parked the previous-tick stamp in
+// Counter::maxTicks, which DumpAndReset zeroes -- so every pane change reset the anchor and almost
+// every gap went uncomputed (2 fired in an 8.5-minute session). An instrument the reporting path can
+// silently disarm is worse than none.
+constexpr int kMaxAnchors = 16;
+struct Anchor { std::atomic<const char*> name{nullptr}; std::atomic<int64_t> lastTick{0}; };
+Anchor g_anchors[kMaxAnchors];
+
+Anchor* AnchorFor(const char* name) {
+    for (int i = 0; i < kMaxAnchors; ++i) {
+        const char* n = g_anchors[i].name.load(std::memory_order_acquire);
+        if (n == name) return &g_anchors[i];
+        if (n == nullptr) {
+            const char* expected = nullptr;
+            if (g_anchors[i].name.compare_exchange_strong(expected, name)) return &g_anchors[i];
+            if (g_anchors[i].name.load(std::memory_order_acquire) == name) return &g_anchors[i];
+        }
+    }
+    return nullptr;
+}
+
 // (hook literal, thread id) pairs already reported, so NoteThread is O(unique) not O(calls).
 struct ThreadPair { std::atomic<const char*> name{nullptr}; std::atomic<uint32_t> tid{0}; };
 ThreadPair g_pairs[kMaxThreadPairs];
@@ -180,14 +201,12 @@ void FrameTick(double gapWarnMs) {
 }
 
 void GapTick(const char* anchor, double gapWarnMs) {
-    Counter* c = SlotFor(anchor);
-    if (!c) return;
+    Anchor* a = AnchorFor(anchor);
+    if (!a) return;
     const int64_t now = Now();
-    // Reuse the counter's lastLogMs slot as this anchor's previous-tick stamp; it is only read by
-    // the rate limiter for scopes, and an anchor is never also a scope.
-    const uint64_t prev = c->maxTicks.exchange(static_cast<uint64_t>(now), std::memory_order_relaxed);
+    const int64_t prev = a->lastTick.exchange(now, std::memory_order_relaxed);
     if (prev != 0) {
-        const double gap = MsOf(static_cast<uint64_t>(now - static_cast<int64_t>(prev)));
+        const double gap = MsOf(static_cast<uint64_t>(now - prev));
         if (gap >= gapWarnMs) {
             LogCrumb(anchor, gap);
             DumpAndReset("gap", 0.0);
@@ -201,6 +220,21 @@ std::atomic<int64_t>     g_menuMarkDone{0};    // QPC when our hook returned
 std::atomic<const char*> g_menuMarkWhat{nullptr};
 std::atomic<uint32_t>    g_paintsSinceMark{0};
 } // namespace
+
+// Fed by Log::Write. Deliberately silent: no STALL line, no LogCrumb, nothing that would re-enter
+// the logger. Surfaces only through DumpAndReset, which is called from outside the logger.
+namespace {
+std::atomic<uint64_t> g_logWait{0}, g_logWrite{0}, g_logCalls{0}, g_logMaxWait{0};
+} // namespace
+
+void AddLoggerSample(int64_t waitTicks, int64_t writeTicks) {
+    g_logCalls.fetch_add(1, std::memory_order_relaxed);
+    g_logWait.fetch_add(static_cast<uint64_t>(waitTicks), std::memory_order_relaxed);
+    g_logWrite.fetch_add(static_cast<uint64_t>(writeTicks), std::memory_order_relaxed);
+    uint64_t prev = g_logMaxWait.load(std::memory_order_relaxed);
+    const uint64_t w = static_cast<uint64_t>(waitTicks);
+    while (w > prev && !g_logMaxWait.compare_exchange_weak(prev, w)) {}
+}
 
 void MarkMenuEntry(const char* what) {
     g_menuMarkWhat.store(what, std::memory_order_relaxed);
@@ -252,6 +286,20 @@ void DumpAndReset(const char* reason, double minTotalMs) {
             return;
         }
     }
+    // Logger first: if the game thread is blocked on g_logMutex behind the input thread's disk
+    // flush, this is the only line that can show it.
+    const uint64_t lc = g_logCalls.exchange(0, std::memory_order_relaxed);
+    if (lc) {
+        const uint64_t lw = g_logWait.exchange(0, std::memory_order_relaxed);
+        const uint64_t lx = g_logWrite.exchange(0, std::memory_order_relaxed);
+        const uint64_t lm = g_logMaxWait.exchange(0, std::memory_order_relaxed);
+        char l[192];
+        snprintf(l, sizeof(l),
+                 "  %-28s calls=%-7llu lockwait=%7.2fms max=%7.2fms  write=%7.2fms",
+                 "Log::Write", (unsigned long long)lc, MsOf(lw), MsOf(lm), MsOf(lx));
+        Log::Write("PERF", l);
+    }
+
     bool any = false;
     for (int i = 0; i < kMaxCounters; ++i) {
         Counter& c = g_counters[i];

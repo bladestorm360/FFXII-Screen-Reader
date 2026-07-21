@@ -88,6 +88,11 @@ void GapTick(const char* anchor, double gapWarnMs);
 // split: how long we spent inside our own hook, and how long the game then took before it drew
 // anything. The field-menu freeze needs exactly that split -- 2235 ms of silence with no scope
 // reporting is otherwise unattributable. Repeat calls before the next mark are ignored.
+// Logger self-measurement. Log::Write cannot use Scope/TimedLock -- StallProbe reports THROUGH
+// Log::Write, so any logging from inside the logger recurses. These accumulate into a counter that
+// only the aggregate dump reads, and emit nothing themselves.
+void AddLoggerSample(int64_t waitTicks, int64_t writeTicks);
+
 void MarkMenuEntry(const char* what);
 void MarkMenuEntryDone();   // call as our hook returns
 

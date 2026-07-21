@@ -131,6 +131,12 @@ bool WriteSlot(void** slot, void* val) {
 // labels; object draws are always framing (never attributed to an item).
 void Capture(void* structPtr, bool listCapable) {
     STALL_SCOPE("TextCapture::Capture");
+    // Closes the announce -> first-draw bracket. This used to hang off HookedPainter, but that hook
+    // (FUN_002d28e0, the list painter) stopped firing after ~14s of the session while Capture kept
+    // going -- the party menu does not draw through it, so the menu under investigation produced no
+    // measurement at all. Capture fires for EVERY menu (2519 times in one party-menu window), so it
+    // is the signal that actually means "the menu drew something". One-shot per mark, inside.
+    StallProbe::NoteFirstPaint();
     const uint8_t* strp = nullptr;
     if (!ReadStrPtr(structPtr, &strp) || !strp) return;
     std::wstring text = GameText::Decode(strp);
@@ -272,7 +278,7 @@ void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
     // Second anchor, on the menu's OWN paint path: if the field sim pauses while a menu is up, the
     // field-frame anchor goes quiet legitimately and cannot tell a pause from a freeze. This one
     // only ticks while something is being drawn, so a gap here means drawing itself stopped.
-    StallProbe::GapTick("anchor:painter", /*gapWarnMs=*/150.0);
+    StallProbe::GapTick("anchor:painter", /*gapWarnMs=*/80.0);
     void* owner = nullptr; void** slot = nullptr; void* realCb = nullptr;
     bool intercept = false;
     if (g_interceptEnabled.load(std::memory_order_relaxed) &&
@@ -292,11 +298,17 @@ void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
           static bool s_warned = false;
           if (!s_warned) { s_warned = true; Log::Write("TEXT", "painter swap FAILED (WriteSlot)"); }
           intercept = false;
+          // AND release the re-entrancy latch. g_intercepting was set true above and is cleared ONLY
+          // by FinishPaint, which the `if (intercept)` tail below now skips -- so without this the
+          // latch stays set and interception is dead for the rest of the session.
+          std::lock_guard<std::mutex> lk(g_mutex);
+          g_intercepting = false;
+          g_realCb = nullptr;
+          g_paintOwner = nullptr;
       } }
     if (s_origPainter) s_origPainter(param_1, param_2, subwidget);
     if (intercept) {
         WriteSlot(slot, realCb);   // restore the game's callback
-        StallProbe::NoteFirstPaint();   // closes the announce -> first-paint bracket
         FinishPaint(owner);
     }
 }

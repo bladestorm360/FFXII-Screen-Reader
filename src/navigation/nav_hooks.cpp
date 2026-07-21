@@ -138,7 +138,7 @@ typedef uint64_t(__fastcall* Pfn_FieldFrame)();
 Pfn_FieldFrame s_origFieldFrame = nullptr;
 
 uint64_t __fastcall HookedFieldFrame() {
-    StallProbe::GapTick("anchor:fieldframe", /*gapWarnMs=*/150.0);
+    StallProbe::GapTick("anchor:fieldframe", /*gapWarnMs=*/80.0);
     {
         // OURS ONLY. This scope used to span s_origFieldFrame() below, so it reported the GAME's
         // entire per-frame field tick as mod cost -- the source of the bogus "223ms / 245ms single

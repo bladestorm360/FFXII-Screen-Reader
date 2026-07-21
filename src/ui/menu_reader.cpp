@@ -333,7 +333,10 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
     // Brackets each menu-open window: everything since the previous pane entry.
-    StallProbe::DumpAndReset("menu entry", /*minTotalMs=*/3.0);
+    // 3ms was always exceeded (TextCapture::Capture alone is ~3.7ms per window), so this wrote ~13
+    // log lines on the game thread at EVERY pane change -- on the exact path being measured. Only
+    // report a window that actually burned real time; the gap anchors dump unconditionally anyway.
+    StallProbe::DumpAndReset("menu entry", /*minTotalMs=*/25.0);
     // Start the announce -> first-paint bracket. This hook is where we speak the entered pane, and
     // it is the exact instant the field-menu freeze begins.
     StallProbe::MarkMenuEntry("pane-entry");

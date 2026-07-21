@@ -79,7 +79,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `o` | Describe / read focused tooltip | free |
 | `t` | Re-read last spoken line | free |
 | `\` | Nav: turn-by-turn route to current selection | free |
-| `Shift`+`` ` `` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — `shift` was unused by nav dispatch |
+| `F4` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — game binds F1/F2/F3 only |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |

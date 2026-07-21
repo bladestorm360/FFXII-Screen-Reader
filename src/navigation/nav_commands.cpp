@@ -217,18 +217,18 @@ void DiagnosticDump() {
 
 } // namespace
 
-void OnNavKey(int vk, bool shift) {
+// NOTE: no `shift` parameter. The game binds Left Shift to Toggle Walk/Run and the mod cannot
+// swallow keys, so a Shift chord would silently flip walk/run on every press (input_tracker.cpp).
+// The old parameter was passed `false` at every call site and could never be honoured -- a dead
+// argument that made an impossible chord look like a working feature. Do not reintroduce it.
+void OnNavKey(int vk) {
     switch (vk) {
         case VK_OEM_5:      RouteToCurrent();                 break;  // \  turn-by-turn route
         case 'P':           RouteToLockedTarget();           break;  // p  route to locked battle target
         case VK_OEM_4:      EntityList::CmdPrev();            break;  // [  previous object
         case VK_OEM_6:      EntityList::CmdNext();            break;  // ]  next object
-        case VK_OEM_3:
-            // Shift+` = diagnostic A/B of the painter interception (the mod's only write into a
-            // game structure). Plain ` is the normal rescan.
-            if (shift) TextCapture::ToggleInterception();
-            else       EntityList::CmdRescan();
-            break;  // `  rescan + area
+        case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area
+        case VK_F4:         TextCapture::ToggleInterception(); break;  // F4 diagnostic A/B
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
