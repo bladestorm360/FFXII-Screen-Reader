@@ -1,5 +1,6 @@
 #include "navigation/bullet_query.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 

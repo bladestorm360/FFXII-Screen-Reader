@@ -1,5 +1,6 @@
 #include "navigation/player_state.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "navigation/map_query.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"

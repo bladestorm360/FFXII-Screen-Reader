@@ -40,7 +40,7 @@ struct ExitDest {
     uint16_t     destMapId = 0;    // destination map id (the flags==0 `mapjump` literal)
     uint16_t     entrance  = 0;    // arrival slot on the DESTINATION map (not a local door index)
     uint32_t     codeOff   = 0;    // routine entry offset in the blob (diagnostics only)
-    std::wstring destName;         // "<region>: <sub-area>", resolved via MapQuery::ResolveFullAreaName
+    std::wstring destName;         // "<region>: <sub-area>", resolved via MapNames::ResolveFullAreaName
 };
 
 // Parse the currently loaded map's field script and return every `__MJ_CTRL<NNN>` controller with its
@@ -48,7 +48,7 @@ struct ExitDest {
 // mid-teardown) yields an empty list rather than a fault. Returns false when no field script is loaded.
 //
 // Callers should match a door to its destination BY POSITION (`pos`), not by slot number: the `+0x54`
-// table repeats records (one map's slot 1 is byte-identical to slot 0) and `MapQuery::EnumerateMapJumps`
+// table repeats records (one map's slot 1 is byte-identical to slot 0) and `MapExits::EnumerateMapJumps`
 // de-duplicates them, so the surviving entry's index may differ from the owning slot while naming the same
 // physical doorway. Position matching also fails safe — a mismatch yields no label rather than a wrong one.
 //

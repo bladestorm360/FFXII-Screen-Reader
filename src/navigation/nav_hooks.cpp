@@ -1,5 +1,6 @@
 #include "navigation/nav_hooks.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "navigation/bullet_query.h"
 #include "navigation/path_planner.h"
 #include "navigation/entity_list.h"

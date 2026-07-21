@@ -5,6 +5,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/map_query.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
 #include "battle/party_status.h"

@@ -1,6 +1,8 @@
 #include "navigation/map_script.h"
 #include "navigation/map_query.h"
+#include "navigation/map_names.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/logger.h"
@@ -191,7 +193,7 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             d.destMapId = U16(b, o + 1);
             d.entrance  = U16(b, o + 4);
             d.codeOff   = code;
-            d.destName  = MapQuery::ResolveFullAreaName(d.destMapId);
+            d.destName  = MapNames::ResolveFullAreaName(d.destMapId);
             out.push_back(d);
             break;
         }

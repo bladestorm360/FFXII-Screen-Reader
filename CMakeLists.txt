@@ -49,10 +49,14 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/player_state.cpp
     src/navigation/bullet_query.cpp
     src/navigation/map_query.cpp
+    src/navigation/map_names.cpp
+    src/navigation/map_exits.cpp
     src/navigation/map_script.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp
+    src/navigation/entity_scan.cpp
+    src/navigation/entity_diag.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
     src/navigation/nav_grid.cpp
