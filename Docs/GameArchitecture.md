@@ -136,6 +136,15 @@ master-data reloc base — are owned by `src/core/phyre_types.h`. Menu surface i
 `src/ui/menu_state.h`; map/exit/planmapname addresses in `src/navigation/map_rva.h`; field-nav
 addresses in `src/navigation/nav_rva.h`. Grep those before re-deriving an offset.
 
+**Codec PAGE BREAK = `0x03`** (confirmed from shipped data 2026-07-21). A multi-page dialogue
+message is ONE string; `0x03` separates the screens. Evidence: `tools/ebp_find_pagebreak.py` decoded
+17,268 messages from 617 extracted `.ebp` scripts and found **3164 of `0x03`'s 3309 occurrences
+(95.6%)** sitting exactly at a visible page boundary (sentence-end immediately followed by a capital,
+no space) — nearest rival `0x0f 20` at 2.0%. Corroborated by `FUN_002ac5f0`, where `0x03` is the only
+control case that returns 0 (ending the draw pass) after storing the resume position in `*param_2`.
+`GameText::DecodePages` splits on it; `rbn_a16.ebp` msg 151 (hunt tutorial) has 4 → 5 pages.
+Dialogue `.ebp` layout: `EBP2` magic, `MSG_BASE` at `+0x18`, self-describing `u32` offset table.
+
 **Text capture hooks** (codec text, NOT UTF-16):
 - PRIMARY `FUN_002b3050` (RVA `0x18B050`) — read **param_2 (RDX) = codec `byte*` PRE-call**;
   28 callers; covers menus, item/ability names+descriptions, panels/prompts, battle-UI text.

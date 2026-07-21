@@ -117,7 +117,19 @@ inline bool IsSpaceControl(uint8_t c) {
 }
 
 // Shared decode loop, used by BOTH Decode and DecodePages so the codec is understood in exactly
-// one place. Always splits at the 0x03 page break; a message without one yields a single page, and
+// one place. Always splits at the 0x03 page break.
+//
+// 0x03 IS CONFIRMED FROM SHIPPED DATA, not inferred. tools/ebp_find_pagebreak.py decoded 17,268
+// dialogue messages out of 617 extracted .ebp scripts, tracked the source offset of every emitted
+// character, and histogrammed the invisible bytes sitting where a sentence visibly runs into the
+// next page ("...the bounty." immediately followed by "You gotta"):
+//     0x03           3164 of 3309 occurrences are page boundaries   (95.6%)
+//     0x0f 20          68 of 3422                                    (2.0%)
+//     0x0f 27          36 of 2427                                    (1.5%)
+// which matches FUN_002ac5f0, where 0x03 is the only control case that returns 0 (ending the draw
+// pass) after storing the resume position in *param_2.
+//
+// Always splits; a message without one yields a single page, and
 // Decode simply concatenates -- which reproduces the previous behaviour exactly, since 0x03 used to
 // fall through the `default: return 1` arm and emit nothing.
 bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>& pages) {
@@ -132,7 +144,6 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
     pages.emplace_back();
     std::wstring* cur = &pages.back();
     cur->reserve(n);
-    
 
     size_t i = 0;
     while (i < n) {
@@ -149,6 +160,10 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         if (c < 0x10) {                                   // control byte
             if (IsSpaceControl(c)) cur->push_back(L' ');
             else if (c == 0x02)    cur->push_back(L'\n');
+            else if (c == 0x03) {                         // PAGE BREAK -- start a new page
+                pages.emplace_back();
+                cur = &pages.back();                      // re-seat: emplace_back may reallocate
+            }
             const int len = ControlLength(c);
             if (len <= 0) break;                          // terminator, or length unknown
             i += static_cast<size_t>(len);

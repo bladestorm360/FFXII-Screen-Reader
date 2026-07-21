@@ -186,6 +186,34 @@ void OnTelop(void* text, int slot) {
     GameText::DecodePages(reinterpret_cast<const uint8_t*>(text), 4096, pages);
     if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
 
+    // RAW BYTE DUMP for a message that decoded to a SINGLE long page -- i.e. one that visibly
+    // contains several screens' worth of text but no separator we recognise.
+    //
+    // 0x03 was identified from FUN_002ac5f0 as the page break (it is the only control case that
+    // returns 0 and stores a resume pointer) and that turned out NOT to be what these messages use:
+    // every one still reports page 1/1. Rather than guess a third byte, this prints the actual
+    // bytes so the separator can be READ off the boundary -- the run between "...the bounty." and
+    // "You gotta talk..." is whatever sits at that offset. Capped at 3 dumps per session and
+    // 256 bytes each, so it cannot become log spam on the game thread.
+    if (pages.size() == 1 && pages.front().size() > 200) {
+        static int s_dumps = 0;
+        if (s_dumps < 3) {
+            ++s_dumps;
+            uint8_t raw[256] = {};
+            if (MemRead::SafeReadBytes(text, raw, sizeof(raw))) {
+                char hex[3 * 64 + 1];
+                for (int off = 0; off < 256; off += 64) {
+                    int p = 0;
+                    for (int k = 0; k < 64; ++k)
+                        p += snprintf(hex + p, sizeof(hex) - p, "%02x ", raw[off + k]);
+                    char line[256];
+                    snprintf(line, sizeof(line), "telop RAW +%03d: %s", off, hex);
+                    Log::Write("MSGTEXT", line);
+                }
+            }
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lk(g_pageMutex);
         g_pages = std::move(pages);
