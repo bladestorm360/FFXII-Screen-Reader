@@ -203,7 +203,13 @@ void OnFocus(void* owner, int index, bool fromPaint) {
             g_pendingIndex = index;
         }
         Log::Write("READER", "  (text not ready — awaiting paint)");
-        TextCapture::DumpRingToLog("focus text empty");
+        // The 257-line ring dump is a heavy diagnostic on a path that is NORMAL, not an error --
+        // the entry focus routinely beats the painter, which is the whole reason for the replay
+        // above. Log-only volume control (the CONSOLE OUTPUT BUDGET rule): dump once per surface,
+        // not once per event. Previously the speech dedup was incidentally throttling this; with
+        // that gone it fired on every empty focus, writing hundreds of fprintf calls on the game
+        // thread while a menu opened.
+        if (ownerChanged) TextCapture::DumpRingToLog("focus text empty");
         return;
     }
 
@@ -260,13 +266,26 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         const uint32_t rowOff = IngameMenuReader::RowChainOff(owner);
 
         // Stash this focus so the FUN_00244830 focus-change hook can replay the entry item once
-        // DAT_0208ebc0 flips to the entered pane (the entry 0x8000 fires just before that flip,
-        // so it would otherwise be gated out). Also emit a deduped active-pane diagnostic.
+        // DAT_0208ebc0 flips to the entered pane (the entry 0x8000 fires just before that flip, so
+        // it would otherwise be gated out). Also emit a deduped active-pane diagnostic.
+        //
+        // ARM IT ONLY WHEN THE PANE IS NOT YET FOCUSED -- that is exactly the case the replay
+        // exists for. It used to be armed on EVERY 0x8000 and never cleared, so a later
+        // FUN_00244830 (e.g. focus returning after a pop-up closed) replayed a focus the dispatch
+        // path had ALREADY spoken: the row was announced twice, which meant two blocking
+        // Tolk_Output(interrupt) calls on the game thread in one frame and a visible hitch on
+        // opening the party menu. The battle command menu never had it because FUN_00244830 does
+        // not replay that path -- which is why it always felt instant by comparison.
         void* focusWin = MenuState::FocusedOwner();
+        const bool willBeGated = (owner != focusWin);
         bool diag;
         {
             std::lock_guard<std::mutex> lk(g_mutex);
-            g_stashOwner = owner; g_stashIndex = index; g_stashRowOff = rowOff;
+            if (willBeGated) {
+                g_stashOwner = owner; g_stashIndex = index; g_stashRowOff = rowOff;
+            } else {
+                g_stashOwner = nullptr; g_stashIndex = -1; g_stashRowOff = 0;
+            }
             diag = (owner != g_diagOwner || focusWin != g_diagFocus);
             if (diag) { g_diagOwner = owner; g_diagFocus = focusWin; }
         }
@@ -310,6 +329,12 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         o = g_stashOwner; idx = g_stashIndex; rowOff = g_stashRowOff;
+        // CONSUME it: the stash is a one-shot handoff for a single gated-out entry focus, not a
+        // standing record of "the last focus". Leaving it armed let every later FUN_00244830 on the
+        // same pane re-announce the same row.
+        if (o && o == newWin && idx >= 0) {
+            g_stashOwner = nullptr; g_stashIndex = -1; g_stashRowOff = 0;
+        }
     }
     if (o && o == newWin && idx >= 0) {
         if (rowOff) IngameMenuReader::OnRowChainFocus(o, rowOff, idx);

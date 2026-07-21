@@ -120,6 +120,13 @@ Pfn_StatusCursor s_origStatusCursor = nullptr;
 
 std::mutex   g_mutex;
 std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (cached from FUN_00276be0)
+// Initial-focus replay for the battle command menu. When the menu OPENS, its 0x8000 fires before
+// FUN_00276be0 has drawn (and therefore cached) any command name, so the highlighted command
+// resolves to nothing and the entry is silent -- the field pause menu gets its entry announce from
+// the FUN_00244830 pane replay, but the battle menu is a separate system with no such path. We
+// stash the unresolved focus here and let the first successful draw replay it.
+void* g_bcmdPendingPanel = nullptr;
+int   g_bcmdPendingIndex = -1;
 
 // The focused row's NAME codec pointer, or null. POD-only under __try (no objects), so the SEH
 // guard is legal; decoding happens outside. The game always sends a valid focus index.
@@ -185,14 +192,27 @@ void SpeakRow(void* owner, const std::wstring& text, const char* tag) {
 // DECODED name per cmdId (memory-only — the game's own localized text) for the 0x8000 focus lookup.
 // The codec pointer can point into a shared static buffer, so we decode immediately and cache the
 // string (never the pointer).
+void SpeakBattleCommand(void* panel, int index);   // defined below; replayed from here
 void HookedBcmdDraw(void* panel, void* geom, int row) {
     if (s_origBcmdDraw) s_origBcmdDraw(panel, geom, row);
     int cmdId = -1; const uint8_t* codec = nullptr;
     if (!ReadBcmdDraw(panel, row, &cmdId, &codec) || !codec || cmdId < 0 || cmdId >= 256) return;
     std::wstring text = GameText::Decode(codec, 256);   // SEH-guarded inside GameText
     if (!GameText::IsMostlyPrintable(text)) return;
-    std::lock_guard<std::mutex> lk(g_mutex);
-    g_bcmdName[cmdId] = text;
+    void* replayPanel = nullptr; int replayIndex = -1;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_bcmdName[cmdId] = text;
+        // Consume a pending entry focus for THIS panel. `exchange`-style one-shot: FUN_00276be0 is a
+        // PER-DRAW hook, so without clearing the pending slot here it would re-announce every frame.
+        // (This is the sanctioned per-frame guard, not a dedup -- see the no-dedup rule in CLAUDE.md.)
+        if (g_bcmdPendingPanel == panel && g_bcmdPendingIndex >= 0) {
+            replayPanel = g_bcmdPendingPanel; replayIndex = g_bcmdPendingIndex;
+            g_bcmdPendingPanel = nullptr; g_bcmdPendingIndex = -1;
+        }
+    }
+    // Outside the lock: the speak path re-enters BattleCommandName, which takes g_mutex itself.
+    if (replayPanel) SpeakBattleCommand(replayPanel, replayIndex);
 }
 
 // Replicate FUN_002b58b0(src, 0): a 2-byte-marker-prefixed codec block; index 0 -> src+2 if it
@@ -324,6 +344,21 @@ void HookedStatusCursor(int slot) {
     Speech::Output(line, /*interrupt=*/true);
 }
 
+// Resolve and speak the highlighted battle command. Returns FALSE when the name is not resolvable
+// yet -- on menu OPEN that is the normal case, not an error: the 0x8000 arrives before FUN_00276be0
+// has drawn any row, so nothing is cached to look up.
+bool TrySpeakBattleCommand(void* panel, int index) {
+    int cmdId = ReadBcmdCmdId(panel, index);
+    if (cmdId < 0) return false;
+    std::wstring text = BattleCommandName(panel, index, cmdId);   // resolves by list type; locks internally
+    if (text.empty()) return false;
+    Log::WriteW("INGAME", "command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
+    Speech::Output(text, /*interrupt=*/true);
+    return true;
+}
+
+void SpeakBattleCommand(void* panel, int index) { TrySpeakBattleCommand(panel, index); }
+
 } // namespace
 
 namespace IngameMenuReader {
@@ -339,6 +374,9 @@ bool Init() {
 void Shutdown() {
     Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_bcmdPendingPanel = nullptr;
+    g_bcmdPendingIndex = -1;
 }
 
 uint32_t RowChainOff(void* owner) {
@@ -368,13 +406,22 @@ bool IsBattleCommandOwner(void* owner) {
 // NO dedup. This used to compare against the last spoken text, which made backing out of the Attack
 // list and reopening it SILENT (same first command, same string). 0x8000 is event-driven, so every
 // fire is a real highlight the player must hear.
+//
+// INITIAL FOCUS ON ENTRY. When the menu opens, this fires before any row has been drawn, so the
+// name cache is empty and the highlighted command resolves to nothing -- the menu used to open
+// silently and only start speaking on the first cursor MOVE. The field pause menu gets its entry
+// announce from the FUN_00244830 pane replay; the battle menu is a separate system with no such
+// path, so an unresolved focus is stashed here and replayed by the first FUN_00276be0 draw that
+// caches a name.
 void OnBattleCommandFocus(void* owner, int index) {
-    int cmdId = ReadBcmdCmdId(owner, index);
-    if (cmdId < 0) return;
-    std::wstring text = BattleCommandName(owner, index, cmdId);   // resolves by list type; locks internally
-    if (text.empty()) return;
-    Log::WriteW("INGAME", "command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
-    Speech::Output(text, /*interrupt=*/true);
+    if (TrySpeakBattleCommand(owner, index)) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_bcmdPendingPanel = nullptr; g_bcmdPendingIndex = -1;   // spoken -> drop any stale pending
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_bcmdPendingPanel = owner;
+    g_bcmdPendingIndex = index;
 }
 
 } // namespace IngameMenuReader
