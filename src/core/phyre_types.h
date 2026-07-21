@@ -39,6 +39,28 @@ constexpr uint32_t ACTOR_POS_Z      = 0xE8;   // cached world Z
 constexpr uint32_t ACTOR_YAW        = 0x160;  // cached facing yaw (radians)
 constexpr uint32_t ACTOR_DEF_PTR    = 0x698;  // source definition / BtlChr ptr (null => empty slot)
 
+// ---- BtlWork: the battle/party work block --------------------------------------------------------
+// DAT_02ebf190 is a POINTER to the block, NOT the block. Treating it as the struct is the Session-48
+// bug that made the 4/5/6 party keys silent, so the distinction is spelled out here rather than left
+// to each caller's comment.
+//
+// ⚠️ NAME COLLISION, UNRESOLVED. This same address carried THREE names across the codebase --
+// `RVA_BTLWORK` (battle_state.cpp, "POINTER to BtlWork"), `PARTY_MGR_PTR` and `FIELD_STATE_BLOCK`
+// (both nav_rva.h) -- i.e. three mental models of one global. The last two were unused and have been
+// deleted; this is now the only name. But note what fell out of merging them: nav_rva.h described
+// `FIELD_STATE_BLOCK + 0x5A7E` as a "field-sign category table", while battle_state.cpp reads the
+// SAME address as `OFF_ROSTER_L3`, the 9-entry party roster list -- and the roster reading is the one
+// that is confirmed working in play. The field-sign reading was never used by any .cpp. It is
+// probably wrong, but "probably" is below this project's 0.98 bar, so it is recorded here as a
+// question to settle with evidence, NOT silently resolved. Do not build on the field-sign reading.
+constexpr uint32_t BTLWORK_PTR   = 0x2D9F190;  // DAT_02ebf190 -- POINTER to BtlWork
+constexpr uint32_t BTLWORK_MAGIC = 0x5071901;  // stamped at W+0x00 by FUN_002370c0; validates the deref
+
+// Master-data relocation base. Every "pointer" in st2e master data is a u32 offset that needs this
+// added (FUN_0020e600). Was declared twice: `RVA_RELOC` (battle_state.cpp) and `MAPJUMP_RELOC_BASE`
+// (nav_rva.h).
+constexpr uint32_t MASTERDATA_RELOC_BASE = 0x1E63530;  // _DAT_01f83530
+
 // ---- BtlChr (combatant record) ------------------------------------------------------------------
 // NOTE the width asymmetry, confirmed in the natives' own bodies: HP is i32, MP is i16. Reading MP
 // as i32 pulls the neighbouring field in as garbage in the high half.

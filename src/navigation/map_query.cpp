@@ -2,6 +2,7 @@
 #include "navigation/nav_rva.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "core/phyre_types.h"
 #include "core/logger.h"
 #include "core/game_text.h"
 
@@ -473,7 +474,7 @@ void EnumerateMapJumps(const FVec3* playerPos, float maxDist, std::vector<ExitRe
     void* containerBase = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
     if (!containerBase) return;
     uint32_t reloc = 0;
-    SafeReadU32(Hooks::ResolveRva(NavRva::MAPJUMP_RELOC_BASE), 0, &reloc);   // _DAT_01f83530 (~0)
+    SafeReadU32(Hooks::ResolveRva(PhyreTypes::MASTERDATA_RELOC_BASE), 0, &reloc);   // _DAT_01f83530 (~0)
 
     void* mapData = PtrAt(containerBase, NavRva::TBL_GUARD_OFF);   // *(u64*)(containerBase+0)
     uint16_t tag = 0;

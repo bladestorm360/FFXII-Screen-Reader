@@ -27,9 +27,8 @@ constexpr uint32_t FIELD_ACTIVE = 0x1F69340;
 // DAT_02098e10 (ABS 0x02098e10): base of the per-selector handle tables.
 // FUN_00263ff0(sel) = &DAT_02098e10 + sel*0x51 (undefined8 units) = base + sel*0x288.
 constexpr uint32_t HANDLE_TABLE_BASE = 0x1F78E10;
-// *DAT_02ebf190 (ABS 0x02ebf190): party-manager pointer (source of truth for the
-// leader index; diagnostic cross-check only in M0).
-constexpr uint32_t PARTY_MGR_PTR = 0x2D9F190;
+// 0x2D9F190 was ALSO declared here twice (PARTY_MGR_PTR, FIELD_STATE_BLOCK) and once in
+// battle_state.cpp (RVA_BTLWORK). Both copies here were unused; it is PhyreTypes::BTLWORK_PTR now.
 
 // ---- Bullet walkability (from FUN_006a1a70 / FUN_006a0310) -------------------
 // FUN_006a0310 (ABS 0x006a0310): builds the per-map physics world; hook it to
@@ -239,11 +238,12 @@ constexpr uint32_t MAPJUMP_ARRAY_LOOKUP   = 0x144B90;  // FUN_00264b90 (exit arr
 // ---- Map-jump EXIT ARRAY layout (per handle-table container; backs getmapjumpposbyindex) -----
 // Derived from FUN_00264b90 (~0.85, PENDING confirmation via the '-key exit dump):
 //   containerBase = HANDLE_TABLE_BASE + c*HANDLE_TABLE_STRIDE
-//   exitBase = containerBase + *(u32)(containerBase + TBL_EXIT_OFF) + *(u32)(MAPJUMP_RELOC_BASE)
+//   exitBase = containerBase + *(u32)(containerBase + TBL_EXIT_OFF) + *(u32)(PhyreTypes::MASTERDATA_RELOC_BASE)
 //   count    = *(u32)exitBase ; exit i: float x/y/z/angle at word [i*8 + 1..4] (EXIT_REC_STRIDE bytes)
 constexpr uint32_t TBL_EXIT_OFF       = 0x54;       // u32 rel-offset to the exit sub-table (primary)
 constexpr uint32_t TBL_EXIT_OFF_ALT   = 0x84;       // alt exit sub-table (destination-side positions)
-constexpr uint32_t MAPJUMP_RELOC_BASE = 0x1E63530;  // _DAT_01f83530 (reloc delta added by FUN_0020e600)
+// MAPJUMP_RELOC_BASE -> PhyreTypes::MASTERDATA_RELOC_BASE (battle_state.cpp declared the same
+// address as RVA_RELOC). It is the master-data reloc delta, not a map-jump-specific one.
 constexpr uint32_t EXIT_REC_STRIDE    = 0x20;       // bytes per jump record (from +0x54 table)
 constexpr uint32_t EXIT_COUNT_MAX     = 64;         // sanity clamp on the exit count
 // ---- Exit DESTINATION AREA id (mapData+0x8c) via FUN_00264920 by JUMP INDEX --------------------------
@@ -413,8 +413,8 @@ constexpr int      CONNREC_TYPE_DOOR = 1;         // type 1 = door/jump exit (0 
 // field-sign site record table. Same id space as gameState+0x1044 -> ResolveMapName(dest) names it.
 constexpr uint32_t SCENE_POOL_ACCESSOR = 0x116820;  // FUN_00236820(i) -> pool object/handle for slot i
 constexpr uint32_t SCENE_POOL_COUNT_FN = 0x116850;  // FUN_00236850() -> pool slot count
-constexpr uint32_t SCENE_POOL_BASE     = 0x1F6E688; // DAT_0208e688 (raw pool base, stride 0xf50; fallback)
-constexpr uint32_t SCENE_POOL_COUNT    = 0x1F6E6A0; // DAT_0208e6a0 (=0x20)
+// SCENE_POOL_BASE / SCENE_POOL_COUNT were a second name for the SAME globals as the actor pool
+// (0x1F6E688 / 0x1F6E6A0); both were unused. Use PhyreTypes::ACTOR_POOL_BASE / ACTOR_POOL_COUNT.
 constexpr uint32_t SCENE_POOL_STRIDE   = 0xF50;     // bytes per pool object
 constexpr uint32_t POOL_HANDLE_OBJ_OFF = 0x30;      // *(rec+0x30) -> object (FUN_00263e30), if accessor gives a handle
 constexpr uint32_t POOL_OBJ_CONN_OFF   = 0x698;     // ptr -> map-connection entry (!=0 => exit gimmick)
@@ -436,12 +436,11 @@ constexpr uint32_t SITE_REC_DEST_OFF   = 0x5C;      // u16 destination map id (<
 // ---- Gimmick tables (classification; from FUN_0031c2f0) ----------------------
 constexpr uint32_t GIMMICK_INSTANCE_TABLE = 0x2D9F120;  // DAT_02ebf120
 constexpr uint32_t GIMMICK_DEF_TABLE      = 0x2D9F150;  // DAT_02ebf150 (def id / model)
-constexpr uint32_t FIELD_STATE_BLOCK      = 0x2D9F190;  // DAT_02ebf190 (ptr to field-state mgr)
-// Field-sign category tables inside *(FIELD_STATE_BLOCK): byte per entity slot,
-// stride 2. The byte->category mapping (which value = Save/Exit/Treasure/...) is
-// the runtime-pinned discriminator — the diagnostic dumps these to pin it.
-constexpr uint32_t FIELDSIGN_CAT_A_OFF    = 0x5A7E;
-constexpr uint32_t FIELDSIGN_CAT_B_OFF    = 0x5A90;
+// ⚠️ REMOVED: FIELD_STATE_BLOCK (0x2D9F190) + FIELDSIGN_CAT_A_OFF/B_OFF (0x5A7E/0x5A90), described
+// here as "field-sign category tables". That address is PhyreTypes::BTLWORK_PTR, and battle_state.cpp
+// reads BTLWORK + 0x5A7E as OFF_ROSTER_L3, the party roster list -- a reading that IS confirmed
+// working in play, whereas nothing ever used these. See the collision note on BTLWORK_PTR in
+// core/phyre_types.h before reviving the field-sign interpretation.
 
 // ---- Field-nav game-thread lifecycle (turn-by-turn A* runs on the game thread) --
 // The route planner casts many walkability rays; doing that on the mod's input thread

@@ -15,13 +15,11 @@ using MemRead::SafeReadU16;
 using MemRead::SafeReadU32;
 
 // ---- RVAs (abs = RVA + 0x120000) --------------------------------------------------------------
-constexpr uint32_t RVA_BTLWORK   = 0x2D9F190;  // DAT_02ebf190 -- POINTER to BtlWork
-constexpr uint32_t RVA_RELOC     = 0x1E63530;  // _DAT_01f83530 -- master-data relocation base
+// BTLWORK_PTR / BTLWORK_MAGIC / MASTERDATA_RELOC_BASE: core/phyre_types.h (each had 2-3 names)
 constexpr uint32_t RVA_POOL      = 0x2D9F170;  // DAT_02ebf170 -- shared codec string pool (word.bin)
 constexpr uint32_t RVA_ACTIONTBL = 0x2D9F138;  // DAT_02ebf138 -- ability/action table
 constexpr uint32_t RVA_STATUSTBL = 0x2D9F118;  // DAT_02ebf118 -- battle status-name table
 
-constexpr uint32_t BTLWORK_MAGIC = 0x5071901;  // stamped at W+0x00 by FUN_002370c0
 constexpr uint32_t OFF_ROSTER_L3 = 0x5A7E;     // list 3: 9 x u16 BtlChr indices (unmasked party)
 constexpr uint32_t OFF_LEADER    = 0x5AA4;     // u8 leader BtlChr index
 constexpr uint32_t OFF_BC_ARRAY  = 0x08;
@@ -46,7 +44,7 @@ constexpr uint32_t HDR_COUNT = 0x04, HDR_STRIDE = 0x08, HDR_RECORDS = 0x0C;
 // Every "pointer" in master data is a u32 offset needing this relocation (FUN_0020e600).
 void* Reloc(uint32_t off) {
     if (off == 0) return nullptr;
-    void* base = PtrAt(Hooks::ResolveRva(RVA_RELOC), 0);
+    void* base = PtrAt(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0);
     if (!base) return nullptr;
     return static_cast<char*>(base) + off;
 }
@@ -90,7 +88,7 @@ void* MasterRecord(uint32_t tableRva, uint32_t index) {
 // ================================================================================================
 
 void* Work() {
-    void* w = PtrAt(Hooks::ResolveRva(RVA_BTLWORK), 0);      // THE DEREFERENCE
+    void* w = PtrAt(Hooks::ResolveRva(BTLWORK_PTR), 0);      // THE DEREFERENCE
     if (!w) return nullptr;
     uint32_t magic = 0;
     if (!SafeReadU32(w, 0x00, &magic) || magic != BTLWORK_MAGIC) return nullptr;
@@ -111,7 +109,7 @@ void* BtlChrForSlot(int slot) {
 
 SlotDiag DiagnoseSlot(int slot) {
     SlotDiag d;
-    d.globalValue = PtrAt(Hooks::ResolveRva(RVA_BTLWORK), 0);
+    d.globalValue = PtrAt(Hooks::ResolveRva(BTLWORK_PTR), 0);
     if (!d.globalValue) return d;
     d.magicOk = SafeReadU32(d.globalValue, 0x00, &d.magic) && d.magic == BTLWORK_MAGIC;
     if (!d.magicOk || slot < 0 || slot >= kRosterSlots) return d;

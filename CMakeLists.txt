@@ -33,6 +33,8 @@ add_library(${PROJECT_NAME} SHARED
     src/input/input_tracker.cpp
     src/ui/menu_observer.cpp
     src/ui/text_capture.cpp
+    src/ui/menu_state.cpp
+    src/ui/config_reader.cpp
     src/ui/menu_reader.cpp
     src/ui/ingame_menu_reader.cpp
     src/ui/battle_target_reader.cpp
