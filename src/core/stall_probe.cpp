@@ -12,6 +12,12 @@ namespace {
 // 16 ms frame, well above anything our hooks should ever legitimately cost.
 constexpr double kStallMs = 2.0;
 
+// RATE LIMIT. A probe that floods the log becomes the problem it is hunting: a mis-scoped per-frame
+// hook fired ~30 STALL lines/second into a game-thread fprintf, which is exactly the class of defect
+// under investigation. Each scope may report at most once per this interval; the aggregate dump
+// still carries the full counts, so nothing is lost -- only the repetition.
+constexpr uint64_t kStallLogIntervalMs = 1000;
+
 constexpr int kMaxCounters = 64;
 constexpr int kMaxThreadPairs = 96;
 
@@ -25,8 +31,19 @@ struct Counter {
     std::atomic<uint64_t>    maxTicks{0};
     std::atomic<uint64_t>    waitTicks{0};  // total blocked acquiring a lock
     std::atomic<uint64_t>    waitCalls{0};
+    std::atomic<uint64_t>    lastLogMs{0};  // rate limit, per scope
+    std::atomic<uint64_t>    suppressed{0}; // breaches swallowed since the last report
 };
 Counter g_counters[kMaxCounters];
+
+// PER-THREAD BREADCRUMB: the last scope entered and the last one exited, per thread.
+//
+// When the game thread blocks somewhere we do NOT instrument, no scope reports -- the log simply
+// goes silent, which is what happened at the field-menu freeze. The last mod code that ran before
+// the silence is then the only evidence there is, and it was being thrown away. thread_local, so
+// recording costs one store and needs no synchronisation.
+struct Crumb { const char* entered = nullptr; const char* exited = nullptr; int64_t enteredAt = 0; };
+thread_local Crumb t_crumb;
 
 // (hook literal, thread id) pairs already reported, so NoteThread is O(unique) not O(calls).
 struct ThreadPair { std::atomic<const char*> name{nullptr}; std::atomic<uint32_t> tid{0}; };
@@ -54,6 +71,19 @@ Counter* SlotFor(const char* name) {
     return nullptr;
 }
 
+// True at most once per kStallLogIntervalMs for this counter; counts what it swallows so the
+// suppression is visible rather than silent.
+bool ShouldLogStall(Counter* c) {
+    const uint64_t now = GetTickCount64();
+    const uint64_t last = c->lastLogMs.load(std::memory_order_relaxed);
+    if (last != 0 && now - last < kStallLogIntervalMs) {
+        c->suppressed.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    c->lastLogMs.store(now, std::memory_order_relaxed);
+    return true;
+}
+
 } // namespace
 
 int64_t Now() {
@@ -62,9 +92,13 @@ int64_t Now() {
     return t;
 }
 
-Scope::Scope(const char* name) : m_name(name), m_t0(Now()) {}
+Scope::Scope(const char* name) : m_name(name), m_t0(Now()) {
+    t_crumb.entered = name;
+    t_crumb.enteredAt = m_t0;
+}
 
 Scope::~Scope() {
+    t_crumb.exited = m_name;
     const uint64_t d = static_cast<uint64_t>(Now() - m_t0);
     Counter* c = SlotFor(m_name);
     if (!c) return;
@@ -74,9 +108,12 @@ Scope::~Scope() {
     while (d > prevMax && !c->maxTicks.compare_exchange_weak(prevMax, d)) {}
 
     const double ms = MsOf(d);
-    if (ms >= kStallMs) {
-        char line[160];
-        snprintf(line, sizeof(line), "STALL %s %.1fms (single call)", m_name, ms);
+    if (ms >= kStallMs && ShouldLogStall(c)) {
+        const uint64_t sup = c->suppressed.exchange(0, std::memory_order_relaxed);
+        char line[176];
+        if (sup) snprintf(line, sizeof(line), "STALL %s %.1fms (single call, +%llu more suppressed)",
+                          m_name, ms, (unsigned long long)sup);
+        else     snprintf(line, sizeof(line), "STALL %s %.1fms (single call)", m_name, ms);
         Log::Write("PERF", line);
     }
 }
@@ -88,7 +125,7 @@ void AddWait(const char* name, int64_t startTicks) {
     c->waitCalls.fetch_add(1, std::memory_order_relaxed);
     c->waitTicks.fetch_add(d, std::memory_order_relaxed);
     const double ms = MsOf(d);
-    if (ms >= kStallMs) {
+    if (ms >= kStallMs && ShouldLogStall(c)) {
         char line[160];
         snprintf(line, sizeof(line), "STALL %s %.1fms BLOCKED on lock", name, ms);
         Log::Write("PERF", line);
@@ -115,19 +152,82 @@ void NoteThread(const char* name) {
     }
 }
 
+// What was this thread doing immediately before the gap? With no scope spanning the block, this is
+// the strongest evidence available.
+void LogCrumb(const char* anchor, double gapMs) {
+    char line[256];
+    const int64_t sinceEnter = t_crumb.enteredAt ? (Now() - t_crumb.enteredAt) : 0;
+    snprintf(line, sizeof(line),
+             "GAP %.1fms on anchor %s (tid=%lu) -- last scope entered=%s exited=%s, %.1fms ago",
+             gapMs, anchor, static_cast<unsigned long>(GetCurrentThreadId()),
+             t_crumb.entered ? t_crumb.entered : "(none)",
+             t_crumb.exited  ? t_crumb.exited  : "(none)",
+             MsOf(static_cast<uint64_t>(sinceEnter)));
+    Log::Write("PERF", line);
+}
+
 void FrameTick(double gapWarnMs) {
     static int64_t s_last = 0;
     const int64_t now = Now();
     if (s_last != 0) {
         const double gap = MsOf(static_cast<uint64_t>(now - s_last));
         if (gap >= gapWarnMs) {
-            char line[160];
-            snprintf(line, sizeof(line), "FRAME GAP %.1fms -- breakdown of that window follows", gap);
-            Log::Write("PERF", line);
+            LogCrumb("input-poll", gap);
             DumpAndReset("frame gap", 0.0);
         }
     }
     s_last = now;
+}
+
+void GapTick(const char* anchor, double gapWarnMs) {
+    Counter* c = SlotFor(anchor);
+    if (!c) return;
+    const int64_t now = Now();
+    // Reuse the counter's lastLogMs slot as this anchor's previous-tick stamp; it is only read by
+    // the rate limiter for scopes, and an anchor is never also a scope.
+    const uint64_t prev = c->maxTicks.exchange(static_cast<uint64_t>(now), std::memory_order_relaxed);
+    if (prev != 0) {
+        const double gap = MsOf(static_cast<uint64_t>(now - static_cast<int64_t>(prev)));
+        if (gap >= gapWarnMs) {
+            LogCrumb(anchor, gap);
+            DumpAndReset("gap", 0.0);
+        }
+    }
+}
+
+namespace {
+std::atomic<int64_t>     g_menuMarkAt{0};      // QPC at the announce
+std::atomic<int64_t>     g_menuMarkDone{0};    // QPC when our hook returned
+std::atomic<const char*> g_menuMarkWhat{nullptr};
+std::atomic<uint32_t>    g_paintsSinceMark{0};
+} // namespace
+
+void MarkMenuEntry(const char* what) {
+    g_menuMarkWhat.store(what, std::memory_order_relaxed);
+    g_paintsSinceMark.store(0, std::memory_order_relaxed);
+    g_menuMarkDone.store(0, std::memory_order_relaxed);
+    g_menuMarkAt.store(Now(), std::memory_order_release);
+}
+
+void MarkMenuEntryDone() { g_menuMarkDone.store(Now(), std::memory_order_relaxed); }
+
+void NoteFirstPaint() {
+    const int64_t at = g_menuMarkAt.load(std::memory_order_acquire);
+    if (at == 0) return;
+    g_paintsSinceMark.fetch_add(1, std::memory_order_relaxed);
+    // Only the FIRST paint after a mark reports; clear the mark so this is one line per menu open.
+    if (!g_menuMarkAt.compare_exchange_strong(const_cast<int64_t&>(at), 0)) return;
+    const int64_t done = g_menuMarkDone.load(std::memory_order_relaxed);
+    const int64_t now  = Now();
+    const char* what = g_menuMarkWhat.load(std::memory_order_relaxed);
+    char line[224];
+    snprintf(line, sizeof(line),
+             "menu-open %s: in-our-hook %.1fms, hook-return -> first paint %.1fms (total %.1fms)",
+             what ? what : "?",
+             done ? MsOf(static_cast<uint64_t>(done - at)) : 0.0,
+             done ? MsOf(static_cast<uint64_t>(now - done)) : MsOf(static_cast<uint64_t>(now - at)),
+             MsOf(static_cast<uint64_t>(now - at)));
+    Log::Write("PERF", line);
 }
 
 void DumpAndReset(const char* reason, double minTotalMs) {

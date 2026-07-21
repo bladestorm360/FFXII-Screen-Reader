@@ -50,4 +50,12 @@ void SetMenuPaintedCallback(MenuPaintedCallback cb);
 // Diagnostic: dump the framing ring + the per-owner item map to the log.
 void DumpRingToLog(const char* reason);
 
+// DIAGNOSTIC A/B (Shift+`). Turns off ONLY the painter callback swap -- the one place the mod
+// writes into a game structure -- while leaving every hook installed and every other reader
+// working. Row text stops being captured while it is off, which is the point: if the field menu
+// then opens instantly, the swap is what stalls it.
+// Returns the new state. Announces itself, so it is usable without sight.
+bool ToggleInterception();
+bool InterceptionEnabled();
+
 } // namespace TextCapture

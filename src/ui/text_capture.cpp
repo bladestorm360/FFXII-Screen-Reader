@@ -3,9 +3,11 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
+#include "speech/speech.h"
 
 #include <Windows.h>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
@@ -90,6 +92,7 @@ uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is s
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
 bool g_initialized = false;
+std::atomic<bool> g_interceptEnabled{true};   // Shift+` A/B; see TextCapture::ToggleInterception
 
 std::wstring JoinFields(const std::vector<std::wstring>& fields) {
     std::wstring out;
@@ -229,7 +232,14 @@ int64_t CellWrapper(void* ctx, int64_t rowDrawCtx, void* geom, int64_t indexArg)
     }
     discard.clear();                   // destructors run off the lock
     Pfn_Cell real = g_realCb;          // read outside the lock (single game thread)
-    return real ? real(ctx, rowDrawCtx, geom, indexArg) : 0;
+    if (!real) {
+        // Also silent before. Returning 0 tells the menu "row not visible", which could make it
+        // re-paint or skip rows -- worth knowing about rather than guessing at later.
+        static bool s_warned = false;
+        if (!s_warned) { s_warned = true; Log::Write("TEXT", "CellWrapper: g_realCb NULL -> returning 0"); }
+        return 0;
+    }
+    return real(ctx, rowDrawCtx, geom, indexArg);
 }
 
 // Runs after the full paint: reset state, then notify the reader that `owner`'s
@@ -259,9 +269,14 @@ void FinishPaint(void* owner) {
 
 void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
     StallProbe::NoteThread("TextCapture::HookedPainter");
+    // Second anchor, on the menu's OWN paint path: if the field sim pauses while a menu is up, the
+    // field-frame anchor goes quiet legitimately and cannot tell a pause from a freeze. This one
+    // only ticks while something is being drawn, so a gap here means drawing itself stopped.
+    StallProbe::GapTick("anchor:painter", /*gapWarnMs=*/150.0);
     void* owner = nullptr; void** slot = nullptr; void* realCb = nullptr;
     bool intercept = false;
-    if (subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
+    if (g_interceptEnabled.load(std::memory_order_relaxed) &&
+        subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_intercepting) {
             g_intercepting = true;
@@ -271,10 +286,17 @@ void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
         }
     }
     { STALL_SCOPE("TextCapture::PainterSwap");
-      if (intercept) WriteSlot(slot, reinterpret_cast<void*>(&CellWrapper)); }  // swap in our wrapper
+      if (intercept && !WriteSlot(slot, reinterpret_cast<void*>(&CellWrapper))) {
+          // Was silent before. A failed swap leaves the game's own callback in place, so rows go
+          // uncaptured with no trace -- indistinguishable from "the menu drew nothing".
+          static bool s_warned = false;
+          if (!s_warned) { s_warned = true; Log::Write("TEXT", "painter swap FAILED (WriteSlot)"); }
+          intercept = false;
+      } }
     if (s_origPainter) s_origPainter(param_1, param_2, subwidget);
     if (intercept) {
         WriteSlot(slot, realCb);   // restore the game's callback
+        StallProbe::NoteFirstPaint();   // closes the announce -> first-paint bracket
         FinishPaint(owner);
     }
 }
@@ -345,6 +367,17 @@ void NotifyFocusChanged() {
 }
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
+
+bool InterceptionEnabled() { return g_interceptEnabled.load(std::memory_order_relaxed); }
+
+bool ToggleInterception() {
+    const bool on = !g_interceptEnabled.load(std::memory_order_relaxed);
+    g_interceptEnabled.store(on, std::memory_order_relaxed);
+    Log::Write("TEXT", on ? "painter interception ENABLED (diagnostic toggle)"
+                          : "painter interception DISABLED (diagnostic toggle) -- row text will not be captured");
+    Speech::Output(on ? L"Menu text capture on" : L"Menu text capture off", true);
+    return on;
+}
 
 // SNAPSHOT UNDER THE LOCK, LOG OUTSIDE IT. This used to hold g_mutex across ~257 Log::Write calls
 // -- and g_mutex is the lock the game's own menu paint needs on every row (CellWrapper) and every

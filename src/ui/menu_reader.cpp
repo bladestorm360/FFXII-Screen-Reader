@@ -334,6 +334,10 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
     // Brackets each menu-open window: everything since the previous pane entry.
     StallProbe::DumpAndReset("menu entry", /*minTotalMs=*/3.0);
+    // Start the announce -> first-paint bracket. This hook is where we speak the entered pane, and
+    // it is the exact instant the field-menu freeze begins.
+    StallProbe::MarkMenuEntry("pane-entry");
+    StallProbe::MarkMenuEntryDoneGuard _mmDone;
     STALL_SCOPE("MenuReader::HookedFocusSet");
     void* o; int idx; uint32_t rowOff;
     {

@@ -1,5 +1,6 @@
 #include "navigation/nav_commands.h"
 #include "navigation/entity_list.h"
+#include "ui/text_capture.h"
 #include "navigation/player_state.h"
 #include "navigation/nav_common.h"
 #include "navigation/path_planner.h"
@@ -216,13 +217,18 @@ void DiagnosticDump() {
 
 } // namespace
 
-void OnNavKey(int vk, bool /*shift*/) {
+void OnNavKey(int vk, bool shift) {
     switch (vk) {
         case VK_OEM_5:      RouteToCurrent();                 break;  // \  turn-by-turn route
         case 'P':           RouteToLockedTarget();           break;  // p  route to locked battle target
         case VK_OEM_4:      EntityList::CmdPrev();            break;  // [  previous object
         case VK_OEM_6:      EntityList::CmdNext();            break;  // ]  next object
-        case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area
+        case VK_OEM_3:
+            // Shift+` = diagnostic A/B of the painter interception (the mod's only write into a
+            // game structure). Plain ` is the normal rescan.
+            if (shift) TextCapture::ToggleInterception();
+            else       EntityList::CmdRescan();
+            break;  // `  rescan + area
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current

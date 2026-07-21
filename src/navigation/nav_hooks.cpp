@@ -21,8 +21,8 @@ Pfn_BuildWorld s_origBuildWorld = nullptr;
 void* s_lastLoggedCtx = nullptr;
 
 uint64_t __fastcall HookedBuildWorld(void* ctx) {
-    STALL_SCOPE("NavHooks::HookedBuildWorld");
     uint64_t r = s_origBuildWorld ? s_origBuildWorld(ctx) : 0;
+    STALL_SCOPE("NavHooks::HookedBuildWorld");   // from here down is OURS; the call above is the game's
     BulletQuery::SetContext(ctx);
     if (ctx != s_lastLoggedCtx) {   // O(unique map load), not per-call spam
         s_lastLoggedCtx = ctx;
@@ -51,7 +51,8 @@ void* s_lastRayCtx = nullptr;
 
 uint64_t __fastcall HookedRayCast(void* ctx, const float* from, const float* to,
                                   float* out, int filter) {
-    STALL_SCOPE("NavHooks::HookedRayCast");
+    {
+        STALL_SCOPE("NavHooks::HookedRayCast");   // scoped block: excludes the trampoline below
     if (ctx && !BulletQuery::HasWorld()) {
         void* world = MemRead::PtrAt(ctx, NavRva::CTX_WORLD_OFF);
         if (world) {
@@ -63,6 +64,7 @@ uint64_t __fastcall HookedRayCast(void* ctx, const float* from, const float* to,
                 Log::Write("NAV", msg);
             }
         }
+    }
     }
     return s_origRayCast ? s_origRayCast(ctx, from, to, out, filter) : 0;
 }
@@ -76,7 +78,8 @@ Pfn_CharGround s_origCharGround = nullptr;
 void* s_lastGroundCtx = nullptr;
 
 uint64_t __fastcall HookedCharGround(void* p1, float* p2, float p3) {
-    STALL_SCOPE("NavHooks::HookedCharGround");
+    {
+        STALL_SCOPE("NavHooks::HookedCharGround");   // scoped block: excludes the trampoline below
     if (p1 && !BulletQuery::HasWorld()) {
         void* ctx = MemRead::PtrAt(p1, 8);
         if (ctx) {
@@ -92,6 +95,7 @@ uint64_t __fastcall HookedCharGround(void* p1, float* p2, float p3) {
             }
         }
     }
+    }
     return s_origCharGround ? s_origCharGround(p1, p2, p3) : 0;
 }
 
@@ -106,7 +110,8 @@ Pfn_WorldStep s_origWorldStep = nullptr;
 void* s_lastStepCtx = nullptr;
 
 uint64_t __fastcall HookedWorldStep(void* ctx, void* stepCtx) {
-    STALL_SCOPE("NavHooks::HookedWorldStep");
+    {
+        STALL_SCOPE("NavHooks::HookedWorldStep");   // scoped block: excludes the trampoline below
     if (ctx) {
         BulletQuery::SetContext(ctx);
         if (ctx != s_lastStepCtx) {   // O(unique world), not per-frame spam
@@ -117,6 +122,7 @@ uint64_t __fastcall HookedWorldStep(void* ctx, void* stepCtx) {
                      ctx, world);
             Log::Write("NAV", msg);
         }
+    }
     }
     return s_origWorldStep ? s_origWorldStep(ctx, stepCtx) : 0;
 }
@@ -132,9 +138,15 @@ typedef uint64_t(__fastcall* Pfn_FieldFrame)();
 Pfn_FieldFrame s_origFieldFrame = nullptr;
 
 uint64_t __fastcall HookedFieldFrame() {
-    STALL_SCOPE("NavHooks::HookedFieldFrame");
-    EntityList::OnFieldFrame();   // auto-rescan when handle-table containers stream in (fixes empty list after a save-load)
-    PathPlanner::OnGameFrame();
+    StallProbe::GapTick("anchor:fieldframe", /*gapWarnMs=*/150.0);
+    {
+        // OURS ONLY. This scope used to span s_origFieldFrame() below, so it reported the GAME's
+        // entire per-frame field tick as mod cost -- the source of the bogus "223ms / 245ms single
+        // call" readings that sent two investigations down the wrong path.
+        STALL_SCOPE("NavHooks::HookedFieldFrame");
+        EntityList::OnFieldFrame();   // auto-rescan when handle-table containers stream in (fixes empty list after a save-load)
+        { STALL_SCOPE("PathPlanner::OnGameFrame"); PathPlanner::OnGameFrame(); }
+    }
     return s_origFieldFrame ? s_origFieldFrame() : 1;
 }
 
@@ -146,9 +158,11 @@ typedef void(__fastcall* Pfn_Teardown)();
 Pfn_Teardown s_origTeardown = nullptr;
 
 void __fastcall HookedTeardown() {
-    STALL_SCOPE("NavHooks::HookedTeardown");
-    BulletQuery::Invalidate();
-    PathPlanner::OnMapTeardown();
+    {
+        STALL_SCOPE("NavHooks::HookedTeardown");
+        BulletQuery::Invalidate();
+        PathPlanner::OnMapTeardown();
+    }
     if (s_origTeardown) s_origTeardown();
 }
 

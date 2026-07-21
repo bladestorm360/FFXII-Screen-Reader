@@ -383,8 +383,10 @@ bool ResolveTarget(ResolvedTarget& out) {
     return true;
 }
 
-// Input-thread accessor for `p` (route to the target). Now routes to the COMMITTED target, so `p`
-// and `;` always agree on which unit they mean.
+// Input-thread accessor for `p` (route to the target). Shares ResolveTarget with `;`, so the two
+// keys agree on which unit they mean -- which was NOT true between 2026-07-20 and 2026-07-21, when
+// `;` rejected the browsed target that `p` happily routed to. The comment claimed agreement the
+// whole time; it is true again now.
 bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
     ResolvedTarget t;
     if (!ResolveTarget(t) || !t.havePos) return false;
@@ -393,34 +395,34 @@ bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
     return true;
 }
 
-// Input-thread accessor for `;` (speak the target's status).
+// Input-thread accessor for `;` (speak the target's status): the unit the player is fighting.
 //
-// Says WHICH KIND of target it is, because the difference matters: a committed target is what the
-// character will actually hit, while a browsed one is only what the cursor is over. Collapsing the
-// two is precisely the bug this replaced.
+// REPORTS WHATEVER ResolveTarget RESOLVED -- the commitment when there is one, the live select-UI
+// target otherwise. It does NOT reject a "browsed" target.
+//
+// WHY (regression, fixed 2026-07-21). This used to be `if (!ResolveTarget(t) || t.browsing)`, added
+// 2026-07-20 in eeffde5 on top of the 3903dbc rewrite that replaced `ResolveLiveTarget` with the
+// commitment path. Before that rewrite the key resolved the live select-UI target (gate P+0x10F78
+// open, handle from P+0x9FD8) and worked on every press -- the 07-20 12:11 log shows
+// `ResolveLiveTarget: gate=1 handle=0x20000f ... hp=65 match=1` succeeding repeatedly. The
+// `t.browsing` clause discarded exactly that state, so with an enemy targeted and Attack confirmed
+// the key went silent: commitment resolution rejects the ACTIVE branch (the action-table row lookup
+// returns null for Attack, id 0x96 -- see DiagnoseCommitment), the QUEUED bit is clear mid-swing,
+// and the live target it fell back to was then thrown away.
+//
+// OUT OF BATTLE IT IS STILL SILENT, structurally and with no "am I in battle" flag: ResolveTarget
+// returns false on its own out of combat, because there is no commitment AND the browse branch
+// requires the select-UI gate to be open. The release-0.1 requirement is preserved by that, not by
+// the clause removed here. Do NOT restore the old "No target" speech -- silence on
+// nothing-to-report is a standing rule.
 void SpeakTargetStatus() {
     ResolvedTarget t;
-
-    // `;` reports ONLY the COMMITTED combat target -- what the leader is actually acting on --
-    // and is SILENT otherwise (user instruction, release 0.1). Two consequences, both intended:
-    //
-    //   * OUT OF BATTLE IT DOES NOTHING AT ALL. There is no commitment outside combat
-    //     (CommittedTargetOf tests the queued flag and requires a real action-table row), so this
-    //     returns before speaking. It must not read the field target cursor, and it must not say
-    //     "No target" either -- announcing anything is exactly the "works out of battle" behaviour
-    //     that was reported. Silence is the correct output for nothing-to-report.
-    //   * A BROWSED cursor is rejected. ResolveTarget only reports `browsing` when there is no
-    //     commitment, so it can never be the "active combat target" this key exists to answer.
-    //
-    // The browse fallback is deliberately left INSIDE ResolveTarget rather than deleted: `p`
-    // (GetLockedTarget -> routing) is the other caller and its behaviour is unchanged.
-    if (!ResolveTarget(t) || t.browsing) {
+    if (!ResolveTarget(t)) {
         // Say WHY, every link of it. A confirmed attack that reports "no commitment" is a bug in the
         // BtlWork -> leader -> actor-pool -> active/queued chain, and without this the whole chain
         // fails as one silent boolean with nothing to grep.
         BattleState::DiagnoseCommitment();
-        Log::Write("TARGET", t.browsing ? "; SILENT: browsed cursor, no commitment"
-                                        : "; SILENT: no committed combat target");
+        Log::Write("TARGET", "; SILENT: no target (no commitment and no open select UI)");
         return;
     }
 
@@ -440,9 +442,10 @@ void SpeakTargetStatus() {
             text += L", HP " + std::to_wstring(pct) + L" percent";
         }
     }
-    // Mod-emitted qualifier: the game has no text for this state. ("browsing" is gone -- a browsed
-    // cursor returns above, so it can never reach here.)
-    if (!t.acting) text += L", queued";
+    // Mod-emitted qualifier, and ONLY for a real commitment that has not started executing. A
+    // browsed target reaches here now, and it is neither acting nor queued -- calling it "queued"
+    // would be a fabricated state. It gets no suffix, matching what this key said when it worked.
+    if (!t.browsing && !t.acting) text += L", queued";
 
     Speech::Output(text, /*interrupt=*/true);
 }

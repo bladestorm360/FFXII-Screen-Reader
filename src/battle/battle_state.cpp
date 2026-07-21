@@ -313,6 +313,35 @@ void DiagnoseCommitment() {
              aAct, aTgt, activeRow ? 1 : 0, qAct, qTgt);
     Log::Write("TARGET", m);
 
+    // The ACTIVE branch's `row != nullptr` test is what rejects a live Attack (id 0x96), so dump the
+    // table internals it depends on. AbilityName uses the SAME MasterRecord, so whatever this shows
+    // also governs whether the combat log can name an ability. Report the numbers; do not guess.
+    {
+        void* hdr = PtrAt(Hooks::ResolveRva(RVA_ACTIONTBL), 0);
+        uint32_t count = 0, recOff = 0; uint16_t stride = 0;
+        bool cOk = false, sOk = false, rOk = false;
+        if (hdr) {
+            cOk = SafeReadU32(hdr, HDR_COUNT,   &count);
+            sOk = SafeReadU16(hdr, HDR_STRIDE,  &stride);
+            rOk = SafeReadU32(hdr, HDR_RECORDS, &recOff);
+        }
+        void* relocBase = PtrAt(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0);
+        void* records   = (recOff && relocBase) ? static_cast<char*>(relocBase) + recOff : nullptr;
+        snprintf(m, sizeof(m),
+                 "commit-diag: actionTbl hdr=%p count=%u(%d) stride=%u(%d) recOff=0x%X(%d) "
+                 "relocBase=%p records=%p | id=0x%X %s",
+                 hdr, count, cOk ? 1 : 0, stride, sOk ? 1 : 0, recOff, rOk ? 1 : 0,
+                 relocBase, records, aAct,
+                 !hdr        ? "<-- TABLE PTR NULL"
+               : !cOk        ? "<-- COUNT UNREADABLE"
+               : (aAct >= count) ? "<-- ID >= COUNT (out of table)"
+               : (stride == 0)   ? "<-- STRIDE 0"
+               : !relocBase  ? "<-- RELOC BASE NULL"
+               : !records    ? "<-- RECORDS NULL"
+                             : "(id is in range -- row should resolve)");
+        Log::Write("TARGET", m);
+    }
+
     // Name the failing condition explicitly rather than leaving it to be inferred from the numbers.
     // When a path DOES match, the commitment is fine and the failure is downstream -- in
     // ActorForHandle -- so resolve the handle here too and say so. Reporting "should have matched"

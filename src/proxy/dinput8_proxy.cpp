@@ -132,7 +132,13 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
     HRESULT hr = g_origGetDeviceState(self, cbData, lpvData);
     // Frame heartbeat: the game polls this every frame, menus included, so it is the one place that
     // can see a stall from outside our own hook bodies.
-    if (cbData >= 256 && IsKeyboardDev(self)) StallProbe::FrameTick(/*gapWarnMs=*/100.0);
+    if (cbData >= 256 && IsKeyboardDev(self)) {
+        // WHICH THREAD is this? Never recorded before, and without it a clean FrameTick result is
+        // ambiguous: "the game thread never stalled" and "my anchor was on a different thread that
+        // kept running" look identical. That ambiguity is why the field-menu freeze went unexplained.
+        StallProbe::NoteThread("DInput::GetDeviceState");
+        StallProbe::FrameTick(/*gapWarnMs=*/100.0);
+    }
     if (cbData >= 256 && IsKeyboardDev(self)) {
         // Diagnostic (rate-limited to transitions): a sustained keyboard GetDeviceState
         // failure (DIERR_INPUTLOST / DIERR_NOTACQUIRED) means the device is UNACQUIRED — the

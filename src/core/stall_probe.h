@@ -79,6 +79,22 @@ void NoteThread(const char* name);
 // gap coincides with the reported symptom.
 void FrameTick(double gapWarnMs);
 
+// Same, for an anchor OTHER than the frame heartbeat -- pass a distinct name so several hooks can
+// each watch their own cadence. Whichever thread keeps running during a stall will catch it.
+void GapTick(const char* anchor, double gapWarnMs);
+
+// MENU-OPEN BRACKET. MarkMenuEntry() stamps the moment we announce a newly-entered menu;
+// NoteFirstPaint() is called from the paint path and, on the first paint after a mark, logs the
+// split: how long we spent inside our own hook, and how long the game then took before it drew
+// anything. The field-menu freeze needs exactly that split -- 2235 ms of silence with no scope
+// reporting is otherwise unattributable. Repeat calls before the next mark are ignored.
+void MarkMenuEntry(const char* what);
+void MarkMenuEntryDone();   // call as our hook returns
+
+// RAII form: stamps "our hook returned" on scope exit, whatever path it takes.
+struct MarkMenuEntryDoneGuard { ~MarkMenuEntryDoneGuard() { MarkMenuEntryDone(); } };
+void NoteFirstPaint();
+
 // Log every counter with calls > 0, then zero them. `reason` brackets the window, e.g. "menu entry".
 // Output is O(unique hooks) (~30 lines), within the console/log budget.
 //
