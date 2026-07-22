@@ -3,6 +3,9 @@
 #include "ui/menu_state.h"
 #include "ui/config_reader.h"
 #include "ui/ingame_menu_reader.h"
+#include "ui/license_reader.h"
+#include "ui/ability_summary_reader.h"
+#include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -49,7 +52,6 @@ constexpr uint32_t RVA_STORE_WRITE = 0x120750;  // FUN_00240750(configId, &newVa
 constexpr uint32_t RVA_GFX_WRITE   = 0x5DB90;   // FUN_0017db90(configId, curVal, dir) -> newVal — Graphics change
 constexpr uint32_t OFF_GFX_ROW_CFGID = 0xC0;    // Graphics value row -> config id (int)
 
-constexpr uint32_t OFF_POPUP_BODY  = 0x1B0;   // confirm window -> inline codec body prompt
 constexpr uint32_t OFF_ROW_CFGID   = 0xC0;    // value row -> config id (u8) — matched against the store write
 
 constexpr uint64_t MSG_FOCUS  = 0x8000;
@@ -112,13 +114,7 @@ using MenuState::IsConfirmWindow;
 using MenuState::IsFocusedPane;
 using MenuState::IsTitleMenu;
 
-// If `owner` is a confirm window, decode its inline body prompt at +0x1b0.
-std::wstring ReadPopupBody(void* owner) {
-    if (!IsConfirmWindow(owner)) return std::wstring();
-    std::wstring s = GameText::Decode(
-        reinterpret_cast<const uint8_t*>(reinterpret_cast<char*>(owner) + OFF_POPUP_BODY), 0x200);
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
-}
+// Prompt body + button labels live in ui/popup_reader.h (both prompt classes).
 
 // On-demand describe key ('i'): speak the focused item's help/description that the
 // game placed in the description bar (captured in TextCapture). Silent if the
@@ -146,7 +142,10 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         return;
     }
 
-    const bool isPopup = IsConfirmWindow(owner);
+    // Both prompt classes. Treating the generic Yes/No prompt (FUN_002cdf20) as a pop-up is what
+    // stops its buttons falling through to the content path, where a RECYCLED owner address
+    // returned stale item text captured from the previous surface (the license-board preview).
+    const bool isPopup = IsConfirmWindow(owner) || MenuState::IsChoicePopup(owner);
 
     // Active-pane gate: a plain in-game content pane (not a pop-up, not a config controller)
     // speaks only when it currently holds the cursor — this is what stops the inventory "mixed"
@@ -159,7 +158,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     // focused row's "name" / "name: value".
     std::wstring text;
     if (isPopup) {
-        text = TextCapture::StringById(1000 + (index != 0 ? 1 : 0));   // 1000=Yes, 1001=No
+        text = PopupReader::ButtonText(index);            // the game's own Yes/No strings
     } else {
         text = TextCapture::FocusedItemText(owner, index);            // row name
         // Append the setting's value — only when this is the ACTIVE config menu, so we
@@ -192,7 +191,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     // Pop-up body prompt: announce once on entry, before the button.
     bool preambleSpoken = false;
     if (ownerChanged && isPopup) {
-        std::wstring body = ReadPopupBody(owner);
+        std::wstring body = PopupReader::BodyText(owner);
         if (!body.empty()) {
             Log::WriteW("READER", "  body: ", body);
             Speech::Output(body, /*interrupt=*/true);
@@ -274,6 +273,15 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         // the description it sets (FUN_00291d80) during s_origDispatch is attributed
         // to this focus for the `o` key.
         TextCapture::NotifyFocusChanged();
+
+        // License board / job-select ring have their own reader. The board's focus `val` is a
+        // POINTER to the focused cell (not a row index), so hand it the raw 64-bit value before the
+        // row-index paths below. NotifyFocusChanged (above) already bumped the help generation, so
+        // the reader's ProvideHelpText for the `o` key binds to THIS focus. Still calls the original
+        // dispatch (observe-only), identical to the fall-through return at the end.
+        if (LicenseReader::OnDispatchFocus(owner, val))
+            return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
+
         const int index = static_cast<int>(static_cast<intptr_t>(val));
         const uint32_t rowOff = IngameMenuReader::RowChainOff(owner);
 
@@ -461,6 +469,8 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
+    ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
+    ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -475,6 +485,8 @@ void Shutdown() {
     InputTracker::SetDescribeCallback(nullptr);
     IngameMenuReader::Shutdown();
     BattleTargetReader::Shutdown();
+    LicenseReader::Shutdown();
+    AbilitySummaryReader::Shutdown();
     Hooks::Uninstall(RVA_FOCUS_SET);
     Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);

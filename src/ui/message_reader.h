@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 // Reads the game's message text — NPC dialogue + in-engine cutscene captions (the
 // e5f0 message window) and informational panels (item acquired, treasure, battle
 // system lines — the FUN_0057c480 system-message surface). Speaks each new line as
@@ -25,5 +27,15 @@ void Shutdown();
 // Silent when no page remains (the box is closing) and when no message is active: announcing
 // anything there would be filler.
 void NextPage();
+
+// Body text of the most recent yes/no confirm surface ("Obtain Accessories 1?", "Choose this
+// license board?"), captured at its case-1 BIRTH — the only moment the composed string, with its
+// substituted parameter, is readable. Returns AND clears it, so one prompt speaks once.
+//
+// This reader stays muted for confirms (kSpeakSurfaceConfirms) and hands the text over instead:
+// MenuReader speaks it as the pop-up preamble, which keeps the proven body-then-button ordering
+// (speaking it here would be cut off by the Yes/No focus that fires immediately after).
+// Empty when no confirm is pending.
+std::wstring TakeConfirmPrompt();
 
 } // namespace MessageReader

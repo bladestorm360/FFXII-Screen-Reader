@@ -1403,3 +1403,69 @@ Prior: 2026-07-07 (Session 18) — Message/dialogue/panel reader SHIPPED in C++
 (`message_reader`): e5f0 dialogue body+speaker; `FUN_0057c480+0x1B0` panel gated by `surface[0x636]`/
 `[0x630]` (INFO spoken, confirms muted); `r` re-read. Built/deployed, play-test pending.
 Prior: 2026-07-07 (S17) message-text read-points decompile-exhausted; 2026-07-06 Pathfinder RE.
+
+## License Board / Job system (Session 53, 2026-07-22) — SHIPPED, play-confirmed
+
+Entry: Party Menu **Licenses** = command `0x4b5` → `FUN_00281ed0` → `FUN_005601b0`.
+`menuCtx = *(u64*)(base + 0x1F7AC30)` (`DAT_0209ac30`).
+
+| Surface | Proc (RVA) | Registered | Focus signal |
+|---|---|---|---|
+| Character-select | `FUN_00560910` **0x440910** | `menuCtx+0x158` | own proc: cat `0x13` SHOW = entry, cat `0xc`/`0x8000` = move |
+| Job-select ring | `FUN_00557db0` **0x437DB0** | `menuCtx+0x320` | shared `FUN_00247510` msg `0x8000` |
+| Board node grid | `FUN_0055cd40` **0x43CD40** | `menuCtx+0x320` | shared `FUN_00247510` msg `0x8000`, **`val` = POINTER to the focused cell** |
+
+- Char-select is **NOT** the Status/Equip chooser (`FUN_00285290` @ `menuCtx+0xf8`); the deferred
+  `FUN_00285a10` hook can never fire for licenses. Highlighted member: read global
+  **`menuCtx+0xde0`** (set first by `FUN_00285f20`) — `ctrl+0xd0` is only filled later by
+  `FUN_00560ee0`, so it is stale at SHOW time.
+- Member block = `*(u64*)(menuCtx + 0xac8 + memberIdx*8)` (= `FUN_00282df0`); `charId = *(i16*)(block+0x60)`.
+- Board fields: `+0x120` cell array, `+0x160` member idx, `+0x558` viewed job, `+0x559/0x55a` grid dims.
+- **Cell (stride 0x38)**: `+0x00` name codec (variant-selected) · `+0x08` u16 node id (`0xFFFF` =
+  locked/not-reachable) · `+0x0b` type · `+0x0c` LP cost · `+0x10` **CATEGORY codec** ("Weapon"/
+  "Magick" — *not* a description) · `+0x18` flags · `+0x20/0x21` col/row · `+0x30` category id.
+  `FUN_0055bff0` (0x43BFF0) builds it and **zeroes locked cells** (status 3/4/5/8) to `id=0xFFFF`.
+- **Node status** `FUN_00323600(charId,node,0)` (0x203600) → `FUN_00323d10` (0x203D10):
+  `1` learned · `2` not enough LP (`charBlock+0x190` < cost) · `0`/`9` can learn · `3/4/5/8` locked ·
+  `6` null char · `7` invalid panel.
+- **Granted-entry list** (`o` detail) — `FUN_0035d330(0x19,node)` → kind `rec+0x23`, 8 ids
+  `rec+0x26..0x34`; copy them BEFORE resolving again (shared scratch `DAT_022ca520`). Resolve by
+  kind: `0`→`FUN_0035d330(1, id<<16)` gear · `1`→`0x14` magick · `2/3`→`0x1d` technick. The entry
+  DESCRIPTION (`rec+0x08`) is drawn **only** for kind‑1 ids in the technick block
+  `(ushort)(id-0x9e) < 0x18` (`FUN_00559e30`, 0x439E30). Anything looser leaks unseen text.
+- **Save record** = `*(DAT_02ebf190) + 8 + charId*0x1c8`: `+0x190` LP · `+0x1c3` job1 · `+0x1c4`
+  job2 · `+0x1c5` viewed board. **Two jobs are SEPARATE boards** — `FUN_003242f0` (0x2042F0)
+  toggles `+0x1c5` between job1/job2. Blank tiles are NOT "where job 2 goes".
+- Job text: name `FUN_002f9860(job + 0x3ED)` (ids 0x3ED..0x3F8), description
+  `FUN_002f9860(job + 0x838)` (0x838..0x843). Ring highlighted job = `ring+0x358`; `ring+0x388 & 4`
+  = committing job1 vs job2.
+- The board **clears** the description bar (`FUN_00291d80(0,0)` in `FUN_00561390`/`FUN_00558fb0`),
+  so `o` text must be supplied by the reader (`TextCapture::ProvideHelpText`).
+
+### Ability-summary overlay (the `F` pages) — a SHARED party-member detail screen
+
+Not part of the license module; the board forwards pad input in (`FUN_0055c740` → `FUN_002c1a80`).
+Mode byte **`menuCtx+0xDE7`**: `2` = Technicks/Mist/Remedy Lore/Espers, `1`/`3` = Magicks, `0` = closed.
+
+| Page | Proc | Slot | Focus routine (fires on open AND every move) | Entries | Index |
+|---|---|---|---|---|---|
+| Abilities | `FUN_002c4460` 0x1A4460 | `menuCtx+0x128` | **`FUN_002c53b0` 0x1A53B0** | `obj+0xE0` | `obj+0x7A0` u16 |
+| Magicks | `FUN_002c3560` 0x1A3560 | `menuCtx+0x120` | **`FUN_002c3b90` 0x1A3B90** | `obj+0xC8` | `obj+0xAE8` u16 |
+
+Entry stride `0x20`: `+0x00` name codec · `+0x10` description codec · `+0x18` flags
+(bit **`0x20000`** = learned/bright, clear = greyed). Section idx `obj+0x7A4`; heading children
+`*(void**)(obj+0x60) + {0x28,0x40,0x58,0x70}` → codec `+0x18`. Description bar window
+`FUN_002c13c0` @ `menuCtx+0x118` (`+0xC0` = published entry ptr).
+
+**Unlearned slots** carry the game's own `"?"` placeholder (`FUN_002f9860(0x4C7)`) in `+0x00`.
+**`GameText::IsMostlyPrintable` rejects it** (`alpha >= 1` fails on `"?"`), which silenced entire
+pages until detected explicitly — see debug.md.
+
+### Yes/No confirm prompt — `FUN_002cdf20` (0x1ADF20)
+
+A SECOND confirm class, distinct from `FUN_00241d40`. Created by `FUN_002cdea0`, registered at
+**`menuCtx+0x2e8`**, object `0xe0`; mode at `+0xd0`; buttons registered as string ids **1000/1001**.
+It stores **no body text**: the composed prompt is handed to a `FUN_0057c480` surface (kept at
+`prompt+0xc0`, also `menuCtx+0x328`) and is readable **only at that surface's case‑1 birth**
+(`surface+0x1B0`). Reading it later returns nothing. `message_reader` captures it at birth;
+`MessageReader::TakeConfirmPrompt()` hands it to the pop-up preamble.

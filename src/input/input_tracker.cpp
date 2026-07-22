@@ -16,6 +16,7 @@ constexpr UINT WM_CONFIRM   = WM_APP + 6;   // game's Confirm (Space/Enter) -- o
 constexpr UINT WM_NAVKEY    = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
 constexpr UINT WM_DIAG      = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
 constexpr UINT WM_UNHOOK_LL = WM_APP + 5;   // retire the WH_KEYBOARD_LL hook once DInput owns input
+constexpr UINT WM_LICENSEPTS = WM_APP + 7;  // `U` -> read License Points (license board only)
 
 // Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
 // working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
@@ -28,9 +29,11 @@ HANDLE  g_thread = nullptr;
 DWORD   g_threadId = 0;
 std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore auto-repeat)
 std::atomic<bool> g_tDown{false};      // edge-detect for the 't' key (ignore auto-repeat)
+std::atomic<bool> g_uDown{false};      // edge-detect for the 'U' key (License Points)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
 InputTracker::HotkeyCallback g_confirmCb = nullptr;
+InputTracker::HotkeyCallback g_lpCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
 
 // Navigation keys (edge-detected independently so auto-repeat is suppressed).
@@ -58,7 +61,7 @@ std::atomic<bool> g_dinputActive{false};
 constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x1B,
               DIK_GRAVE = 0x29, DIK_BACKSLASH = 0x2B, DIK_LSHIFT = 0x2A, DIK_RSHIFT = 0x36,
               DIK_MINUS = 0x0C, DIK_EQUALS = 0x0D, DIK_SEMICOLON = 0x27, DIK_APOSTROPHE = 0x28,
-              DIK_SLASH = 0x35, DIK_P = 0x19;
+              DIK_SLASH = 0x35, DIK_P = 0x19, DIK_U = 0x16;
 // Party-status keys. DIK number row is 1..0 == 0x02..0x0B, so 4/5/6/7 = 0x05/0x06/0x07/0x08.
 // Free in this game: it binds 1/2/3 to Game Speed and nothing to 4-7 (Docs/Controls.md).
 // 7 reads roster slot 3, the GUEST slot (list 3 has nine slots: 0-2 active, 3 guest, 4-8 reserve).
@@ -96,6 +99,7 @@ void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
             if (isNav)              PostThreadMessageW(g_threadId, WM_NAVKEY, (WPARAM)vk, 0);
             else if (vk == 'O')     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
             else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
+            else if (vk == 'U')     PostThreadMessageW(g_threadId, WM_LICENSEPTS, 0, 0);
             else if (vk == VK_SPACE || vk == VK_RETURN)
                                     PostThreadMessageW(g_threadId, WM_CONFIRM, 0, 0);
         }
@@ -171,6 +175,9 @@ DWORD WINAPI InputThread(LPVOID) {
         } else if (m.message == WM_REREAD) {
             InputTracker::HotkeyCallback cb = g_rereadCb;
             if (cb) cb();
+        } else if (m.message == WM_LICENSEPTS) {
+            InputTracker::HotkeyCallback cb = g_lpCb;
+            if (cb) cb();
         } else if (m.message == WM_CONFIRM) {
             InputTracker::HotkeyCallback cb = g_confirmCb;
             if (cb) cb();
@@ -236,6 +243,7 @@ void Shutdown() {
 }
 
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
+void SetLicensePointsCallback(HotkeyCallback cb) { g_lpCb = cb; }
 void SetConfirmCallback(HotkeyCallback cb) { g_confirmCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
@@ -270,6 +278,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
+    DInputEdge('U',           g_uDown,       (dik[DIK_U]          & 0x80) != 0, false);  // U  License Points
     DInputEdge(VK_SPACE,      g_confirmDown[0],(dik[DIK_SPACE]    & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_RETURN,     g_confirmDown[1],(dik[DIK_RETURN]   & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true);  // \  route

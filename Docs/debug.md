@@ -765,3 +765,34 @@ the roll. Confidence 0.98. **`FUN_00328480` is dropped from the design** — one
 
 **Rule going forward: if a value has no text behind it, do NOT ask for a visual reading — trace the
 code path that set it.**
+
+## License Board / Job system — Tried & Failed (Session 53, 2026-07-22)
+
+- **`cell+0x10` is NOT a node description — it is the CATEGORY word.** Shipped `o` reading it as
+  the description; it spoke "Weapon"/"Magick". The cat‑0x19 record holds only NAME (`+0x18`) and
+  CATEGORY (`+0x10`); there is no long per-node description anywhere. What the panel actually shows
+  is the **granted-entry list** (`FUN_00559e30`). Confirmed by probe log + screenshots.
+- **Do not include a granted entry's description whenever it decodes.** The game draws it **only**
+  for kind‑1 entries with `(ushort)(id-0x9e) < 0x18` (the technick block). Telekinesis shows one;
+  Cure/Blindna and gear entries do not. A looser rule leaks text a sighted player never sees.
+- **Blank board tiles are NOT "where the second job's board goes."** Hypothesis raised and
+  disproved: `FUN_003242f0` toggles the *viewed* board (`record+0x1c5`) between job1/job2 — the two
+  jobs are **separate boards**, and `board+0x558` builds from exactly one of them. Blanks are that
+  job's own locked/unreachable nodes (zeroed to `id=0xFFFF` by `FUN_0055bff0`).
+- **Reading the confirm prompt's body at button-focus time returns nothing.** `FUN_002cdf20` stores
+  no text; it hands the composed string to a `FUN_0057c480` surface, readable **only at that
+  surface's case‑1 birth**. Reading `prompt+0xc0 → +0x1B0` later (from the 0x8000 focus) yielded
+  empty every time. Fix: capture at birth in `message_reader` and consume via `TakeConfirmPrompt()`.
+  Also do **not** just flip `kSpeakSurfaceConfirms` — speaking at birth gets cut off by the Yes/No
+  focus that fires milliseconds later; route it through `OnFocus`'s `preambleSpoken` ordering.
+- **`GameText::IsMostlyPrintable` silently drops the `"?"` placeholder.** It requires `alpha >= 1`
+  (at least one A–Z/a–z). The `F` summary pages put the game's own `"?"` (`FUN_002f9860(0x4C7)`)
+  in unlearned slots, so **every** unlearned row decoded to empty and went silent — the entire
+  Magicks page before any magick is learned. The RVAs/offsets were correct the whole time; the
+  gate was the bug. Detect the placeholder explicitly. (Speak it as a word — a literal `?` is
+  commonly dropped by TTS punctuation settings, which re-silences it.)
+- **The deferred `FUN_00285a10` status-chooser hook can never serve the License char-select.** That
+  hook targets the Status/Equip chooser (`FUN_00285290` @ `menuCtx+0xf8`); licenses use a dedicated
+  controller `FUN_00560910` @ `menuCtx+0x158`.
+- **At char-select SHOW, `ctrl+0xd0` is stale.** `FUN_00560ee0` fills it later; the global
+  `menuCtx+0xde0` is written first (`FUN_00285f20`), so read that for a reliable entry announce.

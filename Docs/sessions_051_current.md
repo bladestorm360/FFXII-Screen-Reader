@@ -211,3 +211,109 @@ context. `entity_list.cpp` shed its now-unused `MapExits`/`kExitMaxDist` include
 Dialogue-choice pop-up options; full-screen system-notification banners; item name missing on
 tutorial item pop-ups (`0x0f 2e` substitution slots dropped by the decoder); pathfinding accuracy
 degrading near a target. Commits `371664c`, `2e5d8c3`, `7ec640d`.
+
+## Session 53 — 2026-07-22 — [licenses] License Board + Job system reader: char-select, job ring, board nodes, LP, `o` details, `F` summary pages, confirm prompts
+
+**KEYWORDS:** license board job system Zodiac char-select FUN_00560910 0x440910 menuCtx+0x158
+job ring FUN_00557db0 0x437DB0 board grid FUN_0055cd40 0x43CD40 menuCtx+0x320 cell struct 0x38
+FUN_0055bff0 grid builder cell pointer val FUN_00247510 0x8000 node status FUN_00323600
+FUN_00323d10 status codes learned can-learn not-enough-LP locked LP save+0x190 job1 +0x1c3
+job2 +0x1c4 viewed +0x1c5 FUN_003242f0 swap job names FUN_002f9860 job+0x3ED desc job+0x838
+granted entries FUN_00559e30 kind rec+0x23 ids rec+0x26 technick 0x9e..0xb5 category cell+0x10
+U key LP DIK_U 0x16 ProvideHelpText ability summary overlay FUN_002c53b0 0x1A53B0 FUN_002c3b90
+0x1A3B90 menuCtx+0xDE7 mode entry 0x20 stride flags 0x20000 placeholder 0x4C7 empty
+confirm prompt FUN_002cdf20 0x1ADF20 menuCtx+0x2e8 FUN_0057c480 surface +0x1B0 TakeConfirmPrompt
+
+Built the whole License Board / Job feature. **Everything below is play-tested and confirmed by
+the user** except where marked. Three surfaces + an overlay + the confirm prompts.
+
+### 1. The flow, and the three controllers
+
+Party Menu → **Licenses** (command `0x4b5`) → `FUN_005601b0` creates the **character-select**
+`FUN_00560910` (RVA `0x440910`) at `menuCtx+0x158`. Confirm → an established character opens the
+board (`FUN_00561300` → `FUN_00561390` → `FUN_0055c690`); a jobless one routes through stage
+`FUN_00558fb0`, which spawns the **job ring** `FUN_00557db0` (`0x437DB0`), and after commit the
+**board grid** `FUN_0055cd40` (`0x43CD40`). Ring and grid share slot `menuCtx+0x320` (mutually
+exclusive in time — tell them apart by `obj[0]`).
+
+- **Char-select is NOT the Status/Equip chooser** (`FUN_00285290` at `menuCtx+0xf8`). The mod's
+  long-deferred `FUN_00285a10` hook targets that *other* surface and can never fire here — which
+  is why this screen was silent. It gets its own window-proc hook: **SHOW (cat 0x13) = entry**,
+  **cat 0xc / 0x8000 = move**. Highlighted member read from the global `menuCtx+0xde0` (set FIRST
+  by `FUN_00285f20`) rather than `ctrl+0xd0`, which `FUN_00560ee0` only fills later — that
+  ordering is what makes the *entry* announce reliable.
+- **Board node moves ride the existing `FUN_00247510` 0x8000 hook**, but its `val` is a **POINTER
+  to the focused cell**, not a row index (`FUN_0055bff0` fires
+  `FUN_00247510(board, 0x8000, cellBase + (w*row+col)*0x38)`). `HookedDispatch` already carried
+  `val` as a full 64-bit value, so no signature change.
+
+### 2. Node reads
+
+Cell (stride `0x38`, array at `board+0x120`): `+0x00` name codec (variant-selected), `+0x08` u16
+node id (`0xFFFF` = not-yet-reachable), `+0x0b` type, `+0x0c` LP cost, `+0x10` **CATEGORY** codec
+("Weapon"/"Magick" — *not* a description; this was a real bug), `+0x18` flags, `+0x20/0x21`
+col/row, `+0x30` category id.
+
+**Status** = `FUN_00323600(charId, nodeId, 0)` → `FUN_00323d10`, fully decoded from the decompile:
+`1` learned · `2` not enough LP (`charBlock+0x190` < cost) · `0`/`9` can learn · `3/4/5/8` locked ·
+`6/7` null/invalid. `FUN_0055bff0` **zeroes** locked cells to `id=0xFFFF`, so a named cell is
+always `{0,1,2,9}`. Blank tiles announce **"Locked"** (user-requested; the game draws neither icon
+nor info panel there, so we say a license exists without leaking what it is).
+
+**`o` detail = category + granted entries + a description only where the game draws one.** The
+entry list comes from `FUN_0035d330(0x19,nodeId)` → kind `rec+0x23`, 8 ids `rec+0x26..0x34`
+(copy them BEFORE resolving again — one shared scratch record `DAT_022ca520`), resolved by kind:
+`0`→`FUN_0035d330(1,id<<16)` gear, `1`→`0x14` magick, `2/3`→`0x1d` technick. The description
+(`rec+0x08`) is rendered by the game **only** for kind‑1 ids in the technick block
+`(ushort)(id-0x9e) < 0x18` — screenshots confirmed: Telekinesis shows one, Cure/Blindna and gear
+do not. Gating on anything looser leaks text a sighted player never sees.
+
+### 3. Two-job boards are SEPARATE, not merged
+
+`FUN_003242f0(charIdx)` toggles the *viewed* board (`record+0x1c5`) between `job1 (+0x1c3)` and
+`job2 (+0x1c4)`; `board+0x558` is the single viewed job the grid is built from. **Blank tiles are
+never "where job 2 goes"** — a hypothesis raised and disproved this session.
+
+### 4. `F` ability-summary overlay — a different subsystem entirely
+
+Not part of the license module: a shared party-member detail overlay the board forwards pad input
+into (`FUN_0055c740` → `FUN_002c1a80`). Mode byte **`menuCtx+0xDE7`**: `2` = Technicks/Mist/Remedy
+Lore/Espers, `1`/`3` = Magicks, `0` = closed. Two controllers, one entry format; each has a single
+focus routine firing on open **and** every cursor move, so one hook each covers the screen:
+`FUN_002c53b0` (`0x1A53B0`, entries `obj+0xE0`, idx `obj+0x7A0`, section `obj+0x7A4`) and
+`FUN_002c3b90` (`0x1A3B90`, entries `obj+0xC8`, idx `obj+0xAE8`). Entry `0x20`: `+0x00` name,
+`+0x10` description, `+0x18` flags (bit `0x20000` = learned/bright).
+
+**Bug worth remembering:** the Magicks page was *entirely silent* and the RVAs were fine.
+`GameText::IsMostlyPrintable` requires `alpha >= 1`, and the game's unlearned placeholder
+(`FUN_002f9860(0x4C7)`) is `"?"` — no letters — so every unlearned row decoded to empty and was
+dropped. Placeholder rows are now detected explicitly and spoken as **"empty"** (a literal `?` is
+commonly dropped by TTS punctuation settings, which would re-silence it). Section heading is
+announced on **page switch only** (owner change), not on every section crossing.
+
+### 5. Confirm prompts ("Obtain Accessories 1?", "Choose this license board?")
+
+Class `FUN_002cdf20` (`0x1ADF20`, registered `menuCtx+0x2e8`) — **not** the known confirm window
+`FUN_00241d40`, so it fell through to the generic content path and spoke **stale item text from a
+recycled owner address**. Now recognised as a pop-up (itself or the list widget it owns), so
+Yes/No come from the game's own ids 1000/1001.
+
+Its body is **not stored on the object**: it is composed into a local and handed to a
+`FUN_0057c480` surface. The composed string is readable only at that surface's **case‑1 birth** —
+which `message_reader` already decodes and logged, muted, all along. Reading it later at
+button-focus time returns nothing (tried; failed). `MessageReader::TakeConfirmPrompt()` now stashes
+it at birth and `PopupReader::BodyText()` consumes it, so it flows through `OnFocus`'s existing
+`preambleSpoken` path — body first, button queued after. `kSpeakSurfaceConfirms` stays `false`
+(speaking at birth gets cut off by the Yes/No focus milliseconds later).
+
+### 6. Keys / structure
+
+`U` (DIK `0x16`, free per Controls.md) reads current LP; LP also announced on board entry.
+`TextCapture::ProvideHelpText()` added so a reader can supply `o` text for surfaces the game does
+not feed to the description bar (the board **clears** it: `FUN_00291d80(0,0)`).
+
+Split to respect the 500-line rule: `license_reader` (480), `ability_summary_reader` (143),
+`popup_reader` (41), `menu_reader` back to 499.
+
+**Not yet verified in play:** the `F`-overlay "empty"/page-heading changes and the confirm-body
+wiring landed at end of session — built and deployed, untested.

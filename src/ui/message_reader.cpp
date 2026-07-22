@@ -97,6 +97,12 @@ Pfn_Telop     s_origTelop     = nullptr;
 std::mutex   g_lastMutex;
 std::wstring g_lastLine;
 
+// Body of the pending yes/no confirm surface, captured at its birth (see OnPanelSurface) and
+// consumed by MenuReader through TakeConfirmPrompt(). Written on the game thread, read on the
+// game thread from the focus path -- its own lock, since g_lastMutex guards the `t` re-read line.
+std::mutex   g_confirmMutex;
+std::wstring g_confirmPrompt;
+
 // Pages of the message currently on screen, and which one we have spoken. Written on the game
 // thread (the content setter), read+advanced on the input thread (Confirm), so it needs its own
 // lock -- g_lastMutex guards the `t` re-read line and nothing else.
@@ -154,9 +160,15 @@ void OnPanelSurface(void* surface, void* msg) {
         SpeakAndStash(text, "panel: ");
         return;
     }
-    // Confirm / multi-choice: preserved read-point, classified + logged, but silent.
+    // Confirm / multi-choice. Birth is the ONLY moment the composed prompt (with its substituted
+    // parameter) is readable, so stash it here for MenuReader to speak as the pop-up preamble —
+    // speaking it ourselves would be cut off by the Yes/No focus that fires immediately after.
+    {
+        std::lock_guard<std::mutex> lk(g_confirmMutex);
+        g_confirmPrompt = text;
+    }
     char hdr[96];
-    snprintf(hdr, sizeof(hdr), "panel[muted confirm/choice count=%u flags=0x%x]: ",
+    snprintf(hdr, sizeof(hdr), "panel[confirm/choice count=%u flags=0x%x]: ",
              (unsigned)count, (unsigned)flags);
     Log::WriteW("MSGTEXT", hdr, text);
     if (kSpeakSurfaceConfirms) SpeakAndStash(text, "panel(confirm): ");
@@ -311,7 +323,18 @@ void Shutdown() {
     Hooks::Uninstall(RVA_PANEL);
     Hooks::Uninstall(RVA_ITEMPOPUP);
     g_initialized = false;
+    {
+        std::lock_guard<std::mutex> lk(g_confirmMutex);
+        g_confirmPrompt.clear();
+    }
     Log::Write("MSGTEXT", "MessageReader shut down");
+}
+
+std::wstring TakeConfirmPrompt() {
+    std::lock_guard<std::mutex> lk(g_confirmMutex);
+    std::wstring s;
+    s.swap(g_confirmPrompt);          // consume: one prompt speaks once
+    return s;
 }
 
 } // namespace MessageReader

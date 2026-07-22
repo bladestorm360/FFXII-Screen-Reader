@@ -19,6 +19,12 @@ void Shutdown();
 typedef void (*HotkeyCallback)();
 void SetDescribeCallback(HotkeyCallback cb);
 
+// Callback fired (on the input thread) when the user presses the "read License
+// Points" key (`U`), while the game window is foregrounded. The license reader
+// registers a handler that speaks the current LP when the license board is open
+// (silent otherwise). `U` is free in this game's bindings (Docs/Controls.md).
+void SetLicensePointsCallback(HotkeyCallback cb);
+
 // Callback fired (on the input thread) when the user presses the "re-read last line"
 // key (`t`), while the game window is foregrounded. The message reader registers a
 // handler that repeats the last spoken dialogue/panel line.

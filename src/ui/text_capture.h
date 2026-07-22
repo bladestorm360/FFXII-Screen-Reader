@@ -40,6 +40,15 @@ std::wstring CurrentHelpText();
 // description the game sets during that focus is attributed to it (and only it).
 void NotifyFocusChanged();
 
+// Directly supply the help/description text for the CURRENT focus. For surfaces
+// whose description the game does NOT feed to the description-bar setter
+// (FUN_00291d80) -- the license-board node effect text and job descriptions --
+// the reader resolves the text itself and hands it here. Stamps the current focus
+// generation, so `o` (CurrentHelpText) returns it only for this focus, exactly
+// like the captured path. Call on the game thread AFTER NotifyFocusChanged has
+// bumped the generation for this focus.
+void ProvideHelpText(const std::wstring& text);
+
 // Fired (game thread) right after the painter finishes drawing `owner`'s rows,
 // i.e. when `owner`'s item map is freshly populated. The reader uses this to
 // replay a focus announce whose first `0x8000` arrived before the paint (the

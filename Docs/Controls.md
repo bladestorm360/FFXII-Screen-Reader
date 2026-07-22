@@ -94,6 +94,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `5` | Party: slot 2 status | free |
 | `6` | Party: slot 3 status | free |
 | `7` | Party: **guest** slot status (silent when there is no guest) | free |
+| `U` | License board: current License Points (also announced on board entry) | free |
 
 > **`4`/`5`/`6` FIXED (Session 49, implemented).** `party_status.cpp` treated `DAT_02ebf190`
 > (RVA `0x2D9F190`) as the BtlWork struct; **it is a POINTER**. Every roster read landed in

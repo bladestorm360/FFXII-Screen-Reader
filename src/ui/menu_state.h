@@ -23,6 +23,16 @@ bool IsConfirmWindow(void* owner);    // FUN_00241d40 confirm / quit pop-up
 bool IsConfigController(void* owner); // main config / Graphics / Controls screen
 bool IsGraphicsConfig(void* owner);   // the Graphics sub-screen specifically (FUN_0023bd40) —
                                       // its value setter is a separate hook from the shared store
+bool IsLicenseBoard(void* owner);     // license-board node grid (FUN_0055cd40) — LicenseReader owns it
+bool IsJobSelectRing(void* owner);    // job-select ring, 12 jobs (FUN_00557db0) — LicenseReader owns it
+
+// The generic Yes/No prompt (FUN_002cdf20) — e.g. "Choose this license board?" raised from the job
+// ring. Registered at menuCtx+0x2e8. ChoicePopup() returns the live prompt object (null if none).
+void* ChoicePopup();
+// True when `owner` is that prompt OR the list widget it owns (prompt+0xc0): the 0x8000 focus can
+// come from either, and the widget's address is frequently RECYCLED from a previous surface —
+// which is what made the Yes/No buttons speak stale text from the last menu.
+bool  IsChoicePopup(void* owner);
 
 // True only when `owner` is the CURRENTLY-ACTIVE instance of its config controller. Guards value
 // reads so we never dereference a closed/freed menu's widgets -- which is unsafe even under SEH,

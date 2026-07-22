@@ -379,6 +379,12 @@ void NotifyFocusChanged() {
     ++g_helpGen;
 }
 
+void ProvideHelpText(const std::wstring& text) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_helpText = text;
+    g_helpTextGen = g_helpGen;   // attribute to the current focus (same gating as HookedDesc)
+}
+
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
 
 bool InterceptionEnabled() { return g_interceptEnabled.load(std::memory_order_relaxed); }

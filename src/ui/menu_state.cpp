@@ -19,6 +19,14 @@ constexpr uint32_t RVA_CONFIG_CTRL   = 0x11FBE0;  // FUN_0023fbe0 — main confi
 constexpr uint32_t RVA_GFX_CTRL      = 0x11BD40;  // FUN_0023bd40 — Graphics sub-screen (rows at +0x4E0)
 constexpr uint32_t RVA_CONTROLS_CTRL = 0x11CE10;  // FUN_0023ce10 — Controls sub-screen (rows at +0xD8)
 
+constexpr uint32_t RVA_LICENSE_BOARD = 0x43CD40;  // FUN_0055cd40 — license-board node grid
+constexpr uint32_t RVA_JOBSEL_RING   = 0x437DB0;  // FUN_00557db0 — job-select ring (12 jobs)
+
+constexpr uint32_t RVA_CHOICE_POPUP  = 0x1ADF20;  // FUN_002cdf20 — generic Yes/No prompt
+constexpr uint32_t RVA_MENU_CTX      = 0x1F7AC30; // DAT_0209ac30 (ptr) — menu context
+constexpr uint32_t OFF_CTX_CHOICE    = 0x2E8;     // ctx+0x2e8 = the live Yes/No prompt
+constexpr uint32_t OFF_POPUP_LIST    = 0xC0;      // prompt+0xc0 = the list widget it owns
+
 constexpr uint32_t RVA_VALROW_E770 = 0x11E770;    // FUN_0023e770 — enum value row types 1/2/8
 constexpr uint32_t RVA_VALROW_D6B0 = 0x11D6B0;    // FUN_0023d6b0 — enum value row type 3 (main screen)
 constexpr uint32_t RVA_VALROW_DB40 = 0x11DB40;    // FUN_0023db40 — enum value row type 3 (Controls)
@@ -63,6 +71,28 @@ bool IsConfigController(void* owner) {
 
 bool IsGraphicsConfig(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_GFX_CTRL);
+}
+
+bool IsLicenseBoard(void* owner) {
+    return owner && Obj0(owner) == Hooks::ResolveRva(RVA_LICENSE_BOARD);
+}
+
+bool IsJobSelectRing(void* owner) {
+    return owner && Obj0(owner) == Hooks::ResolveRva(RVA_JOBSEL_RING);
+}
+
+void* ChoicePopup() {
+    void* ctx = nullptr;
+    if (!SafeReadPtr(Hooks::ResolveRva(RVA_MENU_CTX), &ctx) || !ctx) return nullptr;
+    void* pop = PtrAt(ctx, OFF_CTX_CHOICE);
+    return (pop && Obj0(pop) == Hooks::ResolveRva(RVA_CHOICE_POPUP)) ? pop : nullptr;
+}
+
+bool IsChoicePopup(void* owner) {
+    if (!owner) return false;
+    if (Obj0(owner) == Hooks::ResolveRva(RVA_CHOICE_POPUP)) return true;
+    void* pop = ChoicePopup();
+    return pop && owner == PtrAt(pop, OFF_POPUP_LIST);
 }
 
 bool IsActiveConfig(void* owner) {

@@ -159,7 +159,7 @@ NPC-trigger path needs Phase 4 first.
 - [ ] Items menu
 - [ ] Equip menu
 - [ ] Save menu (in-game)
-- [ ] License menu
+- [x] License menu (char-select + job ring + board — Session 53)
 - [ ] Magic & Tech menu
 
 ## Phase 7: Combat log (real-time battle reading)
@@ -202,13 +202,13 @@ NPC-trigger path needs Phase 4 first.
 
 - [ ] Locale QA across all 12 locales
 - [ ] README finalization (incl. Tolk-supply instructions)
-- [ ] License decision
+- [x] License decision (job ring + confirm prompt — Session 53)
 - [ ] V1 release zip
 
 ## v2 (deferred)
 
 - [ ] Gambit editor accessibility
-- [ ] License Board grid navigation
+- [x] License Board grid navigation (nodes, status, LP cost, `o` detail — Session 53)
 - [ ] World map / fast travel
 - [ ] Hunts (marks)
 - [ ] Bazaar combinations
