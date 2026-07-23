@@ -1172,3 +1172,84 @@ category word being spoken as a proper NAME for a scene object the game itself l
 "(You're not sure what this sign is for.)"). Full evidence and the ready fix are in `debug.md` →
 Known Issues. It breaks four separate speech rules, so it should land before release, but it is
 independent of the exit work and was deliberately kept out of that commit.
+
+## Session 65 — 2026-07-23 — [nav] Focus clamp, stable NPC numbers, player labels (F6), sign naming
+
+KEYWORDS: focus clamp, CursorMatch label identity bug, entity_labels, stable duplicate numbers,
+F6 clipboard label, kEntityGraceMs, Sign, entity_commands split, NVDA no longer blocked
+
+### The focus bug — one cause, two symptoms
+
+Tester: *"I was trying to track Rabanastran 7, but it kept disappearing and dropping back to
+Rabanastran 5."*
+
+`NumberDuplicateLabels` assigned the suffix as an **ordinal within the group the current scan saw**, and
+`CmdNext` rebuilds the whole list on every keypress. The log shows the settled map oscillating
+**NPC=14 ↔ NPC=15 across 118 rescans** — one NPC flickering in and out of the handle table renumbered
+everyone after it. That alone is cosmetic; the damage came from `CursorMatch` requiring
+`e.label == g_cursor.label` in **both** match tiers, so a renumber made the focused NPC unrecognisable,
+`FindFocusInViewLocked` returned −1, and `CycleLocked` restarted at `view[0]` — the nearest.
+
+Sorting was already by distance and there is no distance or count cap anywhere in `entity_scan.cpp`:
+the list churned, it never truncated.
+
+### Fixes
+
+1. **Focus identity is the OBJECT.** `CursorMatch` exact-tier is now `e.sceneObj == g_cursor.obj`
+   (fixed exits match on `nameIdx`, which encodes the controller). The re-lock tier keeps the
+   name/label/category test for when the pointer genuinely changed. A nearer entity can no longer
+   change anything the cursor looks at, so it cannot steal focus — the clamp the tester asked for.
+2. **Grace window** (`kEntityGraceMs` = 2 s). `RescanLocked` carries over an entity that has only just
+   stopped being reported, and `RefreshPositionsLocked` no longer deletes on a single failed transform
+   read. A real despawn still leaves; streaming noise removes nobody.
+3. **Stable numbers** (`entity_labels.{h,cpp}`). The suffix is assigned ONCE per object and kept —
+   across rescans, streaming, reloads and sessions. Keyed on `mapId · container · slot`, with `nameIdx`
+   stored as a validation field so a reused slot is logged and ignored rather than mislabelling a
+   stranger.
+
+### Player labels — F6
+
+The player names anything the game leaves anonymous ("gate guard"), and **a label outranks everything**:
+game string, duplicate number, category word. Applied before duplicate numbering, so naming one NPC
+does not renumber the rest.
+
+Entry is by **clipboard**, not typing: the mod passes the DirectInput buffer to the game as `const` and
+never swallows a key, so there is no way to run a text field in-game without breaking the read-only
+input rule. Type the name anywhere, copy, focus the entity, press **F6**; an empty clipboard clears the
+label. Stored in `%LOCALAPPDATA%\FFXII-Screen-Reader\entity_labels.txt`, plain text and hand-editable,
+reloaded on every area change, behind a `version` header so a key-scheme change discards cleanly.
+
+**Not the Session 62 mistake.** That store had the mod *discover game facts by playing* and present them
+as truth. This one holds the player's own words and which ordinal we already handed out — presentation
+state we authored, never a claim about the game. Every game fact is still read fresh every scan.
+
+### Sign naming
+
+An unnamed object carrying a `+0x70` field-sign record (`Entity::doorway`, set by
+`setfieldsignlocationjumpinfo`) **is a sign** and is now labelled "Sign" instead of the category word
+"Interactables". Shop doorways carry the same record but resolve a real name, so they are untouched.
+North End `[0:19]` is covered; `[0:15]` (`door=0`, `act`/`talk` both `0xFFFF`) is still unidentified,
+**stays listed** per instruction, and can be named by the player with F6 meanwhile.
+
+### Housekeeping
+
+`entity_list.cpp` hit 575 lines. Split into `entity_list_internal.h` (shared private state + helpers),
+`entity_list.cpp` (392 — the list and the per-frame tick) and `entity_commands.cpp` (206 — the hotkey
+commands over it).
+
+### Documentation corrected
+
+The tester confirmed **NVDA's own key commands now work while the game runs**, contradicting a
+long-standing note in `Controls.md` and `GameArchitecture.md` that they "remain blocked under the game's
+exclusive grab". Both updated to record the observation and its date. **The cause is deliberately NOT
+stated** — the tester suspects a mod-side issue since fixed, and nobody has traced it; it is written as
+an observation, not a mechanism. The read-only input rules are unaffected.
+
+### Verification (tester)
+
+1. Focus a distant Rabanastran, walk past nearer NPCs, press `/` repeatedly — it must stay on them.
+2. Note a number, walk away, come back, **quit and reload** — same number.
+3. Cycle repeatedly while standing still — no entry may vanish between presses.
+4. Copy "gate guard", focus the NPC, press F6 → confirms, and it keeps that name after a reload.
+5. North End announces "Sign", not "Interactables".
+6. **Release gate: full Nalbina prologue run.**

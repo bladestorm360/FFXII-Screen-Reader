@@ -258,6 +258,7 @@ void OnNavKey(int vk) {
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_F5:         EntityList::CmdToggleAvailability(); break; // F5 all <-> story-gated
+        case VK_F6:         EntityList::CmdLabelFromClipboard(); break;  // F6 label focus from clipboard
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
         case VK_OEM_1:      BattleTargetReader::SpeakTargetStatus(); break;  // ;  active target status
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump

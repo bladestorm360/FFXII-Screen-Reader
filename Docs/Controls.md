@@ -97,6 +97,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `\` | Nav: turn-by-turn route to current selection | free |
 | `F4` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
+| `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
 | `Space` / `Enter` | *(observed only)* advances the spoken dialogue page with the game's own Confirm | the game's Confirm — never swallowed or injected |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
@@ -165,6 +166,14 @@ FFXII acquires the keyboard via **DirectInput (exclusive)**, which starves OS-le
 keyboard hooks (WH_KEYBOARD_LL) and NVDA's own commands. The mod therefore reads its
 hotkeys by hooking the game's **`IDirectInputDevice8::GetDeviceState`** (via the dinput8
 proxy) and inspecting the same 256-byte DIK buffer the game polls each frame — so mod
-keys work regardless of exclusivity, and the game's behaviour is unchanged. NVDA's *own*
-key commands remain blocked under the game's exclusive grab (separate issue); the mod
-does not depend on them (its own hotkeys + Tolk speech are self-contained).
+keys work regardless of exclusivity, and the game's behaviour is unchanged.
+
+**UPDATED 2026-07-23 (Session 65): NVDA's own key commands DO work while the game runs.** The tester
+confirmed this in play. The long-standing note here said they "remain blocked under the game's exclusive
+grab" — that is no longer true in practice, so do not design around it. **The cause is not established:**
+the tester's read is that it was a mod-side problem since fixed. That is recorded as an observation, not
+a mechanism — nobody has traced why it changed, and it should not be quoted as one until somebody does.
+
+Unaffected either way: the mod still **never swallows or injects** a key (it passes the DirectInput
+buffer as `const`, per the read-only rule), so there is still no way to run a text field in-game. That is
+why labelling entities (**F6**) reads the CLIPBOARD instead of capturing typing.

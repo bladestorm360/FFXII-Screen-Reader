@@ -53,6 +53,10 @@ struct Entity {
     // (It replaces a `crossRad` heading that was spoken as "walk east" in S59 and refuted in play. There
     // is no crossing direction to derive any more: the route ends ON the trigger.)
     bool         isTransition = false;
+    // When this object was last actually reported by a scan (GetTickCount64). The handle table streams
+    // objects in and out, so entity_list keeps a recently-missing entity listed for a grace window
+    // rather than deleting somebody the player is walking toward. 0 = never confirmed.
+    uint64_t     lastSeenMs = 0;
     // Where the object sits in the scene-object handle table, and the interaction payload ids the engine
     // would run. Diagnostics only -- these are what identify an object the game gives no name to.
     uint8_t      container = 0xFF;

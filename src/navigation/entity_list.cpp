@@ -1,5 +1,7 @@
 #include "navigation/entity_list.h"
+#include "navigation/entity_list_internal.h"
 #include "navigation/entity_scan.h"
+#include "navigation/entity_labels.h"
 #include "navigation/entity_diag.h"
 #include "navigation/nav_rva.h"
 #include "navigation/map_rva.h"
@@ -27,7 +29,7 @@ using namespace MemRead;
 
 namespace EntityList {
 
-namespace {
+namespace Internal {
 
 // The Entity record, the object scanner and the npcdic classification live in
 // navigation/entity_scan.{h,cpp}; the `` ` `` object dump in navigation/entity_diag.cpp.
@@ -42,22 +44,44 @@ std::vector<Entity>    g_entities;
 Category               g_currentCategory = Category::All;
 Availability           g_availability    = Availability::All;   // never start out hiding anything
 
-// The [ / ] focus, tracked across rescans by STABLE IDENTITY (not a bare scene-object pointer,
-// which can be reused/aliased by a pooled combatant slot or momentarily drop from a rescan and
-// silently re-anchor the cursor to the nearest object). Match tiers: exact (pointer + name-key +
-// label) beats an identity re-lock (name-key + label + category, adopting the object's new pointer).
-struct CursorId {
-    void*        obj     = nullptr;
-    int16_t      nameIdx = 0;
-    std::wstring label;
-    Category     cat     = Category::All;
-    bool         valid   = false;
-};
 CursorId               g_cursor;
 
 // Rebuild the list in place. The scan itself lives in EntityScan; this just binds it to our
 // vector, which every caller below already holds the lock for.
-int RescanLocked() { return EntityScan::Build(g_entities); }
+// How long an entity that has stopped appearing in the scan is kept listed. The handle table streams
+// objects in and out constantly -- one NPC flickering was enough to make the tester's target "disappear
+// randomly from the pathfinder" -- and a rebuild happens on EVERY cycle keypress, so a single absent
+// frame used to delete somebody mid-approach. A real despawn still leaves after this; streaming noise
+// removes nobody.
+constexpr uint64_t kEntityGraceMs = 2000;
+
+// Full rebuild, then carry over anything that has only just stopped being reported.
+int RescanLocked() {
+    std::vector<Entity> fresh;
+    EntityScan::Build(fresh);
+    const uint64_t now = GetTickCount64();
+
+    // Anything present this scan is current; anything missing keeps the timestamp it already had, so
+    // the window measures continuous absence rather than time since the object was first seen.
+    for (auto& e : fresh) {
+        bool carried = false;
+        for (const auto& old : g_entities)
+            if (old.sceneObj && old.sceneObj == e.sceneObj) { carried = true; break; }
+        (void)carried;
+        e.lastSeenMs = now;
+    }
+    for (const auto& old : g_entities) {
+        if (!old.sceneObj) continue;                       // fixed exits are rebuilt every scan anyway
+        bool stillThere = false;
+        for (const auto& e : fresh) if (e.sceneObj == old.sceneObj) { stillThere = true; break; }
+        if (stillThere) continue;
+        if (old.lastSeenMs == 0 || now - old.lastSeenMs > kEntityGraceMs) continue;   // really gone
+        fresh.push_back(old);                              // keep it, with its last known position
+    }
+
+    g_entities.swap(fresh);
+    return static_cast<int>(g_entities.size());
+}
 
 
 // Re-read live positions for the current set; drop objects whose transform no longer
@@ -71,8 +95,15 @@ void RefreshPositionsLocked(const FVec3& playerPos) {
             continue;
         }
         FVec3 p;
-        if (!PlayerState::ReadSceneObjectPos(it->sceneObj, p)) { it = g_entities.erase(it); continue; }
+        if (!PlayerState::ReadSceneObjectPos(it->sceneObj, p)) {
+            // A single failed transform read is streaming noise, not a despawn. Keep the last known
+            // position and let the grace window in RescanLocked decide when the object is really gone.
+            it->dist2D = NavCommon::Distance2D(playerPos, it->pos);
+            ++it;
+            continue;
+        }
         it->pos = p;
+        it->lastSeenMs = GetTickCount64();
         it->dist2D = NavCommon::Distance2D(playerPos, p);
         ++it;
     }
@@ -108,10 +139,26 @@ bool ReadPlayer(FVec3& pos) {
 // 2 = exact (same object): pointer + name-key + label all agree — rejects a pointer that a pooled
 // slot reused for a DIFFERENT unit. 1 = identity re-lock: the same logical object under a new
 // pointer (name-key + label + category agree). 0 = no match.
+// THE FOCUS CLAMP. Identity is the OBJECT -- the scene-object pointer, which entity_scan.h documents
+// as stable for the whole time a map is loaded -- and NOTHING else.
+//
+// It used to also require `e.label == g_cursor.label`, in BOTH tiers. That looked harmless until the
+// duplicate-suffix numbering was found to shift: the handle table streams objects in and out (measured
+// NPC=14 <-> 15 across 118 rescans on one map), every keypress rebuilds the list, and a renumber made
+// the focused NPC unrecognisable. FindFocusInViewLocked then returned -1 and CycleLocked restarted at
+// view[0] -- the NEAREST. That is the reported "tracking Rabanastran 7, kept dropping back to 5".
+//
+// A nearer entity can now change nothing the cursor looks at, so it can never steal the focus.
 int CursorMatch(const Entity& e) {
     if (!g_cursor.valid) return 0;
-    if (e.sceneObj == g_cursor.obj && e.nameIdx == g_cursor.nameIdx && e.label == g_cursor.label)
+    // Fixed exits have no scene node; their nameIdx encodes the controller index and is their identity.
+    if (!e.sceneObj || !g_cursor.obj) {
+        if (!e.sceneObj && !g_cursor.obj && e.nameIdx == g_cursor.nameIdx &&
+            e.category == g_cursor.cat) return 2;
+    } else if (e.sceneObj == g_cursor.obj) {
         return 2;
+    }
+    // Re-lock only when the object itself is gone and something equivalent took its place.
     if (e.nameIdx == g_cursor.nameIdx && e.label == g_cursor.label && e.category == g_cursor.cat)
         return 1;
     return 0;
@@ -174,7 +221,9 @@ void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
 }
 
 void SpeakNoTargets() { Speech::Output(L"No targets"); }
-} // namespace
+} // namespace Internal
+
+using namespace Internal;
 
 // --- public API ------------------------------------------------------------
 
@@ -261,6 +310,9 @@ void OnFieldFrame() {
             // The spoken text itself is logged by Speech (SPEAK-OUT). Log the map id + each half here,
             // since those are what the speech log can't show — and they are exactly what distinguishes a
             // region-only announcement from a full one when a name looks wrong.
+            // A new area: re-read the label store, so editing the text file by hand takes effect
+            // without restarting the game.
+            EntityLabels::Reload();
             const int aid = MapNames::CurrentMapId();
             const std::wstring sub = MapNames::ResolveAreaName(aid);
             const std::wstring reg = MapNames::ResolveRegionName(aid);
@@ -301,125 +353,6 @@ void CmdRescan() {
 }
 
 // Shared body for Next/Prev: refresh, build the nearest-first view, move focus.
-static void CycleLocked(int dir, const FVec3& playerPos) {
-    RefreshPositionsLocked(playerPos);
-    std::vector<size_t> view = FilteredSortedLocked();
-    if (view.empty()) { ClearFocusLocked(); SpeakNoTargets(); return; }
-
-    // Find current focus within the view by stable identity (exact, else identity re-lock).
-    int cur = FindFocusInViewLocked(view);
-    const int nv = static_cast<int>(view.size());
-    int next = (cur < 0) ? 0 : ((cur + dir) % nv + nv) % nv;
-    const Entity& e = g_entities[view[next]];
-    SetFocusLocked(e);
-    SpeakEntityLocked(e, playerPos);
-}
-
-void CmdNext() {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    RescanLocked();   // fresh — pick up objects that appeared since the last command
-    FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
-    CycleLocked(+1, p);
-}
-
-void CmdPrev() {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    RescanLocked();
-    FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
-    CycleLocked(-1, p);
-}
-
-void CmdDescribeCurrent() {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    RescanLocked();
-    FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
-    RefreshPositionsLocked(p);
-    std::vector<size_t> view = FilteredSortedLocked();
-    if (view.empty()) { SpeakNoTargets(); return; }
-    // Speak the current focus (by stable identity), or the nearest if the focus is gone / unset.
-    int fi = FindFocusInViewLocked(view);
-    size_t sel = (fi >= 0) ? view[fi] : view[0];
-    SetFocusLocked(g_entities[sel]);
-    SpeakEntityLocked(g_entities[sel], p);
-
-    // Obstacle-aware hint toward the selection (<=5 rays; safe on the input thread).
-    // A full A* grid is a later enhancement (thousands of rays => needs game-thread
-    // execution to avoid racing the physics step).
-    if (MapQuery::HasWorld()) {
-        float hintFacing = 0.0f;
-        PlayerState::ReadCameraForwardStable(hintFacing);   // always yields a reference
-        const FVec3 tgt = g_entities[sel].pos;
-        const float bodyPad = 0.9f;                  // test at body height, not at the feet
-        const FVec3 from{ p.x, p.y + bodyPad, p.z };
-        if (MapQuery::SegmentClear(from, FVec3{ tgt.x, p.y + bodyPad, tgt.z })) {
-            Speech::SpeakQueued(L"Path clear");
-        } else {
-            // Heading convention matches nav_common::BearingDeg: north = -Z, so a
-            // heading `a` maps to world offset (sin a, -cos a) in (x, z).
-            const float base = std::atan2(tgt.x - p.x, -(tgt.z - p.z));
-            float dist = NavCommon::Distance2D(p, tgt);
-            const float probe = dist < 5.0f ? dist : 5.0f;   // look ~5 m per heading
-            const float offs[4] = { 0.785398f, -0.785398f, 1.570796f, -1.570796f };  // +/-45, +/-90
-            bool found = false;
-            for (float o : offs) {
-                const float a = base + o;
-                const FVec3 pt{ p.x + std::sin(a) * probe, p.y + bodyPad, p.z - std::cos(a) * probe };
-                if (MapQuery::SegmentClear(from, pt)) {
-                    std::wstring s = L"Blocked, bear ";   // same frame as the bearing just spoken
-                    s += NavCommon::CardinalOfHeadingRelative(a, hintFacing);
-                    Speech::SpeakQueued(s);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) Speech::SpeakQueued(L"Blocked");
-        }
-    }
-}
-
-static void ChangeCategoryLocked(int dir) {
-    int c = static_cast<int>(g_currentCategory);
-    int n = static_cast<int>(Category::Count);
-    c = ((c + dir) % n + n) % n;
-    g_currentCategory = static_cast<Category>(c);
-    // Rescan live actors BEFORE counting — the other commands (Next/Prev/Describe)
-    // rescan, but this one used to count over the previous scan's stale set, so a
-    // category whose actors weren't in that scan spoke a stale "0" even though the
-    // object exists and appears once the user cycles. Rescanning makes the count live.
-    RescanLocked();
-    // Count matches + speak category name. Counts through the shared predicate, so the number
-    // spoken is exactly what [ and ] will step through under the current availability filter.
-    size_t matches = 0;
-    for (auto& e : g_entities)
-        if (PassesFiltersLocked(e)) ++matches;
-    wchar_t buf[96];
-    _snwprintf_s(buf, _TRUNCATE, L"%s, %zu", CategoryWord(g_currentCategory), matches);
-    Speech::Output(buf);
-    ClearFocusLocked();   // re-anchor to nearest on next cycle
-}
-
-void CmdNextCategory() { std::lock_guard<std::mutex> lk(g_mutex); ChangeCategoryLocked(+1); }
-void CmdPrevCategory() { std::lock_guard<std::mutex> lk(g_mutex); ChangeCategoryLocked(-1); }
-
-// F5 — flip the availability filter. Speaks the mode plus the resulting count, the same
-// "<what>, <n>" shape the category cycle uses, so the two feel like one control surface.
-void CmdToggleAvailability() {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    g_availability = (g_availability == Availability::All) ? Availability::Gated : Availability::All;
-    RescanLocked();   // live count, same reason the category cycle rescans first
-    size_t matches = 0;
-    for (auto& e : g_entities)
-        if (PassesFiltersLocked(e)) ++matches;
-    wchar_t buf[96];
-    _snwprintf_s(buf, _TRUNCATE, L"%s, %zu",
-                 (g_availability == Availability::Gated) ? L"Story-gated" : L"All", matches);
-    Speech::Output(buf);
-    ClearFocusLocked();   // re-anchor to nearest in the new view
-}
-
 bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition) {
     if (outIsTransition) *outIsTransition = false;
     if (!PlayerState::IsFieldActive()) return false;

@@ -1,4 +1,5 @@
 #include "navigation/entity_scan.h"
+#include "navigation/entity_labels.h"
 #include "navigation/entity_classify.h"
 #include "navigation/nav_rva.h"
 #include "navigation/map_rva.h"
@@ -209,13 +210,33 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
     }
 }
 
-// Append " 1", " 2", ... to labels that occur more than once, so twelve identically-named townsfolk
-// become addressable. Ordered by npcdic id then scene handle — both stable while the map is loaded,
-// so the same person keeps the same number across rescans from the same spot. Labels that occur once
-// are untouched: nothing gains a number it does not need.
+// Append " 1", " 2", ... to labels that occur more than once, so fifteen identically-named townsfolk
+// become addressable. Labels that occur once are untouched: nothing gains a number it does not need.
+//
+// THE NUMBER IS ASSIGNED ONCE AND KEPT (Session 65). It used to be an ordinal within whatever group the
+// current scan happened to see, which meant it moved constantly: the handle table streams objects in
+// and out (measured NPC=14 <-> 15 across 118 rescans on one map) and every cycle keypress rebuilds the
+// list, so one flickering NPC renumbered everyone after it. The tester's "Rabanastran 7" kept becoming
+// "Rabanastran 5". EntityLabels now hands out the lowest number not yet used under that name on that
+// map and remembers it -- across rescans, streaming, reloads and sessions.
 //
 // This is NOT a fabricated label (see the no-invented-UI-text rule): the words are still the game's
 // own string; only a counting suffix is added, in the same spirit as the step counts already spoken.
+// The player's own name for an entity outranks everything the mod would otherwise say -- the game's
+// string, the duplicate number, the category word. Applied after all of those are settled and BEFORE
+// duplicate numbering, so a labelled entity leaves its old counting group entirely: name the gate guard
+// and the remaining Rabanastrans keep the numbers they already had.
+void ApplyPlayerLabels(std::vector<Entity>& out) {
+    const int mapId = MapNames::CurrentMapId();
+    for (auto& e : out) {
+        if (!e.sceneObj) continue;                      // fixed exits are named from the map script
+        std::wstring custom = EntityLabels::LabelFor(mapId, e.container, e.slot, e.nameIdx);
+        if (custom.empty()) continue;
+        e.label     = custom;
+        e.gameNamed = true;   // it is a real name for list purposes: never a category-word fallback
+    }
+}
+
 void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail) {
     for (size_t i = 0; i < out.size(); ++i) {
         if (out[i].label.empty()) continue;
@@ -251,8 +272,12 @@ void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail) {
                 Log::Write("NAV-DIAG", l);
             }
         }
-        int n = 1;
-        for (size_t idx : same) out[idx].label += L" " + std::to_wstring(n++);
+        const int mapId = MapNames::CurrentMapId();
+        for (size_t idx : same) {
+            Entity& e = out[idx];
+            const int n = EntityLabels::NumberFor(mapId, e.container, e.slot, e.nameIdx, e.label);
+            e.label += L" " + std::to_wstring(n);
+        }
     }
 }
 
@@ -351,6 +376,12 @@ int BuildLocked(std::vector<Entity>& out) {
             // The sign-twin drop keys on it, so two anonymous objects that both fell back to the word
             // "Interactables" can never be mistaken for a duplicate pair.
             e.gameNamed = !e.label.empty();
+            // An unnamed object that carries a `+0x70` field-sign record IS a sign: the map script bound
+            // it with `setfieldsignlocationjumpinfo`, which is what `doorway` records. Shop doorways
+            // carry the same record but resolve a real name, so they are untouched. The tester
+            // authorised this word explicitly after finding one on North End that the game itself shows
+            // as "???" / "(You're not sure what this sign is for.)".
+            if (e.label.empty() && e.doorway) e.label = L"Sign";
             if (e.label.empty()) e.label = CategoryWord(e.category);
             out.push_back(e);
         }
@@ -389,6 +420,10 @@ int BuildLocked(std::vector<Entity>& out) {
     //
     // This also numbers the exits whose destination did not resolve: several bare "Exit" entries become
     // "Exit 1", "Exit 2", which keeps them separable without inventing a destination for any of them.
+    //
+    // The player's own labels are applied FIRST, so a named entity leaves its counting group entirely
+    // and the rest keep the numbers they already had.
+    ApplyPlayerLabels(out);
     NumberDuplicateLabels(out, detail);
 
     // Per-category breakdown (confirms the categorization: NPCs/Enemies stay out of Interactables).

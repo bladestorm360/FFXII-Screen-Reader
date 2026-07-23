@@ -1249,8 +1249,13 @@ patches `IDirectInput8::CreateDevice` (COM vtable **index 3**) to identify the k
 frame the game polls the 256-byte DIK scan-code buffer; our hook reads the *same* buffer and feeds the mod's
 hotkeys (`InputTracker::FeedDInputKeyboard`) — edge-detected, dispatched on rising edges. Exclusivity is
 irrelevant and the game's behavior is unchanged. (Forcing the keyboard non-exclusive via `SetCooperativeLevel`
-was tried and did NOT work; reverted.) NVDA's own key commands remain blocked under the game's grab — separate
-issue; the mod doesn't depend on them. Full game keybindings + mod keys: `Docs/Controls.md`.
+was tried and did NOT work; reverted.) Full game keybindings + mod keys: `Docs/Controls.md`.
+
+**CORRECTION, Session 65 (2026-07-23): "NVDA's own key commands remain blocked under the game's grab" is
+NO LONGER TRUE.** The tester confirmed NVDA commands working while the game runs. **The cause is not
+established** — their read is that it was a mod-side issue since fixed. Recorded as an observation, not a
+mechanism; do not cite a cause until one is traced. The `GetDeviceState` hook above is unaffected and is
+still how the mod reads its hotkeys, and the mod still never swallows or injects a key.
 
 ### Name resolver + Layer-3 turn-by-turn (Session 24, 2026-07-08)
 **Compass frame:** FFXII world **north = -Z**. `nav_common::BearingDeg` = `atan2(dx, -dz)`;

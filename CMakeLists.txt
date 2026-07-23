@@ -59,9 +59,11 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp
+    src/navigation/entity_commands.cpp
     src/navigation/entity_scan.cpp
     src/navigation/exit_scan.cpp
     src/navigation/entity_classify.cpp
+    src/navigation/entity_labels.cpp
     src/navigation/entity_diag.cpp
     src/navigation/exit_diag.cpp
     src/navigation/nav_commands.cpp
