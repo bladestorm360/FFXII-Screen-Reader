@@ -1253,3 +1253,29 @@ an observation, not a mechanism. The read-only input rules are unaffected.
 4. Copy "gate guard", focus the NPC, press F6 → confirms, and it keeps that name after a reload.
 5. North End announces "Sign", not "Interactables".
 6. **Release gate: full Nalbina prologue run.**
+
+## Session 66 — 2026-07-23 — [nav] Eastgate found: it is off SOUTHERN PLAZA. Progress unblocked.
+
+KEYWORDS: Eastgate 305, Southern Plaza 292, East End has no loader to 305 CLOSED, progress unblocked,
+ready for shotgun build
+
+The tester found the east gate **in the Southern Plaza**, and progress is unblocked.
+
+That closes an item open since Session 55: *"Eastgate — East End has no loader to 305."* It was never a
+defect. **East End genuinely has no door to 305 because the door is on Southern Plaza (292).** The exit
+reader was right every time it said so; the search was on the wrong map.
+
+**Corrects Session 64.** That entry concluded "305 appears only in the Director's teleport list …
+there was never a door to find". The teleport-list half is right (`flags == 0x0A` is the world-map menu,
+not a walk-through transition). The second half was too strong — there IS a walk-through transition to
+305, on a map we had not looked at.
+
+**The generalisable lesson:** *"this map has no door to X"* is a statement about **that map**, never
+about X. Several sessions went into hunting a missing door that was simply somewhere else. When a
+neighbour is expected and absent, check the adjacent maps before doubting the reader.
+
+No code change — this is a finding. The exit work that made it findable is `27fc6d3` (transitions from
+walkmap map-jump surfaces) and `826c25f` (focus clamp + player labels).
+
+**State:** working tree clean, all navigation work committed on `combat-system`. Next session opens with
+the release build; the **full Nalbina prologue run is still the gate** for it.

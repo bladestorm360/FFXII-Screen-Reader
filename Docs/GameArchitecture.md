@@ -366,9 +366,16 @@ two readers separate and never use one as evidence about the other.
 not how you find a trigger) and the S62 arrival relation (true, but needs a neighbour's data — the
 group tag is local). The `+0x54` arrival table is still the party SPAWN point and nothing else.
 
-**Also settled:** map **305 (Eastgate)** appears only in the Director's `mapjump(…, 0, 0x0A)` list —
-`flags == 0x0A` is the world-map **teleport menu**, not a walk-through door. There was never a door to
-find. The Director routines are that teleport list and nothing more.
+**Also settled — CLOSED Session 66, and the S64 wording above was half wrong.** Map **305 (Eastgate)**
+does appear in East End's Director `mapjump(…, 0, 0x0A)` list, and `flags == 0x0A` is the world-map
+**teleport menu** rather than a walk-through door — that part holds. But "there was never a door to
+find" was too strong: **the Eastgate transition is off SOUTHERN PLAZA (292), not East End (291)**,
+confirmed by the tester walking it. East End correctly has no loader to 305 because the door is on
+another map, which is exactly what the reader was telling us for eleven sessions.
+
+The lesson is the one the walkmap tag already taught: *"the map has no door to X"* is a statement about
+**that map**, never about X. Six sessions of "the Eastgate is missing" were spent looking for something
+on the wrong map. The Director routines are still just the teleport list and nothing more.
 
 ## Script natives: the `mapctrl` id -> name table — Session 63
 

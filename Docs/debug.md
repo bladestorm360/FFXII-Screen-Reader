@@ -54,6 +54,14 @@ crossRad kAtExitDist arrival Y nominal blob dY**
    D's script has `mapjump(M, S, 0)` -- so you learn a map's doors from its NEIGHBOURS (`exit_links.h`,
    persisted). An unestablished destination leaves the exit unnamed; do not add a "best guess" fallback.
 
+0i. **"Map M has no door to X" is a statement about M, not about X (S66).** "East End has no loader to
+   305 (Eastgate)" sat open from Session 55 and was repeatedly treated as evidence that the exit reader
+   was incomplete. It was not: **the Eastgate transition is off Southern Plaza (292)**, and East End
+   correctly has no loader to it. Several sessions went into hunting a door on the wrong map. When an
+   expected neighbour is absent, check the ADJACENT maps before doubting the reader. (This also softens
+   the S64 claim that 305 "was never a door to find" — it is a real walk-through transition, just not
+   from East End.)
+
 0h. **SOLVED (S64) — and the lesson is where the answer was hiding.** Transitions are tagged in the
    WALKMAP: `group = (polyFlags >> 3) & 0x1F`, matching the owning routine's `setmapjumpgroup(K)`.
    That field sits in a structure the mod had parsed for **thirty sessions** — `ReadCellFloor` reads the
