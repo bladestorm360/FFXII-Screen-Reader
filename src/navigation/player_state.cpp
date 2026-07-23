@@ -5,6 +5,7 @@
 #include "core/hooks.h"
 #include "core/mem_read.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 
@@ -227,6 +228,44 @@ bool ReadCameraForward(float& outRad) {
     if (fx == 0.0f && fz == 0.0f) return false;
     outRad = atan2f(-fx, -fz);
     return true;
+}
+
+// Live-or-last-good camera reference, with the leader's own facing as a final fallback. See the
+// header for why every speech path must use this: the raw getter's failure mode, combined with
+// callers ignoring its bool, silently produced a 180-degree reversal of every spoken direction.
+// Written from the input thread and the game thread, so the cache is an atomic; a torn read is
+// impossible and a one-frame-stale yaw is harmless.
+//
+// THREE SOURCES, in order, because a distance with no direction is useless to walk on and there must
+// always be one: (1) the live camera row -- correct, this is where UP sends you; (2) the last row
+// that WAS live -- at worst a frame stale; (3) `faceNode`, the leader's own facing, same
+// atan2(x,z) convention. (3) is imperfect (it only updates while walking, and combat turns it toward
+// the target) but it is a real orientation, which beats no direction at all.
+bool ReadCameraForwardStable(float& outRad, const char** srcOut) {
+    static std::atomic<float> s_lastGood{0.0f};
+    static std::atomic<bool>  s_haveGood{false};
+    const char* src = "none";
+    float live = 0.0f;
+    if (ReadCameraForward(live)) {
+        s_lastGood.store(live, std::memory_order_relaxed);
+        s_haveGood.store(true, std::memory_order_relaxed);
+        outRad = live;
+        src = "live";
+        if (srcOut) *srcOut = src;
+        return true;
+    }
+    if (s_haveGood.load(std::memory_order_relaxed)) {
+        outRad = s_lastGood.load(std::memory_order_relaxed);
+        if (srcOut) *srcOut = "held";
+        return true;
+    }
+    const bool ok = ReadPlayerFacing(outRad);   // last resort: the leader's own heading
+    if (srcOut) *srcOut = ok ? "face" : "none";
+    return ok;
+}
+
+bool ReadCameraForwardStable(float& outRad) {
+    return ReadCameraForwardStable(outRad, nullptr);
 }
 
 // One SEH-guarded snapshot of the movement frame. Each piece is independent: a missing

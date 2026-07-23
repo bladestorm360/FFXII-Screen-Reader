@@ -11,8 +11,24 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 >
 > **UPDATE (Session 45):** added the party-status keys `4`/`5`/`6` — the game binds `1`/`2`/`3`
 > (Game Speed) but **nothing to `4`/`5`/`6`**, so they are free. `;` changed from the facing
-> readout to **active target status**; the facing readout was dropped (orientation isn't needed —
-> the route directions are egocentric and pathfinding works without it).
+> readout to **active target status**; the facing readout was dropped.
+>
+> **UPDATE (Session 54):** `F5` added (nav availability filter).
+>
+> **UPDATE (Session 56) — direction model, corrected.** Spoken directions use **COMPASS words on the
+> camera-relative frame**: "North" is the way an UP push currently sends you, "East" is right, and so
+> on. Session 54's note that the shipped words are EGOCENTRIC (`ahead`/`left`/…) is wrong — the
+> egocentric vocabulary exists in `nav_common.cpp` (`kEgocentric`) but is NOT shipped; `RelativeWord`
+> returns `kCardinal`. Compass-on-relative is the tester's stated preference.
+>
+> **The camera-relative frame is a hard limitation, not a bug.** The game moves the camera on its own
+> (ledges, walls, and continuously in battle as it tracks the target), and when it does, the same route
+> is described from the new angle — a leg can flip 180°. This is accepted and documented in `README.md`:
+> movement is camera-relative, so the mod cannot pick a frame the stick does not act in, and locking the
+> camera would break battle lock-on (it uses the same camera). Session 56 rejected a camera lock, a
+> travel-anchored frame, and a spoken "camera changed" notice (the battle camera would trigger it
+> constantly); it added only a `ref=`/`src=` log line so a genuine camera move is distinguishable from a
+> mod bug. No facing readout is needed — the direction words already describe where things are.
 >
 > **UPDATE (release 0.1):** `7` added for the guest slot. **`;` is now battle-only and silent
 > otherwise** (user instruction): it reports ONLY the committed combat target, never a browsed
@@ -80,6 +96,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `t` | Re-read last spoken line | free |
 | `\` | Nav: turn-by-turn route to current selection | free |
 | `F4` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — game binds F1/F2/F3 only |
+| `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `Space` / `Enter` | *(observed only)* advances the spoken dialogue page with the game's own Confirm | the game's Confirm — never swallowed or injected |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |

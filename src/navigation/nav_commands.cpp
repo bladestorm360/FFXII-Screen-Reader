@@ -2,6 +2,7 @@
 #include "navigation/entity_list.h"
 #include "navigation/entity_scan.h"
 #include "navigation/map_exits.h"
+#include "navigation/exit_diag.h"
 #include "ui/text_capture.h"
 #include "navigation/player_state.h"
 #include "navigation/nav_common.h"
@@ -32,7 +33,8 @@ namespace {
 // there a frame or two later. We only capture the fixed world target here.
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
-    if (!EntityList::GetCurrentTarget(pos, label)) {
+    bool isTransition = false;   // exits only: the target is the map-jump surface itself
+    if (!EntityList::GetCurrentTarget(pos, label, &isTransition)) {
         // Front-of-pipeline diagnostic: distinguishes "\\ produced no target" from
         // "\\ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
         Log::Write("NAV-ROUTE", "'\\' (route) pressed: GetCurrentTarget returned no target -> \"No target\"");
@@ -40,7 +42,7 @@ void RouteToCurrent() {
         return;
     }
     Log::Write("NAV-ROUTE", "'\\' (route) pressed: target acquired -> PathPlanner::Request");
-    PathPlanner::Request(pos, label);
+    PathPlanner::Request(pos, label, isTransition);
 }
 
 // `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the
@@ -227,6 +229,10 @@ void DiagnosticDump() {
         Log::Write("NAV-DIAG", fsm);
         std::vector<MapExits::ExitRec> jp;
         MapExits::EnumerateMapJumps(ppp, EntityScan::kExitMaxDist, jp, /*logRaw=*/true);
+        // The coverage matrix + both candidate pairings + the `+0x8c` destination records. This is the
+        // section that answers "are we even seeing all the exits" on whatever map the tester is standing
+        // in, instead of one map at a time by hand.
+        ExitDiag::DumpCoverage();
         MapExits::DiagScanScriptMapjumps();
     }
 
@@ -251,6 +257,7 @@ void OnNavKey(int vk) {
         case VK_F4:         TextCapture::ToggleInterception(); break;  // F4 diagnostic A/B
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
+        case VK_F5:         EntityList::CmdToggleAvailability(); break; // F5 all <-> story-gated
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
         case VK_OEM_1:      BattleTargetReader::SpeakTargetStatus(); break;  // ;  active target status
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump

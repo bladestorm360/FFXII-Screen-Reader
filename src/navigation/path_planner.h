@@ -27,7 +27,11 @@ void Shutdown();
 // INPUT THREAD. Queue a route to a world-space target (the focused entity's live
 // position) with a spoken destination label. Captures the current map epoch; the
 // actual planning happens on the next safe game frame. Overwrites any prior request.
-void Request(const FVec3& target, const std::wstring& label);
+//
+// `isTransition`: the target is a map-jump surface, so arriving at it IS crossing it. Near one, the
+// planner says "At the exit" rather than grinding out two-metre legs across the seam. False for
+// anything else.
+void Request(const FVec3& target, const std::wstring& label, bool isTransition = false);
 
 // GAME THREAD. Called once per field frame from the FUN_0022a770 hook (at entry). If a
 // request is pending and still valid for this map and the field is fully live, plan the

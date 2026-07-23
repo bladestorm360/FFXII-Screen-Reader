@@ -17,8 +17,9 @@ bool Init() {
     EntityList::Init();
     // Route nav hotkeys to the command dispatcher.
     InputTracker::SetNavKeyCallback(&NavCommands::OnNavKey);
-    Log::Write("NAV", "navigation ready: \\=route  [/]=object  -/==category  "
-                      "`=rescan  ;=facing  /=describe  '=diagnostic");
+    Log::Write("NAV", "navigation ready: \\=route  [/]=object  -/==category  F5=all/story-gated  "
+                      "`=rescan  /=describe  ;=target status  '=diagnostic  "
+                      "(directions are EGOCENTRIC: ahead/left/right/behind, relative to where UP walks you)");
     return ok;
 }
 

@@ -317,3 +317,846 @@ Split to respect the 500-line rule: `license_reader` (480), `ability_summary_rea
 
 **Not yet verified in play:** the `F`-overlay "empty"/page-heading changes and the confirm-body
 wiring landed at end of session — built and deployed, untested.
+
+## Session 54 — 2026-07-22 — [nav] Gates into Interactables; F5 story-gate filter; exit parse unwindowed; world-absolute directions
+
+**KEYWORDS: town gate Rabanastre interactables FLAG_TALK misclassification kind nibble 0x0E
+FUN_002675c0 FUN_0025bad0 story gate 0x10 FUN_0026ba60 script native F5 availability filter
+BLOB_MAX 0x18000 silent return false routine table world-absolute directions egocentric withdrawn
+CompassFaceDeg 180 flip npcdic odd slot struck Rabanastran ordinals duplicate interactables OPEN**
+
+Reported: the Rabanastre town gates appear in no category; the NPC list is a wall of identical
+"Rabanastran"s so the gate guard cannot be picked out; and route/crow-flies directions reorient
+whenever the camera moves. Tester's classification rule for this work: **press-Enter-to-use ⇒
+Interactables; step-on-coordinates ⇒ Exits.** All RE below was done OFFLINE (decompile + extracted
+data) per the ≥0.98 bar — the runtime log was used only as the symptom record.
+
+### 1. The engine's own interaction classifier (the root cause)
+
+`FUN_002675c0` (RVA `0x1475C0`) is "can the player interact with this right now", and it *is* the
+tester's rule: ACTION path returns `(obj+0x0E & 0xF) == 5`, TALK path requires `== 1`. Corroborated
+by `FUN_0025bad0` (kind 1 talk-only, 4 both, 5 action-only, 7 talk-only, else rejected). So
+**`sceneObj+0x0E & 0xF` is the object KIND: 5 = ACTION gimmick (gate/door/switch/chest), 1 = person.**
+
+**STRUCK:** `ClassifyByNameKey`'s `if (flags & FLAG_TALK) return NPC` *as the first test*. The engine
+branches on TALK and ACTION *independently on the same object* and never equates talk-target with
+person. A gate with a confirm prompt is a talk target, so every one was filed under NPC — `Object=0`
+in East End (37 NPCs, zero interactables) and Muthru Bazaar (26/0).
+
+**REGRESSION, caught in play the same session — and it partly refutes the finding above.** The first
+fix ordered the classifier `kind == 5 → Object` *before* the character test, and **every NPC was
+reclassified as Interactables**. Tester: "treasure, NPCs, save crystals should still go in their own
+categories; interactibles like switches, levers, wells should still be interactibles." So:
+
+- **REFUTED: "kind 1 ⇒ a person".** Field NPCs evidently do not carry kind 1, so any kind test placed
+  ahead of the character test swallows them. Two engine functions agreeing on a shape did not make
+  that shape a classifier for the population being scanned.
+- **Survives (~0.9):** `kind == 5` spots the ACTION gimmick *among non-characters* — `FUN_002675c0`'s
+  ACTION branch literally returns `(obj+0x0E & 0xF) == 5`.
+- **The reliable person test was already there:** the scene CHARACTER class `+0x03 & 0x1f` in 5-7.
+
+Shipping order: npcdic gimmick band (Treasure / Gate Crystal / Save Crystal keep their own
+categories) → `isCharacter` ⇒ NPC → non-character `kind == 5` ⇒ Interactables → `FLAG_TALK` ⇒ NPC →
+Interactables. The kind-5 *inclusion* widening is likewise non-characters only. Net effect versus the
+pre-session build: **only** a non-character kind-5 object moves; everything that classified correctly
+before still does.
+
+The `'` dump never logged the kind nibble, which is why nothing caught this before it shipped — it
+now prints `kind=` and `en=` (the story-gate bit) per object.
+
+**Worse, `+0x1C` is MODE STATE:** `FUN_0025ad10`/`FUN_0025ae00` rewrite those bits, and a disabled
+object has **zero** flags — so the inclusion test dropped story-gated gates outright. `kind == 5` is
+now an inclusion reason in its own right.
+
+### 2. Story gate + `F5`
+
+`sceneObj+0x0E & 0x10` is the interaction-ENABLED bit. Setter `FUN_0026ba60` (RVA `0x14BA60`), whose
+only caller `FUN_0034afe0` (RVA `0x22AFE0`) has **zero in-binary callers** ⇒ a script-VM native: the
+map's own script opens and closes it. `EntityScan::IsInteractionAvailable` replicates `FUN_002675c0`
+memory-only; `F5` toggles **All ⇄ Story-gated** through the one predicate every command already goes
+through (`FilteredSortedLocked`). Default All — nothing is ever hidden unasked. Non-interaction kinds
+are always `available` so props never pad the gated list.
+
+### 3. Exit parse — the 96 KB window nobody knew was a precondition
+
+`MapScript::SnapshotBlob` copied a fixed `0x18000` prefix and bounds-checked the header offsets
+against the COPY, so on a bigger map `ReadExitDests` returned false **before its first log line**;
+every door logged `-> no controller (arrival point)` and `Exit=0` across all of Rabanastre. The tell
+was an absence — no `==== field-script exits ====` header — while `EnumerateMapJumps` read 14 doors
+from the same blob. Migelo's Sundries, a small shop, already had `routineTable=+0xE350`.
+
+Now reads the live blob directly (SEH-guarded, `OFFSET_MAX` sanity ceiling, no window); per-rescan
+cost drops from 96 KB to ~2 KB. **Every bail logs its reason**, and a clean parse with 0 controllers
+dumps the routine names. Offline note: `__MJ_CTRL` is plaintext in **none** of the 20 extracted
+`.mpk`s, including Nalbina where it is proven present at runtime — the pool is packed on disk.
+
+### 4. Directions — reversed THREE times; the answer was the ROUTE SMOOTHER
+
+1. Tester: routes "constantly switching directions" → withdrew the relative frame for world-absolute.
+   **Wrong** — absolute is stable but useless, you cannot push "north".
+2. Restored the frame but swapped in literal ego words ("ahead", "behind-left"), theorising that
+   compass-words-on-a-relative-frame was the confusion. **Also wrong**, and backwards: *"most prefer
+   north/south/east/west … essentially north=forward whether it's true north or not, east=right."*
+3. **Actual cause**, tester's words: *"we're not telling the player to walk 30 northwest when the arc
+   is actually 18 north, 7 west … then if the player walks 10 west by accident the directions flip to
+   northeast because the player has gone past the north leg."* The planner's greedy string-pull
+   collapses an L across open ground into one diagonal chord — the player is sent along a line the
+   route never takes, and any drift comes back inverted.
+
+**SHIPPED — the diagonal rule.** A diagonal word may only describe a genuinely diagonal stretch (a
+fine alternation whose net line really is 45°); a route with shape is spoken as its actual legs.
+Pipeline: raw cell path → **Ramer-Douglas-Peucker at one grid cell** → runs → staircase collapse →
+merge same-word → absorb sub-2-step legs → **cap 5 legs then "then N more"**. Both extremes were
+measured wrong: the smoothed chord gave one invented diagonal, the raw path gave a **19-leg** readout
+in play. RDP is deviation-bounded, so unlike string-pull it cannot cross a corner.
+
+**Vocabulary as shipped:** compass words on the RELATIVE frame — North = forward, East = right,
+South = behind, West = left. The literal-ego wording is retained unused and renamed per the tester:
+`forward / forward-right / right / backward-right / backward / backward-left / left / forward-left`.
+
+**`PlayerState::ReadCameraForwardStable`** (live camera → last good → leader facing) replaces the raw
+getter everywhere, and **always** yields a reference: a distance with no direction is useless to walk
+on, so there is no direction-less path. The old code declared `float facingRad = 0.0f`, ignored
+`ReadCameraForward`'s bool, and `CompassFaceDeg(0) == 180` — every direction spoken **reversed**.
+
+### 4b. Phantom "NPC 1 … NPC 37" — unplaced reserve slots at the world origin
+
+Root-caused from the new `dup-label` dump in one session: East End listed **37** entities ALL at
+`pos=(0,0,0)`, unnamed (so labelled by category word, then numbered), `kind` 1 and 5. Slots the map
+allocates at load and positions later; still at the origin means never placed. Off the walkable map,
+so `\` correctly answered "No path" — the log shows `NPC 1. North, 197 steps` then `NPC 1. No path`.
+`ScanCombatants` always had this guard ("unplaced reserve unit"); the handle-table walk never did.
+Fixed with the same exact-zero test. **This is where East End's "NPC=37 Object=0" always came from —
+not one was a real NPC.**
+
+### 5. Same-named NPCs
+
+**STRUCK before building:** npcdic's odd slot is not a yomi — `FUN_00263990` selects it via
+`FUN_0032a930`, a live per-id bitfield at `FUN_002ef2b0()+0x13B4` — but decoding `npcdic.bin`
+directly (2282 slots / 1141 ids) shows **odd == even** in the US build. There is no second name. The
+duplication is the game's data: **109 ids all render "Rabanastran"** (554 distinct names overall).
+So `NumberDuplicateLabels` appends a stable ordinal (npcdic id, then scene handle) to same-label
+entries only. **No name is ever substituted** — `ResolveObjectName` speaks the game's own string
+verbatim, and the numeric suffix is the only edit any label receives.
+
+**Retracted same session (tester correction):** "gate guards are already distinct: npcdic 362 =
+Imperial Guard" was written as fact and is an **unverified hypothesis**. Id 362 does exist and does
+read "Imperial Guard", but it was found by grepping the extracted dictionary for guard-ish words —
+which proves the string exists, not that any object at the Rabanastre gates stamps it at `+0x102`.
+The tester reports the gate guards are **not** Imperials. Below the 0.98 bar; no code keys off it.
+Confirm properly with `'` at a gate and read `nameIdx` on the objects near the logged player position.
+
+### 6. Also recorded / OPEN
+
+- `phyre_types.h`'s `KIND_DEAD = 5` is a **misname** (5 is the field-gimmick kind). Left in place —
+  the combat track owns it, and the actor pool holds no gimmicks so the skip is a no-op today.
+- **OPEN: every interactable is listed twice** (reported mid-session, "at least all of the shops").
+  Not diagnosed, deliberately not guess-fixed. Instrumented instead: `dup-label` groups dump once per
+  map with pointer/handle/kind/flags/pos, and the `'` dump now prints the container's own interaction
+  spans (`grp1 = +0x1DE/+0x1D6`, `grp0 = +0x1DA/+0x1D2`) that `FUN_0025b820` walks instead of the raw
+  array. Same position + different pointers ⇒ shadow registration; different positions ⇒ two real
+  objects. See debug.md.
+
+### 7. Structure
+
+`entity_scan.cpp` hit 512 lines, so the per-object judgement layer split out to
+`entity_classify.{h,cpp}` (151/38): `CategoryWord`, `ResolveObjectName`, `InGimmickBand`,
+`ClassifyByNameKey`, `IsInteractionAvailable`. entity_scan.cpp back to 382 — it finds objects,
+entity_classify decides what each one is. `entity_scan.h` includes the new header, so no caller
+changed.
+
+**Built and deployed; not yet verified in play.**
+
+## Session 55 — 2026-07-23 — [nav] Planner recovery (start-snap/bridge/near-goal); exit source = +0x54 ∪ +0x70; sign-twin dedup; reachability filter; NoPath root causes
+
+**KEYWORDS: pathfinder No path startFloor touched 2157 islanded doorway kMargin 0.5 relaxed retry
+bridge near-goal snap-start reachability flood fill NavReach exit union +0x70 field sign __MJ_CTRL
+slot 7 fieldsignmes setfieldsignlocationjumpinfo sign twin dedup Interactables 12 to 7 kind 4 door
+kind 5 NPC dup-label latch NOT USED placeholder Pharos at Ridorana coverage matrix +0x8c dest table
+MapRef DAT_02099d88 exit_diag exit_scan path_search nav_reach file split**
+
+Tester report on the S54 build (Rabanastre East End 291 / North End 289): duplicate interactables,
+exits named "Pharos at Ridorana: NOT USED", exits with no path, missing east gate. Root-caused from
+the mod's own log + the `'` dump; no runtime discovery.
+
+### Planner — two NoPath causes, both mod-side (path_search.cpp, split from path_planner.cpp)
+- **Start side:** player's own fine cell had no floor sample (`startFloor=0 expands=1`) — the goal got
+  a walkability snap, the start never did. Added `SnapToWalkable` on the start (`snap-start:`).
+- **Goal side:** `touched=2157` identical from four starts and both targets — goal cell walkable but
+  islanded by the 0.5 m lateral-clearance test at a narrow archway. Added a margin-0 **bridge flood
+  from the goal** (≤256 cells) that splices into the strict search, plus a **near-goal fallback** (route
+  to the closest reached cell within 6 m). Every NoPath now logs `pass=` and `nearDist=`.
+
+### Exit source — union of two tables (exit_scan.cpp, split from entity_scan.cpp)
+`__MJ_CTRL` controllers alone are NOT the exit list. East End slot 3 has a controller and no sign;
+**slot 7 has a sign and no controller** — a transition the game files as an exit that the mod could not
+see. Exit = a `+0x54` slot claimed by a controller OR a field sign. **STRUCK:** the "+0x70 empty on
+every map" verdict (25 records on East End). New `map_exits.EnumerateFieldSignRaw` + `SignRec`.
+
+### Duplicate interactables — the fieldsign discriminator
+`'` dump: each shop is two objects, identical `cat=21 kind=4 en=1 flags=0x2134 ACT`, both inside the
+container action span `[19,35)`, 6–15 m apart. Both are field signs (`nameIdx=-1` → `sceneObj+0xf8`
+via `fieldsignmes`). The one bound to a jump (`setfieldsignlocationjumpinfo`, a `+0x70` record within
+~2 m) is the doorway; its same-named twin is a plain sign → dropped by exact-label match. Interactables
+12 → 7. **STRUCK:** S54's `kind==5 = ACTION gimmick` — on East End kind 5 = NPC, kind 4 = doorway,
+kind 1 = player, so `IsInteractionAvailable` never evaluated a door. Fixed the dup-dump latch (fired on
+map-id change, before objects streamed in) to latch on `(mapId, population high-water)`.
+
+### Reachability filter (nav_reach.cpp) — fail-open
+One budgeted flood-fill per map (60 cells/frame, ~1 ms, STALL_SCOPE'd), published via shared_ptr swap.
+Drops an exit only when ready AND no cell within 4.5 m is reachable, AND never more than half a map's
+exits (`reachability filter disabled: would drop N of M`).
+
+### Regressions this build introduced (fixed in S56, recorded here): placeholder detector (≥3-ids
+multiplicity — see S56) and the exit union over-matched shop arrival points (see S56). Diagnostics
+authored: `exit_diag.cpp` (coverage matrix, both candidate pairings, `+0x8c` dest table, MapRef
+records) on the `'` key.
+
+**Files split for the 500-line rule:** path_search.{h,cpp}, exit_scan.{h,cpp}, nav_reach.{h,cpp},
+exit_diag.{h,cpp}. Built + deployed.
+
+## Session 56 — 2026-07-23 — [nav] Direction 180° flip diagnosed = game camera (accepted+documented); placeholder detector fixed; exit union arrival-point exclusion
+
+**KEYWORDS: direction reversed 180 Northeast Southwest camera flip DAT_02aedf30 FUN_004742a0 movement
+basis camera-relative accepted README limitation ref src dref log placeholder NOT USED multiplicity
+struck Aerodrome No 10 Channel exit union shop arrival point signTaken objectOnSign kSignObjectDist
+camera lock rejected battle targeting travel anchor rejected**
+
+Tester walking to Southern Plaza: directions reversed mid-walk — "Northeast" became "Southwest".
+
+### Diagnosis — the frame flipped exactly 180°, and it is the game's camera
+Log: same target, same route, five legs with identical lengths and **every word exactly 180° opposite**
+across `seq=7` → `seq=11`. Player Y went 0.00 → 0.50 (stepped onto the shop terrace) on the flip frame,
+new value held 4 s. The direction reference is `ReadCameraForward` (row 2 of `DAT_02aedf30`), which the
+game block-copies every frame from the active camera (`FUN_00202c70`, `decompile_all.txt:509454`). We
+read it correctly; the game changed it.
+
+### Decision — accept, document, do not engineer around
+Movement is camera-relative, so a mid-walk camera swing sends the held stick input the wrong way *at
+that instant* — no read can undo it, because the mod learns of the flip no sooner than the player.
+Three fixes designed and **rejected** (recorded so not re-attempted):
+- **Camera lock** (write world axes into `DAT_02aedf30` at `FUN_004742a0`'s entry): rejected — that
+  matrix orients the character onto the battle target, and `FUN_004742a0` keeps cross-frame lock-on
+  state (`param_1[2]` + 22.5° threshold), so freezing it breaks targeting. Also crosses read-only rule.
+- **Travel-anchored frame**: rejected — stops the words flipping but the held input is already wrong and
+  the readout stays silent until the next query. Symptom swap.
+- **Spoken "Camera angle changed." notice**: rejected — the battle camera reorients on every target
+  change, so it would fire almost continuously in combat.
+
+**Shipped:** a `ref=<deg> src=<live|held|face> dref=<deg>` line on every route drain and entity
+announce (`ReadCameraForwardStable` gained a `srcOut` overload), a `README.md` "Known Issues" paragraph,
+and a corrected `Docs/Controls.md` (S54's "egocentric words" note was wrong — `RelativeWord` returns
+`kCardinal`; egocentric vocab exists but is unshipped).
+
+### Regression fixes from S55
+- **Placeholder detector** — the ≥3-ids multiplicity test is refuted by its own first run: "NOT USED"
+  is shared by 2 ids (293/294) while genuine "Aerodrome" is shared by 5 and "No. 10/11 Channel" by 3.
+  Replaced with an exact match against `kPlaceholderNameUS = L"NOT USED"` (the one locale-specific point;
+  the shared-name scan stays log-only to name the token on other locales). "Pharos at Ridorana: NOT
+  USED" gone; Aerodrome et al. keep their names.
+- **Exit union over-matched** — exits went 6 → 14; the 7 extras were shop *arrival points* (signs
+  destIdx 20-26 + the North End arrival slot 0). A sign justifies a jump slot only if it is not already
+  claimed by a controller door (`signTaken`) AND has no scene object on it within `kSignObjectDist`
+  (`objectOnSign`) — an interior doorway sign has the press-Enter object sitting on it. East End back to
+  7 exits (slots 1-7).
+
+Built + deployed. **Not yet verified in play.** Deferred: `__MJ_CTRL` slot-N+1 pairing walk test,
+Eastgate search (Southern Plaza / Muthru Bazaar never dumped), `+0x8c` story-variant dest recovery.
+
+## Session 57 — 2026-07-23 — [nav] ROOT CAUSE: +0x54 is the ARRIVAL table not the exit set; exits = __MJ_CTRL controllers only; drop unnamed; S57 zone-test capture diagnostic
+
+**KEYWORDS: mislabel Southern Plaza Bazaar exit destination +0x54 arrival table not exits FUN_00264b90
+FUN_00259b30 getmapjumppos nowjumpindex jumpIndex arrival slot on destination map mapjump literal
+__MJ_CTRL zone test 0x202d native +0x84 parallel table few steps short transition tile N+1 struck
+revert union controllers only drop unnamed HasRealAreaName capture DumpCaptureDiag Explore agent**
+
+Tester on the S56 build (Rabanastre): the "Southern Plaza" exit LOADED Muthru Bazaar; East End listed
+13 exits not 3; a 20-leg route validated through a wall; and exits land a few steps short of the
+transition (in Nalbina too).
+
+### ROOT CAUSE (Explore-agent decompile trace, 0.9–0.95) — supersedes the S46 N+1 model
+**`+0x54` is the party ARRIVAL table, not the exit set.** `+0x54[K]` = x/y/z/angle only (no dest field),
+read by `getmapjumppos(nowjumpindex)` (`FUN_00264b90`) and used by party-spawn `FUN_00259b30` to place
+you ON ARRIVAL. `mapjump(dest, jumpIndex, flags)`'s `jumpIndex` is the **arrival slot on the DESTINATION
+map** (`FUN_003145e0` stores it as `nowjumpindex` at map-state `+0x1048`), NOT the source slot. No
+engine loop tests `+0x54` vs the player — the "stepped on a transition" test is a **script zone check
+(VM native 0x202d)** inside the `__MJ_CTRL` routine, keyed by script-literal zone ids. So **no
+`+0x54`→destination binding exists in the blob**; S46's `__MJ_CTRL<N> owns slot N+1` paired two
+independent tables and only held on Nalbina's tiny maps. That is the mislabel, and routing to `+0x54`
+(arrival, set back from the edge) is the "few steps short" — same data everywhere, so Nalbina too.
+Reliable data = the `mapjump` literal (destination). Missing data = the true transition-tile position.
+
+### +0x84 parallel table — unresolved contradiction the capture settles
+`FUN_00264b90` reads `+0x54` OR `+0x84` (hdr words 0x2a/0x42) by a flag; party-spawn reads `+0x54`
+(arrival), so **`+0x84` is the leading candidate for the transition tiles**. The mod's own S46-era
+`map_script.cpp` comment claims the OPPOSITE — flagged, unresolved, dumped for decode.
+
+### Shipped this build (capture + cleanup)
+- **Exit source reverted to `__MJ_CTRL` controllers only** (`exit_scan.cpp`) — the S55 `+0x54 ∪ +0x70`
+  union was wrong (pulled shop-arrival slots in → Exit=13; its object-list exclusion was empty at
+  area-entry). Deleted the signTaken/objectOnSign machinery. **Drop unnamed** (placeholder 293/294 →
+  `HasRealAreaName` false). East End 13 → 3, robust from frame 0, no object-streaming dependency. Interim
+  labels stay N+1 (may be swapped) per tester — real fix next build.
+- **S57 capture** (`MapScript::DumpCaptureDiag`, on the `'` key): dumps BOTH `+0x54`/`+0x84` tables raw
+  + un-deduped, and every `__MJ_CTRL` routine's full bytecode with each CALLACTPOPA native annotated
+  (mapjump 0x008d / zone-test 0x202d + operands). Needed because East End's routine table sits at
+  `+0x29A00`, past the old 0x9000 blob-hex cap. **Tester presses `'` on East End + Muthru Bazaar.**
+
+### NEXT build (real fix, after decode): correct exit reader
+Destination from the routine's `mapjump` literal + transition-tile position from `+0x84` (if proven the
+tiles) or the routine's `0x202d` zone test — same routine, no N+1, no `+0x54`, no cross-map. Ships behind
+a safe fallback. **HARD CONSTRAINT: must not break the Nalbina prologue** — tester runs a full prologue
+tutorial as the release gate.
+
+Deferred: level-aware walkmap (multi-level Muthru routed y=−9→y=0 through a wall). Built + deployed.
+
+## Session 58 — 2026-07-23 — [nav] `+0x84` edge-pairing decodes the door binding; route target marched to the transition seam
+
+KEYWORDS: +0x84 edge record, edge-pairing, ResolveControllerArrivals, door binding, N+1 struck, arrival
+table, transition seam, SeamTarget, SeamTargetFrom, trigger bearing, route to map edge, Southern Plaza
+loads the Bazaar, map_script_internal.h, map_script_diag.cpp, exit_scan.cpp, ExitDest::edge
+
+### What this session fixed
+
+The S57 capture (`'` on East End + Muthru Bazaar) was decoded offline. It answered the open question
+outright, and both tester symptoms fell out of the same one fact.
+
+**`+0x84` = the `+0x54` arrival table with ONE extra "edge" record inserted per map-jump controller.**
+An edge is a `+0x84` record that appears in no `+0x54` record; it is the transition TRIGGER's reference
+point, sitting off the walkable mesh out past the map boundary. **Controller `i` owns the record
+immediately AFTER the i-th edge.**
+
+That replaces the S46 rule (`__MJ_CTRL<N>` owns `+0x54` slot `N+1`), which paired two structurally
+independent tables and only ever held on maps where every arrival happens to have a controller — i.e.
+Nalbina's 2-3-loader maps. The moment a map has a controller-less arrival (a shop spawn point), the two
+rules diverge, and East End has several.
+
+**East End (6 controllers), edges at `+0x84[1,3,6,8,10,12]`:**
+
+| ctrl | dest | OLD `+0x54[i+1]` | NEW `+0x84[edge_i+1]` | atlas dir | ✓ |
+|---|---|---|---|---|---|
+| 0 | 289 North End | (125,21) | (125,21) | north | ✓ |
+| 3 | 290 Muthru | (107,56) mid-map | **(33,56)** | west | ✓ |
+| 4 | 292 S.Plaza | (33,56) west | **(123,135)** | south | ✓ |
+
+Muthru Bazaar matches too (ctrl0→289 north at (36,24.5), ctrl2→291 East End at (48,56)). It also
+reproduces the tester's walked ground truth: arriving from the Bazaar you spawn at `+0x54[2]=(26,58)`,
+and the Bazaar exit's true position is `+0x84[4]=(26,58)` — the same point. The mod had been showing
+`+0x54[4]=(107,56)`, ~80 units away, which is the reported "10 steps north, actually a couple of steps
+behind me". **"Southern Plaza loads the Bazaar" was this and nothing else.**
+
+### Change A1 — the door binding (`map_script.cpp`)
+
+`ResolveControllerArrivals()` reads both tables, marks every `+0x84` record absent from `+0x54` as an
+edge (exact float match on x/y/z/angle — the arrivals are byte-identical copies), and hands controller
+`i` the record after the i-th edge. `ExitDest` gained `edge`/`edgeOk` alongside `pos`/`posOk`.
+
+**Consistency gate → safe fallback.** If `#edges != #controllers`, or a record after an edge is missing
+or is itself an edge, the whole map falls back to `+0x54[N+1]` and says so in NAV-DIAG. A map that
+breaks the pattern behaves exactly as it did before rather than emitting a wrong position. (On Nalbina
+the two rules are expected to *agree*, because the divergence needs a controller-less arrival; the
+prologue tutorial run is the gate that confirms it.)
+
+### Change A2 — route to the seam, not the arrival (`exit_scan.cpp`)
+
+Tester: *"routing to the arrival point often leaves the player feeling around for the exit because
+there's no indication of which way to walk to get to the map edge."*
+
+The arrival is a couple of steps INSIDE the map. The fix marches it out to the boundary — but **the
+direction cannot be found geometrically**: an unwalkable sample is a building wall and a map edge alike,
+so "march out until the floor ends, in whatever direction ends soonest" walks the player into the
+nearest shopfront. (This was written and discarded before the data answer was found.)
+
+The data has the answer. The paired **edge record's BEARING** from the arrival is exactly the direction
+the player crosses the seam — north to (125,−78), west to (−39,·), south to (·,255) on East End's three
+real exits. So `SeamTarget()` marches the walkmap along that bearing (0.5 m pitch, ±20° fan of 5
+branches, capped at 14 m *or* the trigger distance, whichever is shorter) and takes the last sample that
+still has floor; the fan branch that gains most **along the true bearing** wins, since that is the one
+aimed down the gap. Overshooting is harmless by construction — the transition fires when the player
+crosses it, before they reach the target.
+
+Guards: resolved **once per map** and cached (a few hundred walkmap queries, and the answer cannot
+change while a map is loaded); nothing is cached until `MapQuery::HasWorld()`, because the exit scan runs
+from the first frame on a new map and caching a pre-stream miss would freeze every exit on its arrival
+for the whole area; a seam the `NavReach` flood cannot reach is discarded in favour of the arrival; and
+**reachability is still judged on the ARRIVAL**, before the march, so the march can never hide an exit.
+
+### Housekeeping
+
+`map_script.cpp` hit 523 lines. Split into `map_script_internal.h` (blob layout constants + the guarded
+blob readers, shared so the reader and its capture dump cannot drift apart), `map_script.cpp` (337) and
+`map_script_diag.cpp` (137). `map_script_internal.h` also records the now-SETTLED `+0x54`/`+0x84`
+identities in place of the S57 "DISPUTED" note.
+
+### Verification (tester)
+
+1. East End, `=` to Exit → 3 real transitions at their correct doorways: North End **north**, Muthru
+   **west**, Southern Plaza **south**. Walk each; `announce: mapId=` must match the label.
+2. Routing to an exit should end AT the transition — the closing legs point into it, no feeling around.
+3. NAV-DIAG shows `arrival (…) edge (…)` per controller, `door binding: +0x84 edge-pairing`, and one
+   `route target -> seam (…), N.Nm along the trigger bearing` line per exit.
+4. **Release gate: full Nalbina prologue tutorial run.** Confirm the log says `+0x84 edge-pairing` (not
+   the fallback) and that every prologue exit still names and reaches the right sub-map.
+
+### Still open
+
+Eastgate (East End has no loader to 305); Change B (routes must never validate through an obstacle) is
+still deferred pending the retest above; the direction camera-flip is accepted + documented (S56).
+
+## Session 59 — 2026-07-23 — [nav] Seam march REFUTED in play and removed; speak the crossing direction at the exit
+
+KEYWORDS: seam march refuted, walkmap boundary is not the transition, script zone 0x202d, crossRad,
+hasCross, At the exit Walk east, kAtExitDist, arrival Y projection, GroundAt floorY, blob dY nominal,
+CardinalOfHeadingRelative, path_planner short-circuit, Muthru Bazaar 290, multi-level tier
+
+### The refutation
+
+S58's `+0x84` edge-pairing is CONFIRMED in play — the log reads `door binding: +0x84 edge-pairing
+(4 controllers)` on Muthru Bazaar with correct destinations. The **route target** half of that build is
+what failed. The seam march found a real map boundary **zero times out of two**:
+
+| exit | arrival | march result |
+|---|---|---|
+| ctrl000 → North End | (36, 0.0, 24.5) | (36, 0.0, 10.5) — ran its **full 14 m cap**, no boundary |
+| ctrl002 → East End | (48, 0.0, 56) | (51, **−8.0**, 56) — 3 m east and **8 m down**, onto another tier |
+
+**The premise was wrong, structurally, and S57 already said so:** the transition is a script ZONE (VM
+native `0x202d`), which the collision mesh does not model. No walkmap probe can find it. The march also
+had a real bug — it sampled `GroundAt` with no floor-continuity check, so it stepped off a ledge.
+
+The play consequence: target (51,−8.04,56), player pinned at x=48.40–48.41 across **ten** `\` presses,
+told "East 3. 3 steps" every time and cycling East / Northeast / Southeast / North without converging —
+a confident route into a wall. Tester: *"the exit is in the right area, but I am not told which way to
+walk to get to the actual transition point."*
+
+### Change 1 — the march is gone
+
+`exit_scan.cpp`: `SeamTarget()` / `SeamTargetFrom()` deleted. The route target is the `+0x84` arrival —
+the tile the engine itself places the party on, so it is known walkable and adjacent to the trigger. Two
+seam-finding attempts are now struck (S58's geometric 16-heading probe, discarded before shipping; this
+march, shipped and refuted); both are recorded together in `debug.md` so a third is not attempted.
+
+### Change 2 — the crossing direction, spoken on arrival
+
+The player never needed a better target. They needed to be told **which way to step**, and the game has
+that exactly: every `+0x84` trigger record sits far off-mesh **directly along the crossing axis**.
+
+| ctrl | arrival → edge | crossing |
+|---|---|---|
+| 000 | (36, 24.5) → (36.1, −74.2) | north |
+| 001 | (48, 64) → (195.8, 64.2) | east |
+| 002 | (48, 56) → (198.1, 56.0) | east |
+| 003 | (42.9, 144.9) → (43.0, 258.6) | south |
+
+Exactly axis-aligned on every transition of both test maps. `Entity::crossRad`/`hasCross` carry the
+bearing (`atan2(dx,−dz)`) from `exit_scan.cpp` → `GetCurrentTarget` → `PathPlanner::Request`. In the
+drain, **before** the A*: if `hasCross` and the player is within `kAtExitDist` (3.0 m, X/Z only), speak
+
+> "Exit, Rabanastre: East End. At the exit. Walk east."
+
+instead of another two-metre leg. Checking before the search also means standing on an exit can never
+produce "No path", and costs one distance compare otherwise. `kAtExitDist` = two fine nav cells; the
+measured need is 0.78 m (where the tester stood while being fed 3-step legs). Y is deliberately excluded
+— on a multi-level map it is unreliable even after Change 3, and a doorway at your feet must not fail the
+test over a metre of slope.
+
+Spoken **only** at the end of a route (tester's call) — not on `/` describe, not while cycling, so exit
+announcements stay as short as they are.
+
+### Change 3 — arrival elevation from the walkmap, not the blob
+
+Muthru's East End arrival carries `y = 0.0` while the player walks that ground at `y = −9.0`, which is
+why the describe announced "East, 11 steps **(above)**" for a doorway at the player's feet. The exit's Y
+is now `GroundAt(x, z)` when a floor exists there, keeping x/z; the blob's Y survives only when there is
+no sample. That makes `(above)`/`(below)`, `Distance3D` and the at-the-exit test honest.
+
+### Change 4 — one diagnostic line per exit
+
+`__MJ_CTRL002 (48.0,0.0,56.0) floorY=-8.04 (blob dY=8.04) cross=east dest=291 -> exit "…"`
+
+`blob dY` answers the one open question below without another capture round-trip.
+
+### Verification (tester)
+
+1. Muthru Bazaar at the East End doorway, `\` → "…At the exit. Walk east." Walking it crosses.
+2. From across the map, `\` → normal legs to the arrival, then the crossing sentence inside ~3 m. No
+   more oscillation between 3-step legs.
+3. North End exit on the same map → "Walk north". East End (291) → north / west / south.
+4. Log: the new `floorY=` line per exit; `+0x84 edge-pairing` still present; no `route target -> seam`.
+5. **Release gate: full Nalbina prologue tutorial run** — every exit names and reaches the right
+   sub-map, and the binding line says `+0x84 edge-pairing`, not `FALLBACK +0x54[N+1]`.
+
+### Open
+
+- **Is Muthru's ctrl002 arrival really 9 m above the street?** Its blob Y is 0.0, the player walks at
+  −9.0, and ctrl001 (dest 294 "NOT USED") sits at (48,−9,64) heading east as well. The destination
+  binding is independently confirmed — ctrl002 passes `entrance=2`, and East End's `+0x54[2]` = (26,58)
+  is exactly where the tester lands coming from the Bazaar — so only the HEIGHT is in question. Change
+  4's `blob dY` settles it in the next log; ~0 means there is nothing to fix.
+- Change B (a path with an obstacle in it must never validate) still deferred — re-assess now that the
+  target is the arrival rather than a point on another tier.
+- Eastgate (East End has no loader to 305); the camera direction flip (accepted + documented, S56).
+
+## Session 60 — 2026-07-23 — [nav] The `+0x84` bearing is NOT the crossing direction — refuted in play; NavTrace measures where transitions actually fire
+
+KEYWORDS: crossing direction refuted, walked east into a wall, NavTrace, breadcrumb, TRANSITION FIRED,
+walk field ASCII dump, LogWalkField, walked box, floorY -9.00 blob dY nominal confirmed, kOnExitDist,
+stop asserting unverified directions
+
+### Refuted, in one line of log
+
+`drain seq=3: at exit (1.4m), speaking crossing dir cross=90.0deg ref=-176.4deg` → "Walk East", five
+consecutive presses, camera reference stable across all five (−176.4 / −177.9 / −178.0 / −176.4 /
+−176.4), and **the player's x never once passed 48.41** in the entire session (positions span
+x∈[38.36, 48.41], z∈[45.68, 68.25]). The relative-frame math is correct and self-consistent with the
+route legs — at ref = −176.4 the route to the exit said "North 4" and the crossing said "East", and both
+check out through `CompassFaceDeg`. **The direction itself is simply wrong: the `+0x84` record's bearing
+is not the direction you cross the transition.** Whatever that record is, it is not the trigger's heading.
+
+That is the FIFTH model of the transition trigger derived from the blob and refuted on the ground:
+`+0x54[N+1]` (S46) → the `+0x54`∪`+0x70` union (S55) → the nearest walkmap boundary (S58, pre-ship) →
+the trigger-bearing march (S58, shipped) → the edge bearing as the crossing direction (S59, shipped).
+
+### What the log DID settle
+
+`__MJ_CTRL002 (48.0,0.0,56.0) floorY=-9.00 (blob dY=-9.00) cross=East` — S59's open question is
+answered: **the blob's arrival Y is a nominal, not a tier.** The East End arrival is on the street at
+y=−9, the same surface the player walks. There is no upper level and nothing to fix there; the walkmap
+projection added in S59 is doing its job. (Muthru's North End arrival really is up: `floorY=-0.25`.)
+
+### Stop asserting the direction
+
+The at-exit state stays — it is what stopped the ten-press "3 steps" churn — but it no longer names a
+crossing direction. It says "At the exit.", plus the relative bearing and step count when the player is
+more than `kOnExitDist` (1 m) away, since standing *beside* a doorway rather than in it is a real
+difference. `crossRad` is still computed and LOGGED, flagged `UNVERIFIED ... (not spoken)`, because it is
+the hypothesis under test. Silence beats wrong speech.
+
+### NavTrace — measure it instead of inferring it (`nav_trace.{h,cpp}`)
+
+Five refuted models is a pattern, and the cause is structural: **the trigger is a script zone (`0x202d`)
+whose geometry is nowhere in the blob we can read.** So the mod now measures it. A 64-crumb ring records
+the player's path (a crumb per ~1 m of movement, piggybacked on the position read `PathPlanner::
+OnGameFrame` already does for NavReach), and on a map change it dumps:
+
+```
+TRANSITION FIRED: mapId 290 -> 291; the trail below ends where the player crossed
+==== trail of the map just left: mapId=290 crumbs=41 walked box x[38.4..48.4] z[45.7..68.3] y[-9.0..-7.8] ====
+  ...
+  [40] (48.41,-9.00,56.12)   <== LAST POSITION ON THIS MAP
+```
+
+The last crumb is within ~1 m of where the trigger fired — ground truth for the trigger position, on
+every map, for free, and the oracle any future model must reproduce before it ships. The `walked box`
+is the other half: a player who spent a minute failing to get past x=48.41 has said so in data, without
+ever being asked to look at anything.
+
+### `'` diagnostic: the walk field (`exit_diag.cpp`, `LogWalkField`)
+
+A 21×21 ASCII picture of the walkmap centred on each exit's arrival, 1 m per cell, north up:
+`#` floor at the arrival's tier, `~` floor at another tier, `.` no floor, `A` the arrival. Plus
+`NavTrace::DumpTrail()` for the current map. Between them: which way out of the doorway is even open.
+
+### Verification (tester)
+
+1. On Muthru Bazaar, press `'` — the walk field for both exits and the trail so far.
+2. **Cross into Rabanastre: East End by any means you like**, then check the log for `TRANSITION FIRED`.
+   That single block is what the next build's model is built on.
+3. Routing still works and no longer names a crossing direction.
+
+### Open
+
+The trigger model is now OPEN, not merely uncertain. It will be rebuilt from `TRANSITION FIRED` data
+rather than from another blob reading. The `+0x84` edge-pairing is still correct for WHICH doorway each
+controller owns (destinations verified via `entrance`), and remains shipped; only the claim about its
+bearing is withdrawn.
+
+## Session 61 — 2026-07-23 — [nav] A doorway is a PASSAGE: exit markers move into the transition; the phantom slot is dropped
+
+KEYWORDS: DoorwayPassage, PassageEnd, passage test replaces name filter, exit marker inside the
+corridor, +0x54[3] phantom, walk field corridor, kPassReach 12m, measured trigger 6.3m 8.4m,
+(0,0,0) position gate, reach fill 1 cell
+
+### What the ground truth showed
+
+NavTrace recorded two Muthru→East End crossings: **(55.05,−6.94,65.43)** and **(56.35,−6.31,64.01)**,
+both walked east out of the spawn point `+0x54[2]` = (48,−9,64). The mod was marking `+0x54[3]` =
+(48,0,56). Tester: *"there was no exit there whatsoever. that is not an exit, I don't know what it is."*
+
+The `'` walk field explains both halves in one picture (centred on `+0x54[2]`, 1 m/cell, north up):
+
+```
+z=+63  ################~~~~~
+z=+64  ##########A#####~~~~~   'A' = +0x54[2]; corridor runs 10+ m east, ramping up (~ = other tier)
+z=+65  ################~~~~~
+z=+56  ##############.......   +0x54[3]: floor stops 3 m east. Nothing there.
+```
+
+So the walkmap distinguishes a real doorway from a dead slot perfectly well — we were just never asking
+it. **A real doorway has somewhere to go.**
+
+### Change 1 — the passage test replaces the name filter (`exit_scan.cpp`)
+
+`DoorwayPassage()` / `PassageEnd()`: march the crossing axis (the `+0x84` trigger bearing) out of the
+arrival, validating every 0.5 m step with `MapQuery::SegmentTraversable` — the same floor-continuity /
+no-cliff / no-wall / body-height oracle the planner validates its own routes with. Keep the doorway iff
+a body can get `kPassMin` = 4 m out; the marker becomes the far end of that march.
+
+- **`kPassReach` = 12 m, set by measurement**: the two recorded triggers were 6.3 m and 8.4 m out, so
+  12 m reaches them with margin while stopping the march wandering across open ground. Narrowness is
+  NOT available as a doorway test — a Rabanastre district transition *is* open ground (tester: "it's
+  literally a completely open area the character walks into") — so the length cap is what bounds it.
+- **This is not the struck S58 boundary march.** That one asked "where does the floor end", which
+  cannot tell a building from a map edge, and it ignored elevation so it stepped off a ledge. This asks
+  "how far can a body actually walk this way".
+- **Overshooting the trigger is desirable**: the map changes when the player crosses it, so a marker
+  past the trigger means the route leads *through* the transition instead of stopping short of it.
+
+**The placeholder-name filter is GONE.** It dropped any controller whose destination resolved to "NOT
+USED" (ids 293/294). That deleted the real East End corridor — its blob-order label is "NOT USED" —
+while keeping the phantom that had a name. An unresolvable name now costs the entry its destination
+WORD, never its existence; position and direction are measured, and those are what the player walks on.
+
+Consequence to watch: maps may list more exits than before (East End could go 3 → 6), and the
+destination word on some is still bound by blob table order, which is known to mis-assign it. **Per the
+tester, labelling is explicitly NOT this build's problem** — being led to the actual transition is.
+
+### Change 2 — reject the origin position (`path_planner.cpp`)
+
+For ~1 s after a map load the player position reads exactly `(0,0,0)` and still passes
+`IsFieldNavSafe`. The reachability flood burned a whole pass on it every single transition
+(`reach: fill complete -- 1 cells reachable from (0,0)`, four times in one log) and NavTrace recorded a
+phantom crumb that skewed its own walked box. No real field position is exactly the origin, so both
+consumers now wait a frame longer for the truth.
+
+### Verification (tester)
+
+1. Muthru Bazaar: the East End exit marker should now sit **in the corridor east of the spawn point**,
+   not 8 m southwest of it. Routing to it should walk you east and cross.
+2. The phantom at (48,0,56) should be gone — log line `NO PASSAGE (3.0m of 4.0m needed) ... dropped`.
+3. East End: the Muthru exit should sit west of (26,58) — the way you actually walked back.
+4. Log: `passage N.Nm from arrival (…) -> marker (…)` per surviving exit; no more
+   `fill complete -- 1 cells reachable from (0,0)`.
+5. **Release gate: Nalbina prologue run.**
+
+### Open
+
+Destination WORDS are still bound by blob table order and are known-wrong on at least Muthru and East
+End. Deferred by tester direction. The verified binding channel exists (the `+0x54` slot you arrive on
+is the door back to where you came from — confirmed both directions of Muthru↔East End in the S60/S61
+logs) and is the basis for fixing labels once positions are trusted.
+
+## Session 62 — 2026-07-23 — [nav] Destinations resolved by the ARRIVAL RELATION, learned from neighbour maps and persisted
+
+KEYWORDS: exit_links, arrival relation, mapjump entrance names the NEIGHBOUR's slot, arrivalSlot,
+verified destination binding, blob table order struck, map_links.txt, LOCALAPPDATA, kFormatVersion
+
+### The problem after S61
+
+S61's passage test fixed WHERE exits are — the Muthru phantom at (33,56) is dropped, the real corridor
+survives. But the destination WORD was still bound by blob table order, so the outcome was inverted:
+**the real exits read "Exit 1" / "Exit 2" while the surviving mis-bound ones carried area names.**
+Tester: *"apply the destination resolver to the real exits."*
+
+### The binding rule (the only one ever verified on the ground)
+
+> **Map M's doorway at `+0x54` slot S leads to map D  ⟺  D's script contains `mapjump(M, S, 0)`.**
+
+`mapjump(dest, entrance)` means "you will arrive at DEST's slot `entrance`", and the slot you arrive on
+is the doorway you would walk back out of. **So a map's `mapjump` literals do not name its own doors —
+they name its neighbours'.** This is S46's "arrival relation", and the S60/S61 NavTrace logs confirmed
+both directions of one pair by walking them:
+
+- Muthru's `mapjump(291, 2)` ⇒ East End slot 2 → Muthru. The tester spawned on East End at
+  `+0x54[2]` = (26,58), walked west, and arrived in Muthru ✓
+- East End's `mapjump(290, 2)` ⇒ Muthru slot 2 → East End. The tester spawned in Muthru at
+  `+0x54[2]` = (48,−9,64), walked east, and arrived in East End ✓
+
+### What is STRUCK, and must not come back as a fallback
+
+Every local rule was tried and refuted: **blob table order** (labelled Muthru's dead slot "East End"
+and the real corridor "NOT USED"), the routine's **`0x011E` id** (it is just `ctrlIndex + 1`), and
+reading **`entrance` as a local slot** (three East End controllers claim slot 2). A doorway with no
+established destination is now left UNNAMED — position and direction are measured and still spoken. A
+wrong area name is what walked the tester into a wall, repeatedly; no name is strictly better.
+
+### Implementation
+
+- `MapScript::ExitDest::arrivalSlot` — the `+0x54` index of the paired arrival, recovered by matching
+  the `+0x84` record against `+0x54` (byte-identical copies, so an exact match is exact).
+- `exit_links.{h,cpp}` — the store. `NoteMapControllers(mapId, dests)` records what THIS map says about
+  its neighbours; `Resolve(mapId, slot, dest)` answers for this map's own doorways.
+- **Persisted** to `%LOCALAPPDATA%\FFXII-Screen-Reader\map_links.txt` — deliberately not beside the
+  game, which the mod treats as read-only. Plain `<mapId> <slot> <destMapId>` lines behind a `version`
+  header; a version mismatch discards the file and relearns, so a future rule change cannot be poisoned
+  by links an older rule wrote.
+- `exit_scan.cpp` names an exit only from `ExitLinks::Resolve`.
+
+### Coverage, by design
+
+Arriving anywhere names the way back **immediately** — you were just on the map whose `mapjump` names
+that door. Other doorways on a first-visited map stay unnamed until the map on their far side has been
+seen, and then stay named permanently. One Muthru↔East End round trip names both.
+
+### Verification (tester)
+
+1. Muthru → East End and back. Both maps' shared doorway should now read
+   "Exit, Rabanastre: Muthru Bazaar" / "Exit, Rabanastre: East End" **on the passage that actually
+   works**, not on a dead slot.
+2. Log: `exit links: learned map <M> slot <S> -> map <D>` lines, and per exit
+   `slot=N marker (…) -> "Exit, …"` or `[destination not established yet …]`.
+3. `%LOCALAPPDATA%\FFXII-Screen-Reader\map_links.txt` exists and survives a restart.
+4. **Release gate: Nalbina prologue run.** Expect forward exits unnamed until first crossed; the way
+   back is always named.
+
+### Open
+
+First-visit forward exits are unnamed. Elimination (one unbound doorway + one unassigned destination
+⇒ forced) is available but deliberately NOT implemented — the doorway/destination sets are not in
+bijection once placeholders and passage-failures are removed, so it would be a guess, and guesses are
+what this session removed.
+
+## Session 63 — 2026-07-23 — [nav] Learned-cache removed (rule violation); mapctrl natives NAMED; `0x202d` struck; capture v2
+
+KEYWORDS: ExitLinks removed, no learned cache, dbg_symbols_mapctrl, nativeId+5140, setmapjumpgroup,
+0x202d struck, istouchuc, istouchucsync, setmapidmj, walkmap poly classes, Director routine,
+capture v2, full 32-byte records, blob header dump
+
+### The violation, removed
+
+S62 shipped `ExitLinks` — a runtime store that discovered exit destinations by visiting maps and
+persisted them to `%LOCALAPPDATA%`. That is against the project's rules (discovery belongs in the
+decompile; the mod reads the game's own data), and `GameArchitecture.md` already specified that the
+exit reader resolves "on the first frame of any map with no cross-map data, **no cache and nothing
+learned by playing**". **Deleted — not kept as a fallback.** Exits keep their measured position and
+crossing axis and are UNNAMED until the real resolver lands.
+
+### The natives are now NAMED — and that broke a five-session-old "fact"
+
+From the archived `.dbg` symbol table (`..\FFXII-Decompile\notes\dbg_symbols_mapctrl.csv`):
+
+> **`dbgIndex = nativeId + 5140`**, anchored on `mapjump` (`0x8D` → index 5281) and cross-validated
+> **15/15** against a whole `__MJ_CTRL` routine, which decodes to a coherent fade-and-jump:
+> `reqenable(12) · setmapjumpgroup(K) · clearmapjumpstatus · sysucon · spotsoundtrans(40,0) ·
+> fadelayer(6) · fadeprior(255) · fadeout(2,12) · setmapidmj(1,1) · ucmove ×4 · wait(12) ·
+> stopspotsound · pausesestop · fadesync · wait(2) · mapjump(dest,ent,0)`
+
+Valid in this band only; the standing "`dbg_idx − 5140` is BROKEN" warning is about index math across
+the whole symbol file and still applies elsewhere.
+
+**Consequences:**
+
+1. **`0x011E` = `setmapjumpgroup(K)`**, not S58's "authoring-order id, no new binding info". Its value
+   is `ctrlIndex + 1`, but it is the controller's identity in the engine's map-jump GROUP system.
+2. **STRUCK: "the transition trigger is VM native `0x202d`" (S57).** mapctrl native ids run
+   ~`0x0000`–`0x06BA`; `0x202d` (8237) is outside the table and indexes past the end of the symbol
+   file. It was asserted once and then quoted as fact in three documents across five sessions.
+   **No `__MJ_CTRL` routine contains a zone test at all** — all 15 natives decode and none reads
+   player position.
+3. The real trigger natives are named: **`istouchuc`** (`0x026D`/`0x0529`), **`istouchucsync`**
+   (`0x0525`/`0x052A`), `settouchwh`, `touchradius`, `setnochecktouchheightflag`. The trigger is a
+   **touch volume**, tested in the map's **Director** routine — which we had never dumped.
+4. **`setmapidmj` sits beside `setmapidfloor` / `setmapidwall`** ⇒ the WALKMAP's polygons carry ids and
+   one class is the MAP-JUMP surface. `WALK_POLY_STRIDE` is `0x20`; `ReadCellFloor` reads bytes
+   `0x00–0x11` and uses only the **low 3 bits** of the flags word. The upper 29 bits and the
+   `0x12–0x1F` tail are unread — the leading candidate for a first-frame, local, no-cache trigger.
+
+### Capture v2 (`'` key)
+
+- **Whole 32-byte records** of `+0x54` and `+0x84`, hex + the tail as u32s. Every previous capture read
+  only the first 16 bytes, so half of every record in both tables had never been seen.
+- **Blob header words** `hdr+0x00 … +0xC0`, each with its first word, so an unopened table announces
+  itself by starting with a plausible count.
+- **Director routines** dumped (any routine whose name contains "director", case-insensitive; matched
+  on the suffix, never a map id) at the full span cap, plus a one-line index of **every** routine so
+  nothing stays invisible again.
+- **Natives annotated BY NAME**; unknown ids print as raw hex rather than inventing a label — which is
+  exactly how `0x202d` became a fact.
+- **`LogWalkPolyClasses`**: sweeps the walkmap grid, groups floor polys by their FULL flags word, and
+  reports each class's count, sample positions and unread `0x12–0x1F` tail. Ground truth makes the
+  decode a glance: on Muthru the East End transition fires at ~(56, 64.3), so whichever class has
+  members there is the map-jump surface. Bounded at 200k prim reads, one-shot.
+
+### What the tester needs to do
+
+Press `'` once on **Muthru Bazaar** and once on **Rabanastre East End**. That single capture is what
+the destination resolver gets built from.
+
+### Open
+
+Exits are unnamed in this build by design. `exit_diag.cpp` is at 464 lines — plan a split before it
+grows further.
+
+## Session 64 — 2026-07-23 — [nav] SOLVED: transitions are walkmap surfaces tagged with their map-jump group
+
+KEYWORDS: map-jump surface, setmapidmj, WALK_POLY_MJ_SHIFT, setmapjumpgroup, ExitDest::group,
+ReadMapJumpSurfaces, transitions vs doors, 305 teleport not a door, six models retired
+
+### The rule
+
+> **A walkmap floor poly whose flags carry a non-zero value above the 3 type bits is a MAP-JUMP
+> SURFACE. `group = (flags >> 3) & 0x1F` is the map-jump GROUP id. The `__MJ_CTRL` routine calling
+> `setmapjumpgroup(K)` with `K == group` owns it, and that routine's `mapjump` literal is where it goes.**
+
+One routine, both halves — geometry and destination — so they can never be mismatched again. Local,
+first frame, no cross-map data, no cache, nothing learned by playing.
+
+Verified against every crossing NavTrace has ever recorded: Muthru group 3 → 291 East End at
+(50–56, 60–65) vs crossings (55.1,65.4)/(56.4,64.0); East End group 4 → 290 Muthru at (11,54) vs
+crossing (19.7,58). North End lands north on both maps, Southern Plaza south. Muthru's two "NOT USED"
+controllers have **no surface at all** — the map has nothing to walk onto for them.
+
+### Transitions and doors are different systems
+
+The tester has said this since Session 56. This is the mechanical proof:
+
+| | TRANSITION | DOOR |
+|---|---|---|
+| lives in | walkmap poly tagged `setmapidmj` | scene object, `kind == 4` |
+| fires when | you walk onto it | you press Enter |
+| named by | the owning `__MJ_CTRL`'s `mapjump` | a `+0x70` field sign |
+| read by | `exit_scan.cpp` | `entity_scan.cpp` |
+
+**Every refuted model looked for transitions in door-shaped places** — `+0x54[N+1]`, the
+`+0x54` ∪ `+0x70` union, field-sign pairing, the `+0x84` edge bearing, blob table order, and both
+geometric marches. Transitions were never in the blob's position tables. The two readers stay separate.
+
+### Shipped
+
+- `MapScript::ExitDest::group` — parsed from `4f <K> 5d 1e 01` (`setmapjumpgroup`) in the routine.
+- `MapQuery::ReadMapJumpSurfaces` — one walkmap sweep, grouping tagged floor polys into
+  `{group, centroid, bbox, polyCount}`; a poly contributes its base vertex, not a grid cell (East End's
+  cells are 8 m — far too coarse to aim at a doorway).
+- `NavRva::WALK_POLY_MJ_SHIFT/MASK` beside the existing `WALK_POLY_TYPE_MASK`, layout documented.
+- `exit_scan.cpp` rewritten: position = the surface centroid (Y snapped to the floor), destination =
+  the routine's own literal. **Two drop rules, both from the game's own data:** no surface for the
+  group → nothing to walk onto; destination name unresolved → the game itself says "NOT USED", so it
+  leads nowhere. Every listed exit now has a real surface *and* a real name.
+- `DoorwayPassage`/`PassageEnd` deleted; `crossRad`/`hasCross` retired to `Entity::isTransition` (the
+  route now ends ON the trigger, so there is no crossing direction left to derive — and the one we
+  shipped in S59 was refuted anyway).
+
+### Also settled
+
+Map **305 (Eastgate)** is in the Director's `mapjump(…, 0, 0x0A)` list — `flags == 0x0A` is the
+world-map teleport menu, not a walk-through door. There was never a door to find. The Director routines
+are that teleport list and nothing else; no further script decoding is needed.
+
+### The lesson
+
+`group` lives in a flags word `ReadCellFloor` has been reading for thirty sessions and using **three
+bits of**. Six models were invented to replace data already sitting in memory, unread. **Dump the whole
+record before inventing a model** — every unread byte of a structure you already parse is cheaper to
+look at than one hypothesis is to test. Same still applies to `+0x54`/`+0x84` (stride 0x20, 16 bytes read).
+
+### Verification (tester)
+
+1. **Muthru Bazaar: exactly 2 exits** — "Exit, Rabanastre: North End" (north) and
+   "Exit, Rabanastre: East End" at ~(50–56, 60–65). Route to the latter; walking it must cross.
+2. **East End: exactly 3 exits** — "Exit, Rabanastre: Muthru Bazaar" far west (~x 11–20, z 54–58,
+   where you actually crossed), North End north, Southern Plaza south.
+3. **Every listed exit is named.** A bare "Exit" now means something is wrong.
+4. Both correct on the **first frame** of a freshly loaded save, no prior visit, no file on disk.
+5. Log: `__MJ_CTRL### group=N -> "<name>" (id) at (x,y,z) | P polys, box x[..] z[..]`. A future
+   `TRANSITION FIRED` position must fall inside the box of the exit claiming that destination.
+6. **Release gate: full Nalbina prologue run.**

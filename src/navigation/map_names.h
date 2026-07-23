@@ -24,4 +24,19 @@ std::wstring ResolveAreaName(int mapId);     // SUB-AREA, e.g. 279 -> "Lower Apa
 std::wstring ResolveRegionName(int mapId);   // REGION,   e.g. 279 -> "Nalbina Fortress"
 std::wstring ResolveFullAreaName(int mapId); // "<region>: <sub-area>"; degrades to whichever half resolves
 
+// True when `mapId` has a REAL name, false when its planmapname slot holds the developers' PLACEHOLDER
+// text. Some shipped slots are filler, and resolving one produces confident nonsense -- Rabanastre East
+// End has two doors whose destinations (293, 294) are correct map ids with filler names, which announced
+// as "Pharos at Ridorana: NOT USED" because the placeholder's MapRef record resolves to an unrelated
+// region as well.
+//
+// Detected from the table itself: any name claimed by >= 3 distinct map ids is filler (genuine names
+// repeat at most twice in the shipped table). No hardcoded string -- other locales ship other filler --
+// and no hardcoded map ids. Scans the table once per session on first call, then answers from a set.
+//
+// Callers should use this to decide whether to SPEAK a destination, not to hide the thing itself: a door
+// whose destination will not resolve is still a door, and hiding it removes the only handle the player
+// has on it.
+bool HasRealAreaName(int mapId);
+
 } // namespace MapNames

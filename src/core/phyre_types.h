@@ -93,8 +93,19 @@ constexpr uint32_t BC_MP_GUARD_B = 0x7C;   // i8
 constexpr uint32_t SCENEOBJ_KIND_OFF = 0x0E;   // *(u8)(sceneObj+0x0e) & KIND_MASK
 constexpr uint8_t  KIND_MASK         = 0x0F;
 constexpr uint8_t  KIND_ALLY         = 3;      // party-side (guests + AI party)
-constexpr uint8_t  KIND_DEAD         = 5;      // dead/removed -- exclude from scans
+constexpr uint8_t  KIND_DEAD         = 5;      // NAME IS WRONG -- see the correction below
 // kinds 1, 2 and 7 are enemy.
+//
+// CORRECTION (Session 54, offline): `KIND_DEAD = 5` is a MISNAME. Kind 5 is the FIELD GIMMICK kind --
+// the engine's ACTION target (gate / door / switch / chest). Two engine functions say so: the
+// interaction predicate FUN_002675c0 returns `(obj+0x0E & 0xF) == 5` as its ACTION verdict, and the
+// near-object scanner's filter FUN_0025bad0 admits kind 5 for action only (kind 1 talk only, 4 both,
+// 7 talk only, everything else rejected). The nav module now classifies on that (see nav_rva.h,
+// KIND_ACTION_GIMMICK / KIND_TALK_TARGET). The constant is left in place because the COMBAT track
+// owns the fix: ScanCombatants and battle_state.cpp read it, and the actor pool holds no gimmicks,
+// so skipping kind 5 there is a no-op today rather than a live bug. Do not build anything new on the
+// "dead" reading. Kind 1 is a PERSON (the live diag shows Vaan kind 1, Dire Rat kind 7), which also
+// makes the "kinds 1, 2 and 7 are enemy" line above suspect -- verify before relying on it.
 
 // PLAYER-vs-AI, NOT faction (runtime-disproven 2026-07-09: in the Reks prologue only Reks -- the
 // player-controlled leader -- is 0; allies AND enemies are 1). Use it only to skip the

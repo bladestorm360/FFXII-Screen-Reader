@@ -7,6 +7,281 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### Sessions 58–59 — exit positions and the route target
+
+**KEYWORDS: +0x84 edge pairing door binding N+1 struck arrival table nearest-boundary probe seam
+geometric edge detection building wall vs map edge void-beyond test trigger bearing SeamTarget
+walkmap boundary is not the transition script zone 0x202d crossing direction At the exit Walk east
+crossRad kAtExitDist arrival Y nominal blob dY**
+
+0. **FINDING THE TRANSITION FROM THE WALKMAP IS IMPOSSIBLE — TWO ATTEMPTS, BOTH STRUCK. Do not try a
+   third.** The transition trigger is a **script ZONE (VM native `0x202d`)**; the collision mesh does
+   not model it, so no amount of probing the walkmap can locate it. This is not a tuning problem.
+   - *Attempt 1 (S58, discarded before shipping):* probe 16 headings out from the arrival, take the
+     direction whose floor ends soonest. Cannot work — an unwalkable sample is a building wall and a
+     map edge alike, and the "floor stays absent 3 m beyond" refinement only rejects thin railings; a
+     building footprint passes it exactly as the map edge does.
+   - *Attempt 2 (S58, SHIPPED and refuted in play):* march along the trigger bearing to where the floor
+     ends. On Muthru Bazaar it found a real boundary **0 times out of 2** — one exit ran its full 14 m
+     cap without leaving the floor, the other "ended" 3 m out by dropping 8 m onto a lower tier (it had
+     no floor-continuity check). The tester was then routed confidently into a wall: ten `\` presses,
+     "East 3. 3 steps" every time, x pinned at 48.40–48.41.
+   - **What works instead (S59):** the route target is the `+0x84` ARRIVAL, and the crossing DIRECTION
+     is read from the paired trigger record — it sits off-mesh exactly along the crossing axis on every
+     transition measured. The planner speaks it on arrival ("At the exit. Walk east."). The player never
+     needed a better target; they needed to be told which way to step.
+
+0a. **The `+0x84` edge record's BEARING is NOT the direction you cross the transition — REFUTED IN PLAY
+   (S60).** S59 shipped it: the bearing is exactly axis-aligned on every measured transition, which made
+   it look definitive. On Muthru Bazaar the tester was told "Walk East" on five consecutive presses with
+   a stable camera (`cross=90.0deg`, ref −176.4/−177.9/−178.0/−176.4/−176.4) and **their x never once
+   passed 48.41 all session** (walked span x∈[38.36,48.41], z∈[45.68,68.25]). The relative-frame math
+   checks out and agrees with the route legs — the direction is just wrong. Whatever that record is, it
+   is not the trigger's heading.
+
+   **That is FIVE blob-derived trigger models refuted on the ground:** `+0x54[N+1]` (S46), the
+   `+0x54`∪`+0x70` union (S55), the nearest walkmap boundary (S58, pre-ship), the trigger-bearing march
+   (S58), the edge bearing as crossing direction (S59). The cause is structural and unchanging: **the
+   trigger is a script zone (`0x202d`) whose geometry is not in any blob table we can read.** DO NOT
+   PROPOSE A SIXTH MODEL FROM THE BLOB. `NavTrace` (S60) now records where transitions actually fire —
+   build from that measurement, and make any new model reproduce the recorded crossings first.
+
+0e. **Every LOCAL rule for binding a destination to a doorway is refuted (S62). Do not try another.**
+   Blob table order (labelled Muthru's dead slot "East End" and the real corridor "NOT USED"); the
+   routine's `0x011E` argument (it is `ctrlIndex + 1`); and `entrance` read as a local slot (three East
+   End controllers would claim slot 2 -- it matched on Muthru only because that pair is co-indexed).
+   **The only verified rule is the ARRIVAL RELATION and it is not local:** map M's slot S leads to D iff
+   D's script has `mapjump(M, S, 0)` -- so you learn a map's doors from its NEIGHBOURS (`exit_links.h`,
+   persisted). An unestablished destination leaves the exit unnamed; do not add a "best guess" fallback.
+
+0h. **SOLVED (S64) — and the lesson is where the answer was hiding.** Transitions are tagged in the
+   WALKMAP: `group = (polyFlags >> 3) & 0x1F`, matching the owning routine's `setmapjumpgroup(K)`.
+   That field sits in a structure the mod had parsed for **thirty sessions** — `ReadCellFloor` reads the
+   same flags word and uses **three bits of it**. Six models were invented to replace data that was
+   already in memory, unread. **Before inventing a model, dump the whole record: every unread byte of a
+   structure you already parse is cheaper to look at than one hypothesis is to test.** The same applies
+   to the `+0x54`/`+0x84` records (stride 0x20, only 16 bytes ever read).
+
+0f. **STRUCK (S63): "the transition trigger is VM native `0x202d`."** `mapctrl` native ids run
+   ~`0x0000`-`0x06BA`; `0x202d` = 8237 is outside the table and indexes past the end of the symbol
+   file. It was asserted in S57 and then quoted as established fact in three documents across five
+   sessions. **No `__MJ_CTRL` routine contains a zone test at all** — all 15 of its natives decode
+   (fade out, move party, jump) and none reads player position. The real trigger natives are
+   `istouchuc` / `istouchucsync` / `settouchwh` / `touchradius`, and the test lives in the map's
+   **Director** routine, which had never been dumped. Lesson: an id with no name attached to it is a
+   guess; name it from `dbg_symbols_mapctrl.csv` (`dbgIndex = nativeId + 5140`, anchored on `mapjump`).
+
+0g. **STRUCK (S63): the S62 learned/persisted `ExitLinks` store.** It discovered exit destinations by
+   visiting maps and writing them to disk. That is against the project's rules — discovery happens in
+   the decompile, the mod reads the game's own data, and `GameArchitecture.md` already specified that
+   the exit reader resolves "on the first frame of any map with no cross-map data, no cache and nothing
+   learned by playing". Removed entirely, not kept as a fallback. **Do not reintroduce a learning cache
+   for anything the game itself can be read for.**
+
+0c. **Do NOT filter exits on whether the destination name resolves (S61).** The "drop placeholder
+   destinations (NOT USED, ids 293/294)" rule looked right while we trusted the destination binding.
+   We do not: it is by blob table order and it mis-assigns. On Muthru the REAL Rabanastre-East-End
+   corridor carries the "NOT USED" label and was being deleted, while the phantom that kept its name
+   had a wall 3 m past it. **A label cannot decide whether a doorway exists.** The passage test can:
+   march the crossing axis with `MapQuery::SegmentTraversable`; a real doorway has somewhere to go
+   (>= 4 m), a dead slot does not. An unresolvable name costs the entry its WORD, never its existence.
+
+0d. **The player position reads exactly (0,0,0) for ~1 s after a map load, and passes
+   `IsFieldNavSafe`.** The NavReach flood burned a full pass on it at every transition
+   (`fill complete -- 1 cells reachable from (0,0)`) and NavTrace logged a phantom crumb. Reject the
+   exact origin in any per-frame position consumer; no real field position is there.
+
+0b. **An exit's blob Y is not necessarily its floor.** Muthru Bazaar's East End arrival carries `y=0.0`
+   while the player walks that ground at `y=−9.0`, which made the describe announce "(above)" for a
+   doorway at the player's feet. Project the arrival onto `GroundAt(x,z)` and keep the blob Y only as a
+   fallback. Corollary: **never test "am I at this exit" in 3D** — X/Z only.
+
+1. **`__MJ_CTRL<N>` owns `+0x54` slot `N+1` (the S46 door rule) — FINALLY STRUCK, with the replacement.**
+   Not merely "unverified": measurably wrong on any map with a controller-less arrival. The correct
+   binding is the `+0x84` edge-pairing (GameArchitecture.md, "Exit mechanism — SETTLED Session 58"). It
+   survives ONLY as the shape-mismatch fallback. Do not re-derive it as a primary rule.
+
+2. **Using the `+0x84` EDGE record itself as the route target — REJECTED (design, not a bug).** It is the
+   trigger volume's reference point: off the walkable mesh and at a variable distance (~120 units past
+   the arrival on East End's Southern Plaza exit). A* cannot route to an off-mesh goal, and the distance
+   would be spoken as nonsense. Its *bearing* is used instead; its *coordinate* never is. Likewise,
+   pairing controller→edge by adjacency or by nearest distance both fail on at least one real exit — the
+   only correct pairing is ordinal (the record after the i-th edge).
+
+3. **Finding the map seam geometrically — WRITTEN AND DISCARDED before shipping.** The idea was: probe
+   16 headings out from the arrival, take whichever direction runs out of floor soonest, and route to the
+   last walkable point. It cannot work, because **an unwalkable sample is a building wall and a map edge
+   alike** — an arrival with a shopfront 1.5 m to one side and the seam 4 m ahead would send the player
+   sideways into the shop. The refinement of requiring the floor to stay absent for ~3 m beyond the first
+   miss ("void-beyond") only rejects thin railings; a building footprint passes it just as the map edge
+   does. **There is no geometric discriminator.** The direction has to come from the data — the paired
+   edge record's bearing. If you find yourself designing a walkability probe to *find* an exit's
+   direction, stop: read the trigger.
+
+4. **Do not cache a seam-march miss before `MapQuery::HasWorld()`.** The exit scan runs from the first
+   frame on a new map, before the collision world streams in, so every probe misses. Caching that would
+   pin every exit to its arrival point for the whole area — the exact class of bug as S56's
+   arrival-point exclusion silently excluding nothing because the object list was still empty.
+
+**KEYWORDS: direction reversed 180 flip camera DAT_02aedf30 movement basis camera-relative accepted
+placeholder NOT USED multiplicity 3 ids struck Aerodrome exit union shop arrival point spawn +0x70
+sign object __MJ_CTRL slot N+1 camera lock battle targeting travel anchor Session 55 56**
+
+**SESSION 57 — the big one. STRUCK: `+0x54` is a set of exit trigger volumes.** Explore-agent decompile
+trace (0.9–0.95): `+0x54` is the **party ARRIVAL table** (x/y/z/angle only, no destination), read by
+`getmapjumppos(nowjumpindex)` / `FUN_00264b90` and used by party-spawn `FUN_00259b30` to place you ON
+ARRIVAL. `mapjump(dest, jumpIndex, flags)`'s `jumpIndex` = the **arrival slot on the DESTINATION map**,
+not the source. No engine loop tests `+0x54` vs the player; the transition trigger is a **script zone
+test (VM native 0x202d)** inside the `__MJ_CTRL` routine. So **there is NO `+0x54`→destination binding**,
+and S46's `__MJ_CTRL<N> owns +0x54 slot N+1` paired two independent tables — it only ever held on
+Nalbina's tiny maps. This is the definitive cause of BOTH the "Southern Plaza loads the Bazaar" mislabel
+AND the "exit lands a few steps short" (we route to the arrival point, which is set back from the edge;
+same data everywhere, so it happens in Nalbina too). Fix = read each exit's transition-tile position from
+`+0x84` (leading candidate; `FUN_00264b90` reads it as the parallel table) or the routine's `0x202d` zone
+test — never `+0x54`. Do not re-attempt N+1 or any `+0x54`-position → destination pairing.
+
+Closed in Sessions 55–56 (Rabanastre East End / North End; all from the mod log + `'` dump):
+
+1. **"The pathfinder direction flip is arc-smoothing / a mod bug."** WRONG — it is the game's camera.
+   `NAV-ROUTE` showed the same route with five legs, identical lengths, every word exactly 180°
+   opposite between two drains; player Y went 0.00→0.50 (stepped onto the terrace) on that frame. The
+   direction reference reads row 2 of `DAT_02aedf30`, which the game block-copies each frame from the
+   active camera. We read it correctly. Movement is camera-relative, so this cannot be fixed by any
+   read — accepted and documented in README. See the camera-lock and travel-anchor dead ends below.
+
+2. **Camera lock (freeze `DAT_02aedf30` to world axes at `FUN_004742a0`'s entry).** Rejected: that
+   matrix orients the character onto the battle target, and the rotator keeps cross-frame lock-on state
+   (`param_1[2]` + a 22.5° threshold, `FUN_002ddcf0` reset flag). Freezing its input basis breaks
+   targeting, an undiagnosable soft-lock in combat. Also a write to game memory for a read-only-solvable
+   problem. DO NOT re-attempt.
+
+3. **Travel-anchored direction frame** (reference = direction actually walked, first leg as a turn).
+   Rejected: stops the WORDS flipping but the held stick input is already wrong the instant the camera
+   swings, and the readout stays silent until the next query — a symptom swap, plus 8 invented phrases.
+
+4. **Spoken "Camera angle changed." notice on a large reference delta.** Rejected: the battle camera
+   reorients on every target change, so it would fire almost continuously in combat.
+
+5. **Placeholder-name detection by multiplicity (a name shared by ≥3 map ids is filler).** Refuted by
+   its own first run: real "Aerodrome" is shared by 5 ids, "No. 10/11 Channel" by 3, while the actual
+   placeholder "NOT USED" is shared by only 2 (293/294). Multiplicity flags real names and misses the
+   filler. The "4 rows" evidence came from `planmapname_areas.csv`, which concatenates the area+region
+   tables (table A holds two). Replaced by an exact match against the shipped token `"NOT USED"`.
+
+6. **"+0x70 field-sign table is empty on every map."** STRUCK — 25 records on East End (13 in group 0,
+   12 in group 3). The old "empty" reading was a calling-convention bug (getters take the group in ECX).
+
+7. **`__MJ_CTRL` controllers are the whole exit list.** STRUCK — East End slot 7 has a `+0x70` sign and
+   no controller; the exit source is the UNION of both tables. (The `__MJ_CTRL<N> → slot N+1` pairing
+   is separately still unverified beyond one door/map — pending a walk test.)
+
+8. **Every `+0x54` slot near a field sign is an exit.** WRONG — over-matched shop *arrival* points
+   (destIdx 20-26) and the party-arrival slot. A sign only makes its slot an exit if no controller
+   already claims that sign AND no scene object sits on the sign (an interior doorway has the
+   press-Enter object on it; a district sign does not).
+
+9. **"kind==5 is the ACTION gimmick" (S54).** STRUCK for the field population — on East End kind 5 =
+   NPC, kind 4 = shop doorway, kind 1 = player. Consequence: `IsInteractionAvailable` (gated on kind 5
+   / talk-target) has never evaluated a real door, so F5's story-gate filter has never applied to exits.
+
+**KEYWORDS: town gate Rabanastre interactables missing FLAG_TALK NPC misclassification kind nibble
+0x0E story gate 0x10 npcdic odd slot yomi second name Rabanastran duplicate names BLOB_MAX 0x18000
+snapshot window silent return false camera-relative 180 degree flip Session 54**
+
+Four dead ends closed in Session 54, all resolved OFFLINE (decompile + extracted data), no runtime
+discovery:
+
+1. **"A talk flag means it is a person."** `ClassifyByNameKey` returned `Category::NPC` for anything
+   with `FLAG_TALK` (`sceneObj+0x1C & 0x400`), ahead of the character test. **The engine never says
+   that** — `FUN_0025b820` branches on TALK and ACTION *independently on the same object*. A town gate
+   opens a confirm prompt, so it *is* a talk target, and every one was filed under NPC.
+   **…but the replacement was wrong too, and that is the more useful lesson.** The fix put
+   `kind == 5` (from `FUN_002675c0` / `FUN_0025bad0`, "1 = person, 5 = action gimmick") *ahead of* the
+   scene-character test — and **every NPC became an Interactable**. Tester caught it in play. So:
+   **"kind 1 ⇒ person" is REFUTED** (field NPCs do not carry kind 1); `kind == 5` survives only as a
+   gate/switch test *among non-characters*; and the reliable person test is the one that was already
+   there — the scene CHARACTER class `sceneObj+0x03 & 0x1f` in 5-7. Two decompiled functions agreeing
+   on a shape is NOT the same as that shape being a classifier for the population you are scanning.
+   Shipping order now: npcdic gimmick band → `isCharacter` ⇒ NPC → non-character `kind == 5` ⇒
+   Interactables → `FLAG_TALK` ⇒ NPC → Interactables. The `'` dump gained `kind=`/`en=` per object —
+   its absence is why nothing caught this before it shipped.
+2. **Classifying or INCLUDING an object by `sceneObj+0x1C` at all.** Those bits are **mode state**:
+   `FUN_0025ad10` / `FUN_0025ae00` set `0x400` and clear `0x004` on entering talk mode, and clear
+   `0x400` when the talk id is invalid, so a disabled object has **zero** flags. The scan's inclusion
+   test (`interactive || gimmick-band || named`) therefore *dropped story-gated gates entirely* —
+   exactly when the player most needs to find one. Include by KIND; use the flags only for "what can I
+   do with it right now".
+3. **Mining a better NPC name out of npcdic's odd slot.** `FUN_00263990` picks `slot = id*2 +
+   (FUN_0032a930(id) != 0)`, and that flag is a live per-id bitfield at `FUN_002ef2b0()+0x13B4` — so
+   the odd slot is a *state-selected second name*, not the "yomi/reading" `tools/parse_npcdic.py`
+   assumed. **But in the US build it is byte-identical to the even slot** (decoded straight from
+   `npcdic.bin`: 2282 slots / 1141 ids; ids 0-11 and 433-469 all `even == odd`). There is no hidden
+   name. The duplication is the game's own data: **109 ids all render "Rabanastran"**. Number them;
+   do not invent descriptors.
+   **Struck from this entry as an UNVERIFIED HYPOTHESIS:** "gate guards are already distinct — npcdic
+   362 = Imperial Guard". Id 362 exists and reads "Imperial Guard" (a separate entry from id 1 and the
+   41 other ids that render "Imperial"), but **nothing confirms any object at the Rabanastre gates
+   carries it** — it came from grepping the dictionary for guard-ish words, which proves only that the
+   string exists, not which scene object stamps it at `+0x102`. The tester, who plays these areas,
+   reports the gate guards are **not** Imperials. Confirm properly by standing at a gate, pressing
+   `'`, and reading `nameIdx` on the objects near the logged player position. No code keys off 362.
+4. **Reading `__MJ_CTRL` out of the `.mpk` files offline.** Zero plaintext hits across all 20 extracted
+   map archives — *including the Nalbina maps where it is proven present at runtime*. The name pool is
+   packed on disk; only the loaded blob answers it. (Consistent with the older "offline `.mpk` mapjump
+   literal extraction finds zero hits" entry below.)
+
+Two live bugs with the same shape — **a silent fallback that made a failure look like a fact**:
+
+- **`MapScript::SnapshotBlob`'s fixed `BLOB_MAX = 0x18000` window.** The reader copied 96 KB of the
+  map-control blob and bounds-checked the header offsets *against the copy*, so any map whose routine
+  table sat past 96 KB made `ReadExitDests` `return false` **before its first log line**. Every door
+  then logged as `-> no controller (arrival point)` and `Exit=0` — on every Rabanastre map. The tell
+  was an ABSENCE: no `==== field-script exits ====` header at all, while `EnumerateMapJumps` happily
+  reported 14 doors from the same blob. Fixed by reading the live blob directly (SEH-guarded, sanity
+  ceiling instead of a window) **and by logging a reason on every bail**. See `GameArchitecture.md`.
+- **The camera-relative direction frame's 180° flip.** CERTAIN (read off the code, not inferred):
+  every call site wrote `float facingRad = 0.0f; PlayerState::ReadCameraForward(facingRad);` and
+  **ignored the bool return**; the getter leaves `outRad` untouched when the camera row is not
+  refreshed that frame, and `CompassFaceDeg(0) == 180`, so those frames spoke **every direction
+  reversed**. Fixed by `PlayerState::ReadCameraForwardStable` (live value, else last good) whose bool
+  every caller now honours — no reference means **no direction word**, never a defaulted one.
+
+**KEYWORDS: egocentric compass words confusing southwest becomes north follow-cam trails relative
+frame absolute vocabulary ahead behind left right leg merging 7 north 1 northeast Session 54**
+
+**"DIRECTIONS SNAP AROUND" — the cause was the ROUTE SMOOTHER, not the frame and not the words.**
+Three reversals before it landed; the reasoning is what matters:
+
+1. Tester reported routes "constantly switching directions" → the relative frame was withdrawn for
+   world-absolute. **Wrong:** absolute is stable but useless, you cannot push "north".
+2. Frame restored, but with literal ego words ("ahead", "behind-left"), on the theory that
+   compass-words-on-a-relative-frame was the confusion. **Also wrong**, and the tester's preference
+   is the opposite: *"most prefer north/south/east/west … essentially north=forward whether it's true
+   north or not, east=right."* Vocabulary was a red herring.
+3. **The actual cause**, in the tester's words: *"we're not telling the player to walk 30 northwest
+   when the arc is actually 18 north, 7 west … then if the player walks 10 west by accident the
+   directions flip to northeast because the player has gone past the north leg."* The planner's
+   greedy string-pull (`path_planner.cpp`, keep a waypoint only when the straight span is NOT
+   traversable) collapses an L across open ground into one diagonal chord. The player is sent along a
+   line the route never takes, and any drift off that imaginary diagonal comes back inverted.
+
+**THE DIAGONAL RULE (tester's, now enforced in `path_directions.cpp`):** a diagonal word may ONLY
+describe a genuinely diagonal stretch — a fine alternation (1 north, 1 east, 1 north, 1 east …) whose
+net line really is 45°. A route with any shape to it — an L, or a gradual bend — is spoken as its
+actual legs.
+
+**Both extremes are wrong.** Legs off the smoothed chord gave one invented diagonal; legs off the raw
+cell path gave a **19-leg** readout, measured in play ("North 6, Northwest 6, North 4, Northwest 8,
+West 10, …"). Shipping pipeline: raw path → **Ramer-Douglas-Peucker at one grid cell** (deviation-
+bounded, so real corners survive and grid jitter collapses — unlike string-pull it cannot cross a
+corner) → runs → staircase collapse → merge → absorb sub-2-step legs → **cap at 5 spoken legs, then
+"then N more"**. Totals always equal the sum of what was spoken.
+
+Also recorded: **`phyre_types.h`'s `KIND_DEAD = 5` is a misname** — 5 is the field-gimmick (ACTION)
+kind. Left in place because the combat track owns the correction and the actor pool holds no gimmicks,
+so the skip is a no-op there today. Do not build on the "dead" reading; the same header's "kinds 1, 2
+and 7 are enemy" is suspect too (the live diag shows Vaan as kind 1).
+
 **KEYWORDS: field party menu entry announce speaks-on-keypress menu-not-ready readiness signal
 FUN_00280de0 0x160DE0 cat 0x11f ACTIVATE never-sent DrawCallback first-paint 31ms 400ms fallback
 draw-callback timeout Session 52 SOLVED-by-0x13**
@@ -129,6 +404,52 @@ disguise (see the no-dedup rule).
 
 **KEYWORDS: dialogue choice pop-up options not spoken Tomaj hunt bill yes no selectable
 conversation branch cursor pointing hand R Log Space Confirm OPEN ISSUE**
+
+**KEYWORDS: duplicate interactables every shop listed twice handle table entries array sub-range
+grp0 grp1 0x1D2 0x1D6 0x1DA 0x1DE FUN_0025b820 shadow registration dup-label OPEN ISSUE Session 54**
+
+**OPEN — every interactable is listed TWICE (reported in play, "at least all of the shops").** Not
+the `+0x54` arrival-point duplication (that one is separate and already deduped by exact position
+equality in `MapExits::EnumerateMapJumps`). NOT YET DIAGNOSED — do not guess-fix it.
+
+What is known: `EntityScan::BuildLocked` dedupes by scene-object POINTER (`AlreadyListed`), so the
+twins must be **distinct objects that share the game's own name**. Two candidate explanations, and
+they need opposite fixes, which is exactly why this is not being patched on a hunch:
+- **Shadow registrations.** The mod walks the container's whole entries array `[0, entries[0])`. The
+  GAME does not — `FUN_0025b820` walks exactly two `(start, count)` spans of that slot space:
+  **grp1 (talk AND action) start `container+0x1DE` count `+0x1D6`**, **grp0 (action only) start
+  `+0x1DA` count `+0x1D2`** (container stride `0x288` from `DAT_02098e10`). Anything the mod lists
+  from outside both spans is something the engine never treats as interactable. If the twins live
+  there, the fix is to walk the game's spans.
+- **Two genuinely distinct objects with one name** (a merchant and their counter; 109 npcdic ids all
+  read "Rabanastran"). Then there is nothing to remove and the numbering is the right answer.
+
+**Instrumentation shipped (Session 54), one session settles it:**
+- `NumberDuplicateLabels` dumps every duplicate group **once per map** as
+  `NAV-DIAG dup-label "<name>" xN:` followed by one line per member with `obj=` pointer, `handle=`,
+  `kind=`, `nameIdx=`, `flags=`, `avail=` and `pos=`. **Same position + different pointers ⇒ shadow
+  registration; different positions ⇒ two real objects.**
+- The `'` dump's per-container line now prints the game's own spans:
+  `container N: … | game spans: grp1(talk+act)=[a,b) grp0(act)=[c,d)`. Cross-reference a twin's slot
+  (the `i` in the `[c:i]` object lines) against those to see whether it falls outside both.
+
+**KEYWORDS: unplaced reserve slot world origin 0,0,0 NPC 1 NPC 2 no path handle table
+ScanCombatants guard missing East End NPC=37 phantom Session 54 SOLVED**
+
+**"NPC 1, NPC 2 … no path to them" — unplaced reserve slots at the WORLD ORIGIN.** Reported in play;
+root-caused from the `dup-label` dump in one session. East End listed **37** entities, ALL at
+`pos=(0.00,0.00,0.00)`, all `nameIdx=-1` with an unresolvable custom string (so the label fell through
+to the category word "NPC", then to "NPC 1"…"NPC 37" once duplicates were numbered), split between
+`kind=5 flags=00030004 avail=1` and `kind=1 flags=00034885 avail=0`.
+
+The map allocates object slots at load and positions them later; one still at the origin was never
+placed. Being off the walkable map, routing correctly answers "No path" — the log shows
+`NPC 1. North, 197 steps` then `NPC 1. No path`, 197 steps being the distance to (0,0,0).
+
+**`ScanCombatants` has always had this guard** ("unplaced reserve unit"); the handle-table walk simply
+never got one. Fixed by the same exact-zero test. **This also retroactively explains East End's
+"NPC=37 Object=0"** in every earlier log — not one of those 37 was a real NPC, which is why the area
+looked simultaneously full of NPCs and empty of interactables.
 
 **OPEN — dialogue CHOICE options are not vocalized.** Observed 2026-07-21 in the Rabanastre tavern
 (Tomaj, hunt-bill conversation). On screen:

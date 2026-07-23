@@ -28,6 +28,16 @@ enum class Category {
 //  back under Category::Exit; nothing else ever produced an Event, so the category had no source left.
 //  The naviicon "markers" that were its other intended source were disproven and removed in Session 44.)
 
+// AVAILABILITY filter — orthogonal to Category, toggled with F5. Many field interactables are story-
+// gated: the object exists and can be walked to, but the game will not act on it yet. Finding a gate
+// you cannot use is still what tells you where to look for the NPC who gates it, so nothing is ever
+// hidden by default; Gated narrows the list to exactly the blocked things when you want to find one.
+enum class Availability {
+    All = 0,      // everything (default — the filter never starts out hiding anything)
+    Gated,        // only entries the game currently refuses to let you interact with
+    Count
+};
+
 bool Init();
 void Shutdown();
 
@@ -50,8 +60,9 @@ std::wstring CurrentAreaName();
 // live positions first, then acts + speaks.
 void CmdNext();               // ]
 void CmdPrev();               // [
-void CmdNextCategory();       // Shift+]
-void CmdPrevCategory();       // Shift+[
+void CmdNextCategory();       // =
+void CmdPrevCategory();       // -
+void CmdToggleAvailability(); // F5  (All <-> Story-gated)
 void CmdDescribeCurrent();    // /  (cardinal bearing + distance to the selection)
 void CmdRescan();             // `
 
@@ -59,7 +70,10 @@ void CmdRescan();             // `
 // the nearest in the active filter). False if not on the field or nothing is listed.
 // Used by the `/` route command to hand a fixed world target to the game-thread A*
 // planner. Reads only the persistent handle table — input-thread safe.
-bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel);
+//
+// `outIsTransition` (optional) tells the planner the target is a map-jump surface, so reaching it means
+// crossing it. Only exits set it; everything else reports false.
+bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition = nullptr);
 
 // Dump the raw handle table (tag NAV-DIAG): every named/interactive scene object per
 // container with its category byte, interaction flags, npcdic key, name, and world

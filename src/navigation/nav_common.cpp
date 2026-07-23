@@ -20,6 +20,22 @@ const wchar_t* kCardinal[8] = {
     L"South", L"Southwest", L"West", L"Northwest",
 };
 
+// EGOCENTRIC labels — the ALTERNATE vocabulary, RETAINED but NOT SHIPPED. Same octant indexing as
+// kCardinal; only the words differ.
+//
+// The SHIPPED vocabulary is kCardinal, applied to the RELATIVE frame: "North" means forward (wherever
+// forward currently points), "East" means right, "South" behind, "West" left. That is the tester's
+// explicit preference -- "most prefer north/south/east/west directions ... essentially north=forward
+// whether it's true north or not". A previous build swapped these words in on the theory that
+// compass words on a relative frame were what made directions confusing; that theory was WRONG (the
+// real cause was the route smoother inventing diagonals -- see path_directions.cpp), and it was
+// reverted. Kept here for anyone who does want a literal ego frame, with "forward"/"backward" rather
+// than "ahead"/"behind" per the same instruction.
+const wchar_t* kEgocentric[8] = {
+    L"forward", L"forward-right", L"right", L"backward-right",
+    L"backward", L"backward-left", L"left", L"forward-left",
+};
+
 // Bearing in degrees [0,360): 0 = -Z (game north), increasing toward +X (east).
 float BearingDeg(const FVec3& from, const FVec3& to) {
     float dx = to.x - from.x;
@@ -81,6 +97,30 @@ const wchar_t* CardinalOfHeadingRelative(float headingRad, float facingRad) {
     return kCardinal[OctantOf(ego)];
 }
 
+const wchar_t* EgoBearing(const FVec3& from, const FVec3& to, float facingRad) {
+    const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
+    return kEgocentric[OctantOf(ego)];
+}
+
+const wchar_t* EgoOfHeading(float headingRad, float facingRad) {
+    const float ego = Norm360(headingRad * kRadToDeg - CompassFaceDeg(facingRad));
+    return kEgocentric[OctantOf(ego)];
+}
+
+int RelativeOctant(const FVec3& from, const FVec3& to, float facingRad) {
+    return OctantOf(Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad)));
+}
+
+// SHIPPED vocabulary: compass words on the relative frame (North == forward).
+const wchar_t* RelativeWord(int octant) {
+    return kCardinal[((octant % 8) + 8) % 8];
+}
+
+// Alternate vocabulary, retained and unused.
+const wchar_t* EgoWordOfOctant(int octant) {
+    return kEgocentric[((octant % 8) + 8) % 8];
+}
+
 const wchar_t* CardinalOfFacing(float facingRad) {
     return kCardinal[OctantOf(CompassFaceDeg(facingRad))];
 }
@@ -105,7 +145,9 @@ bool IsWithinReach(float dist2D) {
 
 std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
     float d2 = Distance2D(from, to);
-    if (IsWithinReach(d2)) return L"here";
+    // "right next to you" (not "here"): this is now THE crow-flies phrase, and it inherits the
+    // wording the egocentric one used, so the spoken result is unchanged at melee range.
+    if (IsWithinReach(d2)) return L"right next to you";
     std::wstring s = CardinalBearing(from, to);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
@@ -117,7 +159,22 @@ std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
 std::wstring DescribeDirectionRelative(const FVec3& from, const FVec3& to, float facingRad) {
     float d2 = Distance2D(from, to);
     if (IsWithinReach(d2)) return L"right next to you";
+    // ALWAYS a direction. A distance with no direction is useless to walk on, so there is no
+    // "omit the word" path here -- PlayerState::ReadCameraForwardStable falls back through the live
+    // camera, the last good camera, then the leader's own facing, and only a caller with no player
+    // at all could fail, in which case there is nothing to describe anyway.
     std::wstring s = CardinalBearingRelative(from, to, facingRad);
+    s += L", ";
+    s += std::to_wstring(DistanceToSteps(d2));
+    s += L" steps";
+    s += ElevationSuffix(from, to);
+    return s;
+}
+
+std::wstring DescribeDirectionEgo(const FVec3& from, const FVec3& to, float facingRad) {
+    float d2 = Distance2D(from, to);
+    if (IsWithinReach(d2)) return L"right next to you";
+    std::wstring s = EgoBearing(from, to, facingRad);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
     s += L" steps";

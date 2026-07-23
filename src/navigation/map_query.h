@@ -68,6 +68,26 @@ void CellCenter(const WalkGridInfo& g, int col, int row, float& wx, float& wz);
 // cell center) to outY. No game call, no raycast.
 bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY);
 
+// ---- Map-jump surfaces: WHERE a transition physically is -----------------------------------------
+// The floor polygons the player walks onto to fire a map transition, tagged by the script's
+// `setmapidmj` (see NavRva::WALK_POLY_MJ_*). `group` is the map-jump group id, which is also the
+// argument the owning `__MJ_CTRL` routine passes to `setmapjumpgroup` -- so this is the half of a
+// transition that says WHERE, and the routine is the half that says WHERE TO.
+//
+// This is the thing five earlier models tried and failed to infer from the map-control blob. It was
+// never in the blob: transitions live in the WALKMAP, and interactable doors (shops, stairs) live in
+// the scene-object table. Two separate systems; do not use either as evidence about the other.
+struct MapJumpSurface {
+    int   group     = 0;
+    FVec3 centroid{};        // mean of the tagged polys' base vertices -- the middle of the seam
+    FVec3 min{}, max{};      // bounding box, so a recorded crossing can be checked against it
+    int   polyCount = 0;
+};
+
+// Every map-jump surface on the current map, one entry per group. One full sweep of the walkmap grid
+// (~15k guarded reads on a large map); callers cache it per map. Empty when there is no walkmap.
+bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out);
+
 // Dense traversability of a straight segment (the string-pull validator). Samples every
 // `step` m; at each sample requires floor present (GroundAt), |dFloorY| <= maxStep vs the
 // previous sample, and SegmentClear (walk class) on the ~step sub-segment at the local

@@ -68,6 +68,28 @@ constexpr uint32_t MAPREGION_NAME_BY_IDX = 0x257870; // FUN_00377870(regionIdx)-
 // FUN_00264f90(mapId) -> planmapname REGION INDEX (map-master DAT_02099d88, record+6). The game's own
 // region resolver (FUN_003145e0 / the HUD / FUN_003778b0) is FUN_00377870(FUN_00264f90(mapId)).
 constexpr uint32_t MAP_NAME_INDEX_BY_ID  = 0x144F90;
+
+// ---- MapRef record (DAT_02099d88), 8 bytes per map id -----------------------------------------------
+// record = DAT_02099d88 + *(s32)(DAT_02099d88+4) + mapId*8. Four u16 accessors read it; only +6 (the
+// planmapname REGION index, MAP_NAME_INDEX_BY_ID above) has ever been used. The other three are logged by
+// the exit diagnostic because a map whose planmapname slot holds the developers' placeholder string may
+// still be identifiable here — 293 and 294 in the Rabanastre block are exactly that case.
+// +2 indexes a separate 0x10-stride table at DAT_02099d88 + *(s32)(DAT_02099d88+8); the last two getters
+// return its first two shorts.
+constexpr uint32_t MAPREF_FIELD0_BY_ID   = 0x144F10;  // FUN_00264f10(mapId) -> u16 record+0
+constexpr uint32_t MAPREF_FIELD4_BY_ID   = 0x144ED0;  // FUN_00264ed0(mapId) -> u16 record+4
+constexpr uint32_t MAPREF_GROUP0_BY_ID   = 0x144F40;  // FUN_00264f40(mapId) -> s16 groupTable[rec+2] +0
+constexpr uint32_t MAPREF_GROUP2_BY_ID   = 0x144FD0;  // FUN_00264fd0(mapId) -> s16 groupTable[rec+2] +2
+
+// ---- +0x8c destination table, walked by hand for the diagnostic -------------------------------------
+// destTable = mapData + *(u32)(mapData+0x8c); record for destIdx = destTable + 4 + destIdx*0x10.
+// FUN_00264920 hands word[5] to callers as the area id, and that word reads 0xffff on every record
+// measured so far. `..\FFXII-Decompile\notes\exit_dest_offline_findings.md` records words 2/3/4 as three
+// STORY-PROGRESS variants selected by thunk_FUN_00303ec0 / FUN_003135c0 — i.e. "where this door goes
+// given the story flags". The diagnostic resolves all four so we can see which one is live.
+constexpr uint32_t DEST_TBL_HDR          = 4;      // bytes before record 0
+constexpr uint32_t DEST_REC_STRIDE       = 0x10;   // bytes per destination record
+constexpr uint32_t DEST_REC_WORDS        = 8;      // u16 words per record
 constexpr int      MAP_ID_MAX            = 8191;      // sanity bound before the getter (map ids are small)
 
 // RETIRED: EXIT_JUMP_DESTIDX_OFF (0x1d on a +0x54 JUMP record). The +0x54 records carry x/y/z/angle ONLY

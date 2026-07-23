@@ -73,7 +73,9 @@ constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0x
 // F4: diagnostic A/B toggle for the menu-text painter interception. The game binds F1/F2/F3 to game
 // speed and nothing to F4 (Docs/Controls.md), and the struck F4 modal combat-log design was never
 // built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
-constexpr int DIK_F4 = 0x3E;
+// F5: nav availability filter (All <-> Story-gated). Same reasoning as F4 -- the game binds only
+// F1/F2/F3, so F5 is free.
+constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F;
 // The game's Confirm (Docs/Controls.md: Space / Enter / Left Mouse). Observed only -- the mod is
 // read-only on input and never swallows these, so the game's own text box advances exactly as it
 // always did; we just learn that it did. Mouse confirm is not observed (no hook for it), so a
@@ -84,7 +86,7 @@ constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[15]{};
+std::atomic<bool> g_extraDown[16]{};
 std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
@@ -286,6 +288,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true);  // `  rescan
     DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 text-capture A/B
+    DInputEdge(VK_F5,         g_extraDown[15],(dik[DIK_F5]         & 0x80) != 0, true);  // F5 all/story-gated
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

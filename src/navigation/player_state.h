@@ -96,6 +96,23 @@ bool ReadPlayerFacing(float& outRad);
 // camera rotate, and in combat (faceNode is not). Returns false on read failure or a zero row.
 bool ReadCameraForward(float& outRad);
 
+// The same reference, but SAFE TO USE: returns the live value when the camera row is fresh, else the
+// last value that WAS fresh. False only when no camera has ever been read this session.
+//
+// USE THIS, NOT ReadCameraForward, on every speech path. The raw getter leaves `outRad` untouched on
+// failure, and every caller used to declare `float facingRad = 0.0f` and ignore the bool -- so an
+// unrefreshed camera row silently meant "forward = 0", and CompassFaceDeg(0) == 180, i.e. EVERY
+// direction spoken 180 degrees reversed. A stale-by-a-frame reference is a small error; a reversed
+// one is the difference between walking to a thing and walking away from it.
+bool ReadCameraForwardStable(float& outRad);
+
+// Same as above, but also reports WHICH source produced the value, for the route/announce logs:
+//   "live" = fresh camera row · "held" = last good row · "face" = leader facing fallback.
+// This is the line whose absence made a 180-degree direction reversal take a session to diagnose: with
+// it, "directions went wrong" is answerable from the log alone -- a moving `ref` is the game's camera
+// changing under us (documented, not a bug), a static `ref` with flipped words is ours.
+bool ReadCameraForwardStable(float& outRad, const char** srcOut);
+
 // ---- Movement frame (Phase A diagnostic + egocentric "forward" reference) ----
 // One SEH-guarded snapshot of the pieces that determine "which way does the stick send
 // me": the leader's world facing yaw, the gameplay camera's world look yaw, and the live

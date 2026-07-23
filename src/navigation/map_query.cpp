@@ -232,4 +232,78 @@ bool SegmentTraversable(const FVec3& a, const FVec3& b,
     return true;
 }
 
+// ---- Map-jump surfaces (Session 64) --------------------------------------------------------------
+// Sweep the walkmap once and group every floor poly by its `setmapidmj` tag. Same CSR -> prim -> poly
+// traversal ReadCellFloor uses, with the same 256-prims-per-cell guard; a poly contributes its BASE
+// VERTEX position, which is a real point on the surface rather than a grid-cell approximation (East
+// End's cells are 8 m, far too coarse to aim at a doorway with).
+bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
+    out.clear();
+    WalkGridInfo g;
+    if (!GetGridInfo(g) || !g.valid) return false;
+
+    // Polys are shared between cells, so the same one is reached many times; count each once.
+    std::vector<uint16_t> seen;
+    seen.reserve(256);
+
+    for (int row = 0; row < g.nRows; ++row) {
+        for (int col = 0; col < g.nCols; ++col) {
+            const int cell = g.nCols * row + col;
+            uint16_t start = 0, end = 0;
+            if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell) * 2u, &start)) continue;
+            if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell + 1) * 2u, &end)) continue;
+            if (end < start) continue;
+
+            for (uint32_t k = start; k < end && (k - start) < 256u; ++k) {
+                uint16_t prim = 0;
+                if (!MemRead::SafeReadU16(g.primList, k * 2u, &prim)) break;
+                if (prim >= NavRva::WALK_PRIM_FLOOR_MAX) continue;      // wall / empty
+                const uint32_t pbase = static_cast<uint32_t>(prim) * NavRva::WALK_POLY_STRIDE;
+
+                uint32_t flags = 0;
+                if (!MemRead::SafeReadU32(g.polyArr, pbase + NavRva::WALK_POLY_FLAGS, &flags)) continue;
+                if ((flags & NavRva::WALK_POLY_TYPE_MASK) != 0) continue;   // not a walkable floor
+                const int group =
+                    static_cast<int>((flags >> NavRva::WALK_POLY_MJ_SHIFT) & NavRva::WALK_POLY_MJ_MASK);
+                if (group == 0) continue;                                   // ordinary floor
+
+                bool dup = false;
+                for (uint16_t sp : seen) if (sp == prim) { dup = true; break; }
+                if (dup) continue;
+                seen.push_back(prim);
+
+                int16_t vi = -1;
+                if (!MemRead::SafeReadS16(g.polyArr, pbase + NavRva::WALK_POLY_BASEVERT, &vi)) continue;
+                if (vi < 0) continue;
+                const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
+                float vx, vy, vz;
+                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &vx)) continue;
+                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &vy)) continue;
+                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &vz)) continue;
+
+                MapJumpSurface* surf = nullptr;
+                for (auto& e : out) if (e.group == group) { surf = &e; break; }
+                if (!surf) {
+                    out.push_back(MapJumpSurface{});
+                    surf = &out.back();
+                    surf->group = group;
+                    surf->min = surf->max = FVec3{ vx, vy, vz };
+                }
+                surf->centroid.x += vx; surf->centroid.y += vy; surf->centroid.z += vz;
+                if (vx < surf->min.x) surf->min.x = vx;  if (vx > surf->max.x) surf->max.x = vx;
+                if (vy < surf->min.y) surf->min.y = vy;  if (vy > surf->max.y) surf->max.y = vy;
+                if (vz < surf->min.z) surf->min.z = vz;  if (vz > surf->max.z) surf->max.z = vz;
+                ++surf->polyCount;
+            }
+        }
+    }
+
+    for (auto& e : out) {
+        if (e.polyCount <= 0) continue;
+        const float n = static_cast<float>(e.polyCount);
+        e.centroid.x /= n; e.centroid.y /= n; e.centroid.z /= n;
+    }
+    return !out.empty();
+}
+
 } // namespace MapQuery

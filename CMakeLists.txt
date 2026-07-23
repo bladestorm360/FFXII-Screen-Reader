@@ -55,14 +55,21 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/map_names.cpp
     src/navigation/map_exits.cpp
     src/navigation/map_script.cpp
+    src/navigation/map_script_diag.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp
     src/navigation/entity_scan.cpp
+    src/navigation/exit_scan.cpp
+    src/navigation/entity_classify.cpp
     src/navigation/entity_diag.cpp
+    src/navigation/exit_diag.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
     src/navigation/nav_grid.cpp
+    src/navigation/nav_reach.cpp
+    src/navigation/nav_trace.cpp
+    src/navigation/path_search.cpp
     src/navigation/path_planner.cpp
 )
 

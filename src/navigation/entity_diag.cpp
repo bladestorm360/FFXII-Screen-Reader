@@ -68,27 +68,45 @@ void DumpLocked() {
                 if (flags == 0 && lbl.empty() && !EntityScan::InGimmickBand(nameIdx)) { ++plain; continue; }
                 ++shown;
 
-                uint8_t catByte = 0, readyByte = 0;
+                uint8_t catByte = 0, readyByte = 0, kindByte = 0;
                 SafeReadU8(obj, NavRva::SCENEOBJ_TYPE_BYTE, &catByte);   // low5=category, high3=class
                 SafeReadU8(obj, 0x14, &readyByte);                      // & 0x20 model, & 0x40 ready
+                // KIND nibble + interaction-ENABLE bit share sceneObj+0x0E. `kind=` is the field whose
+                // ABSENCE from this dump let a bad classifier ship: an ordering that put kind ahead of
+                // the character class swept every NPC into Interactables, and nothing here would have
+                // shown it. `en=` is the story gate (FUN_0026ba60's bit; 0 = the game refuses to act).
+                SafeReadU8(obj, NavRva::SCENEOBJ_ENABLE_OFF, &kindByte);
                 FVec3 pos; bool havePos = PlayerState::ReadSceneObjectPos(obj, pos);
                 char nlabel[48] = {};
                 for (size_t k = 0; k < lbl.size() && k < 47; ++k)
                     nlabel[k] = (lbl[k] < 128) ? static_cast<char>(lbl[k]) : '?';
-                char line[256];
+                char line[288];
                 snprintf(line, sizeof(line),
-                         "    [%u:%u] obj=%p cat=%02X r14=%02X flags=%08X%s%s nameIdx=%d \"%s\" pos=(%.2f,%.2f,%.2f) hp=%d",
-                         c, i, obj, catByte, readyByte, flags,
+                         "    [%u:%u] obj=%p cat=%02X kind=%u en=%u r14=%02X flags=%08X%s%s nameIdx=%d \"%s\" pos=(%.2f,%.2f,%.2f) hp=%d",
+                         c, i, obj, catByte,
+                         kindByte & NavRva::KIND_MASK,
+                         (kindByte & NavRva::INTERACT_ENABLE_BIT) ? 1u : 0u,
+                         readyByte, flags,
                          (flags & NavRva::FLAG_TALK) ? " TALK" : "",
                          (flags & NavRva::FLAG_ACTION) ? " ACT" : "",
                          nameIdx, nlabel, pos.x, pos.y, pos.z, havePos ? 1 : 0);
                 Log::Write("NAV-DIAG", line);
             }
         }
-        char ch[128];
+        // The container's OWN interaction sub-ranges (FUN_0025b820 walks exactly these two spans of
+        // the slot space; the mod walks [0,count)). Logged so a duplicate-listed object's slot -- the
+        // `i` in the [c:i] lines above -- can be checked against them: twins that fall OUTSIDE both
+        // spans are entries the game never treats as interactable, which would explain the doubling.
+        uint16_t g1s = 0, g1n = 0, g0s = 0, g0n = 0;
+        SafeReadU16(table, NavRva::TBL_GRP1_START_OFF, &g1s);
+        SafeReadU16(table, NavRva::TBL_GRP1_COUNT_OFF, &g1n);
+        SafeReadU16(table, NavRva::TBL_GRP0_START_OFF, &g0s);
+        SafeReadU16(table, NavRva::TBL_GRP0_COUNT_OFF, &g0n);
+        char ch[208];
         snprintf(ch, sizeof(ch),
-                 "  container %u: active=%u count=%u shown=%u plain=%u",
-                 c, active & 1, count, shown, plain);
+                 "  container %u: active=%u count=%u shown=%u plain=%u | game spans: grp1(talk+act)=[%u,%u) grp0(act)=[%u,%u)",
+                 c, active & 1, count, shown, plain,
+                 g1s, static_cast<unsigned>(g1s) + g1n, g0s, static_cast<unsigned>(g0s) + g0n);
         Log::Write("NAV-DIAG", ch);
     }
     // Combatant pool dump (party + enemies) — CONFIRMS the enemy discriminator. def+5 is

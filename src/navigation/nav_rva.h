@@ -123,6 +123,20 @@ constexpr uint32_t WALK_POLY_PLANE_C  = 0x08;  // float plane C
 constexpr uint32_t WALK_POLY_FLAGS    = 0x0C;  // u32 flags; walk type = low 3 bits (0 = walkable)
 constexpr uint32_t WALK_POLY_BASEVERT = 0x10;  // s16 base-vertex index -> vertex array
 constexpr uint32_t WALK_POLY_TYPE_MASK = 0x7;
+// MAP-JUMP SURFACE TAG, bits 3+ of the same flags word (Session 64).
+//
+// The `mapctrl` script sets these via `setmapidmj`, the sibling of `setmapidfloor` / `setmapidwall`
+// which own other bit fields further up the word. A non-zero value marks the floor you walk onto to
+// fire a transition, and the value IS the map-jump group id -- the same number the owning
+// `__MJ_CTRL` routine passes to `setmapjumpgroup(K)`. So this tag is what ties a transition's
+// GEOMETRY to its DESTINATION, both read from the map's own loaded data on the first frame.
+//
+// Measured on two maps: the field takes values 0x08/0x10/0x18/0x20/0x28/0x30 in the low byte, i.e.
+// group 1..6 at bit 3. Muthru Bazaar has groups {1,3} and exactly two usable transitions; East End has
+// {1..6}, one per controller. Callers additionally reject any id no controller on the map claims, so
+// the exact width of the field cannot matter.
+constexpr uint32_t WALK_POLY_MJ_SHIFT  = 3;
+constexpr uint32_t WALK_POLY_MJ_MASK   = 0x1F;
 constexpr uint32_t WALK_VERT_STRIDE   = 0x10;
 // primitive index encoding (per-cell list entries): < 0x4000 => floor-poly index;
 // 0x4000-0x4FFF => wall segment (idx-0x4000); >= 0x5000 => empty/sentinel.
@@ -144,14 +158,71 @@ constexpr uint32_t ENTRIES_COUNT_OFF   = 0x00;   // int count at entries+0x00
 constexpr uint32_t ENTRIES_SLOT0_OFF   = 0x08;   // object ptr at entries+0x08+slot*8
 constexpr uint32_t OBJ_GENERATION_OFF  = 0x16;   // u16 generation (vs handle bits 20..30)
 
+// ---- The container's own INTERACTION SUB-RANGES (from FUN_0025b820) ---------------------------
+// The scan walks the whole entries array [0, count). The GAME does not: FUN_0025b820 walks exactly
+// two (start, count) spans of the same slot space, one per interaction group --
+//   group 1 (talk AND action, tested by FUN_0025bad0):  start = container+0x1DE, count = +0x1D6
+//   group 0 (action only,      tested by FUN_0025be50): start = container+0x1DA, count = +0x1D2
+// (Ghidra prints these as &DAT_02098fee / &DAT_02098fe6 / &DAT_02098fea / &DAT_02098fe2 indexed by
+//  container*0x144 shorts == container*0x288 bytes; subtract the 0x2098e10 base for the offsets.)
+//
+// DIAGNOSTIC ONLY for now. These are logged next to the walked slot indices so the duplicate-listing
+// bug (every shop appearing twice) can be settled from one session's log: if the twins sit OUTSIDE
+// both spans, the fix is to walk the game's spans instead of the raw array. Do NOT narrow the walk
+// on the hypothesis alone -- objects the mod lists on purpose (named gates, gimmick-band crystals)
+// may legitimately live outside these ranges, and narrowing blind would silently drop them.
+constexpr uint32_t TBL_GRP1_COUNT_OFF  = 0x1D6;  // u16 count, talk+action group
+constexpr uint32_t TBL_GRP1_START_OFF  = 0x1DE;  // u16 first slot, talk+action group
+constexpr uint32_t TBL_GRP0_COUNT_OFF  = 0x1D2;  // u16 count, action-only group
+constexpr uint32_t TBL_GRP0_START_OFF  = 0x1DA;  // u16 first slot, action-only group
+
 // ---- Scene-object interactivity flags (from the game's own interaction scanner
 //      FUN_0025b820 / testers FUN_0025bad0 / FUN_0025be50). Every live interactive
 //      field object (NPC, gate, door, switch, treasure, crystal) is reachable through
-//      the handle table above; these flags say what KIND of interaction it offers.
-//      A load-time GATE is an ACTION object (0x1C & 0x4) present from map load. ----
+//      the handle table above; these flags say what kind of interaction it offers
+//      RIGHT NOW.
+//
+// CAUTION -- these two bits are MODE STATE, not identity. FUN_0025ad10 / FUN_0025ae00 SET 0x400 and
+// CLEAR 0x004 when an object enters talk mode, and clear 0x400 when its talk id is invalid, so an
+// object's flags change during play and go to zero while it is disabled. Never decide WHAT an
+// object is from these; use SCENEOBJ_KIND (below). Use them only for "what can I do with it now".
 constexpr uint32_t SCENEOBJ_FLAGS_OFF  = 0x1C;   // u32 flags word on the scene object
-constexpr uint32_t FLAG_TALK           = 0x400;  // talk target (NPC/person)
-constexpr uint32_t FLAG_ACTION         = 0x004;  // action target (gate/door/switch/item)
+constexpr uint32_t FLAG_TALK           = 0x400;  // talk prompt offered right now
+constexpr uint32_t FLAG_ACTION         = 0x004;  // action prompt offered right now
+
+// ---- The game's OWN interaction classifier: FUN_002675c0 (abs 0x2675c0, RVA 0x1475C0) ----------
+// "Can the player interact with this object right now." Replicated MEMORY-ONLY by EntityScan (never
+// called -- it is a per-object predicate on the input path). Its structure is also the authoritative
+// person-vs-gimmick rule, and it is corroborated by FUN_0025bad0, the near-object scanner's
+// candidate filter (kind 1 -> talk only, 4 -> both, 5 -> action only, 7 -> talk only, else reject):
+//
+//   if ((obj+0x0E & 0x10) == 0)                       -> false   // interaction ENABLED bit
+//   if (!(obj+0x14 & 0x20) || (obj+3 & 0xE0) != 0x60) -> false   // model loaded, class 3
+//   if (!FUN_002e9fe0(obj))                           -> false   // node visible/ready
+//   if (obj+0x1C & 0x004) { id = obj+0xCC; return id valid && (obj+0x0E & 0xF) == 5; }  // ACTION
+//   if (obj+0x1C & 0x400) { id = obj+0xDC; return id valid && (obj+0x0E & 0xF) == 1; }  // TALK
+//
+// => sceneObj+0x0E low nibble is the object KIND. 1 = TALK target (a person), 5 = ACTION gimmick
+// (gate / door / switch / chest). 0.99: two independent engine functions assert it.
+// (SCENEOBJ_KIND_OFF / KIND_MASK live in core/phyre_types.h, where the combatant scan already uses
+//  them. NOTE: that header's `KIND_DEAD = 5` is WRONG -- 5 is the field-gimmick kind. See debug.md;
+//  the combat track owns that correction.)
+constexpr uint32_t INTERACT_PREDICATE   = 0x1475C0; // FUN_002675c0(obj) -- reference only, NOT called
+constexpr uint8_t  KIND_TALK_TARGET     = 1;        // person: the engine's TALK kind
+constexpr uint8_t  KIND_ACTION_GIMMICK  = 5;        // gate/door/switch/chest: the engine's ACTION kind
+constexpr uint32_t SCENEOBJ_ENABLE_OFF  = 0x0E;     // same byte as the kind nibble
+constexpr uint8_t  INTERACT_ENABLE_BIT  = 0x10;     // bit 4: interaction enabled (the STORY GATE)
+constexpr uint32_t SCENEOBJ_ACTION_ID   = 0xCC;     // u16 action payload id (0xFFFF -> map-record default)
+constexpr uint32_t SCENEOBJ_TALK_ID     = 0xDC;     // u16 talk payload id   (0xFFFF -> map-record default)
+constexpr uint16_t PAYLOAD_ID_INHERIT   = 0xFFFF;   // "take it from the map's own object record"
+constexpr uint32_t SCENEOBJ_READY_OFF   = 0x14;     // u8; & 0x20 = model loaded
+constexpr uint8_t  READY_MODEL_BIT      = 0x20;
+constexpr uint8_t  SCENEOBJ_CLASS_MASK  = 0xE0;     // high 3 bits of the +0x03 type byte
+constexpr uint8_t  SCENEOBJ_CLASS_INTERACT = 0x60;  // class 3 == an interactable object
+// The story gate is written by FUN_0026ba60(obj, enable) (RVA 0x14BA60), whose only caller
+// FUN_0034afe0 (RVA 0x22AFE0) has ZERO in-binary callers -- i.e. it is a script-VM native. So the
+// MAP'S OWN SCRIPT turns interactivity on and off per object; that is exactly the story flag.
+constexpr uint32_t INTERACT_ENABLE_SET  = 0x14BA60; // FUN_0026ba60(obj, enable) -- reference only
 
 // ---- Scene object / char component (from FUN_00263e30 / FUN_00317e60) -------
 constexpr uint32_t SCENEOBJ_COMPONENT_OFF = 0x30;  // *(sceneObj+0x30) = char component

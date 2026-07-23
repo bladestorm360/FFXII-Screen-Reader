@@ -43,6 +43,24 @@ struct ExitRec {
 // the exact destination field is pinned across a run or two. Clears `out` first.
 void EnumerateMapJumps(const FVec3* playerPos, float maxDist, std::vector<ExitRec>& out, bool logRaw);
 
+// One RAW +0x70 field-sign record: the game's own "this map connects to somewhere here" marker.
+// `areaId` is 0xffff whenever the game's destination resolver could not answer — which is most records
+// on the maps measured so far, and is exactly why the raw walk exists separately from the filtered one.
+struct SignRec {
+    FVec3    pos;                    // WORLD position of the "-> area" marker
+    int      group   = 0;            // +0x70 sub-table (0 = doorways, 3 = arrival markers on East End)
+    int      index   = 0;            // record index within the group
+    uint8_t  destIdx = 0;            // rec+0x1d: index into the +0x8c destination table
+    uint16_t areaId  = 0xFFFF;       // resolved destination map id (0xffff = the resolver declined)
+    bool     usable  = false;        // story gate satisfied (FUN_002648f0 buf[0])
+    bool     shown   = false;        // the "-> area" arrow is being drawn this instant (render gate)
+};
+
+// Every +0x70 record, unfiltered and unlogged — including the ones whose destination will not resolve.
+// This is the completeness source: on East End it covers a doorway that NO `__MJ_CTRL` routine owns,
+// i.e. a transition the map-jump reader alone cannot see. Clears `out`.
+void EnumerateFieldSignRaw(std::vector<SignRec>& out);
+
 // Enumerate the current map's EXITS from the field-sign array at mapData+0x70, through the game's own
 // getters (FUN_00264ac0(group) / FUN_002649b0(group,i) / FUN_002648f0(rec,buf)). THE exit source: the only
 // records carrying a WORLD position AND a destination together, so `pos` is a real world point (bearing and

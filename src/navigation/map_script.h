@@ -27,16 +27,34 @@ namespace MapScript {
 
 // One map-jump controller routine recovered from the loaded script, resolved to its physical door.
 //
-// DOOR RULE (walk-tested on five maps): **`__MJ_CTRL<N>` owns `+0x54` slot `N + 1`.** Slot 0 is the
-// default/cutscene arrival and is never an exit; a slot with no controller is an arrival point, not a
-// door. Confirmed by walking exits and observing where the game actually landed, and independently by
-// the arrival relation (if M jumps to D with entrance E, D's door back to M is D's slot E) — both agree
-// on every measured pair.
+// DOOR RULE (Session 58, decoded from the `'` capture on East End + Muthru Bazaar): controller `i` owns
+// the `+0x84` record immediately AFTER the i-th "edge" record — an edge being a `+0x84` entry that
+// appears in no `+0x54` entry. See map_script.cpp's ResolveControllerArrivals for the full derivation.
+//
+// **STRUCK: the S46 "`__MJ_CTRL<N>` owns `+0x54` slot `N + 1`" rule.** It paired two structurally
+// independent tables (the exit routines and the party ARRIVAL table) and only ever held on Nalbina's
+// 2-3-loader maps. On Rabanastre East End it put Muthru (a west doorway) mid-map and Southern Plaza (a
+// south doorway) at the far west — the reported "Southern Plaza loads the Bazaar". It survives only as
+// the fallback when the `+0x84` shape is unexpected, so an odd map degrades instead of emitting garbage.
 struct ExitDest {
     int          ctrlIndex = -1;   // NNN parsed from the `__MJ_CTRL<NNN>` routine name
-    int          slot      = -1;   // owning `+0x54` door slot == ctrlIndex + 1
-    FVec3        pos{};            // that slot's RAW world position (the match key -- see below)
+    int          slot      = -1;   // authoring-order id (== ctrlIndex + 1; also the routine's 0x011E arg)
+    FVec3        pos{};            // the doorway's ARRIVAL point: walkable, a couple of steps inside the map
     bool         posOk     = false;
+    // The transition TRIGGER's reference point: off the walkable mesh, out past the map boundary, at a
+    // variable distance (~120 units on one East End exit). Useless as a route target for exactly that
+    // reason — but the DIRECTION from `pos` to `edge` is the direction the player crosses the seam, which
+    // is what lets the route target be pushed out to the boundary instead of stopping at the arrival.
+    FVec3        edge{};
+    bool         edgeOk    = false;
+    // Which `+0x54` slot this doorway's arrival IS -- a plain fact about the blob, recovered by exact
+    // match against `+0x84`. Diagnostics only.
+    int          arrivalSlot = -1;
+    // **THE BINDING.** The routine's `setmapjumpgroup(K)` argument: the id the WALKMAP tags this
+    // transition's floor polygons with. Position comes from those polygons, the destination from this
+    // same routine's `mapjump` literal -- one object, both halves, so they can never be mismatched.
+    // -1 when the routine has no such call (then nothing about it is established and it is dropped).
+    int          group       = -1;
     uint16_t     destMapId = 0;    // destination map id (the flags==0 `mapjump` literal)
     uint16_t     entrance  = 0;    // arrival slot on the DESTINATION map (not a local door index)
     uint32_t     codeOff   = 0;    // routine entry offset in the blob (diagnostics only)
@@ -47,13 +65,19 @@ struct ExitDest {
 // destination and owning door, ordered by ctrlIndex. Memory-only and SEH-guarded: a torn blob (mid-load /
 // mid-teardown) yields an empty list rather than a fault. Returns false when no field script is loaded.
 //
-// Callers should match a door to its destination BY POSITION (`pos`), not by slot number: the `+0x54`
-// table repeats records (one map's slot 1 is byte-identical to slot 0) and `MapExits::EnumerateMapJumps`
-// de-duplicates them, so the surviving entry's index may differ from the owning slot while naming the same
-// physical doorway. Position matching also fails safe — a mismatch yields no label rather than a wrong one.
+// Each returned record is already resolved to its own doorway — `pos` (walkable arrival) and `edge`
+// (off-mesh trigger reference). Callers do NOT cross-reference `MapExits::EnumerateMapJumps`; that path
+// matched doors to destinations by position against a de-duplicated `+0x54` copy, and it is gone. The
+// only thing outside this file that reads `slot` is diagnostics.
 //
 // `logDetail` dumps what was found to NAV-DIAG. It is expensive and noisy, so callers pass true only when
 // the map has actually changed.
 bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail);
+
+// Session 57 capture (file-only, `'`-triggered): dumps BOTH parallel position tables (+0x54 and +0x84)
+// raw + un-deduped, and every `__MJ_CTRL` routine's full bytecode with its CALLACTPOPA native calls
+// annotated (mapjump 0x008d / zone-test 0x202d + operands). This is the data the offline decode uses to
+// find each exit's true transition-tile position (currently we use the +0x54 arrival point). Read-only.
+void DumpCaptureDiag();
 
 } // namespace MapScript

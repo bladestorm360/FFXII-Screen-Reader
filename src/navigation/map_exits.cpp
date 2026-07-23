@@ -22,35 +22,13 @@ namespace MapExits {
 // transitions that move the party between areas. Tester-confirmed by walking into them. See the header
 // for why Session 43's "arrival/spawn, not exits" demotion was wrong (FUN_00353490 is
 // getmapjumpanglebyindex, not a party-placement call).
-// DIAGNOSTIC (log-only): dump a record's raw bytes, then report every u16 field the game's OWN area-name
-// resolver (the same FUN_00377b60/FUN_00264f90 chain the "Entering <area>" announcement uses) turns into a
-// real area name. The DQ7R idiom: the record stores the destination as a map id; we don't know which field,
-// so we resolve them all. The offset that resolves to a NEIGHBOUR area (never the current map, and the same
-// offset on every record) is the destination — then we read it directly and speak it. No new probe needed.
-static void DiagScanRecordForDest(const char* tag, int idx, void* rec, int nbytes, int here) {
-    char hex[3 * 0x20 + 1] = {};
-    int p = 0;
-    for (int b = 0; b < nbytes && b < 0x20; ++b) {
-        uint8_t v = 0; MemRead::SafeReadU8(rec, static_cast<uint32_t>(b), &v);
-        p += snprintf(hex + p, sizeof(hex) - static_cast<size_t>(p), "%02x ", v);
-    }
-    char m[160];
-    snprintf(m, sizeof(m), "    %s[%d] raw: %s", tag, idx, hex);
-    Log::Write("NAV-DIAG", m);
-    for (int o = 0; o + 2 <= nbytes; o += 2) {
-        uint16_t v = 0;
-        if (!MemRead::SafeReadU16(rec, static_cast<uint32_t>(o), &v)) continue;
-        if (v == 0 || v > NavRva::MAP_ID_MAX) continue;
-        if (MapNames::ResolveAreaName(v).empty()) continue;   // resolver rejects non-printable / out-of-range ids
-        const std::wstring full = MapNames::ResolveFullAreaName(v);
-        char nm[96] = {};
-        for (size_t k = 0; k < full.size() && k < 95; ++k) nm[k] = (full[k] < 128) ? static_cast<char>(full[k]) : '?';
-        char line[176];
-        snprintf(line, sizeof(line), "      +0x%02x = %u -> \"%s\"%s",
-                 o, v, nm, (static_cast<int>(v) == here) ? "  <== CURRENT MAP (self)" : "");
-        Log::Write("NAV-DIAG", line);
-    }
-}
+//
+// REMOVED (Session 55): DiagScanRecordForDest, which fed every u16 in a record to the area-name resolver
+// and logged whatever came back. It produced only FALSE POSITIVES and actively misled: on East End it
+// read a field-sign record's destIdx byte pair as area 768 and announced "Eruyt Village: Road of Verdant
+// Praise", and elsewhere "Draklor Laboratory: Rm 6612 West" and "Trial Mode: Stage 90" out of offset
+// bytes. A resolver that accepts any in-range id will always "find" a name in arbitrary bytes; that is
+// fishing, not evidence. The destination fields are now known (see exit_diag.cpp) and are read directly.
 
 // SEH-guarded bulk copy, isolated so callers can use C++ objects (a function with __try can't also unwind).
 static bool SehReadBytes(const void* src, void* dst, size_t n) {
@@ -171,7 +149,6 @@ void EnumerateMapJumps(const FVec3* playerPos, float maxDist, std::vector<ExitRe
     out.clear();
     using MemRead::PtrAt; using MemRead::SafeReadU16;
     using MemRead::SafeReadU32; using MemRead::SafeReadF32;
-    const int here = logRaw ? MapNames::CurrentMapId() : 0;
 
     // mapData = *(u64*)(containerBase+0); jump table offset at mapData+0x54, base = mapData + off +
     // reloc (~0). Precondition: *(u16)(mapData)>2.
@@ -234,10 +211,6 @@ void EnumerateMapJumps(const FVec3* playerPos, float maxDist, std::vector<ExitRe
             snprintf(m, sizeof(m), "  jump[%u] pos=(%.1f,%.1f,%.1f) ang=%.2f d=%.1f dupe=%d pass=%d",
                      i, x, y, z, ang, dist, dupe ? 1 : 0, pass ? 1 : 0);
             Log::Write("NAV-DIAG", m);
-            // Record = 0x20 bytes starting at the x float (exitBase + 4 + i*0x20). Scan its fields for the dest.
-            DiagScanRecordForDest("jump", static_cast<int>(i),
-                                  exitBase + 4 + static_cast<size_t>(i) * NavRva::EXIT_REC_STRIDE,
-                                  NavRva::EXIT_REC_STRIDE, here);
         }
         if (!pass) continue;
         ExitRec e;
@@ -369,18 +342,20 @@ static bool CallExitDestInfo(void* rec, void* buf) {    // buf: b0 usable, u16 a
 }
 } // namespace
 
-void EnumerateFieldSignExits(std::vector<ExitRec>& out, bool logRaw) {
+// The RAW walk of the +0x70 field-sign table: every record in every group, unfiltered and unlogged.
+// This is the game's own list of "places this map connects to", and it is the ONLY table that covers
+// both step-on district doors and press-Enter interior doorways in one place. Session 55 measured 13
+// records in group 0 and 12 in group 3 on East End — which strikes the old "+0x70 is empty on every
+// map" verdict outright (see the header note; the emptiness was a calling-convention bug).
+//
+// Nothing is dropped here, deliberately: the destination resolution below fails on many maps
+// (`areaId` comes back 0xffff), and a walker that hid those records also hid the fact that we cannot
+// resolve them. Callers filter; the diagnostic reports.
+void EnumerateFieldSignRaw(std::vector<SignRec>& out) {
     out.clear();
-    const int here = MapNames::CurrentMapId();
-
     for (unsigned int g = 0; g < NavRva::MAPEXIT_GROUP_MAX; ++g) {
         const int n = CallExitCount(g);
         void* tbl = CallExitTable(g);
-        if (logRaw && (n != 0 || tbl)) {
-            char m[96];
-            snprintf(m, sizeof(m), "map-exits(+0x70) group=%u count=%d tbl=%p", g, n, tbl);
-            Log::Write("NAV-DIAG", m);
-        }
         if (!tbl || n <= 0 || n > static_cast<int>(NavRva::EXIT_COUNT_MAX)) continue;
 
         for (int i = 0; i < n; ++i) {
@@ -389,53 +364,64 @@ void EnumerateFieldSignExits(std::vector<ExitRec>& out, bool logRaw) {
             // drawn this instant. We keep its answer only as a diagnostic ("shown").
             void* rec = static_cast<char*>(tbl) + NavRva::MAPEXIT_TBL_HDR +
                         static_cast<size_t>(i) * NavRva::EXIT_REC_STRIDE;
-            const bool shown = (CallExitObj(g, i) != nullptr);
 
-            // World position straight off the record — the same floats the game draws the "→ area" marker at.
             float x = 0.0f, y = 0.0f, z = 0.0f;
             if (!MemRead::SafeReadF32(rec, NavRva::EXITREC_X_OFF, &x) ||
                 !MemRead::SafeReadF32(rec, NavRva::EXITREC_Y_OFF, &y) ||
                 !MemRead::SafeReadF32(rec, NavRva::EXITREC_Z_OFF, &z)) continue;
 
-            // The game fills the destination: rec+0x1d -> FUN_00264870 -> +0x8c record word[5] = map id.
-            // This IS the game's own destination resolver — we only hand it the record it needs.
+            // The game fills the destination: rec+0x1d -> FUN_00264870 -> +0x8c record = map id.
             uint8_t buf[16] = {};
             const bool gotDest = CallExitDestInfo(rec, buf);
             uint16_t areaId = NavRva::AREAID_NONE;
             memcpy(&areaId, buf + NavRva::EXITBUF_AREAID_OFF, sizeof(areaId));
-            const bool usable = (buf[NavRva::EXITBUF_USABLE_OFF] != 0);
-            uint8_t destIdx = 0;
-            MemRead::SafeReadU8(rec, NavRva::EXITREC_DESTGRP_OFF, &destIdx);
 
-            std::wstring name = gotDest ? MapNames::ResolveFullAreaName(static_cast<int>(areaId)) : std::wstring();
-
-            if (logRaw) {
-                // Log EVERY record and why it drops — a silent `continue` is what hid all 3 exits last run.
-                const std::wstring sub = MapNames::ResolveAreaName(static_cast<int>(areaId));
-                const std::wstring reg = MapNames::ResolveRegionName(static_cast<int>(areaId));
-                char s8[48] = {}, r8[48] = {};
-                for (size_t k = 0; k < sub.size() && k < 47; ++k) s8[k] = (sub[k] < 128) ? static_cast<char>(sub[k]) : '?';
-                for (size_t k = 0; k < reg.size() && k < 47; ++k) r8[k] = (reg[k] < 128) ? static_cast<char>(reg[k]) : '?';
-                char m[256];
-                snprintf(m, sizeof(m),
-                         "  exit[g%u.%d] world=(%.1f,%.1f,%.1f) destIdx=%u gotDest=%d areaId=%u usable=%d shown=%d sub=\"%s\" region=\"%s\"",
-                         g, i, x, y, z, destIdx, gotDest ? 1 : 0, areaId, usable ? 1 : 0, shown ? 1 : 0, s8, r8);
-                Log::Write("NAV-DIAG", m);
-                // Scan the full 0x20-byte record for a field that resolves to a neighbour area (the dest).
-                DiagScanRecordForDest("sign", static_cast<int>(g) * 100 + i, rec, NavRva::EXIT_REC_STRIDE, here);
-            }
-
-            if (areaId == NavRva::AREAID_NONE || name.empty()) continue;   // no honest name -> stay silent
-            if (here > 0 && static_cast<int>(areaId) == here) continue;     // leads back into this same area
-
-            ExitRec e;
-            e.pos      = FVec3{ x, y, z };            // WORLD — bearing/steps are honest for these
-            e.index    = static_cast<int>(g) * 100 + i;
-            e.areaId   = areaId;
-            e.destName = name;
-            e.usable   = usable;
-            out.push_back(e);
+            SignRec s;
+            s.pos     = FVec3{ x, y, z };
+            s.group   = static_cast<int>(g);
+            s.index   = i;
+            s.areaId  = gotDest ? areaId : NavRva::AREAID_NONE;
+            s.usable  = (buf[NavRva::EXITBUF_USABLE_OFF] != 0);
+            s.shown   = (CallExitObj(g, i) != nullptr);
+            MemRead::SafeReadU8(rec, NavRva::EXITREC_DESTGRP_OFF, &s.destIdx);
+            out.push_back(s);
         }
+    }
+}
+
+void EnumerateFieldSignExits(std::vector<ExitRec>& out, bool logRaw) {
+    out.clear();
+    const int here = MapNames::CurrentMapId();
+
+    std::vector<SignRec> raw;
+    EnumerateFieldSignRaw(raw);
+
+    for (const auto& s : raw) {
+        std::wstring name = MapNames::ResolveFullAreaName(static_cast<int>(s.areaId));
+
+        if (logRaw) {
+            // Log EVERY record and why it drops — a silent `continue` is what hid all 3 exits once.
+            char n8[64] = {};
+            for (size_t k = 0; k < name.size() && k < 63; ++k)
+                n8[k] = (name[k] < 128) ? static_cast<char>(name[k]) : '?';
+            char m[224];
+            snprintf(m, sizeof(m),
+                     "  sign[g%d.%d] world=(%.1f,%.1f,%.1f) destIdx=%u areaId=%u usable=%d shown=%d name=\"%s\"",
+                     s.group, s.index, s.pos.x, s.pos.y, s.pos.z, s.destIdx, s.areaId,
+                     s.usable ? 1 : 0, s.shown ? 1 : 0, n8);
+            Log::Write("NAV-DIAG", m);
+        }
+
+        if (s.areaId == NavRva::AREAID_NONE || name.empty()) continue;  // no honest name -> stay silent
+        if (here > 0 && static_cast<int>(s.areaId) == here) continue;   // leads back into this same area
+
+        ExitRec e;
+        e.pos      = s.pos;                       // WORLD — bearing/steps are honest for these
+        e.index    = s.group * 100 + s.index;
+        e.areaId   = s.areaId;
+        e.destName = name;
+        e.usable   = s.usable;
+        out.push_back(e);
     }
 }
 

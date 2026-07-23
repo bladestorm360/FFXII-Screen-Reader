@@ -21,6 +21,7 @@
 #include <mutex>
 #include <vector>
 #include <cstdio>
+#include <atomic>
 
 using namespace MemRead;
 
@@ -39,6 +40,7 @@ using EntityScan::CategoryWord;
 std::mutex             g_mutex;
 std::vector<Entity>    g_entities;
 Category               g_currentCategory = Category::All;
+Availability           g_availability    = Availability::All;   // never start out hiding anything
 
 // The [ / ] focus, tracked across rescans by STABLE IDENTITY (not a bare scene-object pointer,
 // which can be reused/aliased by a pooled combatant slot or momentarily drop from a rescan and
@@ -76,11 +78,20 @@ void RefreshPositionsLocked(const FVec3& playerPos) {
     }
 }
 
-// Indices into g_entities matching the active category filter, nearest-first.
+// True when an entity passes BOTH active filters. The single choke point every command goes
+// through (Next/Prev/Describe/GetCurrentTarget/the category count), so the two filters compose
+// without any command needing to know about them.
+bool PassesFiltersLocked(const Entity& e) {
+    if (g_currentCategory != Category::All && e.category != g_currentCategory) return false;
+    if (g_availability == Availability::Gated && e.available) return false;
+    return true;
+}
+
+// Indices into g_entities matching the active filters, nearest-first.
 std::vector<size_t> FilteredSortedLocked() {
     std::vector<size_t> v;
     for (size_t i = 0; i < g_entities.size(); ++i)
-        if (g_currentCategory == Category::All || g_entities[i].category == g_currentCategory)
+        if (PassesFiltersLocked(g_entities[i]))
             v.push_back(i);
     std::sort(v.begin(), v.end(), [](size_t a, size_t b) {
         return g_entities[a].dist2D < g_entities[b].dist2D;
@@ -131,11 +142,34 @@ void ClearFocusLocked() { g_cursor = CursorId{}; }
 
 void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
     if (e.noBearing) { Speech::Output(e.label); return; }       // map-atlas pos: name only, no direction
+    // RELATIVE crow-flies bearing in compass words ("Northwest, 8 steps" == 8 steps forward-left).
+    // Same frame and vocabulary as the `\` route legs, so the two always agree. The reference comes
+    // from the STABLE camera read, which always yields one -- a distance with no direction is
+    // useless to walk on, so there is deliberately no direction-less path.
     float facingRad = 0.0f;
-    PlayerState::ReadCameraForward(facingRad);                  // "North" = forward = where UP takes you
+    const char* refSrc = "none";
+    PlayerState::ReadCameraForwardStable(facingRad, &refSrc);   // always yields a reference
+    // Same reference the route legs log, for the same reason: a bearing that seems to jump is the game's
+    // camera moving, and `ref=` is what proves it. Input thread, so guard the previous value atomically.
+    {
+        static std::atomic<float> s_prevRef{0.0f};
+        static std::atomic<bool>  s_havePrev{false};
+        const float deg = facingRad * 57.2957795f;
+        float dref = 0.0f;
+        if (s_havePrev.load(std::memory_order_relaxed)) {
+            dref = deg - s_prevRef.load(std::memory_order_relaxed);
+            while (dref > 180.0f)  dref -= 360.0f;
+            while (dref < -180.0f) dref += 360.0f;
+        }
+        s_prevRef.store(deg, std::memory_order_relaxed);
+        s_havePrev.store(true, std::memory_order_relaxed);
+        char m[128];
+        snprintf(m, sizeof(m), "announce ref=%.1fdeg src=%s dref=%.1fdeg", deg, refSrc, dref);
+        Log::Write("NAV", m);
+    }
     std::wstring phrase = e.label;
     phrase += L". ";
-    phrase += NavCommon::DescribeDirectionRelative(playerPos, e.pos, facingRad);   // egocentric
+    phrase += NavCommon::DescribeDirectionRelative(playerPos, e.pos, facingRad);
     Speech::Output(phrase);
 }
 
@@ -185,12 +219,21 @@ void OnFieldFrame() {
     std::vector<Entity> prev;
     const bool hadObjects = !g_entities.empty();
     if (hadObjects) prev = g_entities;                 // snapshot a good set
+    const int mapNow = MapNames::CurrentMapId();
     int n = RescanLocked();
     // Never replace a populated list with a transient empty while a container is still live
     // (honors the "don't let the edge check wipe the scan" caution); a real teardown (mask==0)
     // is allowed to clear it, and the next cycle command prunes any departed objects.
-    if (n == 0 && hadObjects && mask != 0)
+    //
+    // ...but never ACROSS A MAP CHANGE. The snapshot is stamped with the map it was taken on, so this
+    // path can no longer resurrect the previous area's objects and exits. (No user-visible staleness was
+    // ever actually measured -- when the tester reported "exits from the previous map", North End had
+    // listed exactly its own seven doors, and the confusion came from several exits sharing one
+    // placeholder name. The path is real even if that report was not, and closing it costs one int.)
+    static int s_snapshotMap = -1;
+    if (n == 0 && hadObjects && mask != 0 && s_snapshotMap == mapNow)
         g_entities = std::move(prev);
+    s_snapshotMap = mapNow;
 
     // Announce the area just entered ("Entering <name>") — ONLY on a real field area, and only when the
     // area actually changed (edge-triggered on the name; re-entering the same-named area after a menu
@@ -306,8 +349,8 @@ void CmdDescribeCurrent() {
     // A full A* grid is a later enhancement (thousands of rays => needs game-thread
     // execution to avoid racing the physics step).
     if (MapQuery::HasWorld()) {
-        float facingRad = 0.0f;
-        PlayerState::ReadCameraForward(facingRad);   // egocentric "bear <cardinal>" hint (forward = UP)
+        float hintFacing = 0.0f;
+        PlayerState::ReadCameraForwardStable(hintFacing);   // always yields a reference
         const FVec3 tgt = g_entities[sel].pos;
         const float bodyPad = 0.9f;                  // test at body height, not at the feet
         const FVec3 from{ p.x, p.y + bodyPad, p.z };
@@ -325,8 +368,8 @@ void CmdDescribeCurrent() {
                 const float a = base + o;
                 const FVec3 pt{ p.x + std::sin(a) * probe, p.y + bodyPad, p.z - std::cos(a) * probe };
                 if (MapQuery::SegmentClear(from, pt)) {
-                    std::wstring s = L"Blocked, bear ";
-                    s += NavCommon::CardinalOfHeadingRelative(a, facingRad);
+                    std::wstring s = L"Blocked, bear ";   // same frame as the bearing just spoken
+                    s += NavCommon::CardinalOfHeadingRelative(a, hintFacing);
                     Speech::SpeakQueued(s);
                     found = true;
                     break;
@@ -347,10 +390,11 @@ static void ChangeCategoryLocked(int dir) {
     // category whose actors weren't in that scan spoke a stale "0" even though the
     // object exists and appears once the user cycles. Rescanning makes the count live.
     RescanLocked();
-    // Count matches + speak category name.
+    // Count matches + speak category name. Counts through the shared predicate, so the number
+    // spoken is exactly what [ and ] will step through under the current availability filter.
     size_t matches = 0;
     for (auto& e : g_entities)
-        if (g_currentCategory == Category::All || e.category == g_currentCategory) ++matches;
+        if (PassesFiltersLocked(e)) ++matches;
     wchar_t buf[96];
     _snwprintf_s(buf, _TRUNCATE, L"%s, %zu", CategoryWord(g_currentCategory), matches);
     Speech::Output(buf);
@@ -360,26 +404,49 @@ static void ChangeCategoryLocked(int dir) {
 void CmdNextCategory() { std::lock_guard<std::mutex> lk(g_mutex); ChangeCategoryLocked(+1); }
 void CmdPrevCategory() { std::lock_guard<std::mutex> lk(g_mutex); ChangeCategoryLocked(-1); }
 
-bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel) {
+// F5 — flip the availability filter. Speaks the mode plus the resulting count, the same
+// "<what>, <n>" shape the category cycle uses, so the two feel like one control surface.
+void CmdToggleAvailability() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_availability = (g_availability == Availability::All) ? Availability::Gated : Availability::All;
+    RescanLocked();   // live count, same reason the category cycle rescans first
+    size_t matches = 0;
+    for (auto& e : g_entities)
+        if (PassesFiltersLocked(e)) ++matches;
+    wchar_t buf[96];
+    _snwprintf_s(buf, _TRUNCATE, L"%s, %zu",
+                 (g_availability == Availability::Gated) ? L"Story-gated" : L"All", matches);
+    Speech::Output(buf);
+    ClearFocusLocked();   // re-anchor to nearest in the new view
+}
+
+bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition) {
+    if (outIsTransition) *outIsTransition = false;
     if (!PlayerState::IsFieldActive()) return false;
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
     if (g_entities.empty()) return false;
     FVec3 p;
     if (PlayerState::ReadPlayerPos(p)) RefreshPositionsLocked(p);
+    // Only the entity knows whether the target is a transition surface, and the planner needs that at
+    // the moment the player arrives -- see EntityScan::Entity::isTransition.
+    auto take = [&](const EntityScan::Entity& e) {
+        outPos   = e.pos;
+        outLabel = e.label;
+        if (outIsTransition) *outIsTransition = e.isTransition;
+    };
     // Prefer the focused object (by stable identity: exact, else re-lock); else the nearest in
     // the active filter. Read-only query (drives `\`) — does not mutate the cursor.
     int relock = -1;
     for (size_t i = 0; i < g_entities.size(); ++i) {
         int m = CursorMatch(g_entities[i]);
-        if (m == 2) { outPos = g_entities[i].pos; outLabel = g_entities[i].label; return true; }
+        if (m == 2) { take(g_entities[i]); return true; }
         if (m == 1 && relock < 0) relock = static_cast<int>(i);
     }
-    if (relock >= 0) { outPos = g_entities[relock].pos; outLabel = g_entities[relock].label; return true; }
+    if (relock >= 0) { take(g_entities[relock]); return true; }
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) return false;
-    outPos = g_entities[view[0]].pos;
-    outLabel = g_entities[view[0]].label;
+    take(g_entities[view[0]]);
     return true;
 }
 // `` ` `` object dump. The walk itself is in entity_diag.cpp; the lock stays here, with the list it
