@@ -1279,3 +1279,40 @@ walkmap map-jump surfaces) and `826c25f` (focus clamp + player labels).
 
 **State:** working tree clean, all navigation work committed on `combat-system`. Next session opens with
 the release build; the **full Nalbina prologue run is still the gate** for it.
+
+## Session 67 — 2026-07-23 — [release] 0.1.1-shotgun-build: F6 naming + the wall-camera flip documented
+
+KEYWORDS: release 0.1.1-shotgun-build, ReadMe F6 clipboard labelling, F5 availability filter, U License
+Points, wall camera flip known issue, NVDA keys known issue withdrawn, License Board no longer "not
+implemented", four-file zip, Tolk x64 8664
+
+Release prep only — **no code change**. `dinput8.dll` built fresh from `661432d`; the tree was clean
+before and after.
+
+**ReadMe, asked for:**
+- **F6** now has its own section: numbering of duplicate names, copy-then-select-then-press, that the
+  name replaces the game's everywhere the mod speaks it, empty clipboard clears it, names persist in
+  `%LOCALAPPDATA%\FFXII-Screen-Reader` (not the game folder), and that **map exits cannot be named** —
+  they come from the map script, so there is no object to key on and F6 is silent. The clipboard is
+  explained as a *consequence of the read-only input rule*, not as a workaround.
+- **The wall-camera flip** as its own Known Issue. The general camera paragraph (added at 0.1) already
+  described the mechanism; the tester meets it in alleys and doorways, so it now names walls as the
+  common cause and says what to do — step off the wall, re-press the directions key.
+
+**ReadMe, corrected while in there (both would have shipped as false):**
+- *"The License Board … not implemented yet"* — implemented in Session 53. Dropped from the list.
+- *"NVDA's own keyboard commands do not work while the game has focus"* — **withdrawn**, per Session
+  65's play confirmation. `Controls.md` and `GameArchitecture.md` were corrected then; the
+  player-facing file was missed, and it is the one that would have told a blind player their screen
+  reader keys do not work. The readme states the observation and explicitly does **not** assert a cause.
+
+**ReadMe, gaps filled:** `F5` (availability filter) and `U` (License Points) shipped in Sessions 54 and
+53 and had never reached the readme. `F4` is left out deliberately — it is a dev A/B toggle, not a
+player feature.
+
+**Artifacts:** `Releases\V0.1.1-shotgun-build\` + `Releases\FFXII-Screen-ReaderV0.1.1-shotgun-build.zip`,
+four files, zip root flat. All three DLLs verified PE machine `8664`. TTS pair carried over from
+`V0.1-shotgun-build`. No tag, no push — the user ships by hand.
+
+**State:** working tree clean on `combat-system`; two readme commits (`548086f`, `661432d`). The **full
+Nalbina prologue run remains the gate** — this release is built, not validated in play.
