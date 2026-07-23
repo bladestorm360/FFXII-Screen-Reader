@@ -904,6 +904,47 @@ Current module interaction diagram + logging format. Keep up to date as modules 
 
 ## Known Issues
 
+### "Interactables" is spoken as a NAME for objects the game deliberately leaves unnamed (open, S64)
+
+**Symptom** (tester, Rabanastre North End): `Interactables. North, 10 steps (below)`. There should be
+nothing *called* "Interactables" — it is the CATEGORY word being used as a label.
+
+**What the object is.** Two entries on North End, from the `` ` `` object dump:
+
+```
+obj [0:15] kind=4 flags=00002134 nameIdx=-1 act=65535 talk=65535 door=0 named=0 pos=(27.99,0.00,68.93)
+obj [0:19] kind=4 flags=00002134 nameIdx=-1 act=65535 talk=65535 door=1 named=0 pos=(38.79,0.48,72.01)
+```
+
+- `nameIdx = -1` = the custom-string form, whose text `fieldsignmes` writes to `sceneObj+0xf8`.
+- `named = 0` = that string resolved **empty**, so `entity_scan.cpp` fell back to
+  `CategoryWord(Category::Object)` = "Interactables".
+- `act = 0xFFFF`, `talk = 0xFFFF` — **no interaction payload of either kind.**
+
+**The game agrees there is no name.** Interacting with it shows title `???` and body
+*"(You're not sure what this sign is for.)"* — a flavour sign that is deliberately anonymous.
+
+Contrast a shop doorway, same `kind=4` and `nameIdx=-1`, whose sign string DOES resolve:
+`named=1`, `door=1`, label "Migelo's Sundries". So the discriminator already exists and is recorded on
+every entity: **`gameNamed`**.
+
+**Why this is a rule violation, not a cosmetic nit.** `CLAUDE.md`: *never hardcode user-facing speech
+text unless there is no game-supplied text*, *no fabricated UI labels*, *never speak filler when there
+is nothing to report — be SILENT*, and *remove dead fallbacks; silence is better than wrong speech*.
+A category word standing in as a proper name is all four.
+
+**Fix (ready, not yet applied — tester asked for this to be documented first):** in
+`entity_scan.cpp`, stop substituting the category word for a missing name. An object with
+`gameNamed == false` and no action/talk payload carries no information the player can act on — its own
+game text is "you're not sure what this is" — so it should not be listed. The category word stays where
+it belongs: announcing the CATEGORY on `=` / `-`, never an individual entry.
+
+Watch when applying: `gameNamed` is also what the sign-twin dedup keys on, and the unnamed-object dump
+in `entity_diag.cpp` must keep reporting these so a genuinely useful unnamed object can still be found
+in the log.
+
+
+
 ### Session 40 fixes (SHIPPED, pending runtime confirmation) — supersede the S39 pending items
 Three tester regressions, root-caused (Bug 3 from the live log; Bugs 1-2 from two agreeing decompile traces):
 - **`p` routed once then "No target" (FIXED).** The `[TARGET] GetLockedTarget` log showed `tickMs` FROZEN

@@ -1160,3 +1160,15 @@ look at than one hypothesis is to test. Same still applies to `+0x54`/`+0x84` (s
 5. Log: `__MJ_CTRL### group=N -> "<name>" (id) at (x,y,z) | P polys, box x[..] z[..]`. A future
    `TRANSITION FIRED` position must fall inside the box of the exit claiming that destination.
 6. **Release gate: full Nalbina prologue run.**
+
+### Session 64 follow-up — confirmed working in play, committed, plus one open cosmetic issue
+
+The transition reader is **confirmed by the tester in play** and committed (`27fc6d3`, branch
+`combat-system`), covering Sessions 54–64.
+
+**Open, logged not fixed:** North End announces `Interactables. North, 10 steps (below)`. That is the
+category word being spoken as a proper NAME for a scene object the game itself leaves anonymous
+(`kind=4`, `nameIdx=-1`, empty sign string, `act`/`talk` both `0xFFFF`; in-game it reads `???` /
+"(You're not sure what this sign is for.)"). Full evidence and the ready fix are in `debug.md` →
+Known Issues. It breaks four separate speech rules, so it should land before release, but it is
+independent of the exit work and was deliberately kept out of that commit.
