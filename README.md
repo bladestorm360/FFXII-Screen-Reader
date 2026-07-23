@@ -20,7 +20,7 @@ Party status and the combat log are both new in this build and have not been thr
 
 Enemy HP is given as a percentage rather than a number. Party members and allies give real numbers. Libra to be implemented once I have access to the spell.
 
-NVDA's own keyboard commands do not work while the game has focus. FFXII takes exclusive control of the keyboard, which blocks NVDA's shortcuts. The mod's own keys and its speech are unaffected.
+NVDA's own keyboard commands work while the game is running. Earlier builds said here that they did not, because FFXII takes exclusive control of the keyboard — in play they do respond, so that note has been withdrawn. Why it changed is not established. If you find an NVDA command that does nothing while the game has focus, that is worth reporting.
 
 Not yet read: FMV movie subtitles and full-page Handbook tutorials (both are pre-rendered images, not text). The Gambit editor, Bestiary and Clan Primer screens are not implemented yet.
 
