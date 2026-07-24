@@ -1408,3 +1408,86 @@ DIK_G=0x22 → WM_GIL → `GilReader::Announce`. `g` free in game + mod bindings
 Probe archived `../FFXII-Decompile/frida/probe_shop.js`; RE notes
 `../FFXII-Decompile/notes/shop_sell_re_2026_07_24.md`. Files: shop_reader.{h,cpp}, gil_reader.{h,cpp}
 (new); input_tracker.{h,cpp}, menu_reader.cpp, CMakeLists.txt.
+
+## Session 70 — 2026-07-24 — [menu] Inventory item QUANTITY + CATEGORY switching
+
+**KEYWORDS: inventory items quantity row+0x0E category tab switching left right L1 R1 0xCA0
+tabCount<2 FUN_005655f0 0x4455F0 FUN_00563ec0 0x443EC0 FUN_00564300 0x444300 FUN_00564e10 0x444E10
+win+0xE0 win+0x180 win+0xE8 FUN_002f9860 probe_inventory KEY-ITEMS LOOT struck-equipped-count**
+
+**SHIPPED (built + deployed, awaiting play test).** New `src/ui/inventory_reader.{h,cpp}`;
+`shop_reader` gains `OwnsSurface`; `menu_reader.cpp` wiring; CMakeLists.
+
+### The one family
+
+Pause item lists, the Equipment list and the Shop are **ONE tabbed-container family** — same row
+record, same `+0x180` bitfield, same two nav primitives, same refresh. Four window classes seen
+(`0x4436F0` weapons/armor/accessories, `0x443930` **ITEMS and LOOT**, `0x443B10`
+magicks·technicks, `0x443D20` **KEY ITEMS**) and **one class serves several screens**, so the reader
+claims a window by STRUCT SHAPE (`+0xE0` rows, `+0xD8` scroll, `+0xE8` tab table, sane row count) —
+never by a class table.
+
+### Item quantity — `row+0x0E`, array at `*(win+0xE0)`, stride 0x20
+
+The **same record `shop_reader.cpp` already decodes**; the shop just holds it at `panel+0xC8` and
+`FUN_0056e410:54` copies `container+0xE0` across. Name codec `+0x00`, id `+0x08`, quantity `+0x0E`.
+Probe-confirmed: `Potion 5`, `Rat Pelt 3`. **Item id `0x0` is VALID** (Potion) — only `0xFFFF` is the
+empty sentinel.
+
+### STRUCK — `row+0x0C` is NOT the equipped count
+
+Offline it was labelled "equipped count (equipment lists only)". **REFUTED in play by the tester:**
+the probe logged `Dagger qty=1 equipped=0` while that Dagger **was equipped to Vaan**. Every
+equipment row observed had `+0x0E==1, +0x0C==0`, so nothing discriminates the candidate meanings.
+The field is **not read and not spoken**. Settling it needs a save owning ≥2 of one equipment item
+with some equipped and some spare. (`FUN_0057dad0:26-32` sets it from `master+0x20`;
+`FUN_00563560:54-59` draws `+0x0E − +0x0C` and `+0x0E`.)
+
+### Category switching
+
+`FUN_00564e10:24` masks the pad with **`0xCA0` = L1|R1|LEFT|RIGHT** — LEFT is hard-aliased to L1 and
+RIGHT to R1 (measured live: `held=0x20(RIGHT)`, `held=0x80(LEFT)`). Two REAL reasons it goes silent,
+both the game's own behaviour, not a mod gap:
+1. **`FUN_00564e10:22-23` returns early when tab count < 2.** This exactly explains the tester's
+   report — ITEMS 1 tab (silent), MAGICKS·TECHNICKS 2 (active), WEAPONS 2 / ARMOR 3 (active),
+   KEY ITEMS / LOOT / ACCESSORIES 1 (silent).
+2. `win+0x180 & 0x100` (use-on-target sub-mode) routes to `FUN_00564d30`, which has no L/R handler.
+
+`win+0x180`: bits[20:16] = tab COUNT, bits[25:21] = tab INDEX. Prev/next = `FUN_00563ec0`
+(0x443EC0) / `FUN_00564300` (0x444300) — **a CLOSED SET: exactly 3 call sites in the whole 47 MB
+dump** (items `FUN_00564e10`, equipment `FUN_003fdad0` 0x2DDAD0, shop `FUN_0056ded0` 0x44DED0).
+
+### The hook: `FUN_005655f0` (0x4455F0), on ENTRY
+
+Fires on screen **OPEN and on every category change**, all three families. Hooked on **entry**, for
+two reasons: `FUN_00564010:56-70` populates the tab table and `+0x180` *before* calling it, and the
+original's `FUN_002d47c0:15-20` re-fires `FUN_00247510(child, 0x8000, idx)` *during* the call — so
+announcing first gives **category, then item**. (On exit the order inverts; the probe log proves it.)
+
+Name = `FUN_002f9860(*(u32*)(*(win+0xE8) + srcIdx*8 + 8))`, `srcIdx = *(s8*)(win+0xF6+tabIdx*8)`
+clamped at 0. **Two independent read paths agreed 14/14** in the probe. The reader prefers
+`TextCapture::StringById` (already cached from the game's own resolver) and only calls the getter
+the first time an id appears.
+
+**This hook is also what makes a ONE-ITEM list speak at all** — entering it moves no cursor, so a
+0x8000-only reader is silent. Tester caught this; it would have shipped as a bug.
+
+### Confirmed: empty categories never occur
+
+Every `[cat]` line reported `rows=yes` with n≥1, and tab lists are filtered live per screen state
+(ARMOR 3 tabs, ACCESSORIES 1) — the `gateId` at `entry+6` removes empty categories before they are
+tabbed. Tester confirmed independently. **The "speak the category alone" branch was designed and
+then dropped; do not implement it.**
+
+### Speech
+
+Row = `<name>` or `<name> <count>`, the count spoken **only above 1** (a row exists only if you own
+≥1, so a bare name means exactly one — this is what keeps Key Items and Magicks from reading "… 1").
+**No comma.** Category spoken first, item **queued** behind it (`Speech::Output(line, false)`) — not
+a dedup, it suppresses nothing; without it the item's interrupt cuts the category off mid-word.
+Left/Right on a 1-tab screen: **silent**, matching the game.
+
+`ShopReader::OwnsSurface()` added so the two readers never both announce the same shop row.
+
+Probe `../FFXII-Decompile/frida/probe_inventory.js`, log `../FFXII-Decompile/notes/probe_inventory.log`,
+RE notes `../FFXII-Decompile/notes/inventory_qty_category_re_2026_07_24.md`.

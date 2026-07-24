@@ -184,6 +184,12 @@ uint64_t HookedPanel(void* panel, void* msg) {
 
 namespace ShopReader {
 
+bool OwnsSurface(void* w) {
+    if (!w) return false;
+    void* cls = Obj0(w);
+    return cls == Hooks::ResolveRva(RVA_CONTAINER) || cls == Hooks::ResolveRva(RVA_PANEL);
+}
+
 bool Init() {
     bool ok  = Hooks::InstallTyped(RVA_HILITE, &HookedHilite, &s_origHilite);  // item name+price+inventory
     ok      &= Hooks::InstallTyped(RVA_PANEL,  &HookedPanel,  &s_origPanel);   // quantity selector + step

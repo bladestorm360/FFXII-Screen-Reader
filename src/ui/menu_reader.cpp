@@ -6,6 +6,7 @@
 #include "ui/license_reader.h"
 #include "ui/ability_summary_reader.h"
 #include "ui/shop_reader.h"
+#include "ui/inventory_reader.h"
 #include "ui/gil_reader.h"
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
@@ -327,7 +328,13 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             // Speak only if this pane holds the cursor.
             if (IsFocusedPane(owner))
                 IngameMenuReader::OnRowChainFocus(owner, rowOff, index);
-        } else {
+        } else if (!IsFocusedPane(owner) || !InventoryReader::TryFocus(owner, index)) {
+            // Pause-menu item lists (Items / Loot / Key Items / Magicks / weapon+armor views) carry
+            // an owned COUNT the painted-cell path cannot see, so InventoryReader claims those rows
+            // and speaks "name count". It claims by struct shape and returns false for anything
+            // else -- including an unreadable row -- so everything else still falls through here.
+            // Same active-pane gate OnFocus applies internally, checked up front so a background
+            // pane's list is never announced.
             OnFocus(owner, index, /*fromPaint=*/false);   // gates the content path internally
         }
     } else if (msg == MSG_YES || msg == MSG_NO || msg == MSG_CANCEL) {
@@ -389,7 +396,9 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             IngameMenuReader::ArmPaneEntry(o, rowOff, idx);   // released on the SHOW message (cat 0x13)
         } else if (rowOff) {
             IngameMenuReader::OnRowChainFocus(o, rowOff, idx);
-        } else {
+        } else if (!InventoryReader::TryFocus(o, idx)) {
+            // Same split as the dispatch path: an item list speaks its row WITH the count here too,
+            // otherwise entering one of those panes would announce the row without it.
             OnFocus(o, idx, /*fromPaint=*/true);
         }
     }
@@ -474,6 +483,7 @@ bool Init() {
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
     ok     &= ShopReader::Init();         // shop Buy/Sell/Bazaar item name+price+inventory on highlight
+    ok     &= InventoryReader::Init();    // pause item lists: row quantity + active category name
     ok     &= GilReader::Init();          // `g` -> party gil total (field / shop / menus)
     g_initialized = true;
     Log::Write("READER", ok
@@ -491,6 +501,7 @@ void Shutdown() {
     BattleTargetReader::Shutdown();
     LicenseReader::Shutdown();
     AbilitySummaryReader::Shutdown();
+    InventoryReader::Shutdown();
     ShopReader::Shutdown();
     GilReader::Shutdown();
     Hooks::Uninstall(RVA_FOCUS_SET);

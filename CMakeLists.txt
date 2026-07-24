@@ -40,6 +40,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/license_reader.cpp
     src/ui/ability_summary_reader.cpp
     src/ui/shop_reader.cpp
+    src/ui/inventory_reader.cpp
     src/ui/gil_reader.cpp
     src/ui/popup_reader.cpp
     src/ui/battle_target_reader.cpp

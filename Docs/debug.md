@@ -1166,3 +1166,46 @@ code path that set it.**
   controller `FUN_00560910` @ `menuCtx+0x158`.
 - **At char-select SHOW, `ctrl+0xd0` is stale.** `FUN_00560ee0` fills it later; the global
   `menuCtx+0xde0` is written first (`FUN_00285f20`), so read that for a reliable entry announce.
+
+## Inventory quantity / category — Tried & Failed (Session 70, 2026-07-24)
+
+**KEYWORDS: inventory items quantity row+0x0E row+0x0C equipped-count STRUCK category tab
+FUN_005655f0 onEnter onLeave one-item-list silent-on-entry probe dedup-key-collision**
+
+- **`row+0x0C` is NOT the equipped count — STRUCK by tester ground truth.** The offline read
+  (`FUN_0057dad0:26-32` fills it from `master+0x20`; `FUN_00563560:54-59` draws `+0x0E − +0x0C`
+  alongside `+0x0E`) made "how many are equipped" look obvious. It is wrong: the probe logged
+  `Dagger qty=1 equipped=0` while **that Dagger was equipped to Vaan**. Every equipment row observed
+  had `+0x0E==1, +0x0C==0`, so no candidate meaning can be discriminated. **Not read, not spoken.**
+  Resolving it needs a save owning ≥2 of one equipment item with some equipped and some spare.
+  *Lesson: a field label inferred from a draw routine is a HYPOTHESIS. The tester's game state is
+  the oracle — one contradicting fact beats a clean-looking decompile reading.*
+
+- **A cursor-move-only reader is SILENT when you ENTER a list.** Hooking only `FUN_00247510` 0x8000
+  means nothing speaks on entry, because nothing moved. Invisible on long lists (you arrow
+  immediately) but total on a **one-item list** — the tester hit it on an Items screen holding only
+  Potion. Fixed by announcing from `FUN_005655f0` (0x4455F0), which fires on screen OPEN as well as
+  on category change. Do not assume a focus signal implies an entry signal.
+
+- **Hooking `FUN_005655f0` on LEAVE inverts the speech order.** Its own
+  `FUN_002d47c0:15-20` re-fires `FUN_00247510(child, 0x8000, idx)` *during* the call, so on exit the
+  item has already been announced and the category lands after it. Hook on **ENTRY** —
+  `FUN_00564010:56-70` populates the tab table and `+0x180` before the call, so every field the name
+  needs is readable there. (The probe log shows `[row]` before `[cat]` on every event: that was the
+  onLeave artifact, not game behaviour.)
+
+- **Two `Speech::Output(…, interrupt=true)` in one frame collapse to one utterance.** Announcing the
+  category and then letting the item announce normally would cut the category off mid-word. The item
+  is QUEUED behind it (`interrupt=false`) for exactly one announcement. **This is not a dedup** — it
+  suppresses nothing and both lines are spoken; it only orders them.
+
+- **Probe artifact, not a game behaviour: the `[cat] ITEMS` line never appeared.** `probe_inventory.js`
+  keyed its console dedup on `class:tabIdx:tabCount:empty`, and **ITEMS and LOOT share window class
+  `+0x443930`**, both at tab 0 of 1 — so the second collided and was suppressed. `[tabs]` (keyed on
+  the table pointer) still printed it. Similarly **KEY ITEMS *was* captured** (`+0x443D20`, line 7 of
+  the log) despite appearing absent. *When a probe "misses" something, check the dedup key before
+  concluding the game did not fire.*
+
+- **Empty categories never occur** — the `gateId` at tab-table `entry+6` filters them out before they
+  are tabbed (every `[cat]` reported n≥1; tab counts vary by screen state). A "speak the category
+  alone when the list is empty" branch was designed and then dropped as dead code. Do not add it.

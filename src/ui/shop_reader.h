@@ -24,4 +24,9 @@ namespace ShopReader {
 bool Init();
 void Shutdown();
 
+// True if `w` is the shop list container or its item panel -- the two surfaces this reader speaks.
+// The shop is the same tabbed-container shape as the pause-menu item lists, so InventoryReader asks
+// before claiming a window; without it both readers would announce the same shop row.
+bool OwnsSurface(void* w);
+
 } // namespace ShopReader

@@ -1918,3 +1918,57 @@ selected row ptr @ +0xD0** (id @ row+8, price @ row+0x10). Total = `(price&0x7FF
 **Gil:** getter `FUN_00253690` = `*(u32*)(DAT_02092758 + 8)`, `DAT_02092758` = **RVA 0x1F72758**. Read as a
 pure two-step deref (base = *0x1F72758; gil = *(u32)(base+8)) — CONFIRMED live == 99999999. `GilReader` (the
 `g` key) uses this off the game thread (memory-only, like `U`).
+
+## Pause item lists — quantity + category tabs (Session 70, 2026-07-24) — PROBE-CONFIRMED
+
+**The pause item lists, the Equipment list and the Shop are ONE tabbed-container family.** Same row
+record, same `+0x180` bitfield, same nav primitives, same refresh. Reader: `src/ui/inventory_reader.{h,cpp}`.
+
+Four window classes observed: `0x4436F0` (weapons/armor/accessories), `0x443930` (**ITEMS and LOOT**),
+`0x443B10` (magicks·technicks), `0x443D20` (**KEY ITEMS**). **One class serves several screens**, so
+membership is decided by STRUCT SHAPE — `+0xE0` row array, `+0xD8` scroll widget, `+0xE8` tab table,
+sane row count — never by a class table.
+
+**Container layout** (`FUN_00564010`, `FUN_005655f0`, `FUN_00564e10`):
+- `+0x60` display-node array; caption node = `*(disp + (v180 & 0xFF)*8)`, its text ptr at `node+0x18`
+- `+0xC8` tab-strip widget (`FUN_00567200`, 0x447200) — **baked sprite art, NOT text**
+- `+0xD8` scroll/cursor grid (index quintet `0xEC/0xED/0xEE/0xF2/0xF4`; **row count u16 at `+0xE8`**)
+- **`+0xE0` row array** (null = empty list), `+0xE8` tab table, `+0xF0 + i*8` per-tab state
+  (**srcIdx s8 @ +6**, catId s8 @ +7), `+0x17C` selected row
+- **`+0x180`: bits[20:16] = tab COUNT · bits[25:21] = tab INDEX · bit8 = use-on-target sub-mode**
+  (idioms `(v<<0xb)>>0x1b` and `(v<<6)>>0x1b`; next `+0x200000`, wrap `& 0xfc1fffff`)
+
+**Row record — stride 0x20, byte-identical to the shop row** (`FUN_0057dad0:19-56`). The shop merely
+holds it elsewhere: `FUN_0056e410:54` does `*(shopPanel+0xC8) = *(container+0xE0)`.
+- `+0x00` name codec · `+0x08` id (u16) · `+0x0A` icon · **`+0x0E` owned QUANTITY (u16)** · `+0x10` price/flags
+- **`0xFFFF` is the empty sentinel; id `0x0` is a VALID item** (Potion). Confirmed live: `Potion 5`, `Rat Pelt 3`.
+- **`+0x0C` — MEANING UNKNOWN. STRUCK as "equipped count"**: a Dagger *equipped to Vaan* read 0.
+  Set from `master+0x20` when `param_6 & 8`, else `0xFFFF`; `FUN_00563560:54-59` draws `+0x0E − +0x0C`
+  and `+0x0E`. Every row observed had `+0x0E==1, +0x0C==0`, so nothing discriminates. **Never spoken.**
+
+**Category switching.** `FUN_00564e10` (**0x444E10**) masks the pad with **`0xCA0` = L1|R1|LEFT|RIGHT**
+— **LEFT is hard-aliased to L1, RIGHT to R1** (measured: `held=0x20(RIGHT)` / `0x80(LEFT)`; pad words
+`DAT_02f97368/6a/6c` = RVA `0x2E77368/6A/6C`, filled by `FUN_002498b0` 0x1298B0). Two reasons
+Left/Right legitimately do NOTHING: **tab count < 2** (`:22-23`, early return) or **`+0x180 & 0x100`**
+(`FUN_00564c80:13-18` routes to `FUN_00564d30`, which has no L/R). Observed: ITEMS/KEY ITEMS/LOOT/
+ACCESSORIES 1 tab (silent); WEAPONS 2, ARMOR 3, MAGICKS·TECHNICKS 2 (active).
+
+Prev/next = **`FUN_00563ec0` (0x443EC0)** / **`FUN_00564300` (0x444300)** — a **CLOSED SET**: exactly
+three call sites in the whole dump — `FUN_00564e10` (items/abilities), `FUN_003fdad0` (**0x2DDAD0**,
+equipment), `FUN_0056ded0` (**0x44DED0**, shop).
+
+**Unified refresh — `FUN_005655f0` (0x4455F0)**, called on screen OPEN *and* every category change by
+all three families (6 sites). **Hook it on ENTRY**: `FUN_00564010:56-70` populates the tab table and
+`+0x180` before calling it, and its own `FUN_002d47c0:15-20` re-fires `FUN_00247510(child, 0x8000, idx)`
+*during* the call — so announcing on entry yields category-then-item, on exit the reverse.
+Category name = `FUN_002f9860( *(u32*)( *(win+0xE8) + srcIdx*8 + 8 ) )`, `srcIdx = *(s8*)(win+0xF6+tabIdx*8)`
+clamped at 0. Two independent read paths (this, vs reading back `node+0x18`) **agreed 14/14** live:
+`ITEMS`, `LOOT`, `KEY ITEMS`, `WEAPONS`, `ONE-HANDED WEAPONS`, `ARMOR`, `HELMS`, `CHEST PIECES`,
+`ACCESSORIES`, `MAGICKS . TECHNICKS`, `TECHNICKS` (stored ALL CAPS). `TextCapture` already hooks
+`FUN_002f9860`, so the cache serves the common path with no game call.
+
+**Empty categories do not occur** — the `gateId` at `entry+6` filters them out before they are tabbed
+(every `[cat]` had n≥1; tab counts vary per screen state). Tester-confirmed.
+
+**Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
+`FUN_005655f0` hook is what covers it.
