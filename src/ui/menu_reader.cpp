@@ -5,6 +5,8 @@
 #include "ui/ingame_menu_reader.h"
 #include "ui/license_reader.h"
 #include "ui/ability_summary_reader.h"
+#include "ui/shop_reader.h"
+#include "ui/gil_reader.h"
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
 #include "core/game_text.h"
@@ -471,6 +473,8 @@ bool Init() {
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
+    ok     &= ShopReader::Init();         // shop Buy/Sell/Bazaar item name+price+inventory on highlight
+    ok     &= GilReader::Init();          // `g` -> party gil total (field / shop / menus)
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -487,6 +491,8 @@ void Shutdown() {
     BattleTargetReader::Shutdown();
     LicenseReader::Shutdown();
     AbilitySummaryReader::Shutdown();
+    ShopReader::Shutdown();
+    GilReader::Shutdown();
     Hooks::Uninstall(RVA_FOCUS_SET);
     Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);

@@ -1368,3 +1368,43 @@ route-profile WORST step on the tomato route (the ledge height) vs the city/stai
 + whether stairs are ramped). Confirm the tomato route no longer jams (or NoPath if no walkable descent)
 and city/stairs still route. Adjust `kStepDiscont` and rebuild once if the bracket says so. Then move
 S67 pathfinder from Known Issues → Solved and resume the deferred shops/gambits menu plan.
+
+## Session 69 — 2026-07-24 — [menu] Shop reader (Buy/Sell/Bazaar: name+price+inventory + quantity/step) + `g` gil key — SHIPPED, play-confirmed
+
+KEYWORDS: shop buy sell bazaar quantity selector 1x 10x step inventory owned count gil g key sideways
+FUN_0056e5d0 FUN_0056d370 FUN_0056e140 FUN_0057b890 FUN_00253690 shop_reader gil_reader panel container
+highlight price total DAT_02092758 DAT_02ca9790 DAT_02ca9798 0x2B89790 0x2B89798 0x1F72758
+
+**SHIPPED + confirmed in play (user: "works perfectly").** Shops now read on highlight, the quantity
+selector vocalizes, and a new `g` key speaks gil.
+
+**Item reader (`src/ui/shop_reader.{h,cpp}`).** Buy, Sell AND Bazaar share ONE class pair (built by
+`FUN_0056dd50`): container `FUN_0056e140` (0x44E140) holding item panel `FUN_0056d370` (0x44D370). Hooking
+the container highlight/refresh handler **`FUN_0056e5d0` (0x44E5D0)** covers all three (it also sets the
+tooltip → why `o` already worked on Sell). Speaks "‹name›, ‹price› gil, ‹owned› in inventory": name codec
+@ row+0x00, id @ +0x08, owned/INVENTORY (u16) @ +0x0E, price (u32 &0x7FFFFFFF) @ +0x10, stride 0x20, row
+array @ panel+0xC8; idx from the scroll grid @ container+0xD8 (`(s8)+0xED + ((s16)+0xF4 + (s16)+0xF2) *
+(u8)+0xEC + (s8)+0xEE`). Change-guard on (container, itemId) — the sanctioned no-dedup exception naming
+FUN_0056e5d0 (per-focus redraw fires ~2×); resets on container change so re-entry re-announces.
+
+**STRUCK (offline inference):** "Sell reuses the Buy 0x8000 read path." It does NOT — the sideways Sell
+grid refreshes via the container on msg 0x13, never `FUN_00247510` 0x8000, so a 0x8000-only reader saw Buy
+but never Sell. The single `FUN_0056e5d0` hook is the correct point for both.
+
+**Quantity selector (2nd hook: panel `FUN_0056d370`, per-frame).** After picking an item: `panel+0xE4`
+bit1 = quantity mode; qty (u16) @ +0xDC, max @ +0xDE, gil snapshot @ +0xE0, selected row @ +0xD0; total =
+(price&0x7FFFFFFF)*qty. Announces "‹qty›, ‹total› gil" on entry + each change; Left-arrow +1/+10 step =
+`panel+0xE4` bit **0x400000** → "1x"/"10x" (**PROVISIONAL**: one live sample, play-confirmed). Per-frame
+change-guard on (qty, step) naming FUN_0056d370; resets on leaving qty mode.
+
+**`g` gil key (`src/ui/gil_reader.{h,cpp}` + input wiring).** "‹N› gil" anywhere a save is loaded, silent
+on the title screen. Mirrors getter `FUN_00253690` = `*(u32*)(DAT_02092758+8)` as a pure memory read
+(base = *(RVA 0x1F72758); gil = *(u32)(base+8)) — no game call, safe off the game thread like `U`.
+DIK_G=0x22 → WM_GIL → `GilReader::Announce`. `g` free in game + mod bindings.
+
+**RVA correction:** shop controller `DAT_02ca9790` = RVA **0x2B89790**, container `DAT_02ca9798` =
+**0x2B89798** (the agent's "0x1AA9790" was bad arithmetic; abs−0x120000). Gil base 0x1F72758 verified live.
+
+Probe archived `../FFXII-Decompile/frida/probe_shop.js`; RE notes
+`../FFXII-Decompile/notes/shop_sell_re_2026_07_24.md`. Files: shop_reader.{h,cpp}, gil_reader.{h,cpp}
+(new); input_tracker.{h,cpp}, menu_reader.cpp, CMakeLists.txt.

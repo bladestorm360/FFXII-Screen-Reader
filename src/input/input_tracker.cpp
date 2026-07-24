@@ -17,6 +17,10 @@ constexpr UINT WM_NAVKEY    = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
 constexpr UINT WM_DIAG      = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
 constexpr UINT WM_UNHOOK_LL = WM_APP + 5;   // retire the WH_KEYBOARD_LL hook once DInput owns input
 constexpr UINT WM_LICENSEPTS = WM_APP + 7;  // `U` -> read License Points (license board only)
+constexpr UINT WM_MENUNAV   = WM_APP + 8;   // arrows + Home/End -> virtual-buffer nav (status screen).
+                                            // wParam = VK; lParam = 1 if a combat-log fallback applies
+                                            // (Home/End), 0 otherwise (arrows).
+constexpr UINT WM_GIL       = WM_APP + 9;   // `g` -> speak party gil total (field / shop / menus)
 
 // Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
 // working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
@@ -30,11 +34,14 @@ DWORD   g_threadId = 0;
 std::atomic<bool> g_oDown{false};      // edge-detect for the 'o' key (ignore auto-repeat)
 std::atomic<bool> g_tDown{false};      // edge-detect for the 't' key (ignore auto-repeat)
 std::atomic<bool> g_uDown{false};      // edge-detect for the 'U' key (License Points)
+std::atomic<bool> g_gDown{false};      // edge-detect for the 'g' key (gil total)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
 InputTracker::HotkeyCallback g_confirmCb = nullptr;
 InputTracker::HotkeyCallback g_lpCb = nullptr;
+InputTracker::HotkeyCallback g_gilCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
+InputTracker::MenuNavCallback g_menuNavCb = nullptr;
 
 // Navigation keys (edge-detected independently so auto-repeat is suppressed).
 constexpr DWORD kNavVks[4] = { VK_OEM_5 /*\*/, VK_OEM_4 /*[*/, VK_OEM_6 /*]*/, VK_OEM_3 /*`*/ };
@@ -61,7 +68,7 @@ std::atomic<bool> g_dinputActive{false};
 constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x1B,
               DIK_GRAVE = 0x29, DIK_BACKSLASH = 0x2B, DIK_LSHIFT = 0x2A, DIK_RSHIFT = 0x36,
               DIK_MINUS = 0x0C, DIK_EQUALS = 0x0D, DIK_SEMICOLON = 0x27, DIK_APOSTROPHE = 0x28,
-              DIK_SLASH = 0x35, DIK_P = 0x19, DIK_U = 0x16;
+              DIK_SLASH = 0x35, DIK_P = 0x19, DIK_U = 0x16, DIK_G = 0x22;
 // Party-status keys. DIK number row is 1..0 == 0x02..0x0B, so 4/5/6/7 = 0x05/0x06/0x07/0x08.
 // Free in this game: it binds 1/2/3 to Game Speed and nothing to 4-7 (Docs/Controls.md).
 // 7 reads roster slot 3, the GUEST slot (list 3 has nine slots: 0-2 active, 3 guest, 4-8 reserve).
@@ -70,6 +77,10 @@ constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07, DIK_7 = 0x08;
 // Walk/Run and the mod cannot swallow keys, so a Shift chord would silently flip walk/run on every
 // press. Home/End are unbound and have no side effects.
 constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0xCF;
+// Virtual-buffer navigation (status screen). Arrow keys are READ, never swallowed -- the game still
+// gets them. They only DO anything in the mod while a status buffer is active; elsewhere the mod
+// ignores them. DIK extended-key scan codes (dinput.h): Up 0xC8, Down 0xD0, Left 0xCB, Right 0xCD.
+constexpr int DIK_UP = 0xC8, DIK_DOWN = 0xD0, DIK_LEFT = 0xCB, DIK_RIGHT = 0xCD;
 // F4: diagnostic A/B toggle for the menu-text painter interception. The game binds F1/F2/F3 to game
 // speed and nothing to F4 (Docs/Controls.md), and the struck F4 modal combat-log design was never
 // built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
@@ -86,7 +97,7 @@ constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[16]{};
+std::atomic<bool> g_extraDown[20]{};   // 0-15 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
@@ -102,9 +113,23 @@ void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
             else if (vk == 'O')     PostThreadMessageW(g_threadId, WM_DESCRIBE, 0, 0);
             else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
             else if (vk == 'U')     PostThreadMessageW(g_threadId, WM_LICENSEPTS, 0, 0);
+            else if (vk == 'G')     PostThreadMessageW(g_threadId, WM_GIL, 0, 0);
             else if (vk == VK_SPACE || vk == VK_RETURN)
                                     PostThreadMessageW(g_threadId, WM_CONFIRM, 0, 0);
         }
+    } else {
+        downFlag.store(false);
+    }
+}
+
+// Edge-detect a virtual-buffer nav key (arrow / Home / End) and post WM_MENUNAV on the rising edge.
+// `navFallback` is passed through in lParam: true for Home/End (fall through to the combat log if the
+// buffer doesn't consume them), false for arrows (no fallback). Read-only, never swallowed.
+void DInputMenuNavEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool navFallback) {
+    if (down) {
+        if (!downFlag.exchange(true) && GameIsForeground())
+            PostThreadMessageW(g_threadId, WM_MENUNAV, static_cast<WPARAM>(vk),
+                               static_cast<LPARAM>(navFallback ? 1 : 0));
     } else {
         downFlag.store(false);
     }
@@ -180,6 +205,20 @@ DWORD WINAPI InputThread(LPVOID) {
         } else if (m.message == WM_LICENSEPTS) {
             InputTracker::HotkeyCallback cb = g_lpCb;
             if (cb) cb();
+        } else if (m.message == WM_GIL) {
+            InputTracker::HotkeyCallback cb = g_gilCb;
+            if (cb) cb();
+        } else if (m.message == WM_MENUNAV) {
+            // Arrows + Home/End -> virtual-buffer nav (status screen). Offer to the buffer first; for
+            // Home/End (lParam != 0) fall through to the combat-log nav path when it declines.
+            const int vk = static_cast<int>(m.wParam);
+            bool consumed = false;
+            InputTracker::MenuNavCallback cb = g_menuNavCb;
+            if (cb) consumed = cb(vk);
+            if (!consumed && m.lParam != 0) {
+                InputTracker::NavKeyCallback ncb = g_navKeyCb;
+                if (ncb) ncb(vk);
+            }
         } else if (m.message == WM_CONFIRM) {
             InputTracker::HotkeyCallback cb = g_confirmCb;
             if (cb) cb();
@@ -246,9 +285,11 @@ void Shutdown() {
 
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 void SetLicensePointsCallback(HotkeyCallback cb) { g_lpCb = cb; }
+void SetGilCallback(HotkeyCallback cb) { g_gilCb = cb; }
 void SetConfirmCallback(HotkeyCallback cb) { g_confirmCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
+void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
 
 void FeedDInputKeyboard(const unsigned char* dik) {
     if (!dik || !g_threadId) return;
@@ -281,6 +322,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
     DInputEdge('U',           g_uDown,       (dik[DIK_U]          & 0x80) != 0, false);  // U  License Points
+    DInputEdge('G',           g_gDown,       (dik[DIK_G]          & 0x80) != 0, false);  // g  party gil total
     DInputEdge(VK_SPACE,      g_confirmDown[0],(dik[DIK_SPACE]    & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_RETURN,     g_confirmDown[1],(dik[DIK_RETURN]   & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true);  // \  route
@@ -301,8 +343,16 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true);  // 7  guest slot status
     DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true);  // ,  log: older
     DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true);  // .  log: newer
-    DInputEdge(VK_HOME,       g_extraDown[12],(dik[DIK_HOME]      & 0x80) != 0, true);  // Home log: oldest
-    DInputEdge(VK_END,        g_extraDown[13],(dik[DIK_END]       & 0x80) != 0, true);  // End  log: newest
+    // Home/End: status buffer first (top/bottom of stats), else the combat log (oldest/newest). The
+    // buffer's OnMenuNavKey returns false when the status page isn't active, so the fallback fires.
+    DInputMenuNavEdge(VK_HOME, g_extraDown[12],(dik[DIK_HOME]     & 0x80) != 0, /*navFallback=*/true);
+    DInputMenuNavEdge(VK_END,  g_extraDown[13],(dik[DIK_END]      & 0x80) != 0, /*navFallback=*/true);
+    // Arrow keys: status-buffer nav only (no fallback -- the game owns them elsewhere). Up/Down = stat,
+    // Left/Right = group.
+    DInputMenuNavEdge(VK_UP,    g_extraDown[16],(dik[DIK_UP]      & 0x80) != 0, /*navFallback=*/false);
+    DInputMenuNavEdge(VK_DOWN,  g_extraDown[17],(dik[DIK_DOWN]    & 0x80) != 0, /*navFallback=*/false);
+    DInputMenuNavEdge(VK_LEFT,  g_extraDown[18],(dik[DIK_LEFT]    & 0x80) != 0, /*navFallback=*/false);
+    DInputMenuNavEdge(VK_RIGHT, g_extraDown[19],(dik[DIK_RIGHT]   & 0x80) != 0, /*navFallback=*/false);
 }
 
 uint64_t LastInputTimestampMs() {

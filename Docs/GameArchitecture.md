@@ -1888,3 +1888,33 @@ It stores **no body text**: the composed prompt is handed to a `FUN_0057c480` su
 `prompt+0xc0`, also `menuCtx+0x328`) and is readable **only at that surface's case‑1 birth**
 (`surface+0x1B0`). Reading it later returns nothing. `message_reader` captures it at birth;
 `MessageReader::TakeConfirmPrompt()` hands it to the pop-up preamble.
+
+## Shop — Buy / Sell / Bazaar + quantity + gil (Session 69, 2026-07-24) — SHIPPED, play-confirmed
+
+Buy, Sell and Bazaar share ONE class pair, built by `FUN_0056dd50`: a **container** `FUN_0056e140`
+(**0x44E140**) holding an **item panel** `FUN_0056d370` (**0x44D370**). The top Buy/Sell/Bazaar menu is the
+shared equip class `FUN_0057b890` (0x45B890), already announced via the `ROW_CHAIN` label offset; the
+per-item description already reaches `o`. Reader: `src/ui/shop_reader.{h,cpp}`.
+
+**Item read — hook `FUN_0056e5d0` (0x44E5D0)**, the container highlight/refresh handler. It runs on EVERY
+Buy AND Sell cursor move and sets the tooltip (why `o` works on Sell). NOTE: Sell's "sideways" grid
+refreshes here via container **msg 0x13**, NOT via `FUN_00247510` 0x8000 — a 0x8000-only reader sees Buy
+but never Sell (offline "Sell = same 0x8000 path" inference STRUCK). Reads:
+`panel = *(container+0xC0)`, `rows = *(panel+0xC8)`, `scroll = *(container+0xD8)`;
+`idx = (s8)scroll[0xED] + ((s16)scroll[0xF4] + (s16)scroll[0xF2]) * (u8)scroll[0xEC] + (s8)scroll[0xEE]`;
+`row = rows + idx*0x20`:
+- **name codec @ row+0x00, id (u16) @ +0x08, owned/INVENTORY (u16) @ +0x0E, price (u32 `&0x7FFFFFFF`) @ +0x10** (sell price pre-halved), stride 0x20.
+- Buy/Sell discriminator (if needed): `container+0x194` bit0 (1=Sell). Controller option `*(DAT_02ca9790+0xC4)` reads 0xFF while browsing (unusable mid-browse). All ≥0.98 (Frida-confirmed: names decode, prices/inventory match, Potion owned=5).
+
+**Quantity selector — panel `FUN_0056d370` (per-frame proc, 2nd hook).** After confirming an item:
+`panel+0xE4` bit1 = quantity mode; **qty (u16) @ +0xDC, max (u16) @ +0xDE, gil snapshot (u32) @ +0xE0,
+selected row ptr @ +0xD0** (id @ row+8, price @ row+0x10). Total = `(price&0x7FFFFFFF)*qty`. **+1/+10 step =
+`panel+0xE4` bit 0x400000** (set = ×10) — **PROVISIONAL** (one live sample + play-confirmed as "1x"/"10x").
+
+**Shop globals:** controller (top menu) `DAT_02ca9790` = **RVA 0x2B89790**; live list container
+`DAT_02ca9798` = **RVA 0x2B89798**. (Earlier "0x1AA9790" was bad arithmetic: abs 0x2ca9790 − 0x120000 =
+0x2b89790.)
+
+**Gil:** getter `FUN_00253690` = `*(u32*)(DAT_02092758 + 8)`, `DAT_02092758` = **RVA 0x1F72758**. Read as a
+pure two-step deref (base = *0x1F72758; gil = *(u32)(base+8)) — CONFIRMED live == 99999999. `GilReader` (the
+`g` key) uses this off the game thread (memory-only, like `U`).

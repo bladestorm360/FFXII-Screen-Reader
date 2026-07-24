@@ -25,6 +25,12 @@ void SetDescribeCallback(HotkeyCallback cb);
 // (silent otherwise). `U` is free in this game's bindings (Docs/Controls.md).
 void SetLicensePointsCallback(HotkeyCallback cb);
 
+// Callback fired (on the input thread) when the user presses the "read gil" key
+// (`g`), while the game window is foregrounded. GilReader registers a handler that
+// speaks the party's gil total (silent when no save is loaded). Memory-only read, so
+// it is safe off the game thread. `g` is free in this game's bindings (Docs/Controls.md).
+void SetGilCallback(HotkeyCallback cb);
+
 // Callback fired (on the input thread) when the user presses the "re-read last line"
 // key (`t`), while the game window is foregrounded. The message reader registers a
 // handler that repeats the last spoken dialogue/panel line.
@@ -44,6 +50,16 @@ void SetConfirmCallback(HotkeyCallback cb);
 // never be honoured (Left Shift is the game's Toggle Walk/Run and the mod cannot swallow keys).
 typedef void (*NavKeyCallback)(int vk);
 void SetNavKeyCallback(NavKeyCallback cb);
+
+// Virtual-buffer navigation keys (status screen): the ARROW keys plus Home/End, fired on the input
+// thread while the game is foregrounded. `vk` is VK_UP / VK_DOWN / VK_LEFT / VK_RIGHT / VK_HOME /
+// VK_END. The callback returns TRUE if it consumed the key (e.g. the status buffer is active). The
+// return matters only for Home/End: when the buffer does NOT consume them they fall through to the
+// combat-log nav path (NavKeyCallback), so the combat-log Home/End keep working everywhere else. The
+// arrow keys have no fallback -- outside a buffer they simply do nothing in the mod (the game owns
+// them). Keys are edge-triggered (auto-repeat suppressed) and never swallowed from the game.
+typedef bool (*MenuNavCallback)(int vk);
+void SetMenuNavCallback(MenuNavCallback cb);
 
 // Fed by the dinput8 proxy each frame with the game's own 256-byte DirectInput
 // keyboard state (DIK scan-code buffer, bit 0x80 = down). This is the primary key

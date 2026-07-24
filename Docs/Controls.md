@@ -15,6 +15,11 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 >
 > **UPDATE (Session 54):** `F5` added (nav availability filter).
 >
+> **UPDATE (Session 69):** `g` added — speaks the party **gil** total (works on the field, in shops, and in
+> menus; silent on the title screen). The game binds nothing to `G` (letters it uses: W/S/A/D, I/K/J/L, Q/E,
+> C, F, R, H, X, M, Z) and the mod reserved nothing to it — free on both sides. Shop Buy/Sell/Bazaar item
+> lists and the buy/sell quantity selector also now vocalize (no new key — automatic on cursor moves).
+>
 > **UPDATE (Session 56) — direction model, corrected.** Spoken directions use **COMPASS words on the
 > camera-relative frame**: "North" is the way an UP push currently sends you, "East" is right, and so
 > on. Session 54's note that the shipped words are EGOCENTRIC (`ahead`/`left`/…) is wrong — the
@@ -113,6 +118,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `6` | Party: slot 3 status | free |
 | `7` | Party: **guest** slot status (silent when there is no guest) | free |
 | `U` | License board: current License Points (also announced on board entry) | free |
+| `g` | Party **gil** total (field / shop / menus; silent on the title screen) | free — no game/mod binding uses G |
 
 > **`4`/`5`/`6` FIXED (Session 49, implemented).** `party_status.cpp` treated `DAT_02ebf190`
 > (RVA `0x2D9F190`) as the BtlWork struct; **it is a POINTER**. Every roster read landed in
