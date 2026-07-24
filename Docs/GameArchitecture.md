@@ -1973,7 +1973,7 @@ clamped at 0. Two independent read paths (this, vs reading back `node+0x18`) **a
 **Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
 `FUN_005655f0` hook is what covers it.
 
-## Status screen — `FUN_002c2320` (0x1A2320) (Session 71, 2026-07-24) — SHIPPED, PROBE-CONFIRMED
+## Status screen — `FUN_002c2320` (0x1A2320) (Session 71, 2026-07-24) — SHIPPED, PLAY-CONFIRMED
 
 **KEYWORDS: status screen attributes reader FUN_002c2320 0x1A2320 cmd 0x4b4 0x4b6 equipment shared
 container menuCtx+0x140 menuCtx+0x138 FUN_003fe5d0 attribute labels 0x4A90 member block 0xAC8 EXP LP

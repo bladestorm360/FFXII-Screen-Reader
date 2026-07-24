@@ -1588,5 +1588,12 @@ handler, which alone proves the container is notified. The conclusion "no event"
 checking data already in hand. **When about to claim a game does not fire an event, grep the trace
 first.**
 
-**Next:** play-test all three pages, including backing out of a summary page onto the Attributes
-page (should re-announce the first entry) and out of Status entirely.
+**CONFIRMED IN PLAY (tester, end of session): "it works perfectly as intended."** All three pages
+read correctly — the Attributes buffer on the arrow keys, the two cursor pages via
+`ability_summary_reader` with the section heading now announcing on every crossing, and the
+back-out to the Attributes page re-announcing off `FUN_002c1a80`. Committed `ed67c4c`.
+
+**Left uncommitted on purpose** (other tracks' work, per the one-track-per-commit rule):
+`src/ui/ingame_menu_reader.cpp` (S67 `o` stale-in-field fix) and the S67/S68 pathfinder + `o`-fix
+entries in `Docs/debug.md`. `debug.md` was committed via the reset-to-HEAD / apply-only-mine /
+restore dance, so only the S71 strike went in.
