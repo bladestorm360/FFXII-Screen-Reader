@@ -1491,3 +1491,102 @@ Left/Right on a 1-tab screen: **silent**, matching the game.
 
 Probe `../FFXII-Decompile/frida/probe_inventory.js`, log `../FFXII-Decompile/notes/probe_inventory.log`,
 RE notes `../FFXII-Decompile/notes/inventory_qty_category_re_2026_07_24.md`.
+
+## Session 71 — 2026-07-24 — [menu] Status screen reader: wrong hook STRUCK, real controller found, probe authored
+
+**KEYWORDS: status screen reader wire up FUN_0057edb0 0x45EDB0 save load pane STRUCK FUN_002c2320
+0x1A2320 status equipment shared container cmd 0x4b4 0x4b6 ctrl+0x160 ctrl+0x168 bit0 menuCtx+0x140
+menuCtx+0x138 FUN_003fe5d0 attribute labels FUN_002f9860 0x4A90 member block 0xAC8 blk+0x90 EXP
+blk+0x94 next blk+0xB0 LP blk+0xBA level probe_status_data.js virtual_buffer Home End combat log**
+
+**Task:** "wire up the status screen reader" — `status_reader.{h,cpp}` existed but was not in CMake
+and `StatusReader::Init()` had zero callers.
+
+**The wiring was never the blocker — the reader hooks the wrong function.** `status_reader.cpp:27`
+targets `0x45EDB0`, which is the **save/load file-detail pane**: `FUN_00583040` creates it only after
+a 200-slot save-table scan, as a sibling of the slot list `FUN_0057fe80`, and its seven sub-panels
+read a 4-byte packed save-preview record. Full strike in `debug.md`. Adding it to CMake would have
+shipped a reader that fires on the save screen. Its `CAT_SHOW = 0x13` has no case in that function
+either — copied from `FUN_00280de0`.
+
+**Real chain found offline (≥0.98):** Status = pause command `0x4b4` → `FUN_00281ed0` →
+**`FUN_002c2320` (RVA `0x1A2320`)**, the container **shared with Equipment** (`0x4b6`) and
+distinguished by `*(int*)(ctrl+0x160)` / `ctrl+0x168` bit0. Selected character `menuCtx+0xDE0`;
+member block `*(menuCtx+0xAC8 + member*8)`; nine attributes at `panel+0xC8+row*4` off `menuCtx+0x138`.
+Details + category map in `GameArchitecture.md` § "Status screen".
+
+**Two findings that shrink the work:** (1) the five vitals offsets marked PROVISIONAL in
+`status_reader.cpp:48-52` are **correct** — two independent witnesses (`FUN_00283e40` draw,
+`FUN_00329220` fill); (2) the member block already caches EXP `+0x90`, Next `+0x94` (the game itself
+stores `FUN_002f8f20(level) - EXP`) and LP `+0xB0`, so **the save-record read can be deleted** and no
+EXP curve needs reimplementing. (3) The nine attribute **labels are game-supplied** —
+`FUN_002f9860(0x4A90 + row)` — so no English needs hardcoding.
+
+**Probe (two runs, FRIDA-FIRST).** `frida/probe_status_data.js` rewritten against the new chain and
+moved out of `archive\` (the launcher auto-discovers `frida\*.js`, so the move *is* the
+registration); the superseded copy is kept as
+`archive/probe_status_data_SUPERSEDED_wrong_hook_0x45EDB0.js`. Run 1 confirmed the controller, the
+Status/Equip gate, all 15 page-1 values and all 9 labels. Run 2 (rewritten to cover the other two
+pages) delivered everything else. Console capped at 150 lines; dumps file-only to
+`notes/probe_status_data.log`.
+
+**THE STATUS SCREEN HAS THREE PAGES**, selected by `menuCtx+0xDE7` (0 Attributes / 1 or 3 Magicks /
+2 Technicks-Quickenings-Remedy-Espers). Pages 2/3 are the *same two page objects* the license board's
+`F` overlay uses, and are parked in menuCtx: Magicks at `+0x120` (class `+0x1A3560`, 81 slots),
+abilities at `+0x128` (class `+0x1A4460`, 54 slots). Section headings decode live as **Technicks /
+Quickenings / Remedy Lore / Espers** — *Quickenings*, not "Mist" as `ability_summary_reader.h`
+claimed.
+
+**STRUCK: ~~"all three pages are static displays with no browsable cursor, so enumerate 2/3 into the
+buffer"~~.** Pages 2/3 have a real in-game cursor here, exactly as on the license board (tester). A
+three-buffer enumeration was built, shipped and then **removed the same session**; do not rebuild it.
+`status_reader` now covers **page 1 only** and declines every key while `menuCtx+0xDE7 != 0`, so the
+game's cursor is never fought; `ability_summary_reader` speaks 2/3 unchanged from the board path (its
+`StatusReader::IsActive()` stand-down was removed with the buffers).
+
+**FIXED, same session: the section heading now announces on every CROSSING**, not only on a page
+switch. `ability_summary_reader` tracked `g_sumOwner` only, so cursoring from Technicks into Remedy
+Lore said just "Blind" — the tester read that as the mod reporting the wrong thing. It now also
+tracks the game's own section index (`obj+0x7A4`) and re-announces the heading when it changes. The
+old ~~"re-announcing on every crossing was noise"~~ note is STRUCK: it fires once per crossing, not
+per row, and the section is what makes a bare status name mean anything.
+
+**SHIPPED + deployed.** `status_reader.{h,cpp}` rewritten and added to CMake; wired into
+`MenuReader::Init/Shutdown`. Page 1 groups: Character (name, Level, HP, MP, LP, EXP, Next) / the nine
+Attributes with the game's own labels / Status effects. New shared header
+**`src/ui/ability_entry.h`** holds the entry layout + decode rules once, used by both readers.
+
+**Two things deliberately NOT done.** (1) `"(No status effects.)"` is **layout art, not a message
+id** — `FUN_002c5900` merely hides the rows — so it cannot be read back; the group is omitted when
+empty rather than fabricating a line. (2) LEVEL/HP/MP/LP/EXP/NEXT are drawn as art too and stay
+mod-emitted under the CLAUDE.md gauge-label carve-out; every *value* is live game data.
+
+**Robustness:** `OnMenuNavKey` re-validates that our container is still parked at `menuCtx+0x140`
+before consuming a key, so a missed `0x12` teardown can never leave the buffer holding Home/End for
+the session. Buffers are pre-rendered snapshots built on the game thread; the input thread does two
+guarded memory reads and touches nothing else.
+
+**User decisions this session:** the status buffer **claims Home/End** while the page is open — a
+deliberate, user-instructed exception to the "combat log usable everywhere" requirement, now recorded
+in `Controls.md`. Left/Right stay as group nav (user: the game has no arrow-key function on this
+screen).
+
+**STRUCK, same session — "there is no event for mode 2→0, pressing a nav key reports position".**
+That claim was wrong and was called out immediately: a game does not back out of a submenu and then
+sit stale waiting for input. The event exists and is **`FUN_002c1a80` (RVA `0x1A1A80`)**, the overlay
+page state machine and the *only* writer of `menuCtx+0xDE7` — `:24` sets 1 (Magicks), `:42` sets 2
+(Technicks), **`:87` sets 0 = closed back to the Attributes page**. Its return value classifies the
+event: **2 = dropped back to page 1**, 1 = opened/switched/consumed, 0 or −1 = idle. The reader now
+hooks it and acts only on `ret == 1 || ret == 2`, so the idle per-frame path is one integer compare
+and every page change — including the back-out — rebuilds and announces immediately. The two
+page-focus hooks were dropped entirely; the page objects come from their parked pointers.
+
+**Process lesson:** the evidence was already in the probe log — run 2's category list gained
+`0xf, 0xc, 0x14` that run 1 never had, and run 2 was precisely the run where the overlays were opened
+and closed. The `[mode]` transition lines were themselves emitted from *inside* the container's own
+handler, which alone proves the container is notified. The conclusion "no event" was asserted without
+checking data already in hand. **When about to claim a game does not fire an event, grep the trace
+first.**
+
+**Next:** play-test all three pages, including backing out of a summary page onto the Attributes
+page (should re-announce the first entry) and out of Status entirely.

@@ -8,6 +8,7 @@
 #include "ui/shop_reader.h"
 #include "ui/inventory_reader.h"
 #include "ui/gil_reader.h"
+#include "ui/status_reader.h"
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
 #include "core/game_text.h"
@@ -485,6 +486,7 @@ bool Init() {
     ok     &= ShopReader::Init();         // shop Buy/Sell/Bazaar item name+price+inventory on highlight
     ok     &= InventoryReader::Init();    // pause item lists: row quantity + active category name
     ok     &= GilReader::Init();          // `g` -> party gil total (field / shop / menus)
+    ok     &= StatusReader::Init();       // Status screen: 3-page virtual buffer on the arrow keys
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -501,6 +503,7 @@ void Shutdown() {
     BattleTargetReader::Shutdown();
     LicenseReader::Shutdown();
     AbilitySummaryReader::Shutdown();
+    StatusReader::Shutdown();
     InventoryReader::Shutdown();
     ShopReader::Shutdown();
     GilReader::Shutdown();

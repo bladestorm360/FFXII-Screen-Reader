@@ -141,8 +141,32 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 
 | `,` | Combat log: back one entry, older | free |
 | `.` | Combat log: forward one entry, newer | free |
-| `Home` | Combat log: jump to oldest entry | free |
-| `End` | Combat log: jump to newest entry | free |
+| `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
+| `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
+| `Up` / `Down` | **Status Attributes page only:** previous / next entry in the virtual buffer | free on that page |
+| `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
+
+> **Status screen virtual buffer (Session 71).** The Status screen's **Attributes page** is a static
+> display with no in-game cursor, so the mod exposes it as an FF1-style navigable buffer on the arrow
+> keys — Character (name, Level, HP, MP, LP, EXP, Next), the nine Attributes, and Status effects.
+> Entering the screen announces the first entry.
+>
+> **Its other two pages — Magicks and Technicks/Quickenings/Remedy Lore/Espers — DO have a real
+> in-game cursor** and are the same pages the license board's `F` overlay shows, so you browse them
+> with the game's own controls and `ability_summary_reader` speaks each row, including the section
+> heading when you cross into Technicks / Quickenings / Remedy Lore / Espers. The mod's arrow keys
+> deliberately do nothing there (the buffer declines every key while `menuCtx+0xDE7 != 0`), so the
+> game's cursor is never fought. Backing out to the Attributes page re-announces it.
+>
+> **`Home`/`End` are claimed by the status buffer while that screen is open** (top/bottom of the
+> page) and do **not** reach the combat log there. This is a **deliberate, user-instructed exception**
+> to the "combat log usable everywhere" requirement in `CLAUDE.md` — decided Session 71. Everywhere
+> else, including every other menu and while paused, `Home`/`End` still reach the log. The buffer
+> re-validates that its container is still parked at `menuCtx+0x140` on every keypress, so a missed
+> teardown can never leave it holding those keys.
+>
+> **The arrow keys are safe to claim here:** the game binds no arrow-key function on this screen
+> (user-confirmed), and the mod cannot swallow keys anyway. Character switching is L1/R1, untouched.
 
 > **The combat log is NOT modal (decided Session 48).** ~~`F4` to open / `Esc` to close~~ is **STRUCK**
 > — there is no overlay to open, no `WH_KEYBOARD_LL` modal intercept, and the game is never paused.

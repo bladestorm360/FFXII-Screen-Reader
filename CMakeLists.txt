@@ -42,6 +42,8 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/shop_reader.cpp
     src/ui/inventory_reader.cpp
     src/ui/gil_reader.cpp
+    src/ui/virtual_buffer.cpp
+    src/ui/status_reader.cpp
     src/ui/popup_reader.cpp
     src/ui/battle_target_reader.cpp
     src/ui/title_reader.cpp

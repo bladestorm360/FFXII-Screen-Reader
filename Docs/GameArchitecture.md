@@ -1972,3 +1972,145 @@ clamped at 0. Two independent read paths (this, vs reading back `node+0x18`) **a
 
 **Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
 `FUN_005655f0` hook is what covers it.
+
+## Status screen — `FUN_002c2320` (0x1A2320) (Session 71, 2026-07-24) — SHIPPED, PROBE-CONFIRMED
+
+**KEYWORDS: status screen attributes reader FUN_002c2320 0x1A2320 cmd 0x4b4 0x4b6 equipment shared
+container menuCtx+0x140 menuCtx+0x138 FUN_003fe5d0 attribute labels 0x4A90 member block 0xAC8 EXP LP
+next FUN_0057edb0 0x45EDB0 save load STRUCK**
+
+### STRUCK: `FUN_0057edb0` (RVA `0x45EDB0`) is **NOT** the status screen — it is the SAVE/LOAD detail pane
+
+`src/ui/status_reader.cpp` was written against `0x45EDB0` on the belief that it was the status
+Attributes page. **It is not.** Evidence (confidence **0.99**):
+
+- `00583040_FUN_00583040.c:37-53` scans a **200-entry save-slot table** (`FUN_003bb3e0`), gated on a
+  save-vs-load flag at `+0xC1`, and only creates `FUN_0057edb0` (`:90`) when a usable slot exists —
+  as a sibling of the slot list `FUN_0057fe80` (`:100`).
+- Its seven sub-panels read a **4-byte-per-member packed preview record**
+  (`0057e6d0_FUN_0057e6d0.c:20,39,46`: member id / `0xFF` = hide / level clamped to 99 / two nibble
+  gauges / flag bits) — save-file preview shape, not stat-page shape.
+- `FUN_0057edb0` handles only categories `1`, `0xf`, `0x12`, default. **There is no `0x13` case** —
+  the `CAT_SHOW = 0x13` constant in `status_reader.cpp:36` was copied from `FUN_00280de0` (the field
+  pause command column) and never applied to this function.
+
+Do not re-derive this. Anything hooking `0x45EDB0` reads the save screen.
+
+### The real chain
+
+| Fact | Value | Conf |
+|---|---|---|
+| Pause command id | Status `0x4b4` (label `0xcc7`), Equipment `0x4b6` — `00281ae0_FUN_00281ae0.c:38-71`, `labelId == cmdId + 0x813` | 0.98 |
+| Dispatch | `FUN_00281ed0` (0x161ED0) `:40-58` — both ids → `FUN_002c2280` → `FUN_002c2320` | 0.98 |
+| **Controller** | **`FUN_002c2320`, RVA `0x1A2320`**, parked at `menuCtx+0x140` | 0.98 |
+| **Status-vs-Equip gate** | `*(int*)(ctrl+0x160)` = the command id; `*(u32*)(ctrl+0x168)` bit0 SET ⇒ Equipment, CLEAR ⇒ Status (`002c2320_FUN_002c2320.c:63-64`) | 0.98 |
+| Selected character | `*(i16*)(menuCtx+0xDE0)`, written by `FUN_00285f20`; same source the Equipment screen uses | 0.99 |
+| Member block | `*(u64*)(menuCtx+0xAC8 + member*8)` (`FUN_00282df0`); blocks are inline at `menuCtx+0x408 + n*0xC0` (`FUN_00282dd0`), so the pointer is type-validatable by matching the array | 0.99 |
+| Attribute panel | `FUN_003fe5d0` (0x2DE5D0) at `menuCtx+0x138`; fill `FUN_003fead0` (0x2DEAD0); rows `FUN_003fe490` (0x2DE490) | 0.99 |
+| Ailment grid | `FUN_002c59d0` (0x1A59D0) at `menuCtx+0x110`, created on the status branch of cat `0xe` | 0.98 |
+
+**Category map of `FUN_002c2320`** — `1` CREATE (sets `menuCtx+0x140`, `ctrl+0x160`, and calls
+`FUN_00285f20(packet[2])`) · `8` focus lost · `9` focus gained (equip only) · `0xa` **PER-FRAME input**
+(L1/R1 party cycling via `FUN_002c2240`/`FUN_002c2200` — never hang an announcement off this) ·
+`0xc` child list event, sub-code at `packet+8` (`0x8000` cursor move, `0x8002` cancel tears the screen
+down) · `0xe` ACTIVATE · `0x11f` enable/disable · `0x12` DESTROY · `0x13` suspend/resume.
+
+**Member block fields** — all confirmed by two independent paths, the portrait draw `FUN_00283e40`
+(`:170,198,205,207,209`) and the block fill `FUN_00329220` (`:225-229`):
+
+```
+blk+0x20 curHP(i32)  blk+0x24 maxHP(i32)  blk+0x2C curMP(i32)  blk+0x30 maxMP(i32)
+blk+0x90 EXP(u32)    blk+0x94 Next(u32)   blk+0xB0 LP(u32)     blk+0xBA level(u8)
+```
+
+`Next` is already computed for us: `FUN_00329220:226-228` stores `FUN_002f8f20(level) - EXP`, so the
+mod never needs to reimplement the threshold curve. The underlying BtlChr record
+(`*(u64*)DAT_02ebf190 + 8 + idx*0x1C8`) holds EXP `+0x18C`, LP `+0x190`, level `+0x1C2` — but the
+menu block already caches all of them, so **the status reader needs no save-record access at all**.
+
+**The nine attributes** — value at `panel+0xC8 + row*4`, equip-preview at `panel+0xEC + row*4`
+(`003fe490_FUN_003fe490.c:17-26`). On Status both are equal, so no change arrow is drawn.
+
+**LABELS ARE GAME-SUPPLIED: `FUN_002f9860(0x4A90 + row)` for rows 0-8** (`003fe490:21`). Nothing about
+the attribute names needs hardcoding. **All nine decoded live and matched the screen exactly:**
+0 `Attack Power`, 1 `Defense`, 2 `Magick Resist`, 3 `Evade`, 4 `Magick Evade`, 5 `Strength`,
+6 `Magick Power`, 7 `Vitality`, 8 `Speed`. (The pre-probe order guess was right; rows 5-8 were only
+0.92 offline and are now 1.0.) Values matched too — Vaan Lv1: `14 5 5 5 0 23 22 24 24`, HP 128/128,
+MP 30/30, EXP 31, Next 20, LP 99999.
+
+**Categories, measured.** A Status visit delivers `0x6, 0xe, 0x8, 0x1, 0xb, 0x9, 0x13` **exactly once
+each**, then repeats `0x2/0x19/0x3/0x4` per frame, and ends with **`0x12` on close** (confirmed on the
+second run). **Cat `0x1` is the activation edge** — the one one-shot at which `menuCtx+0x138` is
+already built; at `0xe` the panel is still NULL. Anything hung off `0x2/0x3/0x4/0x19` is per-frame.
+
+### The other two pages — Magicks and Technicks (Session 71)
+
+The Status screen has **three** pages selected by the mode byte **`menuCtx+0xDE7`**: `0` = Attributes,
+`1` (or `3`) = Magicks, `2` = Technicks/Quickenings/Remedy Lore/Espers. Measured cycling 0→1→2→0.
+
+**PAGE-CHANGE EVENT — `FUN_002c1a80` (RVA `0x1A1A80`).** This is the overlay page state machine and
+the **only writer of `menuCtx+0xDE7` in the whole binary**, so every page change passes through it:
+`:24` sets 1 (Magicks opened), `:42` sets 2 (Technicks page), **`:87` sets 0 — closed BACK to the
+Attributes page**. Its `int` return classifies the event, which is what makes it usable as a hook
+without any per-frame work:
+
+| ret | meaning |
+|---|---|
+| `1` | opened / switched page, or the open page consumed the input |
+| **`2`** | **closed back to the Attributes page** (the "dropped back to the status screen" event) |
+| `0` / `-1` | nothing happened (page-1 idle / overlay idle) |
+
+Signature `int FUN_002c1a80(block, edge, mask, held, rpt)`. It is **shared with the license board's
+`F` overlay** (reached via `FUN_0055c740`), so any handler must gate on "the Status screen is open".
+Note `:64` returns `-1` every frame while an overlay is open, so gate on `ret == 1 || ret == 2`, not
+on `ret != 0`.
+
+> **STRUCK (Session 71, same session):** *"there is no event for mode 2→0; the reader can only report
+> position when a nav key is pressed."* Wrong — the function above fires on exactly that transition.
+> The claim was made without checking the probe trace already in hand, in which the mode-transition
+> lines were emitted from inside the container's own message handler. A game does not return from a
+> submenu and wait for input to refresh; do not assume it does.
+
+Pages 2 and 3 are the **same two page objects** the license board's `F` overlay uses, **and they
+behave identically here — a real browsable in-game cursor**. So `ability_summary_reader` reads them
+on this screen exactly as it does from the board, and `status_reader` covers only page 1, declining
+every key while `menuCtx+0xDE7 != 0`.
+
+> **STRUCK (Session 71):** ~~"on the Status screen pages 2/3 are static displays with no browsable
+> cursor, so the reader must enumerate every slot into a virtual buffer"~~. That enumeration was
+> built and then removed — the pages are cursor lists. Do not rebuild it.
+
+Both objects are parked in menuCtx (useful for reading them without a hook):
+
+| Page | Parked at | `obj[0]` class | Entries | Count |
+|---|---|---|---|---|
+| Magicks | **`menuCtx+0x120`** | **`+0x1A3560`** | `obj+0x0C8` | 81 |
+| Technicks etc. | **`menuCtx+0x128`** | **`+0x1A4460`** | `obj+0x0E0` | 54 |
+
+Entry stride `0x20`: name codec `+0x00` (the game's own `?` when unlearned), description `+0x10`,
+flags `+0x18` (bit `0x20000` = learned/bright). Section headings read from
+`*(*(obj+0x60) + {0x28,0x40,0x58,0x70}) + 0x18` and decoded live as **`Technicks`, `Quickenings`,
+`Remedy Lore`, `Espers`** — note **`Quickenings`, not "Mist"**, which the old
+`ability_summary_reader.h` comment claimed.
+
+**The current section is `obj+0x7A4` (u16, 0..3) — read it, do not partition the array.** The entry
+records carry no section field, and a measured slot partition `{0,24,27,41}` was derived for the
+removed enumeration; the game's own index is authoritative and survives content changes, so readers
+follow it. **The heading must be announced on every section CROSSING**, not only on a page switch:
+without that, moving from Technicks into Remedy Lore just says "Blind" and reads as the mod reporting
+the wrong thing (tester, Session 71). Observed slot layout on a fresh file, for reference:
+`named[0-0] placeholder[1-26] named[27-40] placeholder[41-52] hidden[53-53]`.
+
+**Status effects.** Grid `FUN_002c59d0` at `menuCtx+0x110`; slot *i* holds an id at
+`grid+0xC8+i*4` (i8, `<0` = unused) and a bright flag at `grid+0xCA+i*4`. **Name =
+`FUN_0035d330(0x1A, id)` -> record, codec `+0x18`** (`002c5900_FUN_002c5900.c:32-33`). The
+**"(No status effects.)" sentence is LAYOUT ART, not a message id** — `FUN_002c5900` merely hides the
+rows when nothing is set (`filter(+0x148)=0`, 0 live slots measured), so it cannot be read back and
+the reader omits the group instead of fabricating a line.
+
+**STRUCK (measured):** the row-chain entry `{ 0x1A2320, 0xC8 }` at `ingame_menu_reader.cpp:29`,
+commented *"inventory category tab bar"*, does **not** fire on the Status screen — across a whole
+session the only `FUN_00247510` msg `0x8000` seen with Status open came from owner class `+0x1a59d0`
+(the ailment grid), never from `+0x1a2320`. So the generic row-chain reader does not claim this
+window and there is no double-speak. The comment is still a misnomer worth correcting if that entry
+is ever revisited.

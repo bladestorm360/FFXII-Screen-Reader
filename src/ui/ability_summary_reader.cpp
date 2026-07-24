@@ -1,4 +1,5 @@
 #include "ui/ability_summary_reader.h"
+#include "ui/ability_entry.h"
 #include "ui/text_capture.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -18,68 +19,47 @@ using MemRead::SafeReadU32;
 
 // ---- the two page controllers (abs = RVA + 0x120000) --------------------------------------------
 // Each is that page's focus/refresh choke point, taking the controller as its only argument.
-constexpr uint32_t RVA_ABIL_FOCUS = 0x1A53B0;   // FUN_002c53b0 — Technicks / Mist / Remedy / Espers
+constexpr uint32_t RVA_ABIL_FOCUS = 0x1A53B0;   // FUN_002c53b0 — Technicks/Quickenings/Remedy/Espers
 constexpr uint32_t RVA_MAGK_FOCUS = 0x1A3B90;   // FUN_002c3b90 — Magicks
 
-// Entry arrays are INLINE in the controller (not a pointer indirection).
-constexpr uint32_t OFF_ABIL_ENTRIES = 0x0E0;    // abilities page: 54 entries
-constexpr uint32_t OFF_ABIL_INDEX   = 0x7A0;    // ...highlighted entry index (u16)
-constexpr uint32_t OFF_ABIL_SECTION = 0x7A4;    // ...current section 0..3 (u16)
-constexpr uint32_t OFF_MAGK_ENTRIES = 0x0C8;    // magicks page: 81 entries
-constexpr uint32_t OFF_MAGK_INDEX   = 0xAE8;    // ...highlighted entry index (u16)
+// The record layout, the page offsets and the decode rules are SHARED with status_reader (the Status
+// screen renders these same two pages as static, cursorless displays) — see ability_entry.h.
+constexpr uint32_t OFF_ABIL_ENTRIES = AbilityEntry::ABIL_ENTRIES;
+constexpr uint32_t OFF_ABIL_INDEX   = AbilityEntry::ABIL_INDEX;
+constexpr uint32_t OFF_ABIL_SECTION = AbilityEntry::ABIL_SECTION;
+constexpr uint32_t OFF_MAGK_ENTRIES = AbilityEntry::MAGK_ENTRIES;
+constexpr uint32_t OFF_MAGK_INDEX   = AbilityEntry::MAGK_INDEX;
 
-constexpr uint32_t OFF_SUM_CHILDREN = 0x60;     // obj+0x60 -> layout-children array
-constexpr uint32_t OFF_CHILD_TEXT   = 0x18;     // child+0x18 = its text codec
+constexpr uint32_t OFF_SUM_CHILDREN = AbilityEntry::OFF_CHILDREN;
+constexpr uint32_t OFF_CHILD_TEXT   = AbilityEntry::OFF_CHILD_TEXT;
 
-constexpr uint32_t ENTRY_STRIDE     = 0x20;
-constexpr uint32_t OFF_ENT_NAME     = 0x00;     // name codec — the game's own "?" when unlearned
-constexpr uint32_t OFF_ENT_DESC     = 0x10;     // description codec (null when the name is "?")
-constexpr uint32_t OFF_ENT_FLAGS    = 0x18;     // bit 0x20000 = learned/bright, clear = greyed
-constexpr uint32_t ENT_FLAG_LEARNED = 0x20000;
+constexpr uint32_t ENTRY_STRIDE     = AbilityEntry::STRIDE;
+constexpr uint32_t OFF_ENT_NAME     = AbilityEntry::OFF_NAME;
+constexpr uint32_t OFF_ENT_DESC     = AbilityEntry::OFF_DESC;
+constexpr uint32_t OFF_ENT_FLAGS    = AbilityEntry::OFF_FLAGS;
+constexpr uint32_t ENT_FLAG_LEARNED = AbilityEntry::FLAG_LEARNED;
 
-constexpr int      SUM_SECTIONS = 4;            // Technicks / Mist / Remedy Lore / Espers
-constexpr uint32_t SECTION_CHILD_OFF[SUM_SECTIONS] = { 0x28, 0x40, 0x58, 0x70 };
+constexpr int      SUM_SECTIONS = AbilityEntry::ABIL_SECTIONS;   // Technicks/Quickenings/Remedy/Espers
 
 typedef uint64_t (*Pfn_SumFocus)(void*);
 Pfn_SumFocus s_origAbilFocus = nullptr;
 Pfn_SumFocus s_origMagkFocus = nullptr;
 
-// Page-change detector: the heading is announced when the player switches PAGES (each page is a
-// distinct controller object, so `F` is exactly an owner change), not when the cursor crosses a
-// section boundary — re-announcing "Technicks" / "Remedy Lore" on every crossing was noise. This
-// DETECTS a transition rather than suppressing a repeat, so it is not speech dedup. Game thread.
-void* g_sumOwner = nullptr;
+// Section-change detector. The heading is announced whenever the player enters a different SECTION —
+// either by switching pages (each page is a distinct controller object, so `F` is an owner change) or
+// by moving the cursor across a boundary into Technicks / Quickenings / Remedy Lore / Espers.
+//
+// ~~"re-announcing the heading on every crossing was noise, so announce it on page change only"~~ is
+// STRUCK (Session 71, tester): without it, crossing from Technicks into Remedy Lore just said "Blind"
+// and read as the mod reporting the wrong thing entirely. A sighted player sees the heading above the
+// column; the section is the only thing that makes a bare status name make sense. It fires once per
+// crossing, not per row, and DETECTS a transition rather than suppressing a repeat — not speech dedup.
+// Game thread.
+void*    g_sumOwner   = nullptr;
+uint16_t g_sumSection = 0xFFFF;
 
-// What an unlearned slot is spoken as. The game draws "?" there; a literal "?" is commonly
-// dropped by screen readers at default punctuation verbosity, which would re-silence the row.
-constexpr wchar_t kEmptySlot[] = L"empty";
-
-// Decode a codec string (GameText guards internally). `skip` strips the shared-pool 00 00 prefix;
-// harmless when absent, since a valid string never starts with a 0x00 terminator.
-std::wstring DecodeCodec(const uint8_t* codec, bool skip) {
-    if (!codec) return std::wstring();
-    const uint8_t* p = skip ? GameText::SkipVariantPrefix(codec) : codec;
-    std::wstring s = GameText::Decode(p, 320);
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
-}
-
-// Decode an entry's NAME. The game writes its own "?" placeholder (FUN_002f9860(0x4C7)) into an
-// unlearned slot, and that string contains NO letters — IsMostlyPrintable requires at least one,
-// so the ordinary gate rejects it and the row goes silent. Before any magick is learned that is
-// the whole Magicks page. Detect the placeholder explicitly and report the slot as empty; keep the
-// gate for everything else so a stale pointer still yields nothing.
-std::wstring DecodeEntryName(const uint8_t* codec, bool* outEmptySlot) {
-    *outEmptySlot = false;
-    if (!codec) return std::wstring();
-    std::wstring s = GameText::Decode(GameText::SkipVariantPrefix(codec), 320);
-    if (s.empty()) return std::wstring();
-    if (s.find(L'?') != std::wstring::npos &&
-        s.find_first_not_of(L" ?") == std::wstring::npos) {   // only '?' (and spaces)
-        *outEmptySlot = true;
-        return kEmptySlot;
-    }
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
-}
+using AbilityEntry::DecodeCodec;
+using AbilityEntry::DecodeName;
 
 // Speak the highlighted entry of a summary page. Both pages share the entry format; only the
 // entry-array and index offsets differ. Game thread, from the page's own focus routine.
@@ -91,23 +71,30 @@ void AnnounceEntry(void* obj, uint32_t entriesOff, uint32_t indexOff, bool hasSe
 
     // An unlearned slot comes back as "empty"; a null name is a hidden row.
     bool emptySlot = false;
-    std::wstring name = DecodeEntryName(
+    std::wstring name = DecodeName(
         reinterpret_cast<const uint8_t*>(PtrAt(entry, OFF_ENT_NAME)), &emptySlot);
     if (name.empty()) return;
 
-    // Heading only when the player switched PAGES — the section index still picks WHICH heading.
+    // Heading whenever the SECTION changes — on a page switch, or on crossing a boundary within the
+    // page. The game keeps the current section in obj+0x7A4, so this follows the game's own notion of
+    // which column the cursor is in rather than any assumption about slot ranges.
     std::wstring line;
     const bool pageChanged = (obj != g_sumOwner);
     g_sumOwner = obj;
-    if (hasSections && pageChanged) {
+    if (hasSections) {
         uint16_t sec = 0;
         if (SafeReadU16(obj, OFF_ABIL_SECTION, &sec) && sec < SUM_SECTIONS) {
-            void* children = PtrAt(obj, OFF_SUM_CHILDREN);
-            void* child = children ? PtrAt(children, SECTION_CHILD_OFF[sec]) : nullptr;
-            std::wstring head = DecodeCodec(
-                reinterpret_cast<const uint8_t*>(PtrAt(child, OFF_CHILD_TEXT)), /*skip=*/true);
-            if (!head.empty()) line = head + L", ";
+            if (pageChanged || sec != g_sumSection) {
+                g_sumSection = sec;
+                void* children = PtrAt(obj, OFF_SUM_CHILDREN);
+                void* child = children ? PtrAt(children, AbilityEntry::SECTION_CHILD[sec]) : nullptr;
+                std::wstring head = DecodeCodec(
+                    reinterpret_cast<const uint8_t*>(PtrAt(child, OFF_CHILD_TEXT)), /*skip=*/true);
+                if (!head.empty()) line = head + L", ";
+            }
         }
+    } else if (pageChanged) {
+        g_sumSection = 0xFFFF;   // Magicks has no sections; re-arm so returning to the other page speaks
     }
     line += name;
 
@@ -156,6 +143,7 @@ void Shutdown() {
     Hooks::Uninstall(RVA_MAGK_FOCUS);
     Hooks::Uninstall(RVA_ABIL_FOCUS);
     g_sumOwner = nullptr;
+    g_sumSection = 0xFFFF;
 }
 
 } // namespace AbilitySummaryReader

@@ -7,6 +7,49 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### STRUCK: `FUN_0057edb0` / RVA `0x45EDB0` is the SAVE/LOAD pane, not the status screen (S71)
+
+**KEYWORDS: status screen wrong hook FUN_0057edb0 0x45EDB0 save load slot pane 200 slots FUN_003bb3e0
+FUN_0057fe80 FUN_00583040 status_reader CAT_SHOW 0x13 does not exist copied from FUN_00280de0
+FUN_002c2320 0x1A2320 real status controller ability pages cursor not static enumerate removed**
+
+**What was tried:** an early `src/ui/status_reader.{h,cpp}` hooked `0x45EDB0`, believing it to be the
+status Attributes page, activating on packet category `0x13` (SHOW). Wiring that into CMake +
+`MenuReader::Init()` would have shipped a reader that activates on the **save screen** and reads
+nothing on Status.
+
+**Why it is wrong** (conf 0.99, decompile only, no probe needed):
+
+1. `00583040_FUN_00583040.c:37-53` scans a **200-entry save-slot table** (`FUN_003bb3e0`) gated on a
+   save-vs-load flag at `+0xC1`, and only then creates `FUN_0057edb0` (`:90`) — as a sibling of the
+   save-slot list `FUN_0057fe80` (`:100`).
+2. Its seven sub-panels read a 4-byte-per-member packed **save preview** record
+   (`0057e6d0_FUN_0057e6d0.c:20,39,46` — member id, `0xFF` = hide, level clamped to 99, two nibble
+   gauges, flag bits). A real stat page draws HP as a number, not a 3-segment nibble gauge.
+3. `FUN_0057edb0` has **no `0x13` case at all** — it handles `1`, `0xf`, `0x12`, default. The `0x13`
+   constant was copied from `FUN_00280de0` (the field pause command column), a different window proc.
+
+**The trap to avoid repeating:** the three header labels `FUN_002f9860(0x875/0x876/0x877)` that
+`FUN_0057edb0` resolves were read as "status column headers" in
+`..\FFXII-Decompile\notes\status_char_select_labels_2026_07_11.md:47`. They are the **save pane's**
+column headers. A label cluster on a screen is not evidence of *which* screen — follow the creation
+chain (`FUN_00244f50(size, proc, args)` call sites) before believing a function's identity.
+
+**Two more things struck in the same session, both worth not repeating:**
+
+- ~~"there is no event when the player backs out of a summary page onto the Attributes page"~~ —
+  wrong. `FUN_002c1a80` (`0x1A1A80`) is the only writer of `menuCtx+0xDE7` and returns **2** on
+  exactly that transition. The claim was asserted without re-reading a probe trace already in hand.
+  **A game does not return from a submenu and then wait for input to refresh; do not assume it does.**
+- ~~"on the Status screen the Magicks and Technicks pages are static displays with no browsable
+  cursor, so enumerate every slot into a virtual buffer"~~ — wrong. They have a real in-game cursor,
+  exactly as on the license board. A three-buffer enumeration was built, shipped and removed the same
+  session. `ability_summary_reader` owns those pages; `status_reader` covers page 1 only.
+
+**Replaced by:** `FUN_002c2320` (RVA `0x1A2320`), the shared Status/Equipment container, gated on
+`*(int*)(ctrl+0x160) == 0x4b4`. Full chain, offsets, and the game-supplied attribute label ids in
+`GameArchitecture.md` § "Status screen". Confirmation probe: `frida\probe_status_data.js`.
+
 ### Sessions 58–59 — exit positions and the route target
 
 **KEYWORDS: +0x84 edge pairing door binding N+1 struck arrival table nearest-boundary probe seam
