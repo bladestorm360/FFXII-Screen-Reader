@@ -144,7 +144,13 @@ void CellCenter(const WalkGridInfo& g, int col, int row, float& wx, float& wz) {
     wz = z;
 }
 
-bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY) {
+namespace {
+// Scan a walkmap cell's floor prims and evaluate the TOPMOST walkable (type-0) floor at (evalX,evalZ).
+// Shared by ReadCellFloor (cell centre) and GroundInfoAt (arbitrary XZ). When outCosSlope != nullptr it
+// also returns the chosen poly's slope cosine B/|(A,B,C)| (1.0 = flat, smaller = steeper) from the plane
+// normal. Returns false if the cell holds no walkable floor.
+bool ScanTopFloorAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
+                    float& outY, float* outCosSlope) {
     if (!g.valid) return false;
     if (col < 0 || row < 0 || col >= g.nCols || row >= g.nRows) return false;
     const int cell = g.nCols * row + col;
@@ -156,11 +162,8 @@ bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY) {
     if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell + 1) * 2u, &end)) return false;
     if (end < start) return false;
 
-    float cx, cz;
-    CellCenter(g, col, row, cx, cz);
-
     bool found = false;
-    float bestY = 0.0f;
+    float bestY = 0.0f, bestCos = 1.0f;
     // Bound the per-cell scan: a torn/garbage CSR range could otherwise spin for ~65k reads
     // per cell x 32k cells. No real cell holds anywhere near this many primitives.
     for (uint32_t k = start; k < end && (k - start) < 256u; ++k) {
@@ -183,12 +186,35 @@ bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY) {
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &vx)) continue;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &vy)) continue;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &vz)) continue;
-        const float y = vy + ((vx - cx) * A + (vz - cz) * C) / B;
-        if (!found || y > bestY) { bestY = y; found = true; }  // topmost walkable floor
+        const float y = vy + ((vx - evalX) * A + (vz - evalZ) * C) / B;
+        if (!found || y > bestY) {                             // topmost walkable floor
+            bestY = y;
+            found = true;
+            if (outCosSlope) {
+                const float n = std::sqrt(A * A + B * B + C * C);
+                bestCos = (n > 1e-6f) ? ((B < 0.0f ? -B : B) / n) : 1.0f;  // |B|/|normal| in [0,1]
+            }
+        }
     }
     if (!found) return false;
     outY = bestY;
+    if (outCosSlope) *outCosSlope = bestCos;
     return true;
+}
+} // namespace
+
+bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY) {
+    float cx, cz;
+    CellCenter(g, col, row, cx, cz);
+    return ScanTopFloorAt(g, col, row, cx, cz, outY, nullptr);
+}
+
+bool GroundInfoAt(float x, float z, float& outY, float& outCosSlope) {
+    WalkGridInfo g;
+    if (!GetGridInfo(g) || !g.valid) return false;
+    int col = 0, row = 0;
+    WorldToCell(g, x, z, col, row);   // fills col/row even when out of bounds; ScanTopFloorAt bounds-checks
+    return ScanTopFloorAt(g, col, row, x, z, outY, &outCosSlope);
 }
 
 bool SegmentTraversable(const FVec3& a, const FVec3& b,

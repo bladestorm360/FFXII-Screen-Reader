@@ -1316,3 +1316,55 @@ four files, zip root flat. All three DLLs verified PE machine `8664`. TTS pair c
 
 **State:** working tree clean on `combat-system`; two readme commits (`548086f`, `661432d`). The **full
 Nalbina prologue run remains the gate** — this release is built, not validated in play.
+
+## Session 68 — 2026-07-24 — [nav] Pathfinder elevation: root cause = STEP-DISCONTINUITY (no slope limit); tight edge test shipped
+
+KEYWORDS: pathfinder elevation cliff pit ledge impassable not moving kMaxStep kStepDiscont kEdgeSubStep
+step discontinuity walk-type flags FUN_0022cc50 FUN_00231900 FUN_0033bc80 0.3 step no slope limit
+GroundInfoAt route-profile diagnostic Dalmasca Estersand Rogue Tomato slope gate dropped
+
+**The S67 progress-blocker, root-caused and fixed (pending one tester round).** On elevation-varied field
+terrain the pathfinder routed the player onto a descent they could not traverse (char holds the stick,
+footsteps, no movement). Four prior fixes failed; the last (a 0.6 m / ~50° dense edge check) left the
+route unchanged.
+
+**RE result that reframes it (first-hand decompile trace, ~0.9):** the FIELD walkmap movement has **NO
+walkable-slope limit.** `FUN_0022cc50` (the move-across-walkmap per-poly handler) decides walkability
+purely from baked **walk-type flags** (poly+0xC & 7: 0 walkable, 1/4 conditional; walls block) — no
+cosine / normal.y / angle threshold anywhere. `FUN_00231900`/`FUN_00231890` only guard `B > 0.001`
+(a divide-by-~0 guard, not a slope cap). Because the player can walk **any continuous slope**, stairs and
+hills work. The only geometric movement blockers are (1) **walls** — `SegmentClear` (mask=4) already
+tests them, and they are CLEAR along the impassable descent — and (2) a **step-height DISCONTINUITY**:
+`FUN_0033bc80:23-28` samples `GroundAt` ahead and reacts when `ABS(groundY − currentY) >= 0.3`
+world-units. So the real limit is a ~0.3 m step, and our A* `kMaxStep = 1.5` was ~5× too loose — it
+stitched routes across a 0.3–0.6 m ledge/lip (invisible to the floor+0.9 m wall feeler and to the loose
+0.6 m dense check).
+
+**DROPPED (do not retry):** the poly-normal **slope gate** (reject cells whose floor poly is too steep).
+The RE null result proves a slope cap would be **wrong** — it would reject continuous slopes the player
+can legitimately walk. The fix is a step-**discontinuity** test, not a slope test.
+
+**Shipped (built + deployed; combined fix + diagnostic per user choice):**
+- `path_search.cpp` `passable()`: replaced the loose dense-edge block with a **fine step-discontinuity
+  check** — sub-sample `GroundAt` every `kEdgeSubStep = 0.25 m` along any edge with a real height change
+  (`> kStepTrigger = 0.15 m`) and reject a sub-step that JUMPS more than `kStepDiscont = 0.35 m` (a
+  ledge; a continuous slope / ramped staircase passes). `kMaxStep = 1.5` kept as the coarse cliff gate so
+  continuous slopes survive. Flat/near-level edges skip it (city fast-path).
+- Same cap applied to the string-pull validator (`SegmentTraversable(kEdgeSubStep, …, kStepDiscont, …)`)
+  so the smoother can't straighten a leg back across a rejected ledge.
+- `map_query.{h,cpp}`: added `GroundInfoAt(x,z,&y,&cosSlope)` (diagnostic-only; centralized the poly
+  scan of `ReadCellFloor` into a shared `ScanTopFloorAt`).
+- `path_planner.cpp`: added `LogRouteProfile(rawPoly)` — dumps the ROUTE's OWN per-leg max sub-step ΔY +
+  floor-Y span + poly slope (the directline/route-field dumps only sample the STRAIGHT line, missing the
+  route's descent). `NAV-ROUTE route-profile leg N: … maxStep=X.XXm … WORST step=…`.
+
+**`kStepDiscont = 0.35` is PROVISIONAL** — not shipped as fact (the `0.3` role in `FUN_0033bc80` is only
+~0.5 conf). The route-profile dump brackets the real value: the descent's WORST step (the tester can't
+follow) vs the WORST step on a route they DO walk (city/stairs). Tune in one round if needed.
+
+**NEXT (tester round):** on Dalmasca Estersand "The Stepping", route to the Rogue Tomato (`\`/`p`) and
+walk it; also route a couple of Rabanastre targets incl. across a staircase. Read `NAV-ROUTE`:
+route-profile WORST step on the tomato route (the ledge height) vs the city/stairs route (walkable bound
++ whether stairs are ramped). Confirm the tomato route no longer jams (or NoPath if no walkable descent)
+and city/stairs still route. Adjust `kStepDiscont` and rebuild once if the bracket says so. Then move
+S67 pathfinder from Known Issues → Solved and resume the deferred shops/gambits menu plan.

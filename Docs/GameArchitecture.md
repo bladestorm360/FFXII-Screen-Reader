@@ -1440,6 +1440,33 @@ wall. Directions stay WORLD-ABSOLUTE (no egocentric). **Direct read is conf 0.92
 `'` self-diagnostic (grid header + `ReadCellFloor`-vs-`GroundAt` cross-check `walkAgree %`);
 `NavGrid::SetDirectRead(false)` = GroundAt-bake fallback.
 
+### Field movement has NO slope limit — walkability = walk-type flags + a ~0.3 m step (Session 68) — conf ~0.9
+
+Root cause of the S67 "routes through impassable elevation" bug. Decompile trace of the FIELD walkmap
+movement (**not** Bullet — absent in the field):
+- **`FUN_0022cc50`** (RVA 0x102C50) — the per-poly handler used both by the segment test `FUN_00230b60`
+  and by the character move-across-walkmap — decides walkability purely from **baked walk-type flags**
+  (poly+0xC low 3 bits, after a remap through `DAT_0209a3e0`/`DAT_0209a3e4`): **0 = walkable**, 1/4 =
+  conditionally blocked (party/enemy side, `param_2+0x46`), walls (prim idx ≥ 0x4000) block. **There is
+  NO cosine / normal.y / slope-angle threshold anywhere in the movement path.**
+- `FUN_00231900` / `FUN_00231890` only guard `B > 0.001` on the plane normal — a divide-by-~0 guard, NOT
+  a walkable-slope cap. `GroundAt` (`FUN_0026e3c0`, mask=1) returns only walk-type-0 floor.
+- ⇒ **the player can walk any CONTINUOUS slope** (that is why stairs and hills work). The only geometric
+  movement blockers are (1) **walls** (`SegmentClear` mask=4, already used) and (2) a **step-height
+  DISCONTINUITY**: **`FUN_0033bc80`** (RVA 0x21BC80) samples `GroundAt` a point ahead and reacts when
+  `ABS(groundY − currentY) >= 0.3` world-units (`if (0.3 <= ABS(fVar1))`, sets ±π/2 pitch). The `0.3`'s
+  exact effect (block vs animate) is ~0.5 conf, but it is the engine's step-significance threshold.
+
+**STRUCK:** a poly-normal SLOPE GATE for routing — it would wrongly reject walkable continuous slopes.
+The routing fix is a **step-discontinuity** test, not a slope cap.
+
+**Mod fix (`path_search.cpp` `passable()`, Session 68):** keep `kMaxStep = 1.5` as the coarse cliff gate
+(so continuous slopes survive), then sub-sample `GroundAt` every `kEdgeSubStep = 0.25 m` along any edge
+with `|Δ| > kStepTrigger = 0.15 m` and reject a sub-step jumping more than `kStepDiscont = 0.35 m`
+(provisional; bracketed at runtime by `LogRouteProfile`). Same cap in the string-pull `SegmentTraversable`
+call. Diagnostic helper `MapQuery::GroundInfoAt(x,z,&y,&cosSlope)` returns the floor Y + poly slope cosine
+`B/|(A,B,C)|` (topmost type-0 floor at an arbitrary XZ; shares `ReadCellFloor`'s `ScanTopFloorAt`).
+
 ---
 
 ## Message / Dialogue / Panel Text (2026-07-07) — decompile-exhausted, ≥0.98; Frida-pending

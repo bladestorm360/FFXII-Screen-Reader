@@ -57,6 +57,119 @@ void ClearIfSeq(uint64_t seq) {
     if (g_reqSeq == seq) g_hasRequest.store(false, std::memory_order_release);
 }
 
+// ROUTE-FIELD DUMP (diagnostic, log-only): a 2D height-tier ASCII map of the walkmap covering the
+// player->target span, so a route that goes "around" the target can be read as terrain -- is the
+// target genuinely walled off (a real, necessary detour) or is a narrow ramp/passage being SKIPPED by
+// the 1.5 m routing grid (a real bug)? Sampled at 1.0 m (finer than the 1.5 m grid) via the same
+// GroundAt the search uses. Cells are marked by floor-height tier RELATIVE TO THE PLAYER:
+//   'P' you   'T' target   '.' no floor (void)
+//   '=' within +/-0.5 m (same level, freely walkable)   '-' up 0.5-1.5 m   ',' down 0.5-1.5 m
+//   '^' up >1.5 m (a ledge A* cannot climb)   'v' down >1.5 m (a drop A* cannot take)
+// Read north-up (rows are +z downward), west-left. If a run of '=' / '-' connects P to T, a direct
+// walkable path exists and any big detour is a bug; if T is fenced off by '^'/'v'/'.', the detour is
+// the real way in. The A* raw path is OVERLAID as '*' (its cells win over terrain, P/T win over it),
+// so we can see whether the route heads INTO the cliff or toward a real ramp. On-demand + bounded
+// (<=33x33), and only called when the straight line is blocked.
+void LogRouteField(const FVec3& from, const FVec3& target, const std::vector<FVec3>& route) {
+    if (!MapQuery::HasWorld()) return;
+    const float cx = (from.x + target.x) * 0.5f, cz = (from.z + target.z) * 0.5f;
+    const float dx = target.x - from.x, dz = target.z - from.z;
+    constexpr float pitch = 1.0f;
+    int rad = static_cast<int>((std::sqrt(dx * dx + dz * dz) * 0.5f + 6.0f) / pitch);
+    if (rad > 16) rad = 16;                                     // cap 33x33 (~33 log lines)
+    float pY = from.y; MapQuery::GroundAt(from.x, from.z, pY);  // player's real floor
+    const int pc = static_cast<int>(std::lround((from.x   - cx) / pitch));
+    const int pr = static_cast<int>(std::lround((from.z   - cz) / pitch));
+    const int tc = static_cast<int>(std::lround((target.x - cx) / pitch));
+    const int tr = static_cast<int>(std::lround((target.z - cz) / pitch));
+    char hdr[176];
+    snprintf(hdr, sizeof(hdr),
+             "==== route field center=(%.1f,%.1f) playerY=%.2f %dm/cell north-up P=you T=target ====",
+             cx, cz, pY, static_cast<int>(pitch));
+    Log::Write("NAV-ROUTE", hdr);
+    for (int r = -rad; r <= rad; ++r) {
+        char line[80];
+        int p = snprintf(line, sizeof(line), "z=%+6.1f ", cz + r * pitch);
+        for (int c = -rad; c <= rad && p < static_cast<int>(sizeof(line)) - 2; ++c) {
+            char ch;
+            bool onRoute = false;
+            for (const FVec3& wp : route) {                     // A* raw path overlay
+                if (static_cast<int>(std::lround((wp.x - cx) / pitch)) == c &&
+                    static_cast<int>(std::lround((wp.z - cz) / pitch)) == r) { onRoute = true; break; }
+            }
+            if (r == pr && c == pc)      ch = 'P';
+            else if (r == tr && c == tc) ch = 'T';
+            else if (onRoute)            ch = '*';
+            else {
+                float gy = 0.0f;
+                if (!MapQuery::GroundAt(cx + c * pitch, cz + r * pitch, gy)) ch = '.';
+                else {
+                    const float d = gy - pY;
+                    if      (d >  1.5f) ch = '^';
+                    else if (d >  0.5f) ch = '-';
+                    else if (d < -1.5f) ch = 'v';
+                    else if (d < -0.5f) ch = ',';
+                    else                ch = '=';
+                }
+            }
+            line[p++] = ch;
+        }
+        line[p] = '\0';
+        Log::Write("NAV-ROUTE", line);
+    }
+}
+
+// ROUTE-PROFILE DUMP (diagnostic, log-only): the ROUTE'S OWN vertical profile, which the directline and
+// route-field dumps above both MISS -- they sample the straight player->target line, not the A* route
+// that goes "around". For each leg of the raw cell path, sub-sample GroundAt finely and log the MAX
+// single sub-step |dY| on that leg -- the height of the tallest step the route asks the player to take
+// -- plus the leg's floor-Y span and the poly slope cosine at its midpoint (1.0 = flat, smaller =
+// steeper). This is the number that pins the real walkable step limit vs the shipped kStepDiscont cap:
+// a leg the tester cannot follow shows the offending step's height; the same dump on a route the tester
+// DOES walk (a city / staircase route) shows the walkable bound and whether stairs are ramped (smooth
+// dY) or stepped. Bounded to the first kMaxLegs legs so the log stays small.
+void LogRouteProfile(const std::vector<FVec3>& route) {
+    if (!MapQuery::HasWorld() || route.size() < 2) return;
+    constexpr float  kProfStep = 0.25f;   // fine sub-sample spacing (== PathSearch kEdgeSubStep)
+    constexpr size_t kMaxLegs  = 24;
+    const size_t legs  = route.size() - 1;
+    const size_t shown = legs < kMaxLegs ? legs : kMaxLegs;
+    float worstStep = 0.0f; int worstLeg = -1;
+    for (size_t i = 0; i < shown; ++i) {
+        const FVec3& a = route[i];
+        const FVec3& b = route[i + 1];
+        const float dx = b.x - a.x, dz = b.z - a.z;
+        const float len = std::sqrt(dx * dx + dz * dz);
+        int n = static_cast<int>(std::ceil(len / kProfStep));
+        if (n < 1) n = 1;
+        float prevY = 0.0f; bool havePrev = false, gap = false, maxIsUp = false;
+        float maxStep = 0.0f;
+        for (int s = 0; s <= n; ++s) {
+            const float t = static_cast<float>(s) / static_cast<float>(n);
+            float gy = 0.0f;
+            if (!MapQuery::GroundAt(a.x + dx * t, a.z + dz * t, gy)) { gap = true; break; }
+            if (havePrev) {
+                const float d = gy - prevY;
+                if (std::fabs(d) > maxStep) { maxStep = std::fabs(d); maxIsUp = d > 0.0f; }
+            }
+            prevY = gy; havePrev = true;
+        }
+        float my = 0.0f, cosv = 1.0f;
+        MapQuery::GroundInfoAt((a.x + b.x) * 0.5f, (a.z + b.z) * 0.5f, my, cosv);
+        char line[176];
+        snprintf(line, sizeof(line),
+                 "route-profile leg %zu: len=%.1fm maxStep=%.2fm(%s)%s slopeCos=%.3f y=%.1f->%.1f",
+                 i, len, maxStep, maxIsUp ? "up" : "down", gap ? " GAP" : "", cosv, a.y, b.y);
+        Log::Write("NAV-ROUTE", line);
+        if (maxStep > worstStep) { worstStep = maxStep; worstLeg = static_cast<int>(i); }
+    }
+    char sum[144];
+    snprintf(sum, sizeof(sum),
+             "route-profile: %zu legs (showed %zu), WORST step=%.2fm at leg %d",
+             legs, shown, worstStep, worstLeg);
+    Log::Write("NAV-ROUTE", sum);
+}
+
 } // namespace
 
 bool Init()  { return true; }
@@ -218,8 +331,62 @@ void OnGameFrame() {
              st.nearC, st.nearR, st.nearDist, NavGrid::kFineCell, NavGrid::SamplesThisMap());
     Log::Write("NAV-ROUTE", ms);
 
+    // ---- DIRECT-LINE PROBE (diagnostic, log-only) ----------------------------------------------
+    // Samples the straight player->target line at ~1.5 m and reports, per sample, the FRACTIONAL floor
+    // Y and a mark: 'X' no floor, '^' a >kMaxStep(1.5 m) jump (already blocks A*), 'W' a walkmap wall
+    // at body height, and 'u' an UP-step of kUpStepLo..kMaxStep -- one A* currently ALLOWS but which is
+    // the prime suspect for the "walk a few steps, hard-stop, must move sideways" jam: the wall ray is
+    // cast at floor+0.9 m so it passes OVER a sub-0.9 m ledge, and GroundAt admits a <1.5 m floor delta,
+    // so a ~0.4-0.9 m step the player cannot climb is invisible to BOTH checks. FRACTIONAL Y (the old
+    // probe rounded to whole metres) is what makes such a ledge visible at all. `firstUp` = the first
+    // such up-step; if it lands at the reported sticking point, that is the confirmed cause. Log-only,
+    // game-thread, ~len/1.5 samples.
+    {
+        constexpr float kProbeStep = 1.5f;     // == NavGrid::kFineCell
+        constexpr float kProbeMaxStep = 1.5f;  // == PathSearch kMaxStep (the current A* allowance)
+        constexpr float kProbePad = 0.9f;      // == PathSearch kBodyPad (the wall-ray height)
+        constexpr float kUpStepLo = 0.4f;      // an up-step at least this tall is a climb-suspect ledge
+        const float dx = target.x - from.x, dz = target.z - from.z;
+        const float len = std::sqrt(dx * dx + dz * dz);
+        const int n = (len > 0.01f) ? static_cast<int>(len / kProbeStep) : 0;
+        char line[720]; int off = 0;
+        off += snprintf(line + off, sizeof(line) - off,
+                        "directline seq=%llu len=%.1fm wmBlock=", (unsigned long long)seq, len);
+        const int hdr = off;
+        int firstBlock = -1; const char* why = "none"; int firstUp = -1;
+        float prevX = from.x, prevZ = from.z, prevY = from.y; bool havePrev = false;
+        char body[600]; int bo = 0;
+        for (int i = 0; i <= n && bo < static_cast<int>(sizeof(body)) - 24; ++i) {
+            const float t = (n > 0) ? static_cast<float>(i) / static_cast<float>(n) : 0.0f;
+            const float sx = from.x + dx * t, sz = from.z + dz * t;
+            float sy = 0.0f;
+            const bool w = MapQuery::GroundAt(sx, sz, sy);
+            char mark = '.';
+            if (!w) { mark = 'X'; if (firstBlock < 0) { firstBlock = i; why = "no-floor"; } }
+            else if (havePrev && std::fabs(sy - prevY) > kProbeMaxStep) {
+                mark = '^'; if (firstBlock < 0) { firstBlock = i; why = "step>max"; }
+            } else if (havePrev && !MapQuery::SegmentClear(FVec3{ prevX, prevY + kProbePad, prevZ },
+                                                           FVec3{ sx, sy + kProbePad, sz })) {
+                mark = 'W'; if (firstBlock < 0) { firstBlock = i; why = "wall"; }
+            } else if (havePrev && (sy - prevY) > kUpStepLo) {
+                mark = 'u'; if (firstUp < 0) firstUp = i;   // up-step A* allows but may block the player
+            }
+            bo += snprintf(body + bo, sizeof(body) - bo, " %c%.1f", mark, w ? sy : -1.0f);
+            if (w) { prevX = sx; prevZ = sz; prevY = sy; havePrev = true; }
+        }
+        snprintf(line + hdr, sizeof(line) - hdr, "%d(%s) firstUp=%d:%s", firstBlock, why, firstUp, body);
+        Log::Write("NAV-ROUTE", line);
+        // Only when the straight line is actually blocked (a detour is happening) dump the 2D field,
+        // so we can read whether the target is genuinely fenced off or a narrow ramp is being skipped.
+        if (firstBlock >= 0) LogRouteField(from, target, rawPoly);
+    }
+
+    // The ROUTE'S OWN step profile -- the decisive measurement the directline above cannot give (it only
+    // walks the straight line). Pins the real walkable step height vs the shipped kStepDiscont cap.
+    if (r == PathSearch::Plan::Route) LogRouteProfile(rawPoly);
+
     // Instrumentation: target + raw/smoothed polyline sizes + the first leg, for diagnosing
-    // a route. Directions are WORLD-ABSOLUTE (no facing/camera frame).
+    // a route. (Leg directions themselves are camera-relative -- see the facingRad block below.)
     {
         const FVec3 s1 = (poly.size() > 1) ? poly[1] : target;
         char mg[192];

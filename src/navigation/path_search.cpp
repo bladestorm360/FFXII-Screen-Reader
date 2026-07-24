@@ -29,9 +29,27 @@ namespace {
 // itself at map edges. Budgets are safety ceilings for the pathological case.
 constexpr int   kMaxExpand    = 20000;   // A* node-expansion cap
 constexpr int   kMaxRays      = 60000;   // wall-ray budget (A* edges + string-pull validation)
-constexpr float kMaxStep      = 1.5f;    // climbable floor-height delta between cells
+constexpr float kMaxStep      = 1.5f;    // coarse cliff gate: floor-height delta between cell CENTRES
 constexpr float kBodyPad      = 0.9f;    // ray height above floor for wall clearance
-constexpr float kValidateStep = 1.0f;    // dense string-pull validator sample spacing (m)
+// STEP-DISCONTINUITY edge test (Session 68, RE-grounded). Decompile of the FIELD walkmap movement
+// (FUN_0022cc50, FUN_00231900, FUN_0033bc80) shows the engine imposes NO walkable-slope limit -- the
+// player can walk any CONTINUOUS slope (that is why stairs and hills work). The only geometric
+// movement blockers are walls (SegmentClear, mask=4, already tested) and a STEP-HEIGHT DISCONTINUITY:
+// FUN_0033bc80 reacts when the ground height jumps >= 0.3 world-units under one movement step. Our
+// coarse kMaxStep (1.5 m between cell centres 1.5 m apart) is ~5x too loose, so A* stitched routes
+// across a ~0.3-0.6 m ledge/lip the player's movement rejects (character jams; confirmed on Dalmasca
+// Estersand). The prior 0.6 m / 0.5 m dense check was still looser than the real limit, so the route
+// never changed. Fix: sub-sample the floor FINELY along any edge with a real height change and reject
+// a sub-step that JUMPS more than kStepDiscont -- a ledge fails, a continuous slope / ramped staircase
+// (whose per-0.25 m rise stays under the cap) passes. NOT a slope cap: a slope gate would wrongly
+// reject slopes the player can walk. kMaxStep stays high on purpose so continuous slopes survive the
+// coarse gate. Flat/near-level edges skip the whole check (fast path) -- city routing is unaffected.
+// kStepDiscont is provisional; the shippable value is bracketed from the NAV-ROUTE route-profile dump
+// (the descent's real ledge height vs the terrain the tester actually walks).
+constexpr float kEdgeSubStep  = 0.25f;   // fine floor sub-sample spacing along an edge (m)
+constexpr float kStepDiscont  = 0.35f;   // max floor JUMP per sub-step; a ledge/lip exceeds it, a
+                                         // continuous slope/ramp does not (~0.3 m engine step limit)
+constexpr float kStepTrigger  = 0.15f;   // only sub-sample edges with at least this much height change
 
 
 // Lateral clearance (capsule radius) demanded of every edge. TWO passes, because 0.5 m turned out
@@ -178,7 +196,32 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             && MapQuery::SegmentClear(FVec3{ a.x - px, a.y, a.z - pz }, FVec3{ b.x - px, b.y, b.z - pz });
     };
     auto passable = [&](int ac, int ar, float ay, int bc, int br, float by) -> bool {
-        if (std::fabs(ay - by) > kMaxStep) return false;
+        if (std::fabs(ay - by) > kMaxStep) return false;                        // coarse cliff gate
+        // Step-discontinuity floor test (see kStepDiscont note above). Only edges with a real height
+        // change are sub-sampled -- flat/near-level edges are the common case and skip this (fast path,
+        // city routing untouched). Walk the floor finely along the edge and reject a sub-step that
+        // JUMPS more than kStepDiscont: a ledge/lip the player cannot step over fails, a continuous
+        // slope or ramped staircase passes. This is what stops A* routing you across a step the player's
+        // own movement rejects (the char jams against it and does not move).
+        if (std::fabs(ay - by) > kStepTrigger) {
+            float ax, az, bx, bz;
+            NavGrid::CellCenter(ac, ar, ax, az);
+            NavGrid::CellCenter(bc, br, bx, bz);
+            const float ex = bx - ax, ez = bz - az;
+            int subN = static_cast<int>(std::ceil(std::sqrt(ex * ex + ez * ez) / kEdgeSubStep));
+            if (subN < 1) subN = 1;
+            float prevSubY = ay;
+            for (int s = 1; s < subN; ++s) {                 // interior sub-samples; endpoints are ay/by
+                if (rays >= kMaxRays) return false;
+                ++rays;
+                const float t = static_cast<float>(s) / static_cast<float>(subN);
+                float subY = 0.0f;
+                if (!MapQuery::GroundAt(ax + ex * t, az + ez * t, subY)) return false;  // gap in the floor
+                if (std::fabs(subY - prevSubY) > kStepDiscont) return false;            // ledge / lip
+                prevSubY = subY;
+            }
+            if (std::fabs(by - prevSubY) > kStepDiscont) return false;                  // last hop onto B
+        }
         if (rays >= kMaxRays) return false;
         // Charge what the pass actually spends: three rays with a margin, one without. The relaxed
         // retry therefore costs about a third of the strict pass for the same exploration, which is
@@ -373,8 +416,10 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             // Always the STRICT margin here, even when the route itself was bridged at margin 0:
             // the smoother's job is to refuse to straighten a detour through a tight gap, so a
             // relaxed test would undo the very corner the bridge had to keep.
+            // Same fine spacing + step-discontinuity cap as passable()'s A* edge test, so the
+            // smoother can never straighten a leg back across a ledge the edge test just rejected.
             if (!MapQuery::SegmentTraversable(outPoly[anchor], outPoly[probe + 1],
-                                              kValidateStep, kBodyPad, kMaxStep, kMarginStrict,
+                                              kEdgeSubStep, kBodyPad, kStepDiscont, kMarginStrict,
                                               rays, kMaxRays)) {
                 smooth.push_back(outPoly[probe]);   // needed corner
                 anchor = probe;

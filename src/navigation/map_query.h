@@ -68,6 +68,14 @@ void CellCenter(const WalkGridInfo& g, int col, int row, float& wx, float& wz);
 // cell center) to outY. No game call, no raycast.
 bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY);
 
+// DIAGNOSTIC: topmost walkable floor at an arbitrary world XZ (not just a cell centre), returning the
+// floor height AND the poly's slope cosine (B / |(A,B,C)| from the plane normal; 1.0 = flat, smaller =
+// steeper). Shares ReadCellFloor's CSR->prim->poly traversal. Used by the NAV-ROUTE route-profile dump
+// to distinguish a step-discontinuity (isolated big dY) from a smooth-but-steep slope (small dY per
+// step, low cosine). NOT a walkability gate -- the field engine imposes no slope limit. Reads the live
+// grid each call, so it is for log-only diagnostics, not the hot A* path. Handles its own GetGridInfo.
+bool GroundInfoAt(float x, float z, float& outY, float& outCosSlope);
+
 // ---- Map-jump surfaces: WHERE a transition physically is -----------------------------------------
 // The floor polygons the player walks onto to fire a map transition, tagged by the script's
 // `setmapidmj` (see NavRva::WALK_POLY_MJ_*). `group` is the map-jump group id, which is also the
