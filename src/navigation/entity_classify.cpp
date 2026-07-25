@@ -24,6 +24,7 @@ const wchar_t* CategoryWord(Category c) {
         case Category::NPC:         return L"NPC";
         case Category::Object:      return L"Interactables";
         case Category::Enemy:       return L"Enemy";
+        case Category::Items:       return L"Items";
         default:                    return L"Interactables";
     }
 }

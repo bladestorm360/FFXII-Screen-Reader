@@ -140,14 +140,32 @@ std::wstring ElevationSuffix(const FVec3& from, const FVec3& to) {
 }
 
 bool IsWithinReach(float dist2D) {
-    return dist2D < g_unitsPerStep * 1.5f;
+    return dist2D < g_unitsPerStep * 1.5f;   // HORIZONTAL only -- see ReachPhrase below
+}
+
+// The reach phrase, with elevation retained.
+//
+// Session 73 bug: all three DescribeDirection* variants early-returned a bare L"right next to you"
+// the moment the HORIZONTAL distance was inside reach, which put the return ABOVE the line that
+// appends ElevationSuffix. So the one phrase that most strongly implies "you can interact now" was
+// also the only phrase that could never say "(above)" -- and the mod used it for an NPC 6.92 units
+// directly overhead, in a 3D game full of plinths, balconies and bridges.
+//
+// The early return itself is CORRECT and stays: at melee range a bearing swings wildly and is
+// meaningless, which is exactly why it was introduced. What was wrong was dropping the one
+// component that does NOT degenerate at close range -- the vertical one. So keep the phrase, keep
+// the stable wording, and re-attach the elevation.
+//
+// On level ground ElevationSuffix returns L"", so this is byte-identical to the old behaviour.
+std::wstring ReachPhrase(const FVec3& from, const FVec3& to) {
+    return std::wstring(L"right next to you") + ElevationSuffix(from, to);
 }
 
 std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
     float d2 = Distance2D(from, to);
     // "right next to you" (not "here"): this is now THE crow-flies phrase, and it inherits the
     // wording the egocentric one used, so the spoken result is unchanged at melee range.
-    if (IsWithinReach(d2)) return L"right next to you";
+    if (IsWithinReach(d2)) return ReachPhrase(from, to);
     std::wstring s = CardinalBearing(from, to);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
@@ -158,7 +176,7 @@ std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
 
 std::wstring DescribeDirectionRelative(const FVec3& from, const FVec3& to, float facingRad) {
     float d2 = Distance2D(from, to);
-    if (IsWithinReach(d2)) return L"right next to you";
+    if (IsWithinReach(d2)) return ReachPhrase(from, to);
     // ALWAYS a direction. A distance with no direction is useless to walk on, so there is no
     // "omit the word" path here -- PlayerState::ReadCameraForwardStable falls back through the live
     // camera, the last good camera, then the leader's own facing, and only a caller with no player
@@ -173,7 +191,7 @@ std::wstring DescribeDirectionRelative(const FVec3& from, const FVec3& to, float
 
 std::wstring DescribeDirectionEgo(const FVec3& from, const FVec3& to, float facingRad) {
     float d2 = Distance2D(from, to);
-    if (IsWithinReach(d2)) return L"right next to you";
+    if (IsWithinReach(d2)) return ReachPhrase(from, to);
     std::wstring s = EgoBearing(from, to, facingRad);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));

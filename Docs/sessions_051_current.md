@@ -1597,3 +1597,279 @@ back-out to the Attributes page re-announcing off `FUN_002c1a80`. Committed `ed6
 `src/ui/ingame_menu_reader.cpp` (S67 `o` stale-in-field fix) and the S67/S68 pathfinder + `o`-fix
 entries in `Docs/debug.md`. `debug.md` was committed via the reset-to-HEAD / apply-only-mine /
 restore dance, so only the S71 strike went in.
+
+## Session 72 — 2026-07-24 — [nav+combat] Ground-loot Items category; enemy "begins casting" realtime; EXP/LP on the defeat line
+
+**KEYWORDS: ground loot drop pool DAT_02ec0fa0 0x2DA0FA0 stride 0x60 marker table DAT_022be7f0
+0x219E7F0 FUN_00319ca0 0x1F9CA0 spawn FUN_00319920 0x1F9920 collected FUN_003197b0 0x1F97B0 discard
+Category::Items item_scan.cpp core/item_names.cpp FUN_00272cb0 0x152CB0 msg 0x0D begins casting
+realtime FUN_00312280 0x1F2280 reward batch BtlChr+0x18C EXP +0x190 LP +0x1C2 level defeated line
+7 slots not 4**
+
+**Task (tester, pre-ship):** two blockers — (1) "items dropped by enemies in the field are not
+accessible on the pathfinder, need an items category"; (2) two combat-log gaps — when an enemy
+starts preparing an ability, and how much EXP/LP a kill gave.
+
+**Straight to C++ by explicit user instruction** — no Frida probe gate this session. The two facts
+that would normally have been probe-gated were closed offline instead (below).
+
+### 1. Ground loot is a SECOND OBJECT POOL — that is why the scanner never saw it
+
+The pathfinder walks the scene-object handle table (`DAT_02098e10`). Dropped loot is not in it. The
+engine keeps ground drops in their own **10-slot pool `DAT_02ec0fa0` (RVA `0x2DA0FA0`, stride
+`0x60`)**, with world positions in a **parallel marker table `DAT_022be7f0` (RVA `0x219E7F0`, stride
+`0x20`)** — `+0x00` alive flag, `+0x10` float xyz, exactly the two fields the engine's own getter
+`FUN_002fb310` reads. Record: `+0x04` state (0 = free), `+0x20`…`+0x57` payload.
+
+**The payload is 7 entries, not 4.** `combat_system.md:1007` said 4; both `FUN_003180f0` (the roll)
+and `FUN_00319920` (the award) loop 7 times — 5 normal drop slots + 2 rare. **Struck.**
+
+New `src/navigation/item_scan.{h,cpp}`, modelled on `exit_scan.cpp` (fixed position, no scene node).
+`Category::Items` inserted **immediately after `Enemy`** — the tester's explicit request, since the
+cycle is a plain modulo and one `=` press then flips between the enemies and their loot.
+
+**The thread split is the whole design.** Three hooks — spawn `FUN_00319ca0` (`0x1F9CA0`), collected
+`FUN_00319920` (`0x1F9920`), discarded/expired `FUN_003197b0` (`0x1F97B0`) — run on the **game
+thread** and are the only place an item id becomes a name, because that is a game call. The spawn
+hook renders all 10 slots' labels into a cache (a full pass, not a diff, so the pool's LRU eviction
+path is covered too). `ScanDrops()` is pure memory reads and only ever reads that cache. Same idiom
+as the combat log rendering its text at append time.
+
+**The hooks are also the refresh event.** `EntityList::OnFieldFrame`'s container-mask edge cannot see
+this pool, so without them a drop would only appear when the player happened to press `` ` `` or flip
+category — the design the project forbids. Each hook sets an atomic; `OnFieldFrame` consumes it
+**before** the mask early-out, so the edge cannot be swallowed.
+
+**`FUN_00272cb0` is NOT an item-id resolver** — corrected en route. It is
+`handle → FUN_003588b0 → FUN_00263990`, and `FUN_00263990` reads `+0x102` / `+0xf8` with the
+`0xffffbfff` npcdic mask: the *scene-object* name chain `EntityScan::ResolveObjectName` already
+replicates. Ghidra dropped the register-passthrough arg, so its input semantics are not established
+offline — but the call is play-confirmed in the battle item sublist, so it is reused **as a game
+call, from the game thread only**, rather than reversing the 14-class dispatch behind
+`PTR_FUN_01eebd08` on an inference below the bar. Centralized into **`src/core/item_names.{h,cpp}`**;
+`ingame_menu_reader.cpp`'s copy now delegates to it.
+
+### 2. Enemy begins casting — one line, and a limit accepted on purpose
+
+Messages `0x0D`/`0x0E`/`0x0F` were already flowing through the Tier-1 hook; they were simply filed as
+the spam tier. `combat_format.cpp`'s `ShouldSpeakNow` now returns true for **`0x0D` only** —
+`FUN_00469af0` maps action category 1 (magick) to it and is faction-gated `& 0x0A` (guest|foe), so a
+party member can never reach it. `0x0E` "readies" / `0x0F` "uses" stay log-only.
+
+**Accepted limit, tester's call:** `0x0D` carries render style `0x01`, which is **not** cull-exempt,
+so the bus drops it beyond ~24 world units — a caster hanging far back announces nothing. Hooking
+the emitter instead would fix that and would also name the target (the message never does), but it
+was deliberately NOT taken, to keep the game's own verbatim wording in all 12 locales. Recorded in
+the code comment so it is not "fixed" later.
+
+### 3. EXP / LP folded into the defeat line
+
+FFXII has **no end-of-battle results screen**. Rewards are granted per corpse and shown as floating
+`+EXP`/`+LP` **sprite digits** — no text exists anywhere in the binary, so the sentence is ours; the
+numbers are the game's.
+
+New hook on **`FUN_00312280` (RVA `0x1F2280`)**, the reward batch, one call per enemy death off
+`FUN_0030e360` case 0. Snapshot `BtlChr+0x18C` (EXP) / `+0x190` (LP) across roster list 3 slots 0–8 —
+**the same list the function itself walks** (`FUN_00320ab0(i, 3)`, capped at 9) — call through, then
+take the largest delta. EXP is divided among survivors so every living member sees the same share and
+the max *is* that share, while a KO'd or absent member reads 0 and cannot drag it down.
+
+`"<enemy> defeated. 34 EXP, 2 LP."` — one line, `speakNow=true`. Both deltas 0 (non-party kill, Trial
+Mode) degrades to the bare `"<enemy> defeated"`; **never "0 EXP, 0 LP"**.
+
+**Why the diff and not the popup:** `FUN_0028fb80(actorId, exp, lp)` looked cheaper — its args are
+literally the drawn numbers — but Ghidra renders that call site with what look like the gil
+accumulator in the value slots (dropped register args), leaving the argument identity at ~0.85. The
+diff needs no such inference; it observes what the game actually wrote. `+0x18C`/`+0x190` are
+corroborated by `license_reader.cpp` (already reads `+0x190` as current LP in shipped code) and by the
+status-menu member block.
+
+**The enemy-defeated line MOVED.** It used to be emitted from `CheckVitals`, i.e. off a damage
+*calculation* one step before the HP write and long before rewards existed — the two could not be
+joined there. It now comes from the real death event. The `l.low` latch stays: it is what re-arms the
+party 20 % warning on revive.
+
+### ⚠ The one sub-0.98 item, and what to watch on first playtest
+
+That `FUN_00312280` is reached for **every** enemy death is **0.95** — its sole caller is
+`FUN_0030e360:204` case 0, the KO funnel for any cause, but "sole caller" came from a static xref,
+not from observation. **Failure mode is loud:** a kill that announces nothing at all. Watch the first
+fight, including a poison/doom death. Fallback if a path misses it: keep `CheckVitals`'s enemy branch
+as the trigger, stash the pending name, and let the reward detour flush it with the numbers attached.
+
+**Built and deployed clean. NOT yet play-confirmed.**
+
+### Reported this session, NOT diagnosed — two silent Clan/Hunt surfaces
+
+The tester reported two more surfaces that read nothing, with screenshots. **Documented in
+`debug.md` § "Clan / Hunt surfaces", no RE done, deliberately not guess-fixed:**
+
+1. **The multi-item reward panel** — a titled panel (the bill name, e.g. `Red & Rotten in the
+   Desert`) over one row per reward: `300 gil`, `Potion x 2`, `Teleport Stone x 1`. Distinct from the
+   single-item obtained toast the mod already reads (`FUN_0035e070` + `widget+0xC8`) and from battle
+   messages `0x24`-`0x26`: it has a heading and a separate quantity column, and has **no cursor**.
+2. **The hunt notice board** — `"Which bill would you like to read?"` over a three-column cursored
+   list (`Mark` / `Rank` / `Status`, e.g. `Thextera | I | Available`), with `Done` as a row in the
+   same list. This one **does** have a cursor, so the first question is why the universal focus
+   signal `FUN_00247510` 0x8000 does not already reach it.
+
+**Do not assume the two share a controller** — one is cursored and one is not. Session 71's wrong
+hook came from exactly that kind of shape assumption; follow each creation chain separately.
+
+---
+
+## Session 73 — 2026-07-24 — [pathfinder] Navigation is elevation-blind: `AllFloorsAt` + the reach-phrase lie
+
+KEYWORDS: elevation, stacked floors, AllFloorsAt, ScanTopFloorAt, topmost floor, NavGrid 2D,
+IsWithinReach, ReachPhrase, right next to you, above, Montblanc, Clan Hall, plinth, interaction
+gates, facing cone, FUN_003a1bb0, FUN_0025bad0, FUN_0025b820, DAT_0209a2b8, height band, layered
+grid, cross-level routing
+
+### The report
+
+Tester could not progress the story: the mod said **"Montblanc. right next to you"** and routed
+**"Northeast 1. 1 steps"**, but Confirm always talked to a Clan Member instead. Measured from the
+mod log (Clan Hall, map 302):
+
+| | X | Y | Z | horiz from player |
+|---|---|---|---|---|
+| Player | 37.00 | **0.00** | 54.60 | — |
+| Montblanc (slot 29) | 37.04 | **6.92** | 55.10 | 0.50 |
+| Clan Member 4 (slot 26) | 38.86 | **0.00** | 54.74 | 1.86 |
+
+Numbering came from `%LOCALAPPDATA%\FFXII-Screen-Reader\entity_labels.txt` (`302 0 26 135 4 Clan
+Member`), not from guessing which duplicate was which.
+
+### Root cause — every floor query in navigation is `f(x, z) -> y`
+
+Four layers, all elevation-blind, each confirmed from our own source:
+
+1. `MapQuery::GroundAt` is a **game** function taking `(x, z)` only. It cannot be asked "the floor
+   nearest MY height."
+2. `ScanTopFloorAt` (`map_query.cpp:190`) — `if (!found || y > bestY)`. It already iterated **every**
+   floor poly in the cell and **discarded all but the highest**. In a stacked column it therefore
+   described the surface *above the player's head*.
+3. `NavGrid` is a **2D** grid (`WorldToCell(wx, wz, col, row)`), one `floorY` per cell — so a target
+   directly overhead maps to the player's own cell: `tgtCell=(24,36) nearest=(24,36) nearDist=0.0m`.
+4. `nav_common.cpp` — all three `DescribeDirection*` early-returned a bare `L"right next to you"`
+   **above** the line appending `ElevationSuffix`. **The one phrase implying "you can interact now"
+   was the only phrase that could never say "(above)".**
+
+The mod had already MEASURED the gap and thrown it away: the same route logged
+`route-profile leg 0: maxStep=6.93m(up)`, `WORST step=6.93m`, `directline wmBlock=1(step>max)` —
+and `path_planner.cpp:122` labels that dump *"diagnostic, log-only"*.
+
+### Shipped this session
+
+- **`MapQuery::AllFloorsAt`** (`map_query.h/.cpp`) — every walkable floor in a column, ascending,
+  near-coplanar polys merged at `kLayerMerge = 0.35` (deliberately the same magnitude as
+  `kStepDiscont`: the height at which the engine stops letting you walk across a change is the
+  height at which two surfaces become different levels). Pure memory reads, no game call, same cost
+  as `ReadCellFloor`. The scan loop is **unchanged** — only what it does with each hit differs.
+- **`ScanTopFloorAt` is now a wrapper** over the collector and tracks its top/cos **independently of
+  the layer array**, so its answer is byte-identical even if the array overflows. No existing caller
+  changed behaviour.
+- **`NavCommon::ReachPhrase`** — the reach short-circuit keeps its wording (a bearing genuinely does
+  swing wildly at melee range, which is why the early return exists) but re-attaches
+  `ElevationSuffix`. On level ground it returns `L""`, so flat maps are byte-identical.
+- **C++ elevation diagnostic** in `entity_diag.cpp` (the `'` dump): the player's column and every
+  dumped object's column now report
+  `cell=(c,r) layers=N raw=M [y0,y1,...] top=… nearest=… dY=±… <== STACKED`.
+  `top=` is what the old single-answer path handed the router; `nearest=` is the level the entity is
+  really on. **`top != nearest` is the bug, printed.** Deliberately does NOT call `GroundAt`
+  (game-thread-only per `nav_grid.h`); `top=` is its memory-only equivalent.
+
+### Interaction system — RE'd, recorded in `GameArchitecture.md`, NOT built on yet
+
+Three independent geometric gates, all of which must pass before an object is even scored:
+horizontal distance (`FUN_003da5a0`, **Y excluded — it is a cylinder**), a vertical band
+(`FUN_0025bad0:77-80`), and a **facing cone** (`FUN_003a1bb0`, 0.99). The engine keeps exactly **one**
+chosen target (`DAT_0209a2b8` + `DAT_0209a2bc`), reset per frame by `FUN_0025d650` — so
+**"cycle interaction target" is not a thing the engine can do**; do not design a key for it.
+
+### Struck / corrected in-session
+
+- ~~"the 15:16:32 telop was Montblanc"~~ — **WRONG**, tester confirmed it was Clan Member 4 (the
+  interaction icon reads "clan member"). It was offered at 0.9, below the bar, and should not have
+  been stated at all. It also *confirms* the diagnosis: the engine never selected Montblanc.
+- ~~"route stays silent when there is no walkable route"~~ — **REVERSED by the tester mid-session.**
+  Turn-by-turn directions must reach **every** destination and nothing may go silent. `No path`
+  becoming *more* common after the layered grid lands is a regression, not a truer answer.
+- **Frida-first was explicitly waived by the tester for pathfinding** ("much easier to diagnose in
+  C++"). A `probe_walkmap_layers.js` was written and then retired to `frida/archive/` unrun. Per
+  CLAUDE.md the standing rules never override an explicit instruction in the current conversation.
+
+### Still open
+
+- **NOT play-confirmed** — built and deployed, no tester round yet.
+- The layered grid itself (`col,row` -> `col,row,layer`, layer-aware snapping, inter-layer edges via
+  the existing `kStepDiscont`) is **designed, not built**. `AllFloorsAt` is the primitive it needs.
+- **Unproven at 0.90:** that scene-object Y and player Y share a reference frame. The new `player
+  floor:` line settles it — if the player's column reports a layer at ~6.92, the frames match.
+- Two silent Clan/Hunt surfaces from S72 remain undiagnosed.
+
+### Session 73 addendum — containment fix validated, layered grid STRUCK, `;` interact readout
+
+**Containment fix validated in play.** Montblanc `pos.y=6.92` → `layers=1 raw=1 [6.93] dY=+0.01`;
+player column `raw=103 → raw=1`. Every named NPC lands on a real floor (Krjn 6.00→[6.00], an object
+0.75→[0.75]). The `(i+1)%3` winding assumption for `DAT_00908de8` is validated — a wrong table gives
+`layers=0`, not exact matches. **Object Y and player Y share a reference frame: SETTLED at 0.99.**
+
+**STRUCK: the layered grid.** Post-fix histogram over the whole dump — `layers=1` ×28, `layers=0`
+×16, **`layers>=2` ×0**. No stacking exists in that room; the walkmap is a single-valued height field
+with a step. The "stacking" was plane extrapolation. Do not build a layer dimension for a case the
+data does not show.
+
+**REAL cause of "1 steps" found:** `expands=0 touched=1`. Player and Montblanc are 0.50 apart
+horizontally and `kFineCell` is 1.5, so both land in ONE fine cell; A* short-circuits as "already
+there" and **never tests an edge, so `kStepDiscont` never runs**. Fix is a resolution-independent
+**goal-surface check** + approach cell, NOT a layer dimension. Designed, not built.
+
+**`;` interact-target readout shipped** (tester's key choice — no new binding). `;` was structurally
+silent in the field, so that dead slot now reads the engine's OWN chosen target
+(`DAT_0209a2b8`/`DAT_0209a2bc` → "Talk: X" / "Action: X", silent when nothing is in reach).
+`BattleTargetReader::SpeakTargetStatus()` now returns whether it spoke; `OnNavKey` falls through only
+on false, so battle behaviour is byte-identical. New `navigation/interact_target.{h,cpp}`.
+The `'` dump gained `LogChosen()` (ground truth) plus a per-object replica of the three gates
+(distance / vertical band / cone) that logs its RAW inputs, so a wrong offset in the replica is
+visible rather than producing a plausible FAIL.
+
+### Session 73 addendum 2 — interaction band VALIDATED, approach-cell routing built
+
+**Band validated in play.** `gates "Montblanc": dist2D=0.51 | band FAIL py=0.00 in [4.63,8.02]
+centre=6.92 sc=1.00 up=1.10 dn=0.50 pad=1.79 | cone PASS |d|=0.255 half=1.571`. Both bounds
+reproduce exactly from the replica, so the offsets are measured, not inferred. **`half=1.571` = π/2 —
+the cone is a 180° hemisphere**, so a "face the target" key would have fixed nothing; and distance is
+a cylinder (0.51 passed from 6.92 below). For anything on a dais the band is the ONLY gate that
+decides where to stand.
+
+**STRUCK (mine): "rotating the camera cannot orient the character."** The tester corrected this —
+camera facing DOES orient the character, settled in an earlier session; movement is camera-relative
+(see `project_camera_relative_directions_session37`). It was also irrelevant: the cone was passing.
+
+**Approach-cell routing built.** Goal is now a SET of cells whose floor lies inside the target's
+interaction band, within 3 cells / 4 m. Multi-goal A* (min-over-goals heuristic, membership
+termination, `tc/tr` adopt the reached cell). Non-regression by construction for ground NPCs,
+exits, `p`, and any target with no readable band. **Built and deployed, NOT play-confirmed.**
+
+### Session 73 addendum 3 — approach cell lands in-band but out of reach (OPEN)
+
+Tester round on the goal-set build: routing gets you *near* the target but not close enough to
+interact. `goal-set: 12 cell(s) ... primary d=0.9m` yet `reached alternate approach cell ...
+nearDist=2.1m` — a nearer cell existed and the search did not take it, because a min-over-goals
+heuristic makes every goal equally attractive and A* stops at the first one popped.
+
+**Shipped a provisional fix:** the remaining gap is now a terminal cost,
+`h(n) = min_g(euclid(n,g) + 4.0 * g.d)`. Admissible, more informed (fewer expansions), and it
+changes only the PREFERENCE among goals, never the goal SET — so it cannot make Montblanc
+unreachable, which the tester called out as the thing not to break. The `goal-set: reached
+alternate approach cell` line now also logs the gap in metres.
+
+**Real fix, next session:** `kApproachRadius = 4.0f` is made up; it should be the engine's true
+horizontal interaction reach from `FUN_003da5a0` — two of its four extents are constants at
+`playerNode+0x5C` and `targetNode+0x7C`. Measured bracket: reach is between 0.51 (passed) and 1.70
+(band+cone passed, engine still chose nothing). **Do not tighten it blind** — an empty goal set falls
+back to the target's own cell, i.e. the unreachable dais.
+
+**NOT play-confirmed.** Built and deployed at end of session; the tester shipped the build without a
+verification round.

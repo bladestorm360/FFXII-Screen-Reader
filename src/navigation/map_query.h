@@ -66,7 +66,39 @@ void CellCenter(const WalkGridInfo& g, int col, int row, float& wx, float& wz);
 // Direct per-cell walkability + floor height from the grid: true iff the cell holds a
 // walkable floor poly (type 0), writing the topmost such floor's height (plane eval at the
 // cell center) to outY. No game call, no raycast.
+//
+// CAUTION -- "topmost" is why navigation was elevation-blind (Session 73). In any column with
+// stacked geometry (plinth, balcony, bridge, upper storey) this describes the surface ABOVE the
+// player's head, not the floor they are standing on. Prefer AllFloorsAt below for anything that
+// has to know WHICH level it is talking about; this stays for callers that genuinely want the roof.
 bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY);
+
+// ---- Stacked floors: every walkable level in one column ------------------------------------------
+// The mod's whole navigation stack asks f(x,z) -> y, which is not a well-defined question in a game
+// with balconies and bridges: MapQuery::GroundAt is a GAME function taking only (x,z), and our own
+// ScanTopFloorAt resolved the ambiguity by keeping the maximum. It already visited every floor poly
+// in the cell -- it just discarded all but the highest. AllFloorsAt keeps them.
+struct FloorLayer {
+    float y        = 0.0f;   // plane-evaluated height at the requested (evalX, evalZ)
+    float cosSlope = 1.0f;   // |B| / |(A,B,C)|; 1.0 = flat, smaller = steeper
+};
+
+// Ceiling on levels reported per column. Far above any real cell; purely a stack bound.
+constexpr size_t kMaxFloorLayers = 16;
+
+// Two floors closer together than this are ONE walkable surface, not two levels -- co-planar polys
+// meeting inside a cell must not read as a step. Deliberately the same magnitude as PathSearch's
+// kStepDiscont (0.35): the height at which the engine stops letting you walk across a change IS the
+// height at which two surfaces become different levels.
+constexpr float kLayerMerge = 0.35f;
+
+// Every walkable floor in cell (col,row), evaluated at (evalX,evalZ), ASCENDING by height with
+// near-coplanar polys merged. Returns the number of layers written to `out` (0 = no floor).
+// `outRawCount` optionally receives the pre-merge poly count, so a caller can see how much
+// geometry collapsed -- and can tell when a column hit the kMaxFloorLayers bound.
+// Memory-only, no game call, no raycast. Same cost as ReadCellFloor.
+size_t AllFloorsAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
+                   FloorLayer* out, size_t maxOut, int* outRawCount = nullptr);
 
 // DIAGNOSTIC: topmost walkable floor at an arbitrary world XZ (not just a cell centre), returning the
 // floor height AND the poly's slope cosine (B / |(A,B,C)| from the plane normal; 1.0 = flat, smaller =

@@ -12,6 +12,7 @@
 #include "navigation/map_rva.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
+#include "navigation/interact_target.h"
 #include "battle/party_status.h"
 #include "battle/combat_log.h"
 #include "core/hooks.h"
@@ -34,7 +35,8 @@ namespace {
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     bool isTransition = false;   // exits only: the target is the map-jump surface itself
-    if (!EntityList::GetCurrentTarget(pos, label, &isTransition)) {
+    void* sceneObj = nullptr;    // needed for the interaction band -- see below
+    if (!EntityList::GetCurrentTarget(pos, label, &isTransition, &sceneObj)) {
         // Front-of-pipeline diagnostic: distinguishes "\\ produced no target" from
         // "\\ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
         Log::Write("NAV-ROUTE", "'\\' (route) pressed: GetCurrentTarget returned no target -> \"No target\"");
@@ -42,7 +44,12 @@ void RouteToCurrent() {
         return;
     }
     Log::Write("NAV-ROUTE", "'\\' (route) pressed: target acquired -> PathPlanner::Request");
-    PathPlanner::Request(pos, label, isTransition);
+    // Route to where you could STAND and interact, not to where the object is. A transition is
+    // excluded on purpose: its destination IS the surface you walk onto, so it has no approach cell.
+    InteractTarget::Band band;
+    if (!isTransition) band = InteractTarget::ReadBandFor(sceneObj);
+    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi);
+    else            PathPlanner::Request(pos, label, isTransition);
 }
 
 // `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the
@@ -260,7 +267,12 @@ void OnNavKey(int vk) {
         case VK_F5:         EntityList::CmdToggleAvailability(); break; // F5 all <-> story-gated
         case VK_F6:         EntityList::CmdLabelFromClipboard(); break;  // F6 label focus from clipboard
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
-        case VK_OEM_1:      BattleTargetReader::SpeakTargetStatus(); break;  // ;  active target status
+        // `;` is context-gated, not double-bound: the battle reader is STRUCTURALLY silent in the
+        // field (it needs a commitment or an open select UI), so its false return is the field
+        // case. In battle you get the battle target; outside it, who Confirm will address.
+        case VK_OEM_1:
+            if (!BattleTargetReader::SpeakTargetStatus()) InteractTarget::SpeakCurrent();
+            break;                                                // ;  target status / interact target
         case VK_OEM_7:      DiagnosticDump();                 break;  // '  diagnostic dump
         case '4':           PartyStatus::SpeakSlot(0);        break;  // 4  party slot 1 status
         case '5':           PartyStatus::SpeakSlot(1);        break;  // 5  party slot 2 status

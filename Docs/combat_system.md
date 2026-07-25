@@ -22,6 +22,8 @@
 > | §7.2 | `FUN_00313b30` = battle start/end | fires **~2× per action, per combatant** | 0.96 |
 > | §7.2 | game over = `FUN_0035c7b0` | **no caller ever passes `0x17`.** Real edge fn is **`FUN_0035c8a0`** | 0.95 |
 > | §7.2 | `FUN_00312280` "gives EXP/LP/gil/loot" | **none are arguments.** gil → hook `FUN_00469e80`; loot → `FUN_003180f0`; EXP/LP → before/after diff | 0.95 |
+> | §7.2 | the loot buffer is "**4 slots**, stride 8" | **7 slots** — 5 normal + 2 rare. Both `FUN_003180f0` and `FUN_00319920` loop 7 times. Struck S72 | 0.99 |
+> | §9.1.4 | `0x0D`–`0x0F` are all "the spam tier, log-only" | **`0x0D` "begins casting" is REALTIME** since S72; only `0x0E`/`0x0F` are the spam tier | — |
 > | §9.4, §10 | Tier-1 hook `FUN_0028e110` | **it never receives the message id.** Hook **`FUN_00536410`** (RVA `0x416410`): id at `RCX+4 & 0x7FFF`, finished string into `RDX`, one frame | 0.97 |
 >
 > **Also materially enlarged:** §1.7's codec fix is far bigger than the `0x29` rule — the complete
@@ -1004,7 +1006,7 @@ edge by one action — settle with `probe_combat_state.js`. Pure on-demand read 
 |---|---|---|---|
 | **`0x1EF760`** | `FUN_0030f760` | per action committed (~1–10/s) | "X uses Y on Z" for **every** combatant incl. AI, **and** the battle-engage edge |
 | **`0x1F3B30`** | `FUN_00313b30` | ⛔ ~~per engage / disengage~~ **per ACTION, ~2× each** (S49, 0.96) — both call sites are per-action (`FUN_0030f760:84`, `FUN_00310780:13`), and committing an action first *ends* the previous one. Using it as battle start/end emits a pair per swing | attacker + victim handles ✔ (`ev+0x08`/`+0x0C`) |
-| **`0x1F2280`** | `FUN_00312280` | per enemy death ✔ (victim kind `1`, killer kind `0`) | ⛔ **none of EXP/LP/gil/loot is an argument** (S49, 0.95). gil → hook **`FUN_00469e80`** (delta is its only arg); loot → **`FUN_003180f0`** (4 slots, stride 8, `-1` = empty, and it is a **ground pickup**); EXP/LP → before/after diff of `member+0x18C`/`+0x190`. Chain ✔ in-frame |
+| **`0x1F2280`** | `FUN_00312280` | per enemy death ✔ (victim kind `1`, killer kind `0`) | ⛔ **none of EXP/LP/gil/loot is an argument** (S49, 0.95). gil → hook **`FUN_00469e80`** (delta is its only arg); loot → **`FUN_003180f0`** (⛔ ~~4 slots~~ **7 slots** — 5 normal + 2 rare — stride 8, `-1` = empty, and it is a **ground pickup**); EXP/LP → before/after diff of `member+0x18C`/`+0x190`. Chain ✔ in-frame. **SHIPPED S72** as the enemy-defeated + EXP/LP line |
 | **`0x1EC650`** | `FUN_0030c650` | ⛔ ~~per level gained~~ **per level-GRANT, possibly multi-level** (S49, 0.94); announces once on the final level. `param_3` bit 1 = silent | "X reached level N" — read `*(u8*)(who+0x1c2)` in a **return** hook |
 | ~~`0x23C7B0`~~ **`0x23C8A0`** | ⛔ ~~`FUN_0035c7b0`~~ **`FUN_0035c8a0`** | once per game-over condition **edge** | `ecx` 0xB party wipe / 0x18 guest wipe / 0x17 leader down. **No caller ever passes `0x17` to `FUN_0035c7b0`** — that branch is dead on its path (S49, 0.95) |
 | **`0x16EF50` / `0x16EF00`** | `FUN_0028ef50` / `ef00` | chain level-up / break | chain announcements |
@@ -1448,7 +1450,8 @@ silently, read with `,`/`.`. Every entry lands in the log regardless.
 | **YES** | `0x61` | "Back attack!" — you are being flanked |
 | **YES** | `0x04`, `0x24`–`0x26`, `0x2D`–`0x34`, `0x37`–`0x38`, `0x64`–`0x65` | level up, loot, steal, poach — one-shot results you would otherwise never learn |
 | **YES** | `0x44`–`0x4E` | boss mechanics that change the fight |
-| no | `0x0D`–`0x0F` | action announces — fire constantly, this is the spam tier |
+| **YES** | `0x0D` | ⛔ ~~spam tier~~ **an enemy or guest BEGINS CASTING** — you can still interrupt, guard or move. **Flipped to realtime S72** (tester's call). Note it is style `0x01`, so the bus culls it beyond ~24 units: a distant caster announces nothing, and that limit was accepted rather than hooking the emitter |
+| no | `0x0E`–`0x0F` | "readies" / "uses" — fire constantly, this is the spam tier |
 | no | `0x13`–`0x1B`, `0x1E`–`0x23` | routine restores and cures |
 | no | `0x00`–`0x03`, `0x27`–`0x2C`, `0x35`–`0x36`, `0x39`–`0x3D`, `0x5D`–`0x60`, `0x62` | situational; readable from the log |
 | Tier 2 | action + number lines (incl. aggregated AoE) | **log-only** — this is the stream that made linear narration unusable |
@@ -1613,7 +1616,11 @@ Single-target only in this phase.
 phase 9. Tolerate `received > expected` (reflect/counter re-enter). Decode the action row from the
 `FUN_00387090`-substituted id, not the raw `0x714`.
 
-**Phase 5c — status inflicted, EXP/LP.** The remaining Tier-2 gaps.
+**Phase 5c — status inflicted, ~~EXP/LP~~.** **EXP/LP SHIPPED in Session 72** — hook `FUN_00312280`
+(`0x1F2280`), snapshot/diff `BtlChr+0x18C`/`+0x190` across roster list 3 slots 0-8, largest delta,
+folded into the enemy-defeated line as `"<enemy> defeated. 34 EXP, 2 LP."` The `FUN_0028fb80` popup
+was considered and rejected: its argument identity is only ~0.85 (dropped register args). Status
+inflicted remains the open Tier-2 gap.
 
 **Phase 6 — critical-event auto-speech.** §9.4.1. KO and below-20 % HP, edge-triggered, party-side only.
 No new hooks — both are already installed by Phase 5.

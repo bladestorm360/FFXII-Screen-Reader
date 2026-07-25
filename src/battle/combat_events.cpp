@@ -32,6 +32,16 @@ constexpr uint32_t RVA_SPRINTF = 0x416410;
 // work -- see HookedApply.
 constexpr uint32_t RVA_APPLY = 0x1F12F0;
 
+// FUN_00312280(BtlChr* killer, Actor* dying) -- the REWARD BATCH, one call per enemy death. Its sole
+// caller is FUN_0030e360's case 0 (the KO funnel, which fires for any cause of death), so this is
+// also the truest "an enemy died" event available: unlike the applier, it runs after the HP write
+// actually landed rather than off a damage CALCULATION.
+//
+// None of EXP/LP/gil/loot is an argument -- that claim was struck in Session 49. The function
+// computes each reward internally and writes it straight into the BtlChr records, so we snapshot
+// before and diff after. Cheap: 9 slots, twice, once per kill.
+constexpr uint32_t RVA_REWARD = 0x1F2280;
+
 // result struct fields
 constexpr uint32_t R_OUTCOME = 0x04, R_VALID = 0x1C, R_TGT_HP = 0x24;
 // BtlChr fields: core/phyre_types.h
@@ -39,9 +49,11 @@ using namespace PhyreTypes;
 
 typedef void (*Pfn_Sprintf)(void*, void*, uint32_t, uint32_t);
 typedef void (*Pfn_Apply)(void*, void*, void*, uint32_t, uint32_t);
+typedef void (*Pfn_Reward)(void*, void*);
 
 Pfn_Sprintf s_origSprintf = nullptr;
 Pfn_Apply   s_origApply   = nullptr;
+Pfn_Reward  s_origReward  = nullptr;
 
 // ---- edge latches, indexed by BtlChr slot ------------------------------------------------------
 // Edge-triggered so each event fires once per crossing and re-arms only when the unit recovers.
@@ -128,18 +140,75 @@ void CheckVitals(void* tgtBc, int32_t hpDelta) {
     // PARTY side: the game narrates it itself -- FUN_00300530's KO path emits message 0x10
     // "{0} has fallen", gated to party|guest|ally, for ANY cause including poison and doom. Adding
     // our own line here would duplicate text the game supplies.
-    if (party) return;
-
-    // ENEMY side: that same gate means the game emits NOTHING when a foe dies, so this line is
-    // ours.
     //
+    // ENEMY side: the game emits nothing, so that line is ours -- but it is NOT emitted here any
+    // more. It moved to HookedReward (FUN_00312280), the real death event, so the kill and its
+    // EXP/LP can be spoken as ONE line. Announcing from here was announcing off a damage
+    // CALCULATION, one step before the HP write and well before the rewards exist. The latch above
+    // still runs for both sides: it is what re-arms the 20% warning on revive.
+}
+
+// ---- rewards: the enemy-defeated line, with the kill's EXP and LP -------------------------------
+// FUN_00312280(killer, dying). Once per enemy death, off the KO funnel -- NOT a per-frame path.
+//
+// FFXII has no end-of-battle results screen: it grants rewards per corpse and shows them as
+// floating +EXP/+LP sprite digits, so there is no game text to read and the sentence is ours.
+// The NUMBERS are the game's own -- we snapshot the party's EXP/LP, let the batch run, and diff.
+//
+// Why the diff and not FUN_0028fb80(actorId, exp, lp), the popup itself: Ghidra renders that call
+// site with what look like the gil accumulator in the value slots (dropped register args), leaving
+// the argument identity at ~0.85 -- below this project's bar. The diff needs no such inference; it
+// observes what the game actually wrote.
+void HookedReward(void* killer, void* dying) {
+    STALL_SCOPE("CombatEvents::HookedReward");
+
+    // Roster list 3, slots 0-8 -- the SAME list FUN_00312280 walks to build its living-party set
+    // (FUN_00320ab0(i, 3), capped at 9). Reserve members gain nothing, so their delta is simply 0.
+    uint32_t beforeExp[BattleState::kRosterSlots] = {};
+    uint32_t beforeLp [BattleState::kRosterSlots] = {};
+    void*    slotBc   [BattleState::kRosterSlots] = {};
+    for (int i = 0; i < BattleState::kRosterSlots; ++i) {
+        slotBc[i] = BattleState::BtlChrForSlot(i);
+        if (!slotBc[i]) continue;
+        MemRead::SafeReadU32(slotBc[i], BC_EXP, &beforeExp[i]);
+        MemRead::SafeReadU32(slotBc[i], BC_LP,  &beforeLp[i]);
+    }
+
+    // Resolve the name BEFORE the batch: this is a death path, and the actor's record is being torn
+    // down around it.
+    const std::wstring who = BattleState::DisplayNameForActor(dying);
+
+    s_origReward(killer, dying);
+
+    // Largest delta across the roster. EXP is divided among the survivors, so every living member
+    // gets the same share and the max IS that share -- while a KO'd or absent member reads 0 and
+    // cannot drag the answer down. An EXP-doubling aura makes one member exceed the on-screen
+    // number; reporting what was actually gained is the more useful figure.
+    uint32_t expGain = 0, lpGain = 0;
+    for (int i = 0; i < BattleState::kRosterSlots; ++i) {
+        if (!slotBc[i]) continue;
+        uint32_t e = 0, l = 0;
+        if (MemRead::SafeReadU32(slotBc[i], BC_EXP, &e) && e > beforeExp[i])
+            expGain = (e - beforeExp[i] > expGain) ? e - beforeExp[i] : expGain;
+        if (MemRead::SafeReadU32(slotBc[i], BC_LP, &l) && l > beforeLp[i])
+            lpGain  = (l - beforeLp[i] > lpGain)  ? l - beforeLp[i]  : lpGain;
+    }
+
+    {
+        char m[160];
+        snprintf(m, sizeof(m), "reward: killer=%p dying=%p exp=+%u lp=+%u named=%d",
+                 killer, dying, expGain, lpGain, who.empty() ? 0 : 1);
+        Log::Write("COMBAT", m);
+    }
+
+    // No name means no line -- never announce an anonymous kill.
+    if (who.empty()) return;
+
     // REALTIME (user, 2026-07-20). Knowing a foe is down lets you stop attacking a corpse and
     // retarget, which is worth an interruption. If it proves too chatty in a big fight the fix is a
     // config toggle, not silence -- so keep this a single flag rather than burying the decision.
-    const std::wstring who = BattleState::DisplayNameForActor(BattleState::ActorForBtlChr(tgtBc));
-    if (!who.empty())
-        CombatLog::Append(CombatLog::Kind::System, CombatFormat::DefeatedLine(who),
-                          /*speakNow=*/true);
+    CombatLog::Append(CombatLog::Kind::System,
+                      CombatFormat::DefeatedLine(who, expGain, lpGain), /*speakNow=*/true);
 }
 
 // ---- the real work, reached only for genuine hits ----------------------------------------------
@@ -223,13 +292,16 @@ bool Init() {
     CombatLog::Init();
     bool ok = Hooks::InstallTyped(RVA_SPRINTF, &HookedSprintf, &s_origSprintf);
     ok     &= Hooks::InstallTyped(RVA_APPLY,   &HookedApply,   &s_origApply);
+    ok     &= Hooks::InstallTyped(RVA_REWARD,  &HookedReward,  &s_origReward);
     Log::Write("COMBAT", ok
-        ? "CombatEvents: installed (FUN_00536410 Tier-1 messages, FUN_003112f0 Tier-2 damage)"
+        ? "CombatEvents: installed (FUN_00536410 Tier-1 messages, FUN_003112f0 Tier-2 damage, "
+          "FUN_00312280 enemy defeated + EXP/LP)"
         : "CombatEvents: a hook FAILED to install");
     return ok;
 }
 
 void Shutdown() {
+    Hooks::Uninstall(RVA_REWARD);
     Hooks::Uninstall(RVA_APPLY);
     Hooks::Uninstall(RVA_SPRINTF);
     CombatLog::Shutdown();

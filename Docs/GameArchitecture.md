@@ -640,6 +640,93 @@ What survives, and what does not:
 Gate Crystal / Save Crystal keep their own categories) → `isCharacter` ⇒ NPC → non-character `kind == 5` ⇒
 Interactables → `FLAG_TALK` ⇒ NPC → Interactables.
 
+### The three GEOMETRIC gates on interaction — RE'd Session 73 (offline decompile)
+
+Being a valid candidate (above) is not enough. `FUN_0025b820` rescans every field frame and
+`FUN_0025bad0` / `FUN_0025be50` score the survivors; **three independent geometric tests** must all
+pass, and only the single best-scoring object survives.
+
+| Gate | Where | Rule | Conf |
+|---|---|---|---|
+| **Horizontal distance** | `FUN_003da5a0` | returns `sqrt(dx² + dz²) − Σradii`; must be **< 0**. **Y is excluded entirely** — interaction range is a cylinder, not a sphere | 0.98 |
+| **Vertical band** | `FUN_0025bad0:77-80` | unless the target's `xform+0xDD != 0`, the player's Y must lie inside the target's vertical extent ± margins. A separate test from distance | **VALIDATED IN PLAY** |
+| **Facing cone** | `FUN_003a1bb0` (abs `0x3A1BB0`) | `\|wrap(atan2(tx−px, tz−pz) − playerYaw)\| < halfAngle`. Player yaw = `playerColl+0xA8`; half-angle is per-target | 0.99 |
+
+```c
+bool FUN_003a1bb0(float facingYaw, float halfAngle, float px, float pz, float tx, float tz) {
+    a = atan2f(tx - px, tz - pz);          // NOTE: (x, z) — same convention as faceNode
+    a = wrap(a - facingYaw, -PI, PI);
+    return fabs(a) < halfAngle;            // outside the cone => not interactable
+}
+```
+(Ghidra shows only 4 args at the `FUN_0025bad0:133` call site — it drops the register-passthrough
+pair. `FUN_0025be50:41` shows the full 6 and is what pins the signature. See
+`feedback_resolve_natives_by_behaviour`.)
+
+### The vertical band, VALIDATED in play (Session 73) — and why routing needs it
+
+```
+gates "Montblanc": dist2D=0.51 (Y EXCLUDED)
+                 | band FAIL py=0.00 in [4.63,8.02] centre=6.92 sc=1.00 up=1.10 dn=0.50 pad=1.79
+                 | cone PASS |d|=0.255 half=1.571
+```
+
+Both bounds reproduce exactly from the offsets below, so these are measured, not inferred:
+
+```
+centre = *(sceneObj+0xC0)+0x140  +  *(sceneObj+0xC0)+0x144  +  targetNode+0x04      // 6.92
+lo     = (centre - targetNode+0x24 * targetNode+0xCC) - playerNode+0xC0 * playerNode+0x24
+       = (6.92 - 1.00*0.50) - 1.79*1.00                                            // 4.63
+hi     = centre + targetNode+0x24 * targetNode+0xC8
+       = 6.92 + 1.00*1.10                                                          // 8.02
+```
+
+**`half=1.571` = π/2**, i.e. the cone is a **180° forward hemisphere** — facing is far less
+restrictive than it looks, and a "turn to face the target" key would have fixed nothing. Distance is
+a **cylinder** (0.51 passed while the player was 6.92 below), so for anything on a dais, counter or
+ledge **the band is the only gate that decides where you must stand.**
+
+That is why `PathSearch::Run` now takes the band: the goal is "a cell whose floor is inside
+`[lo,hi]`", i.e. somewhere you could stand and interact — not the target's own cell. See
+`InteractTarget::ReadBandFor`.
+
+**The chosen target is ONE object, and there is NO cycling.** Per-frame reset by `FUN_0025d650`
+(score = `0x501502f9` ≈ 1e10, ids = `-1`), then rescored:
+
+| Global | Meaning |
+|---|---|
+| `DAT_0209a2b8` | winning object slot |
+| `DAT_0209a2b4` | its container |
+| `DAT_0209a2bc` | `10` = talk / `2` = action |
+| `DAT_0209a2aa` | `1` = a target exists this frame |
+| `DAT_0209a2b0` | best score so far (minimised) |
+
+Consumed by `FUN_00268d10` (the confirm handler). **Do not design a "cycle interaction target" key —
+the engine has no such concept.** A pure-read announcement of `DAT_0209a2b8` is, however, the exact
+answer to "who will I talk to if I press Confirm", and it is event-driven off `FUN_0025b820`.
+
+## Navigation is ELEVATION-BLIND — root cause, Session 73
+
+Recorded because it produced a story-blocking bug and the shape of the mistake is easy to repeat:
+the mod announced *"Montblanc. right next to you"* and routed *"1 steps"* to an NPC **6.92 world
+units directly overhead**, in the Rabanastre Clan Hall.
+
+**Every floor query in navigation is `f(x, z) → y`. There is no `f(x, y, z)`.**
+
+| Layer | Evidence | Consequence |
+|---|---|---|
+| `MapQuery::GroundAt` (`map_query.h:26`) | game fn, args are `(x, z)` only | cannot be asked "the floor nearest *my* height" |
+| `ScanTopFloorAt` (`map_query.cpp:190`) | `if (!found \|\| y > bestY)` — keeps the **max** | in any stacked column (plinth, balcony, bridge, upper storey) the grid describes the surface **above the player's head**. It already visits every floor poly; it just discards them |
+| `NavGrid` (`nav_grid.h:20`) | `WorldToCell(wx, wz, col, row)`, one `floorY` per cell | a target overhead maps to the player's own cell → `nearDist=0.0m`, the search "arrives" instantly |
+| `nav_common.cpp:142-157` | `IsWithinReach(dist2D)` early-returns before `ElevationSuffix` | **"right next to you" is the one phrase that can never carry "(above)"** |
+| `path_planner.cpp:122` | route-profile is *"diagnostic, log-only"* | the mod measured `maxStep=6.93m` and `wmBlock=1(step>max)` and gated nothing on either |
+
+**This is global, not per-map** — see `feedback_global_not_per_map`. The fix is a layered grid
+(`col,row` → `col,row,layer`) fed by an `AllFloorsAt` that keeps what `ScanTopFloorAt` throws away,
+with inter-layer edges admitted by the **existing** `kStepDiscont` test (`path_search.cpp:34-52`).
+**FFXII has no climb/jump button** (tester), so inter-level connectivity is purely geometric
+continuity — there are no action edges to model, and spoken legs stay 2D.
+
 ## World MAP screen (`page+0x138` = map id) — RE'd Session 45, KEEP for map-transition speech
 
 Found while disproving the "e5f0 dialogue" read-points (they were this screen all along). **Not
@@ -2114,3 +2201,80 @@ session the only `FUN_00247510` msg `0x8000` seen with Status open came from own
 (the ailment grid), never from `+0x1a2320`. So the generic row-chain reader does not claim this
 window and there is no double-speak. The comment is still a misnomer worth correcting if that entry
 is ever revisited.
+
+## Ground loot — the drop pool (Session 72, 2026-07-24) — SHIPPED
+
+**Dropped loot is NOT in the scene-object handle table.** That is the whole reason the pathfinder
+never saw it. The engine keeps ground drops in their own pool, with positions in a second, parallel
+table. Confidence ≥0.98 — every field below is read directly out of four agreeing function bodies
+(roll, spawn, award, expire).
+
+| What | abs | **RVA** | Notes |
+|---|---|---|---|
+| Loot record pool `DAT_02ec0fa0` | `0x02EC0FA0` | **`0x2DA0FA0`** | 10 slots, stride `0x60` |
+| Position marker table `DAT_022be7f0` | `0x022BE7F0` | **`0x219E7F0`** | 10 slots, stride `0x20` |
+| Active-list head `DAT_02ec1360` | `0x02EC1360` | `0x2DA1360` | next ptr at slot `+0x18` (unused by the mod — the flat 10-slot walk is bounded and cannot loop on a corrupt link) |
+| Drop roll | `0x003180F0` | `0x1F80F0` | `bool(Actor* dying, short* out)` |
+| **Spawn (the drop event)** | `0x00319CA0` | **`0x1F9CA0`** | `(lootBuf, worldPos)`; called from `FUN_00312280` |
+| **Award on touch** | `0x00319920` | **`0x1F9920`** | ⚠ mutates inventory — hook only, **never call** |
+| **Discard / expire** | `0x003197B0` | **`0x1F97B0`** | non-party picker *and* timeout |
+| Engine's own nearest-loot search | `0x00319850` | `0x1F9850` | reference for the shape only |
+| Engine's own position getter | `0x002FB310` | `0x1DB310` | replicated memory-only by `item_scan.cpp` |
+
+**Loot record:** `+0x00` u32 slot index · `+0x04` u32 **state (0 = free**; 1 arcing in, 2–6 blinking
+out, 7 expiring — any non-zero means something is on the ground) · `+0x10`/`+0x18` prev/next ·
+`+0x20`…`+0x57` = **7** × `{i16 itemId, i16 pad, i32 count}`, `itemId == -1` = empty · `+0x58` visual
+handle.
+
+> **STRIKE:** `combat_system.md` said the payload was **4 slots**. It is **7** — 5 normal + 2 rare.
+> Both `FUN_003180f0` and `FUN_00319920` loop seven times.
+
+**Marker record:** `+0x00` u8 alive · `+0x10` float x, y, z. The alive flag is the engine's own
+validity test (`FUN_002fb310` refuses the slot without it), so a record whose marker is not up yet is
+unplaced and must not be listed at a garbage coordinate.
+
+### `FUN_00272cb0` is NOT an item-id → name resolver — read this before reusing it
+
+`ingame_menu_reader.cpp` labelled it "item name codec". Read firsthand it is
+`FUN_00272cb0 → FUN_003588b0 → FUN_00263990`, where `FUN_003588b0` decodes its argument as a **pooled
+record handle** (`>>0x10 & 0xf` pool selector < 5, `& 0xffff` index, `>>0x14 & 0x7ff` generation vs
+`rec+0x16`) and `FUN_00263990` reads `rec+0x102` / `rec+0xf8` with the `0xffffbfff` npcdic mask — the
+**scene-object name chain** `EntityScan::ResolveObjectName` already replicates memory-only.
+
+Ghidra dropped the register-passthrough argument on the inner call, so the input semantics are **not
+established offline**; the call is nevertheless play-confirmed in the battle item sublist. It is
+therefore used **as a game call, from the game thread only** (`src/core/item_names.{h,cpp}`), rather
+than reversing the 14-class dispatch behind `PTR_FUN_01eebd08` (stride `0xb` qwords, class =
+`id >> 12`; per-class count array `DAT_01eebcfc`, stride `0x16` ints; same `0x58`-byte descriptor) on
+an inference below the confidence bar. If a memory-only item name is ever needed on the input thread,
+that dispatch is the thing to reverse — `BattleState::MasterRecord` + `PoolString` is the ready-made
+idiom (`hdr+0x04` count, `+0x08` stride, `+0x0C` records offset, relocated via `FUN_0020e600`).
+
+## Battle rewards — EXP / LP per kill (Session 72) — SHIPPED
+
+**There is no end-of-battle results screen and no victory event.** Rewards are granted per enemy
+death and shown as floating `+EXP`/`+LP` **sprite digits** — no text exists for them anywhere.
+
+| What | abs | **RVA** | Notes |
+|---|---|---|---|
+| **Reward batch, per enemy death** | `0x00312280` | **`0x1F2280`** | `FUN_00312280(BtlChr* killer, Actor* dying)`; sole caller `FUN_0030e360` case 0 (the KO funnel, any cause) |
+| EXP formula | `0x002F8BB0` | `0x1D8BB0` | divides by living-member count |
+| LP formula | `0x002F90C0` | `0x1D90C0` | **not** divided; 0 in Trial Mode |
+| `+EXP`/`+LP` HUD popup | `0x0028FB80` | `0x16FB80` | `(actorId, exp, lp)` — args are the drawn numbers, but their identity is only **0.85** (dropped register args). **Not used**; the mod diffs instead |
+| Level up | `0x0030C650` | `0x1EC650` | already covered by game message `0x04` |
+| Gil gained | `0x00469E80` | `0x349E80` | already covered by game message `0x26` |
+
+**BtlChr progression fields** (stride `0x1C8`, array at `Work()+0x08`): `+0x18C` u32 EXP (cap
+99,999,999) · `+0x190` u32 LP (cap 99,999) · `+0x1C2` u8 level. Corroborated by `license_reader.cpp`
+(already reads `+0x190`) and the status-menu member block above.
+
+**Enemy reward rows:** `actor+0xE70` base, `actor+0xE78` per-level; `+0x2F` u8 LP, `+0x30` i32 gil,
+`+0x34` i32 EXP. Value = `(enemyLevel − levelFloor) × perLevel + base`.
+
+**Shipped method:** snapshot EXP/LP across roster list 3 slots 0–8 — the same list the function walks
+(`FUN_00320ab0(i, 3)`, capped at 9) — call through, take the largest delta. Every living member gets
+the same share, so the max IS the share, while a KO'd or absent member reads 0 and cannot drag it
+down.
+
+⚠ **0.95, not 0.98:** that `FUN_00312280` is reached for *every* enemy death rests on a static
+"sole caller" xref, not observation. Failure mode is a kill that announces nothing.

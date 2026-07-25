@@ -41,6 +41,8 @@ bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut);
 // above, which still accepts a browsed target for routing; the two callers differ deliberately.
 // Same liveness rules and formatting as the automatic target-change announcement.
 // Thread-safe (input thread).
-void SpeakTargetStatus();
+// TRUE only if it spoke. `;` falls through to InteractTarget::SpeakCurrent() on false, so the same
+// key reads the battle target in combat and the field interaction target outside it.
+bool SpeakTargetStatus();
 
 } // namespace BattleTargetReader

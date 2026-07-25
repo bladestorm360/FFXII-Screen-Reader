@@ -5,6 +5,7 @@
 #include "navigation/nav_common.h"
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
+#include "navigation/interact_target.h"
 #include "navigation/map_names.h"
 #include "navigation/map_exits.h"
 #include "core/hooks.h"
@@ -24,7 +25,69 @@ using namespace MemRead;
 // classify. Split out of entity_list.cpp, where 130 lines of pure logging were a seventh of the file.
 namespace EntityDiag {
 
+namespace {
 
+// ---- ELEVATION DIAGNOSTIC (Session 73) ----------------------------------------------------------
+// The question navigation could not answer: WHICH floor is this? Every floor query in the stack is
+// f(x,z) -> y, and ScanTopFloorAt resolved the ambiguity by keeping the MAX -- so in a plinth /
+// balcony / bridge column the grid described the surface above the player's head. That is how the
+// mod came to say "Montblanc. right next to you" to an NPC 6.92 units overhead.
+//
+// This formats the FULL layer list at a world XZ next to `top=`, which is exactly what the old
+// single-answer path would have returned. When `top` differs from the layer nearest the entity's
+// own Y, that difference IS the bug, printed.
+//
+// PURE MEMORY READS -- AllFloorsAt/GetGridInfo/WorldToCell touch no game function, so this is safe
+// off the game thread. Deliberately does NOT call MapQuery::GroundAt, which is game-thread-only
+// (nav_grid.h); `top=` is the memory-only equivalent of its answer.
+void FormatFloorLayers(float wx, float wz, float refY, char* buf, size_t bufLen) {
+    if (!buf || bufLen == 0) return;
+    buf[0] = '\0';
+
+    MapQuery::WalkGridInfo g;
+    if (!MapQuery::GetGridInfo(g) || !g.valid) {
+        snprintf(buf, bufLen, "layers=<no walkmap>");
+        return;
+    }
+    int col = 0, row = 0;
+    const bool inBounds = MapQuery::WorldToCell(g, wx, wz, col, row);
+
+    MapQuery::FloorLayer layers[MapQuery::kMaxFloorLayers];
+    int raw = 0;
+    const size_t n = MapQuery::AllFloorsAt(g, col, row, wx, wz,
+                                           layers, MapQuery::kMaxFloorLayers, &raw);
+
+    // The layer this entity is actually standing on, and the signed gap to it.
+    int nearest = -1;
+    float nearDy = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        const float d = layers[i].y - refY;
+        const float ad = (d < 0.0f) ? -d : d;
+        const float bestAd = (nearDy < 0.0f) ? -nearDy : nearDy;
+        if (nearest < 0 || ad < bestAd) { nearest = static_cast<int>(i); nearDy = d; }
+    }
+
+    size_t at = 0;
+    int w = snprintf(buf, bufLen, "cell=(%d,%d)%s layers=%zu raw=%d [",
+                     col, row, inBounds ? "" : "!oob", n, raw);
+    if (w > 0) at = static_cast<size_t>(w);
+    for (size_t i = 0; i < n && at + 1 < bufLen; ++i) {
+        w = snprintf(buf + at, bufLen - at, "%s%.2f", (i ? "," : ""), layers[i].y);
+        if (w <= 0) break;
+        at += static_cast<size_t>(w);
+    }
+    if (at + 1 < bufLen) {
+        // top= is what ReadCellFloor/GroundAt would have handed the router. nearest= is the level
+        // the entity is really on. top != nearest  =>  this column is where navigation goes wrong.
+        snprintf(buf + at, bufLen - at, "] top=%.2f nearest=%.2f dY=%+.2f%s",
+                 n ? layers[n - 1].y : 0.0f,
+                 (nearest >= 0) ? layers[nearest].y : 0.0f,
+                 nearDy,
+                 (n > 1) ? "  <== STACKED" : "");
+    }
+}
+
+} // namespace
 
 // Dump the raw handle table: every live scene object in every container, with its
 // interaction flags, npcdic name key, resolved name, and world position. This is the
@@ -44,6 +107,20 @@ void DumpLocked() {
              "==== handle-table diag: player=(%.2f,%.2f,%.2f) haveP=%d leader=%p ====",
              pp.x, pp.y, pp.z, haveP ? 1 : 0, leader);
     Log::Write("NAV-DIAG", hdr);
+
+    // The player's own column, first -- everything below is read against it. If this line reports
+    // more than one layer with top != nearest, the router has been steering by the wrong surface.
+    if (haveP) {
+        char fl[224];
+        FormatFloorLayers(pp.x, pp.z, pp.y, fl, sizeof(fl));
+        char pl[288];
+        snprintf(pl, sizeof(pl), "  player floor: y=%.2f %s", pp.y, fl);
+        Log::Write("NAV-DIAG", pl);
+    }
+    // GROUND TRUTH for "who will Confirm talk to". Logged before the per-object gate replicas so the
+    // engine's own answer is read first and the replicas are checked against it, not the other way
+    // round -- the replicas are ours and may be wrong; this line is the game's.
+    InteractTarget::LogChosen();
 
     for (uint32_t c = 0; c < NavRva::HANDLE_TABLE_CONTAINERS && base; ++c) {
         void* table = static_cast<char*>(base) + static_cast<size_t>(c) * NavRva::HANDLE_TABLE_STRIDE;
@@ -80,17 +157,27 @@ void DumpLocked() {
                 char nlabel[48] = {};
                 for (size_t k = 0; k < lbl.size() && k < 47; ++k)
                     nlabel[k] = (lbl[k] < 128) ? static_cast<char>(lbl[k]) : '?';
-                char line[288];
+                // Appended, not a second line: the object's own column resolved against its own Y.
+                // An NPC whose `nearest` sits far from the player's layer is on another level --
+                // which is precisely the case the 2D grid used to collapse into "right next to you".
+                char fl[224] = {};
+                if (havePos) FormatFloorLayers(pos.x, pos.z, pos.y, fl, sizeof(fl));
+                char line[544];
                 snprintf(line, sizeof(line),
-                         "    [%u:%u] obj=%p cat=%02X kind=%u en=%u r14=%02X flags=%08X%s%s nameIdx=%d \"%s\" pos=(%.2f,%.2f,%.2f) hp=%d",
+                         "    [%u:%u] obj=%p cat=%02X kind=%u en=%u r14=%02X flags=%08X%s%s nameIdx=%d \"%s\" pos=(%.2f,%.2f,%.2f) hp=%d %s",
                          c, i, obj, catByte,
                          kindByte & NavRva::KIND_MASK,
                          (kindByte & NavRva::INTERACT_ENABLE_BIT) ? 1u : 0u,
                          readyByte, flags,
                          (flags & NavRva::FLAG_TALK) ? " TALK" : "",
                          (flags & NavRva::FLAG_ACTION) ? " ACT" : "",
-                         nameIdx, nlabel, pos.x, pos.y, pos.z, havePos ? 1 : 0);
+                         nameIdx, nlabel, pos.x, pos.y, pos.z, havePos ? 1 : 0, fl);
                 Log::Write("NAV-DIAG", line);
+                // Only for objects the engine would even consider (talk/action flagged): the three
+                // geometric gates, so a candidate the game silently refuses says WHICH gate rejected
+                // it. Ground truth is the chosen-target line logged after this loop.
+                if (flags & (NavRva::FLAG_TALK | NavRva::FLAG_ACTION))
+                    InteractTarget::LogGatesFor(obj, nlabel);
             }
         }
         // The container's OWN interaction sub-ranges (FUN_0025b820 walks exactly these two spans of

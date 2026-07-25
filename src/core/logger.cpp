@@ -186,7 +186,11 @@ void Write(const char* category, const char* message) {
                      strcmp(category, "INIT") == 0 ||
                      strcmp(category, "HOOK_HEALTH") == 0 ||
                      strcmp(category, "PARTY") == 0 ||
-                     strcmp(category, "COMBAT") == 0)) {
+                     strcmp(category, "COMBAT") == 0 ||
+                     // INTERACT is a single-press diagnostic: one `'` or `;` emits it and then the
+                     // tester alt-F4s out. Exactly the PARTY/COMBAT failure above, so it joins them
+                     // rather than waiting to be lost once.
+                     strcmp(category, "INTERACT") == 0)) {
         fflush(g_logFile);
     }
 

@@ -67,6 +67,41 @@ constexpr float kMarginRelaxed = 0.0f;
 
 // Nearest-walkable ring search radius, shared by the goal and start snaps (~9 m at kFineCell).
 constexpr int   kSnapMax       = 6;
+// ---- Approach-cell goal set (Session 73) --------------------------------------------------------
+// How far from the target we look for somewhere to STAND. The engine's interaction distance is a
+// short horizontal reach, so this only has to cover "the cell beside it" -- 3 cells is 4.5 m at
+// kFineCell, comfortably more than any interaction range, and small enough that the scan is 49
+// WalkableAt calls (all cache hits after the first visit).
+constexpr int    kApproachCells  = 3;
+constexpr float  kApproachRadius = 4.0f;   // metres from the target, hard cap on an approach cell
+// Cap on goals kept. heur() takes a min over this set on every expansion, so it belongs in the
+// inner loop's budget; the nearest handful are the only ones worth standing in anyway.
+constexpr size_t kMaxGoals       = 12;
+// How hard to prefer an approach cell that is CLOSE to the target (Session 73, second round).
+//
+// The first build stopped at whichever goal A* popped first, because a plain min-over-goals
+// heuristic makes every goal look equally good. Measured: `primary (356,141) d=0.9m` existed, and
+// the search finished on (355,142) at `nearDist=2.1m` -- inside the band, but too far to interact,
+// so the tester arrived and still had to wiggle on crow-flies directions.
+//
+// Treating the remaining gap as a TERMINAL COST fixes the preference: reaching goal g costs
+// path(g) + weight*g.d, so a nearer-to-target cell wins unless it is much further to walk. The
+// heuristic stays admissible (euclid <= true path cost), so the search is still correct, and a
+// LARGER h is more informed -- expansions go down, not up.
+//
+// CRITICALLY, this changes only the PREFERENCE among goals, never the goal SET. Anything routable
+// before this weight existed is still routable; the search can still fall back to a far approach
+// cell when no near one is reachable. That is what keeps Montblanc reachable.
+//
+// PROVISIONAL: the honest fix is to cap kApproachRadius at the engine's real horizontal interaction
+// reach (FUN_003da5a0's radii sum) instead of the made-up 4 m, which would make every goal
+// interactable by construction and render this weight unnecessary. Bracketed by measurement so far:
+// dist2D 0.51 PASSED the distance gate, 1.70 did not get chosen -- so the true reach is in between.
+constexpr float  kGoalGapWeight  = 4.0f;
+
+// A cell the player could stand in and still interact with the target. `d` is its distance to the
+// target, which is a TERMINAL COST, not just a sort key -- see the heuristic.
+struct GoalCell { int c, r; float wx, wz; float d2; float d; };
 // When both passes fail, route to the closest cell the search actually reached if it is within this
 // many cells of the goal. A route that stops a few metres short beats "No path" -- the player can
 // cover the last stretch, but they cannot cover the whole map on a shrug.
@@ -121,7 +156,7 @@ bool SnapToWalkable(int& c, int& r, float wx, float wz, float& outDist) {
 // A* over a FINE walkability grid (NavGrid), lazily sampled with GroundAt against the actual floor mesh
 // and cached per map-epoch. `rawPoly` = the raw cell staircase (what the spoken legs are measured from);
 // `outPoly` = the smoothed, wall-validated route.
-Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
+Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch, float bandLo, float bandHi,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats) {
     rawPoly.clear();
     outPoly.clear();
@@ -130,6 +165,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
     int tc, tr; NavGrid::WorldToCell(to.x, to.z, tc, tr);
     int sc, sr; NavGrid::WorldToCell(from.x, from.z, sc, sr);
+    // The target's OWN cell, kept so the end of the route can tell "we finished on the target" from
+    // "we finished on an approach cell beside it" -- only the former may append the target's true
+    // world position to the polyline. Appending it after routing to an approach cell would put the
+    // last leg 0.93 m up onto Montblanc's dais, which is the exact thing this change exists to stop.
+    const int origTc = tc, origTr = tr;
 
     // Target-cell walkability snap: a target standing slightly off-mesh (a ledge, a map edge, an
     // enemy-only tile, or a fine-grid sampling gap) lands on a non-walkable cell, and A* — which only
@@ -137,7 +177,60 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // walkable cell. The final poly point becomes that walkable cell, not the off-mesh target, so the
     // last leg lands on ground rather than pointing into a wall.
     bool snapped = false;
-    {
+
+    // ---- GOAL SET: every cell you could stand in and still interact ------------------------------
+    // NOT "the target's own cell". A target frequently stands where the player cannot: Montblanc on a
+    // dais whose floor is 6.93 while the walkway beside it is 6.00. Asking A* to stand ON him is
+    // unsatisfiable, and that is exactly what the old code did -- it snapped the goal ONLY when the
+    // target's cell had no floor at all, so a walkable dais sailed through and the search was handed
+    // an unreachable goal. From the ground floor the fine cell then collapsed target and player
+    // together (`expands=0`), which is where "Montblanc. 1 steps" came from.
+    //
+    // The goal test here is the ENGINE'S OWN predicate, not a heuristic. FUN_0025bad0 accepts an
+    // interaction when the player's Y is inside a per-target vertical band and the HORIZONTAL
+    // distance is in range -- Y is excluded from distance, so interaction range is a cylinder. A goal
+    // cell is therefore any walkable cell near the target whose floor lies inside that band. For
+    // Montblanc that admits BOTH the 6.93 dais and the 6.00 walkway; A* never reaches the dais, so it
+    // routes to the walkway with no special-casing, and the same rule covers every chest on a ledge
+    // and NPC behind a counter without a single map-specific line (feedback_global_not_per_map).
+    std::vector<GoalCell> goals;
+    if (bandHi >= bandLo) {
+        for (int dz = -kApproachCells; dz <= kApproachCells; ++dz) {
+            for (int dx = -kApproachCells; dx <= kApproachCells; ++dx) {
+                const int cc = tc + dx, cr = tr + dz;
+                float cy;
+                if (!NavGrid::WalkableAt(cc, cr, cy)) continue;
+                if (cy < bandLo || cy > bandHi) continue;       // could not interact from here
+                float wx, wz; NavGrid::CellCenter(cc, cr, wx, wz);
+                const float ddx = wx - to.x, ddz = wz - to.z;
+                const float d2 = ddx * ddx + ddz * ddz;
+                if (d2 > kApproachRadius * kApproachRadius) continue;
+                goals.push_back(GoalCell{ cc, cr, wx, wz, d2, std::sqrt(d2) });
+            }
+        }
+        std::sort(goals.begin(), goals.end(),
+                  [](const GoalCell& a, const GoalCell& b) { return a.d2 < b.d2; });
+        // Bound the set: heur() is a min over goals and runs per expansion, so an unbounded set would
+        // put the cost in the search's inner loop. The nearest few are the ones worth standing in.
+        if (goals.size() > kMaxGoals) goals.resize(kMaxGoals);
+    }
+
+    if (!goals.empty()) {
+        // Primary = nearest admissible cell. Everything downstream (bridge flood, near-goal
+        // fallback, reconstruction) keys off tc/tr, so pointing them at the primary keeps those
+        // paths unchanged; the search below may finish on any goal and rewrites tc/tr to that one.
+        const bool moved = (goals[0].c != tc || goals[0].r != tr);
+        char gm[192];
+        snprintf(gm, sizeof(gm),
+                 "goal-set: %zu cell(s) in band [%.2f,%.2f], primary (%d,%d)->(%d,%d) d=%.1fm",
+                 goals.size(), bandLo, bandHi, tc, tr, goals[0].c, goals[0].r,
+                 std::sqrt(goals[0].d2));
+        Log::Write("NAV-ROUTE", gm);
+        if (moved) snapped = true;   // the poly ends on the approach cell, not on the target itself
+        tc = goals[0].c; tr = goals[0].r;
+    } else {
+        // No band, or nothing admissible near the target: fall back to the original behaviour so a
+        // target with no readable band routes exactly as it did before this change.
         float ty;
         if (!NavGrid::WalkableAt(tc, tr, ty)) {
             const int ot = tc, or_ = tr;
@@ -178,10 +271,31 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         return FVec3{ wx, y, wz };
     };
     float twx, twz; NavGrid::CellCenter(tc, tr, twx, twz);
+    // Multi-goal heuristic: distance to the NEAREST goal. Taking the min keeps it admissible (it can
+    // never exceed the true cost to the goal actually used), which is what lets the search finish on
+    // whichever approach cell is reachable rather than the one that happened to be closest to the
+    // target. With no goal set it degenerates to the single-target distance, i.e. the old behaviour.
     auto heur = [&](int c, int r) -> float {
         float wx, wz; NavGrid::CellCenter(c, r, wx, wz);
-        const float dx = wx - twx, dz = wz - twz;
-        return std::sqrt(dx * dx + dz * dz);            // admissible Euclidean (meters)
+        if (goals.empty()) {
+            const float dx = wx - twx, dz = wz - twz;
+            return std::sqrt(dx * dx + dz * dz);        // admissible Euclidean (meters)
+        }
+        // Cost to reach goal g and stop there = walk to g, plus the gap g still leaves to the target,
+        // weighted. Min over goals keeps it admissible; the weight is what stops the search settling
+        // for a far-but-early goal when a closer one is only slightly more walking.
+        float best = -1.0f;
+        for (const GoalCell& g : goals) {
+            const float dx = wx - g.wx, dz = wz - g.wz;
+            const float cost = std::sqrt(dx * dx + dz * dz) + kGoalGapWeight * g.d;
+            if (best < 0.0f || cost < best) best = cost;
+        }
+        return best;
+    };
+    auto isGoal = [&](int c, int r) -> bool {
+        if (goals.empty()) return c == tc && r == tr;
+        for (const GoalCell& g : goals) if (g.c == c && g.r == r) return true;
+        return false;
     };
     // A clear body-height corridor WITH lateral margin: center ray + two rays offset +/-margin
     // perpendicular, so a leg only counts clear with body width on both sides (keeps the route
@@ -262,7 +376,23 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             const float d  = std::sqrt(dc * dc + dr * dr);
             if (bestCellD < 0.0f || d < bestCellD) { bestCellD = d; bestKey = Key(cur.c, cur.r); }
         }
-        if (cur.c == tc && cur.r == tr) { reached = true; break; }
+        // Finish on ANY admissible approach cell, and adopt it as the goal so the reconstruction,
+        // the `snapped` end-point handling and the stats all describe the cell actually routed to.
+        if (isGoal(cur.c, cur.r)) {
+            reached = true;
+            if (cur.c != tc || cur.r != tr) {
+                tc = cur.c; tr = cur.r;
+                stats.tx = tc; stats.tz = tr;
+                float awx, awz; NavGrid::CellCenter(tc, tr, awx, awz);
+                const float adx = awx - to.x, adz = awz - to.z;
+                char am[160];
+                snprintf(am, sizeof(am),
+                         "goal-set: reached alternate approach cell (%d,%d), gap to target %.1fm",
+                         tc, tr, std::sqrt(adx * adx + adz * adz));
+                Log::Write("NAV-ROUTE", am);
+            }
+            break;
+        }
         if (++expands > kMaxExpand || rays >= kMaxRays) break;
 
         const int64_t ck = Key(cur.c, cur.r);
@@ -371,6 +501,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
     stats.rays = raysStrict + rays;
     if (!reached) return Plan::NoPath;
+
+    // Finished somewhere other than the target's own cell => the destination is an approach cell, so
+    // the route must END there. The target itself may be a metre above it (a dais) or through a
+    // counter, and appending its true position would re-introduce the unreachable last leg.
+    if (tc != origTc || tr != origTr) snapped = true;
 
     // Reconstruct target -> start, then emit from -> ... -> to (world coords).
     std::vector<int64_t> rev;

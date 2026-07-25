@@ -122,7 +122,22 @@ constexpr uint32_t WALK_POLY_PLANE_B  = 0x04;  // float plane B (divisor; guard 
 constexpr uint32_t WALK_POLY_PLANE_C  = 0x08;  // float plane C
 constexpr uint32_t WALK_POLY_FLAGS    = 0x0C;  // u32 flags; walk type = low 3 bits (0 = walkable)
 constexpr uint32_t WALK_POLY_BASEVERT = 0x10;  // s16 base-vertex index -> vertex array
+// The poly is a TRIANGLE: three s16 vertex indices, not one (Session 73, from FUN_002324f0, which
+// walks `poly+0x10 + i*2` for i in 0..2). Only vert0 was known before, and without the other two
+// there was no way to test whether a query point actually lies inside the poly -- so the plane was
+// evaluated for points outside it and extrapolated to nonsense (a Clan Hall column reported floors
+// at -2089 and +2537). WALK_POLY_BASEVERT is an alias of VERT0; both names kept, VERT0 preferred.
+constexpr uint32_t WALK_POLY_VERT0    = 0x10;  // s16 vertex index 0 (== WALK_POLY_BASEVERT)
+constexpr uint32_t WALK_POLY_VERT1    = 0x12;  // s16 vertex index 1
+constexpr uint32_t WALK_POLY_VERT2    = 0x14;  // s16 vertex index 2
 constexpr uint32_t WALK_POLY_TYPE_MASK = 0x7;
+// Plane B must be STRICTLY POSITIVE, not merely non-zero: FUN_00231890 gates on `0.001 < B` and
+// FUN_00231900 repeats it. B <= 0 is a downward-facing poly (a ceiling); the engine never treats
+// one as ground. Our old `|B| > 0.001` accepted them.
+constexpr float    WALK_POLY_MIN_B     = 0.001f;
+// Point-in-triangle epsilon from FUN_002324f0: an edge REJECTS the point when the normalised
+// cross(edge, vertex->point).y is <= -0.0001, and an edge shorter than this cannot reject at all.
+constexpr float    WALK_POLY_EDGE_EPS  = 0.0001f;
 // MAP-JUMP SURFACE TAG, bits 3+ of the same flags word (Session 64).
 //
 // The `mapctrl` script sets these via `setmapidmj`, the sibling of `setmapidfloor` / `setmapidwall`
@@ -239,6 +254,33 @@ constexpr uint32_t CTX_WORLD_OFF = 0x60;  // *(context+0x60) = live Bullet world
 // class-nibble gate (obj+3 >> 5 in {1,3}), which zeroes gates whose class isn't 1/3.
 constexpr uint32_t SCENEOBJ_TYPE_BYTE   = 0x03;   // low5 = category, high3 = class (diagnostic only)
 constexpr uint32_t SCENEOBJ_XFORM_PTR   = 0xB8;   // *(sceneObj+0xB8) -> transform node
+
+// ---- The game's OWN chosen interaction target (Session 73) ---------------------------------------
+// Written by FUN_0025bad0 / FUN_0025be50 (the scorers, reached from the per-field-frame scanner
+// FUN_0025b820), reset every frame by FUN_0025d650, consumed by the confirm handler FUN_00268d10.
+// Exactly ONE target survives -- the minimum score. There is no candidate list and no cycling.
+constexpr uint32_t INTERACT_HAVE  = 0x1F7A2AA;   // DAT_0209a2aa u8: 1 = something was chosen
+constexpr uint32_t INTERACT_SCORE = 0x1F7A2B0;   // DAT_0209a2b0 float, minimised (~1e10 = none)
+constexpr uint32_t INTERACT_CONT  = 0x1F7A2B4;   // DAT_0209a2b4 s32 container  (-1 = none)
+constexpr uint32_t INTERACT_SLOT  = 0x1F7A2B8;   // DAT_0209a2b8 s32 slot index (-1 = none)
+constexpr uint32_t INTERACT_MODE  = 0x1F7A2BC;   // DAT_0209a2bc s32: 10 = talk, 2 = action
+constexpr int32_t  INTERACT_MODE_TALK   = 10;
+constexpr int32_t  INTERACT_MODE_ACTION = 2;
+
+// ---- Transform-node fields used by the three interaction gates (FUN_0025bad0) --------------------
+// In the decompile the player side is `param_3 = *(sceneObj + 0x5c)` on a `short*`, i.e. byte offset
+// 0xB8 -- the SAME transform node the mod already reads position from. Offsets below are that node.
+constexpr uint32_t XFORM_FACE_YAW_INTERACT = 0xA8;  // param_3[0x2a]: yaw the CONE test compares against
+constexpr uint32_t XFORM_BAND_SCALE        = 0x24;  // pfVar1[9]   / param_3[9]
+constexpr uint32_t XFORM_BAND_UP           = 0xC8;  // pfVar1[0x32]: upward extent multiplier
+constexpr uint32_t XFORM_BAND_DOWN         = 0xCC;  // pfVar1[0x33]: downward extent multiplier
+constexpr uint32_t XFORM_BAND_PLAYER_PAD   = 0xC0;  // param_3[0x30]: player-side downward pad
+constexpr uint32_t XFORM_CONE_HALF_ANGLE   = 0xBC;  // pfVar1[0x2f]: per-target cone half-angle (rad)
+constexpr uint32_t XFORM_SKIP_HEIGHT_BAND  = 0xDD;  // byte; non-zero => the band test is skipped
+// sceneObj+0xC0 -> a struct whose +0x140/+0x144 floats offset the target's band centre.
+constexpr uint32_t SCENEOBJ_BAND_STRUCT    = 0xC0;
+constexpr uint32_t BAND_STRUCT_LO          = 0x140;
+constexpr uint32_t BAND_STRUCT_HI          = 0x144;
 constexpr uint32_t XFORM_POS_X          = 0x00;   // float X (ground)
 constexpr uint32_t XFORM_POS_Y          = 0x04;   // float Y (elevation / up)
 constexpr uint32_t XFORM_POS_Z          = 0x08;   // float Z (ground)

@@ -3,6 +3,7 @@
 #include "navigation/entity_scan.h"
 #include "navigation/entity_labels.h"
 #include "navigation/entity_diag.h"
+#include "navigation/item_scan.h"
 #include "navigation/nav_rva.h"
 #include "navigation/map_rva.h"
 #include "navigation/nav_common.h"
@@ -259,9 +260,16 @@ void OnFieldFrame() {
     // feature is worse than the problem it guessed at.
     STALL_SCOPE("EntityList::OnFieldFrame");
 
+    // Ground loot lives in its OWN pool, not the handle table, so the container mask can never see a
+    // drop appear or get picked up. Its three hooks set a flag instead; consuming it here is what
+    // makes a fresh drop show up while the player is already sitting in the Items category, with no
+    // rescan keypress. Read it FIRST, and unconditionally, so the mask's early-out cannot swallow
+    // the edge.
+    const bool lootChanged = ItemScan::TakeDirty();
+
     static uint32_t s_lastMask = 0;
     uint32_t mask = EntityScan::ActiveContainerMask();
-    if (mask == s_lastMask) return;          // container set unchanged — nothing to do
+    if (mask == s_lastMask && !lootChanged) return;   // nothing changed — nothing to do
     s_lastMask = mask;
 
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -353,8 +361,10 @@ void CmdRescan() {
 }
 
 // Shared body for Next/Prev: refresh, build the nearest-first view, move focus.
-bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition) {
+bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition,
+                      void** outSceneObj) {
     if (outIsTransition) *outIsTransition = false;
+    if (outSceneObj) *outSceneObj = nullptr;
     if (!PlayerState::IsFieldActive()) return false;
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
@@ -367,6 +377,7 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransiti
         outPos   = e.pos;
         outLabel = e.label;
         if (outIsTransition) *outIsTransition = e.isTransition;
+        if (outSceneObj) *outSceneObj = e.sceneObj;
     };
     // Prefer the focused object (by stable identity: exact, else re-lock); else the nearest in
     // the active filter. Read-only query (drives `\`) — does not mutate the cursor.

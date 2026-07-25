@@ -1,7 +1,9 @@
 #include "ui/ingame_menu_reader.h"
 #include "ui/menu_reader.h"
+#include "ui/text_capture.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
+#include "core/item_names.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
 #include "core/logger.h"
@@ -50,6 +52,9 @@ constexpr uint32_t RVA_FIELD_PANE_WND = 0x160DE0;   // FUN_00280de0 (== ROW_CHAI
 constexpr uint32_t PKT_CAT_OFF        = 0x00;       // *(int*)packet       = category
 constexpr uint32_t PKT_MSG_OFF        = 0x08;       // *(int64*)(packet+8) = message
 constexpr uint32_t WND_CAT_SHOW       = 0x13;       // the menu-visible frame (see above)
+constexpr uint32_t WND_CAT_CLOSE      = 0x12;       // pause-menu root teardown (FUN_00280de0 case 0x12,
+                                                    // clears DAT_0209ac30+0xdf8) -- the frame the whole
+                                                    // pause menu goes away and the field resumes
 
 typedef uint64_t (*Pfn_FieldPaneWnd)(void*, void*);
 Pfn_FieldPaneWnd s_origFieldPaneWnd = nullptr;
@@ -96,13 +101,13 @@ constexpr uint32_t RVA_DRAW_CHOOSER= 0x15D240; // FUN_0027d240 (Magicks/Technick
 constexpr uint32_t RVA_DRAW_MAGICK = 0x15CE70; // FUN_0027ce70 (spell/technick list, cat 0x14)
 constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 (items) — CONFIRMED working
 constexpr uint32_t RVA_RESOLVE_DEF = 0x23D330; // FUN_0035d330(cat, id) -> &record
-constexpr uint32_t RVA_RESOLVE_ITEM= 0x152CB0; // FUN_00272cb0(id) -> item name codec — CONFIRMED
+                                              // (FUN_00272cb0, the item name codec, moved to
+                                              // core/item_names.cpp — shared with the loot scanner)
 constexpr uint32_t CAT_MAGICK      = 0x14;     // FUN_0035d330 category for the spell/technick list
 constexpr uint32_t CAT_CHOOSER_TECH= 0x18;     // chooser category when flag bit2 set (Technicks)
 constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // chooser category otherwise (Magick schools)
 
 typedef const uint8_t* (*Pfn_ResolveDef)(uint32_t, uint32_t);  // FUN_0035d330(cat, id)
-typedef const uint8_t* (*Pfn_ResolveItem)(uint32_t);           // FUN_00272cb0(id)
 
 // Battle target-selection readout lives in battle_target_reader.cpp now (hooks the vitals builder
 // FUN_00329220 + the current-target index ctx+0xde0). The old reticle hook (FUN_005528c0) was
@@ -281,6 +286,17 @@ uint64_t HookedFieldPaneWnd(void* window, void* packet) {
     if (!MemRead::SafeReadU32(packet, PKT_CAT_OFF, &cat)) return ret;
     MemRead::SafeReadU64(packet, PKT_MSG_OFF, &msg);
 
+    // Pause-menu teardown -> invalidate any `o` description the menu left behind. The `o` help
+    // (TextCapture::CurrentHelpText) is valid only while its generation matches the current focus
+    // generation; that generation is bumped on every menu FOCUS but nothing bumps it when the menu
+    // CLOSES, so the last row's description stayed "current" and `o` spoke it out in the field. This
+    // is FUN_00280de0 (the pause-menu ROOT command column), so its close is the whole pause menu
+    // going away -- bumping the generation here makes CurrentHelpText() return empty once we are back
+    // in the field. Ungated (not tied to a pending entry): it must fire on every close.
+    // NOTE: MenuState::IsAnyMenuOpen() is NOT usable as an `o` gate -- DAT_0208ebc0 is never nulled
+    // (it holds the last-focused window forever) so it reads "open" in the field too.
+    if (cat == WND_CAT_CLOSE) TextCapture::NotifyFocusChanged();
+
     void* releaseOwner = nullptr; uint32_t rowOff = 0; int idx = -1;
     bool logSeen = false; uint64_t waited = 0;
     {
@@ -344,12 +360,9 @@ const uint8_t* ResolveDefName(uint32_t cat, uint32_t cmdId) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
 
-// Item name codec: FUN_00272cb0(id) returns it directly (CONFIRMED working). SEH-guarded.
-const uint8_t* ResolveItemName(uint32_t itemId) {
-    auto fn = reinterpret_cast<Pfn_ResolveItem>(Hooks::ResolveRva(RVA_RESOLVE_ITEM));
-    if (!fn) return nullptr;
-    __try { return fn(itemId); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
-}
+// Item name codec: FUN_00272cb0(id) returns it directly (CONFIRMED working). Centralized in
+// core/item_names.cpp, because the field loot scanner needs the same lookup for ground drops.
+const uint8_t* ResolveItemName(uint32_t itemId) { return ItemNames::ResolveCodec(itemId); }
 
 // Resolve the highlighted command's name by the panel's list type (draw callback). Top-level uses
 // the memory-only cache (no game call); sub-lists resolve on focus. Empty if unknown/unresolved.

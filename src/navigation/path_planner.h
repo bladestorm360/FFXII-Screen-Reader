@@ -31,7 +31,13 @@ void Shutdown();
 // `isTransition`: the target is a map-jump surface, so arriving at it IS crossing it. Near one, the
 // planner says "At the exit" rather than grinding out two-metre legs across the seam. False for
 // anything else.
-void Request(const FVec3& target, const std::wstring& label, bool isTransition = false);
+// `bandLo`/`bandHi`: the target's interaction band (InteractTarget::ReadBandFor) -- the range of
+// player Y from which the engine will let you interact with it. The planner routes to the nearest
+// reachable cell whose floor is inside that band, so a target standing somewhere you cannot (a dais,
+// a counter, a ledge) still gets a walkable destination. Defaults are an INVERTED range, meaning
+// "no band known", which reproduces the pre-Session-73 route-to-its-own-cell behaviour.
+void Request(const FVec3& target, const std::wstring& label, bool isTransition = false,
+             float bandLo = 1.0f, float bandHi = -1.0f);
 
 // GAME THREAD. Called once per field frame from the FUN_0022a770 hook (at entry). If a
 // request is pending and still valid for this map and the field is fully live, plan the

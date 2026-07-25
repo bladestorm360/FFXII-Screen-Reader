@@ -145,25 +145,69 @@ void CellCenter(const WalkGridInfo& g, int col, int row, float& wx, float& wz) {
 }
 
 namespace {
-// Scan a walkmap cell's floor prims and evaluate the TOPMOST walkable (type-0) floor at (evalX,evalZ).
-// Shared by ReadCellFloor (cell centre) and GroundInfoAt (arbitrary XZ). When outCosSlope != nullptr it
-// also returns the chosen poly's slope cosine B/|(A,B,C)| (1.0 = flat, smaller = steeper) from the plane
-// normal. Returns false if the cell holds no walkable floor.
-bool ScanTopFloorAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
-                    float& outY, float* outCosSlope) {
-    if (!g.valid) return false;
-    if (col < 0 || row < 0 || col >= g.nCols || row >= g.nRows) return false;
+
+// Point-in-triangle in the XZ plane -- the test the cell scan was missing, and the reason a single
+// Clan Hall column reported "floors" at -2089.09 and +2537.15 (Session 73). A poly's PLANE is
+// infinite: evaluating it for a point outside the poly's own triangle extrapolates without limit,
+// and a nearly-flat poly (B just over the 0.001 gate) extrapolates fastest of all. The engine never
+// does this -- its own cell scan FUN_00231900 calls FUN_002324f0 to reject non-containing polys
+// BEFORE it will take a height from one.
+//
+// Replicated from FUN_002324f0: for each of the three edges (verts at poly +0x10/+0x12/+0x14, next
+// = (i+1)%3) build the edge and the vertex->point vector **with Y zeroed**, normalise the edge, and
+// take cross(edge, toPoint).y, which FUN_00202e10 shows is `edge.z*toPoint.x - edge.x*toPoint.z`.
+// An edge rejects the point when that is <= -0.0001; a degenerate edge cannot reject. Inside == no
+// edge rejects.
+bool PointInPolyXZ(const WalkGridInfo& g, uint32_t pbase, float px, float pz) {
+    float vx[3], vz[3];
+    for (int i = 0; i < 3; ++i) {
+        int16_t vi = -1;
+        const uint32_t off = NavRva::WALK_POLY_VERT0 + static_cast<uint32_t>(i) * 2u;
+        if (!MemRead::SafeReadS16(g.polyArr, pbase + off, &vi)) return false;
+        if (vi < 0) return false;
+        const uint32_t vb = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
+        if (!MemRead::SafeReadF32(g.vertArr, vb + 0x00, &vx[i])) return false;
+        if (!MemRead::SafeReadF32(g.vertArr, vb + 0x08, &vz[i])) return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        float ex = vx[j] - vx[i], ez = vz[j] - vz[i];
+        const float len = std::sqrt(ex * ex + ez * ez);
+        if (len <= NavRva::WALK_POLY_EDGE_EPS) continue;    // degenerate edge cannot reject
+        ex /= len; ez /= len;                               // engine normalises before the cross
+        const float crossY = ez * (px - vx[i]) - ex * (pz - vz[i]);
+        if (crossY <= -NavRva::WALK_POLY_EDGE_EPS) return false;   // outside this edge
+    }
+    return true;
+}
+
+// Scan a walkmap cell's floor prims and evaluate EVERY walkable (type-0) floor at (evalX,evalZ).
+// This is the primitive; ScanTopFloorAt and AllFloorsAt are both thin wrappers over it.
+//
+// The poly-decode loop is unchanged from the original topmost-only scan -- only what happens with
+// each hit differs. `outTopY`/`outTopCos` are tracked unconditionally and independently of the
+// layer array, so ScanTopFloorAt's answer is byte-identical to what it was before this split even
+// if the layer array overflows. `out`/`maxOut` may be null/0 when only the top is wanted.
+// Returns the number of merged layers written; `outRawCount` gets the pre-merge poly count.
+size_t ScanFloorsAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
+                    FloorLayer* out, size_t maxOut,
+                    float* outTopY, float* outTopCos, int* outRawCount) {
+    if (outRawCount) *outRawCount = 0;
+    if (!g.valid) return 0;
+    if (col < 0 || row < 0 || col >= g.nCols || row >= g.nRows) return 0;
     const int cell = g.nCols * row + col;
     const int cellCount = g.nCols * g.nRows;
-    if (cell < 0 || cell + 1 > cellCount) return false;
+    if (cell < 0 || cell + 1 > cellCount) return 0;
 
     uint16_t start = 0, end = 0;
-    if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell) * 2u, &start)) return false;
-    if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell + 1) * 2u, &end)) return false;
-    if (end < start) return false;
+    if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell) * 2u, &start)) return 0;
+    if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell + 1) * 2u, &end)) return 0;
+    if (end < start) return 0;
 
     bool found = false;
     float bestY = 0.0f, bestCos = 1.0f;
+    size_t n = 0;
+    int raw = 0;
     // Bound the per-cell scan: a torn/garbage CSR range could otherwise spin for ~65k reads
     // per cell x 32k cells. No real cell holds anywhere near this many primitives.
     for (uint32_t k = start; k < end && (k - start) < 256u; ++k) {
@@ -173,35 +217,85 @@ bool ScanTopFloorAt(const WalkGridInfo& g, int col, int row, float evalX, float 
         const uint32_t pbase = static_cast<uint32_t>(prim) * NavRva::WALK_POLY_STRIDE;
         uint32_t flags = 0;
         if (!MemRead::SafeReadU32(g.polyArr, pbase + NavRva::WALK_POLY_FLAGS, &flags)) continue;
+        // Engine equivalent is a BITSET test, `mask >> (flags & 7) & 1` (FUN_00231900); this is
+        // that test with mask == 1, i.e. walkable-floor polys only.
         if ((flags & NavRva::WALK_POLY_TYPE_MASK) != 0) continue;   // non-walkable poly type
         float A, B, C; int16_t vi = -1;
         if (!MemRead::SafeReadF32(g.polyArr, pbase + NavRva::WALK_POLY_PLANE_A, &A)) continue;
         if (!MemRead::SafeReadF32(g.polyArr, pbase + NavRva::WALK_POLY_PLANE_B, &B)) continue;
         if (!MemRead::SafeReadF32(g.polyArr, pbase + NavRva::WALK_POLY_PLANE_C, &C)) continue;
-        if (!MemRead::SafeReadS16(g.polyArr, pbase + NavRva::WALK_POLY_BASEVERT, &vi)) continue;
+        if (!MemRead::SafeReadS16(g.polyArr, pbase + NavRva::WALK_POLY_VERT0, &vi)) continue;
         if (vi < 0) continue;
-        if (B > -0.001f && B < 0.001f) continue;               // near-vertical: no valid height
+        // STRICTLY positive, matching FUN_00231890's `0.001 < B`. The old `|B| > 0.001` also let
+        // through downward-facing (ceiling) polys, which the engine never treats as ground.
+        if (B <= NavRva::WALK_POLY_MIN_B) continue;
+        // The point must actually lie INSIDE this poly -- without it the plane extrapolates and the
+        // cell reports floors hundreds of units away. Ordered after the cheap gates, as the engine does.
+        if (!PointInPolyXZ(g, pbase, evalX, evalZ)) continue;
         float vx, vy, vz;
         const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &vx)) continue;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &vy)) continue;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &vz)) continue;
         const float y = vy + ((vx - evalX) * A + (vz - evalZ) * C) / B;
-        if (!found || y > bestY) {                             // topmost walkable floor
+        const float nrm = std::sqrt(A * A + B * B + C * C);
+        const float cosv = (nrm > 1e-6f) ? ((B < 0.0f ? -B : B) / nrm) : 1.0f;  // |B|/|normal| in [0,1]
+        ++raw;
+
+        if (!found || y > bestY) {                             // topmost walkable floor (unchanged)
             bestY = y;
+            bestCos = cosv;
             found = true;
-            if (outCosSlope) {
-                const float n = std::sqrt(A * A + B * B + C * C);
-                bestCos = (n > 1e-6f) ? ((B < 0.0f ? -B : B) / n) : 1.0f;  // |B|/|normal| in [0,1]
+        }
+        if (!out || maxOut == 0) continue;
+
+        // Merge into an existing level when within kLayerMerge, keeping the highest poly's plane so
+        // the top layer always carries exactly the plane ScanTopFloorAt would have chosen. (A later
+        // poly can bridge two levels that were kept apart; harmless -- it only ever over-splits.)
+        bool merged = false;
+        for (size_t i = 0; i < n; ++i) {
+            const float d = y - out[i].y;
+            if (d > -kLayerMerge && d < kLayerMerge) {
+                if (y > out[i].y) { out[i].y = y; out[i].cosSlope = cosv; }
+                merged = true;
+                break;
             }
         }
+        if (merged || n >= maxOut) continue;   // overflow is visible to callers as raw >> n
+
+        size_t ins = n;                        // insertion sort, ascending by height
+        while (ins > 0 && out[ins - 1].y > y) { out[ins] = out[ins - 1]; --ins; }
+        out[ins].y = y;
+        out[ins].cosSlope = cosv;
+        ++n;
     }
-    if (!found) return false;
-    outY = bestY;
-    if (outCosSlope) *outCosSlope = bestCos;
+    if (outRawCount) *outRawCount = raw;
+    if (found) {
+        if (outTopY)   *outTopY   = bestY;
+        if (outTopCos) *outTopCos = bestCos;
+    }
+    return n;
+}
+
+// Evaluate the TOPMOST walkable floor at (evalX,evalZ). Shared by ReadCellFloor (cell centre) and
+// GroundInfoAt (arbitrary XZ). When outCosSlope != nullptr it also returns that poly's slope cosine.
+// Returns false if the cell holds no walkable floor.
+bool ScanTopFloorAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
+                    float& outY, float* outCosSlope) {
+    float topY = 0.0f, topCos = 1.0f;
+    int raw = 0;
+    ScanFloorsAt(g, col, row, evalX, evalZ, nullptr, 0, &topY, &topCos, &raw);
+    if (raw == 0) return false;
+    outY = topY;
+    if (outCosSlope) *outCosSlope = topCos;
     return true;
 }
 } // namespace
+
+size_t AllFloorsAt(const WalkGridInfo& g, int col, int row, float evalX, float evalZ,
+                   FloorLayer* out, size_t maxOut, int* outRawCount) {
+    return ScanFloorsAt(g, col, row, evalX, evalZ, out, maxOut, nullptr, nullptr, outRawCount);
+}
 
 bool ReadCellFloor(const WalkGridInfo& g, int col, int row, float& outY) {
     float cx, cz;

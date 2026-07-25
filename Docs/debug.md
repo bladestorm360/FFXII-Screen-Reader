@@ -7,48 +7,113 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-### STRUCK: `FUN_0057edb0` / RVA `0x45EDB0` is the SAVE/LOAD pane, not the status screen (S71)
+### Session 68 — PATHFINDER ELEVATION root-caused: STEP-DISCONTINUITY, not slope; slope-gate idea STRUCK
 
-**KEYWORDS: status screen wrong hook FUN_0057edb0 0x45EDB0 save load slot pane 200 slots FUN_003bb3e0
-FUN_0057fe80 FUN_00583040 status_reader CAT_SHOW 0x13 does not exist copied from FUN_00280de0
-FUN_002c2320 0x1A2320 real status controller ability pages cursor not static enumerate removed**
+**KEYWORDS: pathfinder elevation step discontinuity ledge no slope limit walk-type flags FUN_0022cc50
+FUN_00231900 FUN_0033bc80 0.3 step kStepDiscont kEdgeSubStep kMaxStep too loose poly normal slope gate
+dropped GroundInfoAt route-profile diagnostic shipped pending confirmation**
 
-**What was tried:** an early `src/ui/status_reader.{h,cpp}` hooked `0x45EDB0`, believing it to be the
-status Attributes page, activating on packet category `0x13` (SHOW). Wiring that into CMake +
-`MenuReader::Init()` would have shipped a reader that activates on the **save screen** and reads
-nothing on Status.
+This CLOSES the reasoning of the S67 pathfinder entry below (which said "the mechanism is plausibly right;
+the THRESHOLD is not pinned"). Root cause and the winning fix:
 
-**Why it is wrong** (conf 0.99, decompile only, no probe needed):
+**Decompile trace (first-hand, ~0.9): the FIELD walkmap has NO walkable-slope limit.** `FUN_0022cc50`
+(move-across-walkmap per-poly handler) gates walkability on baked **walk-type flags** (poly+0xC & 7: 0
+walkable, 1/4 conditional; walls block) — no cosine / normal.y / angle anywhere. `FUN_00231900` /
+`FUN_00231890` only guard `B > 0.001` (divide-by-~0, not a slope cap). The player can therefore walk
+**any continuous slope** (why stairs/hills work). The only geometric movement blockers are (1) **walls**
+— `SegmentClear` (mask=4) already tests them and they are CLEAR along the descent — and (2) a
+**step-height DISCONTINUITY**: `FUN_0033bc80:23-28` samples `GroundAt` ahead and reacts at
+`ABS(groundY − currentY) >= 0.3` world-units. So the real limit is a ~0.3 m step; our A* `kMaxStep = 1.5`
+was ~5× too loose and stitched routes across a 0.3–0.6 m ledge/lip (invisible to the floor+0.9 m wall
+feeler and to the prior 0.6 m dense check — which is exactly why fix #4 changed nothing).
 
-1. `00583040_FUN_00583040.c:37-53` scans a **200-entry save-slot table** (`FUN_003bb3e0`) gated on a
-   save-vs-load flag at `+0xC1`, and only then creates `FUN_0057edb0` (`:90`) — as a sibling of the
-   save-slot list `FUN_0057fe80` (`:100`).
-2. Its seven sub-panels read a 4-byte-per-member packed **save preview** record
-   (`0057e6d0_FUN_0057e6d0.c:20,39,46` — member id, `0xFF` = hide, level clamped to 99, two nibble
-   gauges, flag bits). A real stat page draws HP as a number, not a 3-segment nibble gauge.
-3. `FUN_0057edb0` has **no `0x13` case at all** — it handles `1`, `0xf`, `0x12`, default. The `0x13`
-   constant was copied from `FUN_00280de0` (the field pause command column), a different window proc.
+**STRUCK — do NOT build the poly-normal SLOPE GATE.** Rejecting cells/edges whose floor poly is too steep
+(from the plane normal `B/|(A,B,C)|`) would be WRONG: the engine imposes no slope limit, so a slope cap
+rejects continuous slopes the player can legitimately walk. The fix is a step-**discontinuity** test.
 
-**The trap to avoid repeating:** the three header labels `FUN_002f9860(0x875/0x876/0x877)` that
-`FUN_0057edb0` resolves were read as "status column headers" in
-`..\FFXII-Decompile\notes\status_char_select_labels_2026_07_11.md:47`. They are the **save pane's**
-column headers. A label cluster on a screen is not evidence of *which* screen — follow the creation
-chain (`FUN_00244f50(size, proc, args)` call sites) before believing a function's identity.
+**Shipped (built + deployed, pending one tester round):** `path_search.cpp` `passable()` now sub-samples
+`GroundAt` every `kEdgeSubStep = 0.25 m` along any edge with `|Δ| > kStepTrigger = 0.15 m` and rejects a
+sub-step jumping more than `kStepDiscont = 0.35 m`; `kMaxStep = 1.5` kept as the coarse cliff gate so
+continuous slopes survive; flat edges skip (city fast-path). Same cap in the string-pull validator.
+`map_query::GroundInfoAt` (slope-returning floor read) + `path_planner::LogRouteProfile` (dumps the
+ROUTE's own per-leg max sub-step ΔY + slope) added as the decisive diagnostic. `kStepDiscont = 0.35` is
+PROVISIONAL — the route-profile `WORST step` on the tomato route vs a walkable city/stairs route brackets
+the shippable value. See Session 68 session log + Known Issues header below.
 
-**Two more things struck in the same session, both worth not repeating:**
+### Session 67 — PATHFINDER ROUTES THROUGH IMPASSABLE ELEVATION (OPEN, progress-blocking) — 4 fixes tried, all failed
 
-- ~~"there is no event when the player backs out of a summary page onto the Attributes page"~~ —
-  wrong. `FUN_002c1a80` (`0x1A1A80`) is the only writer of `menuCtx+0xDE7` and returns **2** on
-  exactly that transition. The claim was asserted without re-reading a probe trace already in hand.
-  **A game does not return from a submenu and then wait for input to refresh; do not assume it does.**
-- ~~"on the Status screen the Magicks and Technicks pages are static displays with no browsable
-  cursor, so enumerate every slot into a virtual buffer"~~ — wrong. They have a real in-game cursor,
-  exactly as on the license board. A three-buffer enumeration was built, shipped and removed the same
-  session. `ability_summary_reader` owns those pages; `status_reader` covers page 1 only.
+**KEYWORDS: pathfinder routes into cliff pit ledge impassible terrain character not moving elevation
+plateau Rogue Tomato Dalmasca Estersand The Stepping kMaxStep step check GroundAt walkmap hasWorld=0
+Bullet absent physics dead dense edge check kEdgeSubMax slope limit char-controller walkable slope
+directline route field diagnostic stuck wiggle progress blocking**
 
-**Replaced by:** `FUN_002c2320` (RVA `0x1A2320`), the shared Status/Equipment container, gated on
-`*(int*)(ctrl+0x160) == 0x4b4`. Full chain, offsets, and the game-supplied attribute label ids in
-`GameArchitecture.md` § "Status screen". Confirmation probe: `frida\probe_status_data.js`.
+**SYMPTOM (tester, 100% progress-blocking):** on elevation-varied field terrain (confirmed on Dalmasca
+Estersand "The Stepping", mapId 227, hunting the Rogue Tomato) the pathfinder routes the player onto a
+descent/climb they **physically cannot traverse** — the character walks against impassable terrain and
+**does not move** ("holds up-stick, footsteps but no movement, until I move sideways first"). A* reports
+`pass=strict nearDist=0.0m` (claims it reached the target), but the produced route is unfollowable. The
+tomato happens to sit in a hard spot; **the bug is general elevation handling, NOT tomato-specific and
+NOT map-specific** (the walkmap loads on every field map). Both the `\` entity route and the `p` combat
+route are affected (same `PathSearch::Run`/`passable`).
+
+**CONFIRMED (>=0.98), rule out these dead ends first:**
+- **No Bullet/physics is involved.** `hasWorld=0` on every route line and the Bullet world-builder never
+  fired this session (`grep -c "world-builder FIRED"` = 0). Routing has ALWAYS used the SQEX walkmap;
+  the physics-collision idea (Steps 1/2, filter 0xF) is **DEAD for the field** — do not retry it. (The
+  player's own ground/slope resolve `FUN_006a5c00` uses the Bullet raycast at filter 0xf, but it is not
+  exercised here because there is no Bullet world.)
+- **`GroundAt` is NOT over-reporting walkability.** `GroundAt` (`FUN_003208c0` -> `FUN_0026e3c0` ->
+  `FUN_00231900(ctx,pt,param_3=1)`) filters to **type-0 (walkable) floor only, topmost** — line-45 test
+  `1 >> (polyType&7) & 1` accepts only type 0, identical to the direct reader `ReadCellFloor`. So the
+  grid's per-cell walkability matches the game's navmesh; the false-positive is in EDGE connectivity, not
+  cell walkability.
+- **The wall test is correct.** `SegmentClear` (`FUN_00230b60` mask=4 -> `FUN_0022cc50`) filters the
+  player's real collision classes (0/1/4); it works in the city. The blocking terrain shows **no `W`
+  (wall)** on the direct line — it is an elevation/floor issue, not a missing wall.
+- **No "different pathfinder for the overworld" is needed** — same walkmap, same core, everywhere.
+
+**ROOT CAUSE (as understood):** `PathSearch::passable()` decides an edge from the floor-height delta
+between cell CENTRES 1.5 m apart (`|ay-by| <= kMaxStep`, 1.5 m). That single number cannot tell a
+walkable ramp from a 1.5 m ledge or a ~45 deg+ cliff face — all read as "<=1.5 m." So A* stitches a
+"path" down a stepped pit wall / up a ledge the player cannot traverse. Directline proof (seq 116):
+player on a plateau `.29.0 ... .31.2 ^25.1 ^21.4 .20.3 ... .14.6` — a ~6 m cliff (the `^`) down to a pit
+at Y~15; A* refuses the direct cliff but routes AROUND into a descent that is still un-walkable.
+
+**TRIED & FAILED / INSUFFICIENT:**
+1. **Bullet/physics edge gate** (probe_menu... no — the `directline` physics ray at filter 0xF): refuted,
+   `hasWorld=0` (no physics world). DEAD.
+2. **"GroundAt over-reports non-walkable terrain":** refuted by the `FUN_00231900 param_3=1` type-0 filter.
+3. **"Small up-step the player can't climb"** (footstep-count hypothesis): the up-step case was a FALSE
+   ALARM — the tester simply could not hear footsteps; the north walk was moving correctly.
+4. **Elevation-honest DENSE EDGE CHECK — DEPLOYED, DID NOT FIX (the current in-tree state).** Added to
+   `passable()` (`path_search.cpp`): when `|ay-by| > kEdgeSubMax` (0.6 m), sub-sample the floor every
+   `kEdgeSubStep` (0.5 m) along the edge and reject any sub-step > `kEdgeSubMax` (a ledge/cliff), while a
+   smooth ramp passes. Result: **route UNCHANGED** (`expands`~270 same as before, same `say=` legs,
+   still routes into the pit, tester still stuck). So the descent A* uses **passes a ~50 deg cap** — it is
+   either a smooth-but-too-steep slope the player's REAL slope limit rejects (limit < ~50 deg, so
+   `kEdgeSubMax` needs to be much tighter, e.g. matched to the game's actual walkable-slope) OR the check
+   is not catching the right edges. The mechanism is plausibly right; the THRESHOLD/coverage is not
+   pinned. **Left in the tree for the next session to tighten or rework — see Known Issues.**
+
+**WHERE TO START NEXT SESSION (see Known Issues "pathfinder elevation" below).**
+
+### Session 67 — `o` describe stale in field; `MenuState::IsAnyMenuOpen()` is NOT a field/menu gate
+
+**KEYWORDS: o key describe stale help text field no menu active IsAnyMenuOpen DAT_0208ebc0 never
+nulled FocusedOwner input focus window help generation g_helpGen NotifyFocusChanged pause menu close
+FUN_00280de0 cat 0x12 teardown**
+
+- **`MenuState::IsAnyMenuOpen()` cannot gate "is a menu open".** It returns `FocusedOwner() != null`
+  = `*DAT_0208ebc0 != null`. `DAT_0208ebc0` (the input-focus window ptr) is **WRITTEN ONLY** — the sole
+  write is `DAT_0208ebc0 = param_2` in `FUN_00244830`; **no path ever nulls it** (grep of the whole
+  decompile: 1 write, 0 clears). After the first menu it holds the last-focused window forever (the
+  field root once back in the field), so it reads "menu open" during field roam and battle. A prior
+  session already hit this — `entity_list.cpp:254` removed an `IsAnyMenuOpen()` gate that "silently
+  killed the field object scan for the entire fight." Do not use it as a menu/field discriminator.
+- Also dead as menu-open signals: **`DAT_0209ac30`** is a fixed singleton (`= &DAT_0209ac60`, never
+  null); **`PlayerState::IsFieldActive()`** stays TRUE under the pause menu (map still live);
+  **`DAT_0228ea60`** menu registry is zeroed on close (`FUN_00241d40` case 0x12) but only tracks
+  `FUN_00241d40`-driven pop-ups/type-1, not equip/license/gambit — so not a general "any menu" signal.
 
 ### Sessions 58–59 — exit positions and the route target
 
@@ -755,6 +820,19 @@ so don't look for a lock flag.)
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
 
+**KEYWORDS: o key describe stale field no menu active help generation bump pause menu teardown
+FUN_00280de0 cat 0x12 NotifyFocusChanged CurrentHelpText g_helpGen IsAnyMenuOpen unusable S67**
+
+**`o` (describe) spoke a closed menu's description while walking in the field.** SOLUTION:
+`TextCapture::CurrentHelpText()` is valid only while `g_helpTextGen == g_helpGen`; `g_helpGen` is
+bumped by `NotifyFocusChanged()` on menu FOCUS but nothing bumped it on menu CLOSE, so the last row's
+description stayed "current" into the field. `ingame_menu_reader.cpp` `HookedFieldPaneWnd` (hook on the
+pause-menu ROOT command column `FUN_00280de0`) now calls `TextCapture::NotifyFocusChanged()` on cat
+`0x12` (root teardown = whole pause menu closes) → `CurrentHelpText()` returns empty in the field.
+Cannot break in-menu `o` (help is re-set for the new generation on each focus; 0x12 fires only on full
+close). **NOT** gated on `MenuState::IsAnyMenuOpen()` — that reads "open" in the field/battle because
+`DAT_0208ebc0` is never nulled (see Tried & Failed, Session 67).
+
 **KEYWORDS: field party menu entry announce speaks-on-keypress SHOW message cat 0x13
 FUN_00280de0 0x160DE0 ArmPaneEntry HookedFieldPaneWnd battle-menu parity FUN_00244830 S52**
 
@@ -954,6 +1032,122 @@ Current module interaction diagram + logging format. Keep up to date as modules 
 ```
 
 ## Known Issues
+
+### PATHFINDER routes through impassable ELEVATION — FIX SHIPPED S68, awaiting one tester round (was S67 PROGRESS-BLOCKING)
+
+**KEYWORDS: pathfinder elevation cliff pit ledge impassable not moving kMaxStep kEdgeSubMax passable
+walkable slope limit char-controller directline route field diagnostic start here kStepDiscont step
+discontinuity FUN_0033bc80 route-profile**
+
+**UPDATE (S68): root-caused and fixed pending confirmation — see the Session 68 Tried & Failed entry at
+the top of this file.** Root cause is a **step-height DISCONTINUITY** (~0.3 m, `FUN_0033bc80`), NOT a
+slope (the field engine has no slope limit — `FUN_0022cc50` gates on walk-type flags only). The A*
+`kMaxStep = 1.5` was ~5× too loose. Shipped a fine step-discontinuity edge test (`kStepDiscont = 0.35 m`
+provisional) + the `LogRouteProfile` diagnostic that measures the descent's real step height. **Next: one
+tester round on "The Stepping" (Rogue Tomato) — read `NAV-ROUTE route-profile … WORST step=` to confirm
+the tomato route stops crossing the ledge and city/stairs still route; tune `kStepDiscont` once if
+needed, then move this to Solved.** The historical S67 write-up below is kept for the reasoning trail.
+
+See the full Tried & Failed writeup above (Session 67 pathfinder). Short version: `PathSearch::passable`
+connects cells on a 1.5 m centre-to-centre height delta, which cannot distinguish a ramp from a
+ledge/cliff, so A* routes the player onto descents/climbs they cannot traverse (character jams, does not
+move). The dense elevation edge-check now in `passable()` (`kEdgeSubStep`/`kEdgeSubMax`) did NOT fix it —
+the un-walkable descent passes a ~50 deg cap.
+
+**The ONE thing to pin (>=0.99) first:** the player's REAL field walkable-slope / step-up / step-down
+limits, from the WALKMAP char-controller (NOT the Bullet `FUN_006a5c00`; there is no Bullet world here —
+`hasWorld=0`). Candidate movers = the `GroundAt`/`FUN_003208c0` consumers `FUN_00335180`, `FUN_00337470`,
+`FUN_0033bc80` (`FUN_0033a720` is enemy AI STEERING, not it). Then set the edge test to those limits
+(and decide LEDGE vs SMOOTH-STEEP: a ledge needs finer sub-sampling; a too-steep smooth slope needs a
+real slope-angle cap from the poly normal or the char-controller constant).
+
+**Open sub-question:** is the un-walkable descent a stepped LEDGE (dense floor sub-sampling with a
+tighter cap catches it) or a SMOOTH slope steeper than the player can walk (needs the actual slope-limit
+constant)? To decide, log the ROUTE's own per-cell Y (extend the route-field dump to print Y along the
+`*` cells, or dump `rawPoly` Y-deltas) — the current directline only samples the STRAIGHT line, which
+misses the route's actual descent.
+
+**Also consider:** if the player is on a promontory with NO walkable descent to the target's level, the
+correct answer is `NoPath` (approach the pit from another side), not a fabricated route. A tight-enough
+edge test would produce that automatically.
+
+**DIAGNOSTIC TOOLING LEFT IN `path_planner.cpp` (log-only, tag `NAV-ROUTE`), reuse it:**
+- `directline seq=N len=.. wmBlock=I(why) firstUp=J: <marks>` — fractional-Y profile of the STRAIGHT
+  player->target line. Marks: `.` clear, `^` >1.5 m step, `W` walkmap wall, `u` up-step 0.4-1.5 m,
+  `X` no floor. Numbers are the floor Y.
+- `==== route field center=(x,z) playerY=.. ====` + a 33x33 ASCII map — player-relative height tiers:
+  `P` you, `T` target, `*` the A* raw path, `=` +/-0.5 m, `-` up 0.5-1.5, `,` down 0.5-1.5, `^` up >1.5
+  (cliff up), `v` down >1.5 (cliff down/pit), `.` no floor. North-up, west-left. Fires only when the
+  straight line is blocked (`firstBlock>=0`). **Evidence (seq 116):** `P` sits on a small `=`/`-` patch
+  (Y~29-31); nearly the whole map is `v` (the pit, >1.5 m below); the `*` route descends off the patch
+  into the `v` and crosses to `T` — a descent the tester cannot walk.
+
+**DEFERRED THIS SESSION (resume after the pathfinder is fixed):** the menu-feature plan — Part B (items
+qty), C (shop), D (gambit), E (status virtual buffer), F (dropped-items pathfinder category). Plan +
+findings are in `~/.claude/plans/our-goal-this-session-federated-kay.md` and the S67 memory notes.
+Already landed: Part A (`o` stale-in-field fix, DONE + deployed). Written but NOT wired/built:
+`src/ui/virtual_buffer.{h,cpp}` (FF1 NavigationBuffer port, in CMake, compiles), `src/ui/status_reader.{h,cpp}`
+(NOT in CMake — provisional offsets, kept out until probe-confirmed), and the arrow/Home-End input
+plumbing in `input_tracker.cpp` (dormant callback). Probes authored: `probe_menu_windows.js`,
+`probe_status_data.js`.
+
+> **UPDATE (Session 71):** the reason `status_reader.{h,cpp}` was "kept out until probe-confirmed"
+> was understated — it hooks the **wrong function entirely** (`0x45EDB0` = the save/load pane, see
+> the Tried & Failed entry below). Its five PROVISIONAL vitals offsets turned out to be *correct*;
+> the hook target, the `0x13` activation category, and the save-record read were the real defects.
+> The real controller is `FUN_002c2320` (`0x1A2320`) — see `GameArchitecture.md` § "Status screen".
+> `probe_status_data.js` has been rewritten against the new chain and moved to `frida\` (active).
+
+### STRUCK: `FUN_0057edb0` / RVA `0x45EDB0` is the SAVE/LOAD pane, not the status screen (S71)
+
+**KEYWORDS: status screen wrong hook FUN_0057edb0 0x45EDB0 save load slot pane 200 slots FUN_003bb3e0
+FUN_0057fe80 FUN_00583040 status_reader CAT_SHOW 0x13 does not exist copied from FUN_00280de0
+FUN_002c2320 0x1A2320 real status controller**
+
+**What was tried:** `src/ui/status_reader.{h,cpp}` (Session 67, never compiled) hooks `0x45EDB0`,
+believing it to be the status Attributes page, and activates on packet category `0x13` (SHOW) /
+deactivates on `0x12`. Wiring it into CMake + `MenuReader::Init()` would have shipped a reader that
+activates on the **save screen** and reads nothing on Status.
+
+**Why it is wrong** (conf 0.99, decompile only, no probe needed):
+
+1. `00583040_FUN_00583040.c:37-53` scans a **200-entry save-slot table** (`FUN_003bb3e0`) gated on a
+   save-vs-load flag at `+0xC1`, and only then creates `FUN_0057edb0` (`:90`) — as a sibling of the
+   save-slot list `FUN_0057fe80` (`:100`).
+2. Its seven sub-panels read a 4-byte-per-member packed **save preview** record
+   (`0057e6d0_FUN_0057e6d0.c:20,39,46` — member id, `0xFF` = hide, level clamped to 99, two nibble
+   gauges, flag bits). A real stat page draws HP as a number, not a 3-segment nibble gauge.
+3. `FUN_0057edb0` has **no `0x13` case at all** — it handles `1`, `0xf`, `0x12`, default. The `0x13`
+   constant was copied from `FUN_00280de0` (the field pause command column), a different window proc.
+
+**The trap to avoid repeating:** the three header labels `FUN_002f9860(0x875/0x876/0x877)` that
+`FUN_0057edb0` resolves were read as "status column headers" in
+`..\FFXII-Decompile\notes\status_char_select_labels_2026_07_11.md:47`. They are the **save pane's**
+column headers. A label cluster on a screen is not evidence of *which* screen — follow the creation
+chain (`FUN_00244f50(size, proc, args)` call sites) before believing a function's identity.
+
+**Replaced by:** `FUN_002c2320` (RVA `0x1A2320`), the shared Status/Equipment container, gated on
+`*(int*)(ctrl+0x160) == 0x4b4`. Full chain, offsets, and the game-supplied attribute label ids in
+`GameArchitecture.md` § "Status screen". Confirmation probe: `frida\probe_status_data.js`.
+
+### License-board confirm pop-ups do not read their prompt BODY text (open, S67)
+
+**KEYWORDS: license board pop-up prompt body not read choose this license board confirm learn node
+buy license Yes No BodyText PopupReader IsChoicePopup IsConfirmWindow FUN_002cdf20 FUN_00241d40
+menuCtx+0x2e8**
+
+**Symptom** (tester): the two license-board confirmation pop-ups — (1) the **"select/choose a board"**
+prompt raised from the job-select ring, and (2) the **confirm-purchase** prompt when learning a license
+node — **speak only the Yes/No buttons, never the prompt BODY** ("Choose this license board?" / the
+learn-node question). The body text is on screen but unvocalized.
+
+**Where it lives.** `menu_reader.cpp` `OnFocus` announces a pop-up body once on entry via
+`PopupReader::BodyText(owner)` for `IsConfirmWindow` (`FUN_00241d40`) OR `IsChoicePopup`
+(`FUN_002cdf20` @ `menuCtx+0x2e8`). Either these board prompts are a THIRD prompt class neither
+predicate matches (so the body path never runs), or they match but `BodyText` reads the wrong
+offset for this prompt and returns empty. NOT yet diagnosed — needs the prompt's `owner` obj[0] RVA
+(hook `FUN_00247510` 0x8000 while the prompt is up, or the existing menu probe) to tell which case.
+The buttons read because they come from the code-fixed Yes/No path, which does not need the body.
 
 ### "Interactables" is spoken as a NAME for objects the game deliberately leaves unnamed (open, S64)
 
@@ -1252,3 +1446,287 @@ FUN_005655f0 onEnter onLeave one-item-list silent-on-entry probe dedup-key-colli
 - **Empty categories never occur** — the `gateId` at tab-table `entry+6` filters them out before they
   are tabbed (every `[cat]` reported n≥1; tab counts vary by screen state). A "speak the category
   alone when the list is empty" branch was designed and then dropped as dead code. Do not add it.
+
+## Ground loot + rewards — Solved / corrected (Session 72, 2026-07-24)
+
+**KEYWORDS: ground loot drop pool DAT_02ec0fa0 second pool not handle table marker DAT_022be7f0
+FUN_00272cb0 not item resolver scene-object handle FUN_003588b0 FUN_00263990 7 slots not 4
+FUN_0028fb80 rejected 0.85 dropped register args FUN_00312280 defeat line moved msg 0x0D realtime**
+
+- **SOLVED: "items dropped by enemies are not on the pathfinder."** Root cause is not a filter bug —
+  ground loot is **a completely separate object pool**. The scanner walks the scene-object handle
+  table `DAT_02098e10`; drops live in `DAT_02ec0fa0` (RVA `0x2DA0FA0`, 10 slots, stride `0x60`) with
+  positions in a parallel marker table `DAT_022be7f0` (RVA `0x219E7F0`). No amount of classification
+  work on the handle table could ever have found them. *Lesson: when a whole class of object is
+  missing rather than mislabelled, look for a second backing store before touching the classifier.*
+
+- **STRUCK: `FUN_00272cb0` is an "item name codec".** It is
+  `handle → FUN_003588b0 → FUN_00263990`; `FUN_003588b0` decodes its argument as a pooled record
+  handle (pool selector / index / generation vs `rec+0x16`) and `FUN_00263990` reads `rec+0x102` /
+  `rec+0xf8` with the `0xffffbfff` npcdic mask — the **scene-object** name chain. Ghidra dropped the
+  register-passthrough arg, so its input semantics are NOT established offline, even though the call
+  is play-confirmed in the battle item sublist. It is reused as a **game call from the game thread
+  only** (`core/item_names.cpp`), never reimplemented on a guess. *Lesson: a comment saying
+  "CONFIRMED working" confirms the OUTPUT, never your model of the arguments.*
+
+- **STRUCK: the loot payload is "4 slots".** It is **7** — 5 normal + 2 rare. Both `FUN_003180f0`
+  and `FUN_00319920` loop seven times. `combat_system.md:1007` was wrong;
+  `notes/combat_re_2026_07_20_battle_state.md:228` was right.
+
+- **REJECTED as the EXP/LP source: `FUN_0028fb80(actorId, exp, lp)`**, the on-screen popup. Its args
+  *are* the drawn numbers, which made it look like the obvious hook — but Ghidra renders the call
+  site with what look like the gil accumulator in the value slots (dropped register args), leaving
+  the argument identity at ~0.85, below the bar. Used the before/after diff of `BtlChr+0x18C`/`+0x190`
+  instead, which needs no inference at all. *Lesson: when a cheap source depends on an argument
+  identity Ghidra could not recover, prefer the source that observes state directly.*
+
+- **The enemy-defeated line was being emitted from the wrong event.** It came from `CheckVitals`,
+  i.e. off a damage *calculation* one step before the HP write — which is why it could not be joined
+  to the rewards, and why it was announcing a death the game had not committed yet. Moved to
+  `FUN_00312280` (`0x1F2280`), the real per-death event.
+
+- **OPEN, watch on first playtest (0.95):** that `FUN_00312280` is reached for *every* enemy death
+  rests on a static "sole caller" xref (`FUN_0030e360:204` case 0), not observation. Failure mode is
+  a kill that announces nothing at all — check a poison/doom death specifically.
+
+## Clan / Hunt surfaces — SILENT, reported Session 72, NOT diagnosed
+
+**KEYWORDS: hunt mark bill notice board clan primer Which bill would you like to read Mark Rank
+Status Thextera Available Done multi-item reward panel Red & Rotten in the Desert gil Potion x2
+Teleport Stone titled reward list quest reward silent**
+
+Two surfaces the tester reported as reading **nothing at all**. Both belong to the Clan/Hunt system,
+which the mod has never touched. **Reported only — no RE done, no function identified. Do not
+implement from a guess; find the surface first.**
+
+### 1. The multi-item reward panel
+
+A bordered panel with a **title line** (the bill/quest name, e.g. `Red & Rotten in the Desert`), a
+rule under it, then one row per reward:
+
+```
+Red & Rotten in the Desert
+  [icon] 300 gil
+  [icon] Potion          x  2
+  [icon] Teleport Stone  x  1
+```
+
+Observations that matter:
+- It is **not** the single-item obtained toast the mod already reads (`message_reader.cpp`,
+  `FUN_0035e070`, text at `widget+0xC8`) — that one is a one-line toast with no title and no
+  quantity column. This is a multi-row list with a heading.
+- It is **not** battle messages `0x24`/`0x25`/`0x26` either: those are one obtain per message and
+  are already spoken in realtime. Nothing about this panel came through.
+- Each row has an **icon, a name, and a separate `x N` quantity column** — the quantity is its own
+  field, exactly like the inventory rows (`row+0x0E`, Session 70), not part of the name string.
+- Gil has no quantity column; it is formatted into the name ("300 gil").
+
+**First checks next session** (in this order, per CHECK-GameArchitecture-FIRST):
+1. Grep `GameArchitecture.md` and `debug.md` for an existing quest/reward/clan read-point before
+   anything else.
+2. Does the universal focus signal `FUN_00247510` (msg `0x8000`) reach this panel at all? It has no
+   cursor, so probably not — which would make it a **draw/open** surface, like the shop
+   (`FUN_0056e5d0`) rather than a focus surface.
+3. If it is a row list, it is far more likely to share the row-chain / list-widget shape the
+   inventory and shop readers already parse than to need anything new. Look for the row array and a
+   count before inventing a reader.
+
+### 2. The hunt notice board — "Which bill would you like to read?"
+
+A **cursored** list with a prompt line and **column headers**:
+
+```
+Which bill would you like to read?
+   Mark        Rank   Status
+-> Thextera      I    Available
+   Done
+```
+
+Observations that matter:
+- **This one HAS a cursor** (the pointing-hand glyph moves between rows), so unlike the reward panel
+  it should be reachable by a focus signal — and it still says nothing. That gap is the interesting
+  part: **check whether `FUN_00247510` 0x8000 fires here before assuming a new hook is needed.**
+- A row is **three columns** — Mark name, Rank (roman numeral), Status. A useful readout must join
+  all three; speaking only the focused cell would be useless. The headers are separate text from the
+  row content.
+- `Status` is a state word (`Available` here) drawn in its own colour — treat it as game text to
+  read, never as a word to hardcode.
+- **`Done` is a row in the same list**, not a separate button, so the reader must not assume every
+  row has three columns.
+- The prompt line ("Which bill would you like to read?") is game text and should be the entry
+  announce, the same way other panes announce on entry.
+
+**Do not assume these two share a controller.** One has a cursor and one does not; that is exactly
+the kind of surface-shape assumption that cost Session 71 a wrong hook (`0x45EDB0` turned out to be
+the save/load pane because a label cluster looked right). Follow the creation chain for each.
+
+---
+
+## Navigation elevation-blindness — Solved / corrected (Session 73, 2026-07-24)
+
+**Symptom.** Story-blocking. In the Rabanastre Clan Hall the mod announced *"Montblanc. right next
+to you"* and routed *"Northeast 1. 1 steps"*, but pressing Confirm always talked to a Clan Member.
+Montblanc was **6.92 world units directly overhead**; Clan Member 4 was 1.86 units away at the
+player's own height.
+
+### Root cause — `f(x, z) -> y` everywhere
+
+| Layer | Evidence |
+|---|---|
+| `MapQuery::GroundAt` | a **game** fn taking `(x, z)` only — cannot be asked for the floor nearest *my* height |
+| `ScanTopFloorAt` (`map_query.cpp:190`) | `if (!found \|\| y > bestY)` — visited **every** floor poly, kept only the **highest** |
+| `NavGrid` (`nav_grid.h:20`) | 2D grid, one `floorY` per cell → an overhead target lands in the player's own cell (`nearDist=0.0m`) |
+| `nav_common.cpp` | the reach short-circuit returned a bare `L"right next to you"` **above** the `ElevationSuffix` line |
+
+The mod had already measured the gap (`maxStep=6.93m`, `wmBlock=1(step>max)`) and gated nothing on
+it — `path_planner.cpp:122` marks that dump *"diagnostic, log-only"*.
+
+### Fixed
+
+`MapQuery::AllFloorsAt` (keeps what `ScanTopFloorAt` discarded, merge `kLayerMerge = 0.35`);
+`ScanTopFloorAt` demoted to a wrapper that tracks its top independently of the layer array, so it is
+byte-identical; `NavCommon::ReachPhrase` re-attaches elevation to the reach phrase; the `'` dump now
+prints `layers=[…] top=… nearest=… dY=…` per column, where **`top != nearest` is the bug, printed**.
+
+### TRIED & FAILED / STRUCK
+
+- **STRUCK: "the mod's `near=`/reach distance corroborates 3D adjacency."** It does not — every
+  distance in `nav_common` is `Distance2D`, X/Z only. `"right next to you"` was never evidence about
+  elevation; it is *structurally incapable* of carrying it. Do not read it as a 3D claim again.
+- **STRUCK: "the 15:16:32 Clan Hall telop was Montblanc."** Asserted at 0.9 — below the bar, and
+  wrong. The tester confirmed the interaction icon read *"clan member"*. Never state a sub-0.98
+  identification as fact; it also *confirmed* the diagnosis (the engine never selected Montblanc).
+- **REVERSED mid-session: "the route key should go silent when there is no walkable route."**
+  Tester requirement is turn-by-turn to **every** destination, nothing silent, and the pathfinder
+  must route **across levels**. If `No path` gets *more* common after the layered grid, that is a
+  regression, not a truer answer.
+- **Frida-first waived for pathfinding** (tester: "much easier to diagnose in C++"). A written
+  `probe_walkmap_layers.js` was retired unrun to `frida/archive/`. Diagnostics for nav go in C++ and
+  come back through the mod log.
+- **Do NOT design a "cycle interaction target" key.** `FUN_0025b820` keeps exactly one winner
+  (`DAT_0209a2b8`), reset per frame by `FUN_0025d650`. The engine has no such concept — 0.98.
+- **Do not call `MapQuery::GroundAt` from the diagnostic.** It is game-thread-only (`nav_grid.h`);
+  the `'` dump runs off the input thread. `top=` from `AllFloorsAt` is the memory-only equivalent.
+
+### Still open
+
+Built and deployed, **not play-confirmed**. The layered grid (`col,row` → `col,row,layer`) is
+designed, not built. Unproven at 0.90: that scene-object Y and player Y share a reference frame —
+the new `player floor:` line settles it.
+
+### Containment fix VALIDATED in play (Session 73, second round)
+
+`'` dump, Clan Hall, after adding `PointInPolyXZ` + strict `B > 0.001`:
+
+| | before | after |
+|---|---|---|
+| player column | `layers=16 raw=103 [-1751.74 … 271.02]` | `layers=1 raw=1 [0.00]` |
+| Montblanc | `layers=16 raw=112 … nearest=6.74 dY=-0.19` | `layers=1 raw=1 [6.93] dY=+0.01` |
+| STACKED columns | 32 | **0** |
+
+Every named NPC now lands on a real floor: Montblanc 6.92→[6.93] (**dY=+0.01**), Krjn 6.00→[6.00],
+Clan Members 0.00→[0.00] and 6.00→[6.00], and an object at 0.75→[0.75] (an intermediate value, so it
+is not merely snapping to 0/6). **The `(i+1)%3` next-vertex assumption for `DAT_00908de8` is
+validated** — a wrong winding would have produced `layers=0` everywhere, not exact matches.
+
+**SETTLED at 0.99: scene-object Y and player Y share a reference frame.** Montblanc is genuinely
+6.93 units above the player. The 0.90 caveat carried since the start of the session is closed.
+
+### STRUCK: the layered-grid design (`col,row` -> `col,row,layer`)
+
+**Not justified by the data.** Post-fix histogram over the whole dump: `layers=1` x28, `layers=0` x16,
+**`layers>=2` x0**. The walkmap here is a single-valued height field with a big step, NOT overlapping
+levels. The garbage that looked like stacking was plane extrapolation, and it is gone. Do not build
+a layer dimension without a map that actually shows one.
+
+### The REAL cause of "Montblanc. 1 steps"
+
+`NAV-ROUTE ... tgtCell=(24,36) expands=0 touched=1 nearest=(24,36) nearDist=0.0m`.
+
+**`expands=0` means A* never expanded a node** — the goal cell WAS the start cell. Player
+(37.00,54.60) and Montblanc (37.04,55.10) are 0.50 apart horizontally and `kFineCell = 1.5`, so both
+land in ONE fine cell. The search short-circuits as "already there", **so no edge is ever tested and
+`kStepDiscont` never runs.** The 6.93 m step is invisible because nothing ever looks at an edge.
+
+Fix is therefore NOT a layer dimension but a **goal-surface check**: compare the target's own Y with
+the floor at the target's XZ (now readable correctly), and if it differs from the player's surface by
+more than a step, the target is not "1 step away" — route to an approach cell instead. `kFineCell`
+collapsing a 0.5 m separation is the proximate trigger; the surface check is resolution-independent
+and is the durable fix.
+
+### Approach-cell routing — BUILT (Session 73, not yet play-confirmed)
+
+**Symptom.** Routing to Montblanc gave "1 steps" from the ground floor and failed outright from the
+upper floor, where Krjn (y=6.00) is reachable but Montblanc (y=6.93) is not.
+
+**Cause.** `path_search.cpp` snapped the goal **only** `if (!NavGrid::WalkableAt(tc, tr, ty))`.
+Montblanc's dais IS walkable (floor 6.93), so no snap ran and A* was asked to **stand on the dais** —
+a 6.93 step from the ground floor, 0.93 from the upper one, both past `kStepDiscont` (0.35). From the
+ground floor the 1.5 m fine cell additionally collapsed player and target into one cell
+(`expands=0`), which is where "1 steps" came from.
+
+**Fix — the goal is now a SET, and the test is the engine's own predicate.** A goal cell is any
+walkable cell within `kApproachCells` (3) / `kApproachRadius` (4 m) of the target whose floor lies
+inside the target's **interaction band**. For Montblanc that admits both the 6.93 dais and the 6.00
+walkway; A* never reaches the dais, so it finishes on the walkway with no special-casing. Multi-goal
+A*: `isGoal()` membership test, `heur()` = min distance over goals (still admissible), and on
+termination `tc/tr` adopt the reached cell so reconstruction, stats and the bridge/near-goal
+fallbacks are unchanged.
+
+**Non-regression, by construction:**
+- Ground-level NPC → its own cell is in band at distance ~0 → primary == original cell → identical
+  route, and the true target position is still appended to the polyline.
+- Transition/exit → band deliberately not read (its destination IS the surface you walk onto).
+- `p` (battle target) → default inverted band → old single-cell path.
+- No band readable / nothing admissible → falls through to the original `SnapToWalkable`.
+- `snapped` is forced true when the route ends on a cell other than the target's own, so the
+  unreachable last leg onto the dais can never be re-appended.
+
+**Plumbing:** `InteractTarget::ReadBandFor` → `EntityList::GetCurrentTarget(..., outSceneObj)` →
+`PathPlanner::Request(..., bandLo, bandHi)` → `PathSearch::Run(..., bandLo, bandHi, ...)`.
+
+**Log lines to check:** `request: interaction band=[lo,hi]`, `goal-set: N cell(s) in band ...`, and
+`goal-set: reached alternate approach cell (c,r)`.
+
+### OPEN FOR NEXT SESSION — the approach cell is in-band but out of REACH
+
+**Symptom (tester, end of Session 73):** routing lands you *near* the target but not close enough to
+interact, so you still have to wiggle on crow-flies directions.
+
+**Measured:**
+```
+goal-set: 12 cell(s) in band [44.04,47.88], primary (356,141)->(356,141) d=0.9m
+goal-set: reached alternate approach cell (355,142)     ... nearDist=2.1m
+```
+A 0.9 m cell existed; the search stopped at a 2.1 m one.
+
+**Two defects, one fixed, one OPEN.**
+
+1. **FIXED (provisional).** A plain min-over-goals heuristic makes every goal look equally good, so
+   A* took whichever it popped first. The remaining gap is now a **terminal cost**:
+   `h(n) = min_g(euclid(n,g) + kGoalGapWeight * g.d)`, `kGoalGapWeight = 4.0`. Still admissible
+   (euclid <= true path cost), and a larger h is more informed so expansions go down. **It changes
+   only the PREFERENCE among goals, never the goal SET** — which is what guarantees it cannot make
+   Montblanc unreachable.
+
+2. **OPEN — the real fix.** `kApproachRadius = 4.0f` is *made up*. It should be the engine's actual
+   horizontal interaction reach, which would make every goal cell interactable **by construction**
+   and render the weight above unnecessary. From `FUN_003da5a0`:
+   ```
+   gap = sqrt(dx^2 + dz^2) - ( fVar6 + *(float*)(param_4+0x0C) + fVar5 + *(float*)(param_2+0x0C) )
+   ```
+   with `param_2 = playerNode+0x50` and `param_4 = targetNode+0x70`, so two of the four extents are
+   plain constants at **`playerNode+0x5C`** and **`targetNode+0x7C`**; `fVar5`/`fVar6` come from
+   `FUN_003da730` + `FUN_003a1d30` (direction-dependent shape queries, not yet replicated).
+   **Bracket already measured:** `dist2D=0.51` PASSED the distance gate; `dist2D=1.70` had band and
+   cone PASS yet the engine chose nothing, so the true reach lies **between 0.51 and 1.70**.
+   Next step: log those two constants per object in the `gates` line, confirm they sum into that
+   bracket, then use the sum as `kApproachRadius`.
+
+**Do NOT tighten `kApproachRadius` blind.** If the goal set comes up empty the code falls back to
+`SnapToWalkable` on the target's own cell — i.e. straight back to the unreachable dais, which is the
+bug this whole change exists to fix. Widen-then-prefer, never narrow-then-hope.
+
+**Also still open:** enemies route with `band=[1.00,-1.00] (none -> target's own cell)` because the
+combatant-pool entries reach `ReadBandFor` with no usable scene object. Harmless today (enemies are
+on your level) but it means the approach-cell logic is inactive for them.

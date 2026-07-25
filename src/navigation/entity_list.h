@@ -21,8 +21,12 @@ enum class Category {
     NPC,
     Object,       // unclassified gimmick
     Enemy,        // live battle combatant (BtlWork pool), read separately from the handle table
+    Items,        // ground loot an enemy dropped (DAT_02ec0fa0 pool), read separately again
     Count
 };
+// Items sits IMMEDIATELY after Enemy on purpose: the cycle is a plain modulo over [0, Count), so
+// one `=` press flips between the enemies you are fighting and the loot they left. Requested by the
+// tester -- checking for drops is what you do the moment a fight ends. Do not reorder.
 // (Category::Event is RETIRED. It was created in Session 43 to hold the mapData+0x54 table after that
 //  table was wrongly demoted from Exit — see map_query.h. The +0x54 entries are map-jump exits and are
 //  back under Category::Exit; nothing else ever produced an Event, so the category had no source left.
@@ -74,7 +78,12 @@ void CmdLabelFromClipboard(); // F6 name the focused entity with whatever is on 
 //
 // `outIsTransition` (optional) tells the planner the target is a map-jump surface, so reaching it means
 // crossing it. Only exits set it; everything else reports false.
-bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition = nullptr);
+// `outSceneObj` optionally returns the target's scene-object pointer, which the route path needs to
+// read the target's INTERACTION BAND (InteractTarget::ReadBandFor) -- routing has to know where you
+// could STAND to interact, not just where the object is. Null for entries with no scene object
+// (exits, combatant-pool entries).
+bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition = nullptr,
+                      void** outSceneObj = nullptr);
 
 // Dump the raw handle table (tag NAV-DIAG): every named/interactive scene object per
 // container with its category byte, interaction flags, npcdic key, name, and world

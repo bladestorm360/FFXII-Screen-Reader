@@ -36,9 +36,20 @@ bool ShouldSpeakNow(uint16_t id) {
     if (InRange(id, 0x4F, 0x5C)) return true;
     // "Back attack!" -- you are being flanked.
     if (id == 0x61)              return true;
+    // An enemy or guest BEGINS CASTING -- a spell is charging and you still have time to interrupt
+    // it, guard, or move out of the way. Only 0x0D: FUN_00469af0 maps action category 1 (magick) to
+    // this id, and it is faction-gated to guest|foe (`& 0x0A`), so a party member can never reach it.
+    // Its siblings 0x0E "readies" / 0x0F "uses" stay log-only -- those are the spam tier.
+    //
+    // KNOWN LIMIT, accepted by the user: 0x0D carries render style 0x01, which is NOT cull-exempt,
+    // so the message bus drops it beyond ~24 world units. A caster hanging far back announces
+    // nothing. Fixing that means hooking the emitter instead of reading the message; that was
+    // considered and deliberately NOT taken, to keep the game's own verbatim wording in all 12
+    // locales. Do not "fix" it by adding an emitter hook.
+    if (id == 0x0D)              return true;
 
-    // Everything else is log-only. Notably 0x0D-0x0F (action announces) fire constantly and are
-    // the spam tier, and 0x13-0x1B / 0x1E-0x23 are routine restores and cures.
+    // Everything else is log-only. Notably 0x0E-0x0F (readies / uses) fire constantly and are the
+    // spam tier, and 0x13-0x1B / 0x1E-0x23 are routine restores and cures.
     return false;
 }
 
@@ -63,6 +74,13 @@ std::wstring OutcomeWord(uint8_t outcome) {
 
 std::wstring DefeatedLine(const std::wstring& who) {
     return who + L" defeated";
+}
+
+std::wstring DefeatedLine(const std::wstring& who, uint32_t expGain, uint32_t lpGain) {
+    // Silence beats filler: a kill the party got no credit for reports the kill and nothing else.
+    if (expGain == 0 && lpGain == 0) return DefeatedLine(who);
+    return who + L" defeated. " + std::to_wstring(expGain) + L" EXP, "
+               + std::to_wstring(lpGain) + L" LP";
 }
 
 std::wstring DamageLine(const std::wstring& attacker,

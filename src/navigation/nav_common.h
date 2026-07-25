@@ -84,8 +84,14 @@ int DistanceToSteps(float dist);
 // L" (above)" / L" (below)" / L"" from the Y (elevation) delta.
 std::wstring ElevationSuffix(const FVec3& from, const FVec3& to);
 
-// Very close on the ground plane (short-circuit "you're basically there").
+// Very close on the ground plane (short-circuit "you're basically there"). HORIZONTAL ONLY --
+// pair it with ReachPhrase, never with a bare literal, or a target directly overhead reads as
+// adjacent (Session 73).
 bool IsWithinReach(float dist2D);
+
+// L"right next to you" plus the elevation suffix. The ONLY thing that should ever be returned from
+// an IsWithinReach short-circuit: the bare literal silently discards the vertical gap.
+std::wstring ReachPhrase(const FVec3& from, const FVec3& to);
 
 // Full spoken crow-flies phrase in the WORLD-ABSOLUTE frame. RETAINED, NOT USED —
 // DescribeDirectionRelative is the shipped one. Returns L"right next to you" within reach.

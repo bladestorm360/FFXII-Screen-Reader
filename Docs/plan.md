@@ -181,17 +181,26 @@ NPC-trigger path needs Phase 4 first.
 - [x] 100-event continuous-FIFO ring buffer (battle/combat_log.cpp) — shipped, confirmed in play 0.1
 - [x] Log navigation — **non-modal**, `,` older · `.` newer · Home oldest · End newest. Works in
   menus and while paused (only gate is `GameIsForeground()`). ~~F4 open / Escape close~~ **STRUCK.**
-- [ ] Damage event capture (Frida-prototype DrummerIX `DamageModAOB` first)
-- [ ] Combo aggregation (~750ms window for same actor+target+type)
-- [ ] Heal event capture
-- [ ] KO event capture
-- [ ] Status apply event capture (DrummerIX `StatusEffectAOB`)
-- [ ] Critical / element / weakness flag annotations
-- [ ] Combat-log message templates added to phrasebook (12 locales)
-- [ ] Critical-event auto-speech: party-member KO
-- [ ] Critical-event auto-speech: party member <20% HP
+- [x] Damage event capture — `FUN_003112f0` (`0x1F12F0`), Tier 2. ~~DrummerIX `DamageModAOB`~~ never needed.
+- ~~[ ] Combo aggregation (~750ms window for same actor+target+type)~~ — **STRUCK (S49).** It was a
+  workaround for synthesized text; the game's own bus already dedupes and phrases things its way.
+- [x] Heal event capture — same applier, signed delta
+- [x] KO event capture — party side is the game's own message `0x10`; enemy side is ours (below)
+- [ ] Status apply event capture (`FUN_0030e360` mode 3/4) — the last open Tier-2 gap
+- [ ] Critical / element / weakness flag annotations — critical probably does not exist (§5.5)
+- [ ] Combat-log message templates added to phrasebook (12 locales) — now tiny; the game supplies
+  almost all of it
+- ~~[ ] Critical-event auto-speech: party-member KO~~ — the game says it (`0x10`); ours would duplicate
+- [x] Critical-event auto-speech: party member <20% HP
+- [x] Enemy begins casting — game message `0x0D`, flipped to realtime (S72)
+- [x] Enemy defeated + EXP/LP gained — one line off `FUN_00312280` (`0x1F2280`) (S72), **not yet
+  play-confirmed**
 - [ ] User test: smoke flow (enter battle, take hits, open log, scroll, close)
 - [ ] User test: continuous FIFO across battle boundary verified
+
+**Reported silent, not yet diagnosed (Session 72)** — details in `debug.md` § "Clan / Hunt surfaces":
+- [ ] Multi-item reward panel (titled bill name + `gil` / `Potion x 2` / `Teleport Stone x 1` rows)
+- [ ] Hunt notice board — "Which bill would you like to read?", 3-column cursored Mark/Rank/Status list
 
 ## Phase 8: Remaining menus
 

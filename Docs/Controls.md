@@ -108,9 +108,9 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |
 | `-` | Nav: previous category | free |
-| `=` | Nav: next category | free |
+| `=` | Nav: next category — All, Exit, Save Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy, **Items**. **Items sits next to Enemy on purpose** (Session 72): one press flips between the enemies you are fighting and the loot they dropped | free |
 | `` ` `` | Nav: rescan + area name | free |
-| `;` | Battle **only**: **committed** target status (name + instance letter + HP). Silent out of battle, and silent on a merely browsed cursor — see below | free |
+| `;` | **Context-gated target readout.** In battle: **committed** target status (name + instance letter + HP), silent on a merely browsed cursor — see below. In the field: **who Confirm will address**, e.g. "Talk: Montblanc" / "Action: Save Crystal", silent when nothing is in reach | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
 | `'` | Nav: diagnostic dump | free |
 | `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) | free |
@@ -207,3 +207,16 @@ a mechanism — nobody has traced why it changed, and it should not be quoted as
 Unaffected either way: the mod still **never swallows or injects** a key (it passes the DirectInput
 buffer as `const`, per the read-only rule), so there is still no way to run a text field in-game. That is
 why labelling entities (**F6**) reads the CLIPBOARD instead of capturing typing.
+
+> **`;` is context-gated, not double-bound (Session 73).** The battle reader is *structurally*
+> silent in the field — `ResolveTarget` needs either a committed action or an open select UI, and
+> neither exists outside combat — so its field-side silence was a dead slot, not a behaviour worth
+> preserving. `SpeakTargetStatus()` now returns whether it spoke, and `OnNavKey` calls
+> `InteractTarget::SpeakCurrent()` only on false. Battle behaviour is unchanged; a battle with no
+> target stays silent in both halves, exactly as before.
+>
+> The field half reads the engine's OWN chosen target (`DAT_0209a2b8` / `DAT_0209a2bc`), not the
+> mod's nearest-object list. Those disagree — that disagreement is the bug it was built to expose:
+> the mod said "Montblanc, right next to you" while the game had selected a Clan Member 1.86 units
+> away. **There is exactly one engine target and no cycling** (`FUN_0025b820` keeps the minimum
+> score, `FUN_0025d650` resets per frame) — do not add a "next interaction target" key.

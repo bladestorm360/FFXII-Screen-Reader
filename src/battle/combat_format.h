@@ -41,4 +41,11 @@ std::wstring OutcomeWord(uint8_t outcome);
 // all. Party KOs keep using the game's own wording -- only this side is ours.
 std::wstring DefeatedLine(const std::wstring& who);
 
+// The same line with the kill's rewards appended: "Dire Rat defeated. 34 EXP, 2 LP."
+// FFXII has no end-of-battle results screen -- it pops floating +EXP/+LP numbers over the corpse,
+// drawn as sprite digits with no text anywhere in the binary, so the sentence is ours. When both
+// values are 0 (a kill the party got no credit for, or Trial Mode) this degrades to the bare
+// DefeatedLine rather than saying "0 EXP, 0 LP".
+std::wstring DefeatedLine(const std::wstring& who, uint32_t expGain, uint32_t lpGain);
+
 } // namespace CombatFormat

@@ -28,7 +28,13 @@ struct Stats {
 
 // Plan a route from `from` to `to` on the map identified by `epoch`. `rawPoly` is the raw cell path (what
 // the spoken legs are measured from); `outPoly` is the string-pulled, wall-validated geometry.
-Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
+//
+// `bandLo`/`bandHi` are the target's INTERACTION BAND (InteractTarget::ReadBandFor): the range of
+// player Y from which the engine will let you interact with it. The search routes to the nearest
+// REACHABLE cell whose floor lies inside that band, rather than to the target's own cell -- which is
+// frequently somewhere you cannot stand (a dais, a counter, a ledge). Pass an inverted range
+// (`bandLo > bandHi`) to disable the goal set and get the pre-Session-73 single-cell behaviour.
+Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch, float bandLo, float bandHi,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats);
 
 } // namespace PathSearch

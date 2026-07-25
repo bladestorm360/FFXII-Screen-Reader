@@ -31,6 +31,12 @@ std::mutex            g_mutex;              // guards the fields below
 FVec3                 g_target;
 std::wstring          g_label;
 bool                  g_isTransition = false;   // target is a map-jump surface: arriving == crossing
+// The target's INTERACTION BAND (InteractTarget::ReadBandFor): the range of player Y from which the
+// engine will let you interact with it. Captured at Request() on the input thread, where the target
+// object is still in hand, and handed to PathSearch so the goal becomes "a cell you could stand in
+// and interact from" rather than "the target's own cell". Inverted (lo > hi) = no band known, which
+// PathSearch treats as the pre-Session-73 behaviour.
+float                 g_bandLo = 1.0f, g_bandHi = -1.0f;
 uint32_t              g_reqEpoch = 0;       // g_epoch captured at Request()
 uint64_t              g_reqSeq   = 0;       // distinguishes successive requests
 int                   g_framesLeft = 0;     // retry countdown while not yet safe
@@ -175,11 +181,14 @@ void LogRouteProfile(const std::vector<FVec3>& route) {
 bool Init()  { return true; }
 void Shutdown() { g_hasRequest.store(false, std::memory_order_release); }
 
-void Request(const FVec3& target, const std::wstring& label, bool isTransition) {
+void Request(const FVec3& target, const std::wstring& label, bool isTransition,
+             float bandLo, float bandHi) {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_target       = target;
     g_label        = label;
     g_isTransition = isTransition;
+    g_bandLo       = bandLo;
+    g_bandHi       = bandHi;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
     g_framesLeft = kWaitFrames;
     ++g_reqSeq;
@@ -188,6 +197,10 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition) 
     snprintf(m, sizeof(m), "request: target=(%.2f,%.2f,%.2f) epoch=%u seq=%llu (input thread)",
              target.x, target.y, target.z, g_reqEpoch, (unsigned long long)g_reqSeq);
     Log::Write("NAV-ROUTE", m);
+    char bm[128];
+    snprintf(bm, sizeof(bm), "request: interaction band=[%.2f,%.2f]%s",
+             bandLo, bandHi, (bandHi < bandLo) ? " (none -> target's own cell)" : "");
+    Log::Write("NAV-ROUTE", bm);
 }
 
 void OnMapTeardown() {
@@ -222,12 +235,13 @@ void OnGameFrame() {
     if (!g_hasRequest.load(std::memory_order_acquire)) return;   // O(1) common case
 
     FVec3 target; std::wstring label; uint32_t reqEpoch; uint64_t seq;
-    bool isTransition;
+    bool isTransition; float bandLo, bandHi;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_hasRequest.load(std::memory_order_relaxed)) return;
         target = g_target; label = g_label; reqEpoch = g_reqEpoch; seq = g_reqSeq;
         isTransition = g_isTransition;
+        bandLo = g_bandLo; bandHi = g_bandHi;
     }
 
     // Map changed since the request was made -> un-revivably stale; drop silently.
@@ -313,7 +327,7 @@ void OnGameFrame() {
 
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
-    PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, rawPoly, poly, st);
+    PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, rawPoly, poly, st);
 
     const char* planName = (r == PathSearch::Plan::Route) ? "Route" : "NoPath";
     char m[160];

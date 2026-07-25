@@ -84,6 +84,12 @@ constexpr uint32_t BC_STATUS_B   = 0x64;   // u32 status word B
 // FUN_00300ce0, so it is the game's own "does this character have an MP gauge" test.
 constexpr uint32_t BC_MP_GUARD_A = 0x6C;   // i8
 constexpr uint32_t BC_MP_GUARD_B = 0x7C;   // i8
+// Progression. FUN_00312280 writes all three when an enemy dies: EXP capped at 99,999,999, LP at
+// 99,999, and the level loop bumps +0x1C2 one step at a time. Corroborated by the status-menu block
+// (GameArchitecture.md) and by license_reader.cpp, which already reads +0x190 as current LP.
+constexpr uint32_t BC_EXP        = 0x18C;  // u32 total experience
+constexpr uint32_t BC_LP         = 0x190;  // u32 current License Points
+constexpr uint32_t BC_LEVEL      = 0x1C2;  // u8
 
 // ---- Scene object: the faction nibble ------------------------------------------------------------
 // The game's OWN faction test -- identical in the damage path (FUN_0030ab40), the HUD builder

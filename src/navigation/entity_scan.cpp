@@ -10,6 +10,7 @@
 #include "navigation/map_exits.h"
 #include "navigation/map_script.h"
 #include "navigation/exit_scan.h"
+#include "navigation/item_scan.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
@@ -412,6 +413,10 @@ int BuildLocked(std::vector<Entity>& out) {
     // duplicated the combatant scan.)
     ScanExits(out);
 
+    // Ground loot — what an enemy dropped when it died. A third source with a third backing store:
+    // not the handle table, not the actor pool, but the engine's own 10-slot drop pool.
+    ItemScan::ScanDrops(out);
+
     // Same-label disambiguation. The game itself gives 109 different npcdic ids the display name
     // "Rabanastran" (1141 ids, 554 distinct names), and there is no second name to fall back on --
     // FUN_00263990's odd npcdic slot is byte-identical to the even one in the US build. So a list of
@@ -434,12 +439,13 @@ int BuildLocked(std::vector<Entity>& out) {
         if (ci >= 0 && ci < static_cast<int>(Category::Count)) ++cc[ci];
         if (!e.available) ++gated;
     }
-    char msg[208];
+    char msg[224];
     snprintf(msg, sizeof(msg),
-             "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Save=%d Gate=%d Treasure=%d) story-gated=%d",
+             "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Save=%d Gate=%d Treasure=%d Items=%d) story-gated=%d",
              out.size(), cc[(int)Category::NPC], cc[(int)Category::Enemy], cc[(int)Category::Object],
              cc[(int)Category::Exit], cc[(int)Category::SaveCrystal],
-             cc[(int)Category::GateCrystal], cc[(int)Category::Treasure], gated);
+             cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
+             cc[(int)Category::Items], gated);
     Log::Write("NAV", msg);
     return static_cast<int>(out.size());
 }

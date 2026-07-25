@@ -30,6 +30,7 @@ add_library(${PROJECT_NAME} SHARED
     src/core/stall_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
+    src/core/item_names.cpp
     src/speech/speech.cpp
     src/input/input_tracker.cpp
     src/ui/text_capture.cpp
@@ -67,9 +68,11 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/entity_commands.cpp
     src/navigation/entity_scan.cpp
     src/navigation/exit_scan.cpp
+    src/navigation/item_scan.cpp
     src/navigation/entity_classify.cpp
     src/navigation/entity_labels.cpp
     src/navigation/entity_diag.cpp
+    src/navigation/interact_target.cpp
     src/navigation/exit_diag.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp

@@ -415,7 +415,12 @@ bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
 // requires the select-UI gate to be open. The release-0.1 requirement is preserved by that, not by
 // the clause removed here. Do NOT restore the old "No target" speech -- silence on
 // nothing-to-report is a standing rule.
-void SpeakTargetStatus() {
+// Returns TRUE only when it actually spoke. `;` is shared with the field-side interact-target
+// readout (InteractTarget::SpeakCurrent), which runs only when this had nothing -- so the caller
+// needs to know the difference between "spoke" and "stayed silent". It is NOT an "in battle" flag:
+// a battle with no committed or browsed target also returns false, and the field reader is silent
+// there too, so the combined key stays silent exactly where it always did.
+bool SpeakTargetStatus() {
     ResolvedTarget t;
     if (!ResolveTarget(t)) {
         // Say WHY, every link of it. A confirmed attack that reports "no commitment" is a bug in the
@@ -423,7 +428,7 @@ void SpeakTargetStatus() {
         // fails as one silent boolean with nothing to grep.
         BattleState::DiagnoseCommitment();
         Log::Write("TARGET", "; SILENT: no target (no commitment and no open select UI)");
-        return;
+        return false;
     }
 
     uint32_t curHPu = 0, maxHPu = 0;
@@ -448,6 +453,7 @@ void SpeakTargetStatus() {
     if (!t.browsing && !t.acting) text += L", queued";
 
     Speech::Output(text, /*interrupt=*/true);
+    return true;
 }
 
 } // namespace BattleTargetReader
