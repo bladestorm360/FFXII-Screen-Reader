@@ -112,7 +112,12 @@ Map exits cannot be named this way. They come from the map's own script rather t
 
 These work on the field as well as in battle.
 
-Semicolon: status of the active target. 
+* g: how much gil the party is carrying.
+* ;: the active target. In battle, its name and HP. Outside battle, what Confirm will act on where you are standing — "Talk: Montblanc", "Action: Save Crystal". Silent when nothing is in reach.
+
+#### Status screen
+
+The Status screen reads as you move through it — no mod key. On the Attributes page the arrow keys step through the character's attributes and status effects, up and down a line at a time and left and right by section, with Home and End jumping to either end. The Magicks and Technicks pages read from the game's own cursor as you move it.
 
 #### Combat log
 
@@ -128,5 +133,5 @@ The mod keeps a running log of the last 100 battle events. Important ones are sp
 * O: read the focused item's description or tooltip.
 * T: repeat the last thing spoken.
 * U: current License Points, on the License Board.
-* Apostrophe: write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.
+* ': write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.
 
