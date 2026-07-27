@@ -32,12 +32,16 @@ void Shutdown();
 // planner says "At the exit" rather than grinding out two-metre legs across the seam. False for
 // anything else.
 // `bandLo`/`bandHi`: the target's interaction band (InteractTarget::ReadBandFor) -- the range of
-// player Y from which the engine will let you interact with it. The planner routes to the nearest
-// reachable cell whose floor is inside that band, so a target standing somewhere you cannot (a dais,
-// a counter, a ledge) still gets a walkable destination. Defaults are an INVERTED range, meaning
-// "no band known", which reproduces the pre-Session-73 route-to-its-own-cell behaviour.
+// player Y from which the engine will let you interact with it.
+// `reachRadius`: the engine's own horizontal interaction reach for that target
+// (InteractTarget::ReadReachFor, `radiusMin`).
+//
+// Supplied together, they let the search stop at the first poly the player can both stand on AND
+// interact from, which is what removes the 3-4 step overshoot past the point where `;` starts
+// answering. Either one missing (inverted band, or a zero radius) routes to the target's own poly,
+// which is the older behaviour.
 void Request(const FVec3& target, const std::wstring& label, bool isTransition = false,
-             float bandLo = 1.0f, float bandHi = -1.0f);
+             float bandLo = 1.0f, float bandHi = -1.0f, float reachRadius = 0.0f);
 
 // GAME THREAD. Called once per field frame from the FUN_0022a770 hook (at entry). If a
 // request is pending and still valid for this map and the field is fully live, plan the

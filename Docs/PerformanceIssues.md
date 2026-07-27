@@ -89,3 +89,28 @@ party keys silent for two sessions. Re-run this after adding addresses.
    `ReadBcmdDraw`) and `map_query.cpp` keep multi-step pointer walks inside a single guard. That is
    a correctness constraint, not duplication — a walk split across guards can fault between them.
    Do not "centralize" these into `MemRead` calls.
+4. **`map_query.h` is 157 lines, over the 150 header ceiling (Session 74).** Introduced by the
+   map-jump vertex list, `NearestPointOnSurface` and `CachedMapJumpSurfaces`. Phase 1 of the
+   pathfinder rebuild moves the floor-span reader out into `nav_voxel`, which takes this back under
+   on its own — do not restructure it separately in the meantime.
+5. **~1,000 lines of exit/entity diagnostics are now unreachable (Session 74).** Stripping the `'`
+   key left `EntityList::LogDiagnostic` / `EntityDiag::DumpLocked`, `ExitDiag::DumpCoverage` (and
+   through it `MapScript::DumpCaptureDiag`), `MapExits::DiagScanScriptMapjumps` and
+   `PlayerState::ReadMoveFrame` with **zero call sites**. They still compile and still link.
+   **Deliberately not deleted:** they are the instrument trail for how the exit mechanism was pinned
+   down across Sessions 46-64, and the exit saga cost six sessions of wrong models before that. If
+   they are to go, that is a decision to take on its own, not a side effect of a key being re-keyed.
+   The cheaper alternative is to re-key them onto a second diagnostic key.
+
+6. **The grid pathfinder is gone (Session 75).** `nav_grid.h/.cpp` deleted; `path_search.cpp` fell from
+   ~700 lines to 201 and `path_planner.cpp` from 482 to 322 once the grid-era diagnostics went with
+   it (the direct-line step probe, the 33x33 terrain field and the per-leg step profile all measured
+   `kMaxStep` / `kStepDiscont`, gates that no longer exist). Routing now costs ONE short raycast per
+   expanded edge instead of thousands per route -- the failed Highhall route logged `rays=2985`.
+7. **`map_query.h` is 157 lines, over the 150 header ceiling.** Carried from Session 74. The navmesh
+   reader went into its own `nav_mesh.h` rather than growing this further; trimming it is still open.
+
+8. **`entity_scan.cpp` split (Session 77).** It passed the 500-line ceiling at 545. The passes that
+   run over the FINISHED list -- `ObjectHandle`, `LogObjectDump`, `TagDoorwaysAndDropSignTwins`,
+   `ApplyPlayerLabels`, `NumberDuplicateLabels` -- moved to `entity_postscan.cpp` (327 / 251 lines).
+   Signatures live in `entity_scan.h` so the two units cannot drift apart.

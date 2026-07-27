@@ -50,6 +50,70 @@ float WrapPi(float a) {
 
 } // namespace
 
+uint8_t ObjectClass(void* sceneObj) {
+    uint8_t b = 0;
+    if (!sceneObj || !SafeReadU8(sceneObj, NavRva::SCENEOBJ_TYPE_BYTE, &b)) return 0;
+    return static_cast<uint8_t>(b >> NavRva::SCENEOBJ_CLASS_SHIFT);
+}
+
+namespace {
+
+// The target's position AS THE GATES SEE IT -- a replica of the engine's own getter FUN_002646c0.
+//
+// Class 3 (characters) adds xform[0x40..0x48] when the byte at xform+0x107 has bit 0 set, BEFORE
+// both the distance gate and the band test. Class 1 (gimmicks) uses the plain position. The engine
+// returns (0,0,0) for any other class; we return the raw position instead, because a caller wanting
+// a position is better served by an approximate one than by the origin of the map.
+void ReadGatePos(void* sceneObj, void* xform, float& x, float& y, float& z) {
+    x = y = z = 0.0f;
+    SafeReadF32(xform, NavRva::XFORM_POS_X, &x);
+    SafeReadF32(xform, NavRva::XFORM_POS_Y, &y);
+    SafeReadF32(xform, NavRva::XFORM_POS_Z, &z);
+
+    if (ObjectClass(sceneObj) != NavRva::SCENEOBJ_CLASS_CHAR) return;
+
+    uint8_t off = 0;
+    if (!SafeReadU8(xform, NavRva::XFORM_POS_OFFSET_FLAG, &off) || (off & 1) == 0) return;
+    float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+    SafeReadF32(xform, NavRva::XFORM_POS_OFFSET_X, &ox);
+    SafeReadF32(xform, NavRva::XFORM_POS_OFFSET_Y, &oy);
+    SafeReadF32(xform, NavRva::XFORM_POS_OFFSET_Z, &oz);
+    x += ox; y += oy; z += oz;
+}
+
+// FUN_003da730 + FUN_003a1d30: the radius of `shape`'s ellipse along the direction (dx,dz) from it to
+// the other party. Degenerate axes fall back to 0 rather than dividing by zero -- a shape with a zero
+// semi-axis contributes no reach, which is what the engine's own `<= 0` early-out amounts to.
+float EllipseRadius(void* xform, uint32_t shapeOff, float dx, float dz) {
+    float a = 0.0f, b = 0.0f, yaw = 0.0f;
+    SafeReadF32(xform, shapeOff + NavRva::SHAPE_SEMI_A, &a);
+    SafeReadF32(xform, shapeOff + NavRva::SHAPE_SEMI_B, &b);
+    SafeReadF32(xform, shapeOff + NavRva::SHAPE_YAW,    &yaw);
+    if (!(a > 1e-6f) || !(b > 1e-6f)) return 0.0f;
+
+    const float c = std::cos(-yaw), s = std::sin(-yaw);
+    const float w = c * dz - s * dx;
+    const float u = s * dz + c * dx;
+    const float u2 = u * u, w2 = w * w;
+    if (u2 + w2 <= 0.0f) return 0.0f;                     // coincident points -- engine returns 0
+    const float den = u2 / (a * a) + w2 / (b * b);
+    if (!(den > 1e-12f)) return 0.0f;
+    const float r2 = (u2 + w2) / den;
+    return std::sqrt(r2 < 0.0f ? -r2 : r2);               // FUN_003a1d30 is sqrtf(fabs(x))
+}
+
+// Direction-independent lower bound on one shape's contribution: the ellipse is never smaller than its
+// short semi-axis, so min(A,B) is reachable from every approach angle.
+float EllipseMin(void* xform, uint32_t shapeOff) {
+    float a = 0.0f, b = 0.0f;
+    SafeReadF32(xform, shapeOff + NavRva::SHAPE_SEMI_A, &a);
+    SafeReadF32(xform, shapeOff + NavRva::SHAPE_SEMI_B, &b);
+    if (!(a > 1e-6f) || !(b > 1e-6f)) return 0.0f;
+    return a < b ? a : b;
+}
+
+} // namespace
+
 Chosen Read() {
     Chosen c;
     uint8_t have = 0;
@@ -134,6 +198,31 @@ Band ReadBandFor(void* sceneObj) {
     void* tn = PtrAt(sceneObj, NavRva::SCENEOBJ_XFORM_PTR);
     if (!pn || !tn) return b;
 
+    // CLASS 1 (gimmicks) has an entirely different band layout, and reading class 3's offsets on one
+    // yields plausible-looking floats that are simply wrong. FUN_0025be50 rejects unless
+    //     (node.y - node[+0x6C]) - playerPad*playerScale <= playerY <= node.y + node[+0x68]
+    // with no band-scale multiplier, skipped when the byte at node+0x5C is non-zero.
+    if (ObjectClass(sceneObj) == NavRva::SCENEOBJ_CLASS_VOLUME) {
+        uint8_t vskip = 0;
+        SafeReadU8(tn, NavRva::XFORM_V_SKIP_BAND, &vskip);
+        if (vskip != 0) {
+            b.valid = true; b.unconstrained = true;
+            b.lo = -1e9f; b.hi = 1e9f;
+            return b;
+        }
+        float ty = 0.0f, up = 0.0f, down = 0.0f, pPad = 0.0f, pScale = 0.0f;
+        SafeReadF32(tn, NavRva::XFORM_POS_Y,             &ty);
+        SafeReadF32(tn, NavRva::XFORM_V_BAND_UP,         &up);
+        SafeReadF32(tn, NavRva::XFORM_V_BAND_DOWN,       &down);
+        SafeReadF32(pn, NavRva::XFORM_BAND_PLAYER_PAD,   &pPad);
+        SafeReadF32(pn, NavRva::XFORM_BAND_SCALE,        &pScale);
+        b.lo = (ty - down) - pPad * pScale;
+        b.hi = ty + up;
+        if (b.hi < b.lo) return b;
+        b.valid = true;
+        return b;
+    }
+
     uint8_t skip = 0;
     SafeReadU8(tn, NavRva::XFORM_SKIP_HEIGHT_BAND, &skip);
     if (skip != 0) {                      // engine skips the band test -> it constrains nothing
@@ -164,6 +253,56 @@ Band ReadBandFor(void* sceneObj) {
     return b;
 }
 
+Reach ReadReachFor(void* sceneObj) {
+    Reach r;
+    if (!sceneObj) return r;
+    void* leader = PlayerState::ReadLeaderSceneObject();
+    if (!leader) return r;
+    void* pn = PtrAt(leader,   NavRva::SCENEOBJ_XFORM_PTR);
+    void* tn = PtrAt(sceneObj, NavRva::SCENEOBJ_XFORM_PTR);
+    if (!pn || !tn) return r;
+
+    float px, py, pz, tx, ty, tz;
+    ReadGatePos(leader, pn, px, py, pz);
+    ReadGatePos(sceneObj, tn, tx, ty, tz);
+    (void)py; (void)ty;                               // Y is excluded: the gate is a CYLINDER
+
+    const float dx = tx - px, dz = tz - pz;
+    r.dist2D = std::sqrt(dx * dx + dz * dz);
+
+    // Argument order matches the two FUN_003da730 calls: the player's ellipse is evaluated toward the
+    // target, the target's toward the player. Same magnitude either way for a circle, not for an
+    // ellipse -- so the sign of the delta matters and is kept.
+    r.ellipsePlayer = EllipseRadius(pn, NavRva::XFORM_PLAYER_SHAPE,  dx,  dz);
+    r.ellipseTarget = EllipseRadius(tn, NavRva::XFORM_TARGET_SHAPE, -dx, -dz);
+    SafeReadF32(pn, NavRva::XFORM_PLAYER_SHAPE + NavRva::SHAPE_EXTRA_RADIUS, &r.extraPlayer);
+    SafeReadF32(tn, NavRva::XFORM_TARGET_SHAPE + NavRva::SHAPE_EXTRA_RADIUS, &r.extraTarget);
+
+    r.radius    = r.ellipsePlayer + r.extraPlayer + r.ellipseTarget + r.extraTarget;
+    r.radiusMin = EllipseMin(pn, NavRva::XFORM_PLAYER_SHAPE) + r.extraPlayer
+                + EllipseMin(tn, NavRva::XFORM_TARGET_SHAPE) + r.extraTarget;
+    r.passes    = (r.dist2D < r.radius);
+    r.valid     = true;
+
+    // The engine's own answer for the same quantity -- but only under TWO conditions, and the second
+    // one is easy to miss.
+    //
+    // 1. This object must be the one the engine chose. The score global is a single minimised slot,
+    //    so reading it for anything else attributes another candidate's number to this one.
+    // 2. It must be a CLASS-3 target. `DAT_0209a2b0` mixes units between the two scorers:
+    //    FUN_0025bad0 stores `2*dist2D - reach` (hence the identity), while FUN_0025be50 stores a
+    //    plain distance measure from FUN_003a1960. Applying the identity to a class-1 winner
+    //    produces a confident, meaningless number -- exactly the kind of thing that gets promoted to
+    //    fact because it printed next to the word CONFIRMED.
+    const Chosen c = Read();
+    if (c.valid && c.sceneObj == sceneObj &&
+        ObjectClass(sceneObj) == NavRva::SCENEOBJ_CLASS_CHAR) {
+        r.haveMeasured = true;
+        r.measured     = 2.0f * r.dist2D - c.score;
+    }
+    return r;
+}
+
 void LogGatesFor(void* sceneObj, const char* label) {
     if (!sceneObj) return;
     void* leader = PlayerState::ReadLeaderSceneObject();
@@ -172,13 +311,12 @@ void LogGatesFor(void* sceneObj, const char* label) {
     void* tn = PtrAt(sceneObj, NavRva::SCENEOBJ_XFORM_PTR);
     if (!pn || !tn) return;
 
+    // Through the class-aware getter, so the logged gates are the ones the engine actually applied
+    // rather than class-3 arithmetic pointed at a class-1 object.
     float px = 0, py = 0, pz = 0, tx = 0, ty = 0, tz = 0;
-    SafeReadF32(pn, NavRva::XFORM_POS_X, &px);
-    SafeReadF32(pn, NavRva::XFORM_POS_Y, &py);
-    SafeReadF32(pn, NavRva::XFORM_POS_Z, &pz);
-    SafeReadF32(tn, NavRva::XFORM_POS_X, &tx);
-    SafeReadF32(tn, NavRva::XFORM_POS_Y, &ty);
-    SafeReadF32(tn, NavRva::XFORM_POS_Z, &tz);
+    ReadGatePos(leader,   pn, px, py, pz);
+    ReadGatePos(sceneObj, tn, tx, ty, tz);
+    const uint8_t cls = ObjectClass(sceneObj);
 
     const float dx = tx - px, dz = tz - pz;
     const float dist2D = std::sqrt(dx * dx + dz * dz);
@@ -215,9 +353,9 @@ void LogGatesFor(void* sceneObj, const char* label) {
 
     char m[400];
     snprintf(m, sizeof(m),
-             "  gates \"%s\": dist2D=%.2f (Y EXCLUDED) | band %s py=%.2f in [%.2f,%.2f] "
+             "  gates \"%s\" class=%u: dist2D=%.2f (Y EXCLUDED) | band %s py=%.2f in [%.2f,%.2f] "
              "skip=%u centre=%.2f sc=%.2f up=%.2f dn=%.2f pad=%.2f | cone %s |d|=%.3f half=%.3f yaw=%.3f",
-             label ? label : "?", dist2D,
+             label ? label : "?", cls, dist2D,
              bandOk ? "PASS" : "FAIL", py, lo, hi, skipBand, centre, tScale, tUp, tDown, pPad,
              coneOk ? "PASS" : "FAIL", delta, halfAngle, yaw);
     Log::Write("INTERACT", m);

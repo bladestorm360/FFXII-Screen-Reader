@@ -3,6 +3,7 @@
 #include "navigation/map_rva.h"
 #include "navigation/bullet_query.h"
 #include "navigation/path_planner.h"
+#include "navigation/nav_probe.h"
 #include "navigation/entity_list.h"
 #include "core/hooks.h"
 #include "core/logger.h"
@@ -146,6 +147,9 @@ uint64_t __fastcall HookedFieldFrame() {
         STALL_SCOPE("NavHooks::HookedFieldFrame");
         EntityList::OnFieldFrame();   // auto-rescan when handle-table containers stream in (fixes empty list after a save-load)
         { STALL_SCOPE("PathPlanner::OnGameFrame"); PathPlanner::OnGameFrame(); }
+        // The `'` probe drains here rather than running on the input thread: Gate B needs
+        // MapQuery::GroundAt, which is a game call. O(1) when nothing is pending.
+        NavProbe::OnGameFrame();
     }
     return s_origFieldFrame ? s_origFieldFrame() : 1;
 }

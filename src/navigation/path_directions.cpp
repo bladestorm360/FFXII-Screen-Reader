@@ -1,8 +1,10 @@
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
-#include "navigation/nav_grid.h"
+#include "core/logger.h"
+
 
 #include <cmath>
+#include <cstdio>
 #include <utility>
 #include <cwchar>
 #include <string>
@@ -51,9 +53,12 @@ struct Run {
 };
 
 // RDP tolerance: one routing cell. Below this a deviation is grid jitter, not a turn.
-constexpr float kSimplifyTol = NavGrid::kFineCell;
+// Route-simplification tolerance. Was NavGrid::kFineCell back when the route was a staircase of
+// 1.5 m cells; the polyline is now portal midpoints on the game's own navmesh, so this is simply
+// the smallest deviation worth keeping as a separate leg.
+constexpr float kSimplifyTol = 1.5f;
 // A run this short is a staircase tread, not a leg the player should be told to walk.
-constexpr float kTreadMax = NavGrid::kFineCell * 1.6f;
+constexpr float kTreadMax = 1.5f * 1.6f;
 // Fewer alternations than this is a corner, not a staircase.
 constexpr int   kMinTreads = 3;
 // A leg under this many steps is absorbed into its neighbour rather than announced.
@@ -218,6 +223,39 @@ std::wstring Describe(const std::vector<FVec3>& poly, float facingRad) {
     if (poly.size() < 2) return L"";
     std::vector<Leg> legs = BuildLegs(poly, facingRad);
     if (legs.empty()) return L"";                   // whole route < half a step
+
+    // REVERSAL INVARIANT (log-only). A route must never send the player one way and then straight
+    // back; if it does, the polyline is wrong, not the wording.
+    //
+    // NOT a Session 77 regression, as this comment originally claimed. Log forensics across the whole
+    // archive found **109 reversals in 1,059 routes, 86 of them in the OLD GRID era** -- and every
+    // grid-era one came from `pass=strict`, a fully completed search with up to 601 expansions, not
+    // from any recovery pass. The grid's were also far worse: up to 20 wasted steps
+    // ("South 24, Northwest 20, North 22"), against never more than 6 on the navmesh.
+    //
+    // Two bugs wearing one name: the grid produced route-scale detours, the navmesh produces
+    // leg-0 stubs on a waypoint the player has walked past. This detector postdates every archived
+    // log, so none of that history was ever caught by it. It stays.
+    //
+    // Legs are octants 45 degrees apart, so a circular index gap of 3 or more is >= 135 degrees.
+    for (size_t i = 1; i < legs.size(); ++i) {
+        int a = -1, b = -1;
+        for (int o = 0; o < 8; ++o) {
+            if (legs[i - 1].word == NavCommon::RelativeWord(o)) a = o;
+            if (legs[i].word     == NavCommon::RelativeWord(o)) b = o;
+        }
+        if (a < 0 || b < 0) continue;
+        int d = a > b ? a - b : b - a;
+        if (d > 4) d = 8 - d;
+        if (d >= 3) {
+            char m[176];
+            snprintf(m, sizeof(m),
+                     "REVERSAL: leg %zu -> %zu turns %d deg (%d steps then %d steps) -- the polyline "
+                     "doubles back; the route geometry is wrong, not the wording",
+                     i - 1, i, d * 45, legs[i - 1].steps, legs[i].steps);
+            Log::Write("NAV-ROUTE", m);
+        }
+    }
 
     int total = 0;
     for (const Leg& l : legs) total += l.steps;      // total == what we actually told them to walk

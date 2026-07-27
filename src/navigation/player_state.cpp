@@ -21,6 +21,25 @@ bool IsFieldActive() {
 }
 
 namespace {
+
+// How often the interaction-anchor offset is actually present, and how large it gets. Log-only, and
+// deliberately cheap: three ints touched on a path that already runs per entity per rescan.
+//
+// This exists because the offset's SEMANTICS are unverified (~0.9 -- we know the engine applies it
+// before the interaction gates, not what writes it). Rather than assert a meaning, count it: if the
+// flag never fires, the change is a no-op and we should say so plainly instead of leaving it looking
+// like a fix. If it fires with implausible magnitudes, that is a wrong offset showing itself.
+int   g_anchorOffsetCount = 0;
+int   g_anchorPlainCount  = 0;
+float g_anchorMaxOffset   = 0.0f;
+
+void NoteAnchorOffset(float ox, float oy, float oz) {
+    ++g_anchorOffsetCount;
+    const float m = std::sqrt(ox * ox + oy * oy + oz * oz);
+    if (m > g_anchorMaxOffset) g_anchorMaxOffset = m;
+}
+void NoteAnchorPlain() { ++g_anchorPlainCount; }
+
 // The 8 IsFieldNavSafe() conditions, each as ONE single-source predicate (true = OK).
 // This is the ONLY place the conditions are spelled out — both the real gate (a &&
 // chain, so short-circuit + semantics are preserved) and the diagnostic fail-mask
@@ -200,8 +219,43 @@ bool ReadSceneObjectPos(void* sceneObj, FVec3& out) {
     if (!SafeReadF32(node, NavRva::XFORM_POS_X, &x)) return false;
     if (!SafeReadF32(node, NavRva::XFORM_POS_Y, &y)) return false;
     if (!SafeReadF32(node, NavRva::XFORM_POS_Z, &z)) return false;
+
+    // THE ENGINE'S INTERACTION ANCHOR, not the raw transform origin.
+    //
+    // `FUN_0025bad0:72-76` adds this offset to the target's position BEFORE both the distance gate
+    // and the vertical band test, and `FUN_0025c230` does the same -- so for any object carrying the
+    // flag, the point the engine measures interaction from is NOT where the transform sits. Reporting
+    // the raw origin meant the mod described one point while the game judged another.
+    //
+    // Applied here, in the one function that feeds every entity position (entity_scan's two builders
+    // and entity_list's live refresh), so the `/` describe, the `\` route and the `;` readout cannot
+    // drift apart -- they are reading the same number.
+    //
+    // NOT ASSERTED: what writes this offset, or what it means semantically, is not established
+    // (~0.9). The justification does not depend on it -- "report the point the engine measures from"
+    // holds regardless -- but AnchorStats below counts how often the flag is actually set so the
+    // first play session tells us instead of us assuming.
+    uint8_t flag = 0;
+    if (SafeReadU8(node, NavRva::XFORM_POS_OFFSET_FLAG, &flag) && (flag & 1) != 0) {
+        float ox = 0, oy = 0, oz = 0;
+        if (SafeReadF32(node, NavRva::XFORM_POS_OFFSET_X, &ox) &&
+            SafeReadF32(node, NavRva::XFORM_POS_OFFSET_Y, &oy) &&
+            SafeReadF32(node, NavRva::XFORM_POS_OFFSET_Z, &oz)) {
+            x += ox; y += oy; z += oz;
+            NoteAnchorOffset(ox, oy, oz);
+        }
+    } else {
+        NoteAnchorPlain();
+    }
+
     out = FVec3{ x, y, z };
     return true;
+}
+
+void GetAnchorStats(int& withOffset, int& plain, float& maxOffset) {
+    withOffset = g_anchorOffsetCount;
+    plain      = g_anchorPlainCount;
+    maxOffset  = g_anchorMaxOffset;
 }
 
 bool ReadPlayerPos(FVec3& out) {

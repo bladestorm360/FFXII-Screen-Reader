@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <mutex>
 #include <string>
 
 namespace {
@@ -119,6 +120,11 @@ bool GetGridInfo(WalkGridInfo& out) {
     out.nCols = nCols; out.nRows = nRows;
     out.cellSizeX = csx; out.cellSizeZ = csz;
     out.originX = ox; out.originZ = oz;
+    // The engine's own cell count, which is the CSR LAYER STRIDE minus one. Falls back to the
+    // product when the field reads as garbage; layer 0 (all we read) is unaffected either way.
+    int16_t cc = 0;
+    out.cellCount = (MemRead::SafeReadS16(ctx, NavRva::WALK_CTX_CELLCOUNT, &cc) && cc > 0)
+                        ? static_cast<int>(cc) : (nCols * nRows);
     out.header = header;
     out.valid = true;
     return true;
@@ -158,7 +164,7 @@ namespace {
 // take cross(edge, toPoint).y, which FUN_00202e10 shows is `edge.z*toPoint.x - edge.x*toPoint.z`.
 // An edge rejects the point when that is <= -0.0001; a degenerate edge cannot reject. Inside == no
 // edge rejects.
-bool PointInPolyXZ(const WalkGridInfo& g, uint32_t pbase, float px, float pz) {
+bool PolyContainsXZDetail(const WalkGridInfo& g, uint32_t pbase, float px, float pz) {
     float vx[3], vz[3];
     for (int i = 0; i < 3; ++i) {
         int16_t vi = -1;
@@ -231,7 +237,7 @@ size_t ScanFloorsAt(const WalkGridInfo& g, int col, int row, float evalX, float 
         if (B <= NavRva::WALK_POLY_MIN_B) continue;
         // The point must actually lie INSIDE this poly -- without it the plane extrapolates and the
         // cell reports floors hundreds of units away. Ordered after the cheap gates, as the engine does.
-        if (!PointInPolyXZ(g, pbase, evalX, evalZ)) continue;
+        if (!PolyContainsXZDetail(g, pbase, evalX, evalZ)) continue;
         float vx, vy, vz;
         const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
         if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &vx)) continue;
@@ -392,14 +398,22 @@ bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
                 if (dup) continue;
                 seen.push_back(prim);
 
-                int16_t vi = -1;
-                if (!MemRead::SafeReadS16(g.polyArr, pbase + NavRva::WALK_POLY_BASEVERT, &vi)) continue;
-                if (vi < 0) continue;
-                const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
-                float vx, vy, vz;
-                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &vx)) continue;
-                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &vy)) continue;
-                if (!MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &vz)) continue;
+                // ALL THREE vertices, not just vert0. Reading only the base vertex gave every seam a
+                // third of its real geometry: Upper Apartments' Highhall came back as 2 polys
+                // spanning a 0.3 m depth with a 1.9 m rise, which is not a surface anyone can stand
+                // on. Both the spoken distance and the route goal were aimed at that fragment.
+                FVec3 v[3];
+                bool haveAll = true;
+                for (int k = 0; k < 3 && haveAll; ++k) {
+                    int16_t vi = -1;
+                    const uint32_t voff = NavRva::WALK_POLY_VERT0 + static_cast<uint32_t>(k) * 2u;
+                    if (!MemRead::SafeReadS16(g.polyArr, pbase + voff, &vi) || vi < 0) { haveAll = false; break; }
+                    const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
+                    haveAll = MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &v[k].x)
+                           && MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &v[k].y)
+                           && MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &v[k].z);
+                }
+                if (!haveAll) continue;
 
                 MapJumpSurface* surf = nullptr;
                 for (auto& e : out) if (e.group == group) { surf = &e; break; }
@@ -407,12 +421,16 @@ bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
                     out.push_back(MapJumpSurface{});
                     surf = &out.back();
                     surf->group = group;
-                    surf->min = surf->max = FVec3{ vx, vy, vz };
+                    surf->min = surf->max = v[0];
                 }
-                surf->centroid.x += vx; surf->centroid.y += vy; surf->centroid.z += vz;
-                if (vx < surf->min.x) surf->min.x = vx;  if (vx > surf->max.x) surf->max.x = vx;
-                if (vy < surf->min.y) surf->min.y = vy;  if (vy > surf->max.y) surf->max.y = vy;
-                if (vz < surf->min.z) surf->min.z = vz;  if (vz > surf->max.z) surf->max.z = vz;
+                surf->polys.push_back(static_cast<int>(prim));
+                for (int k = 0; k < 3; ++k) {
+                    if (surf->verts.size() < kMaxSurfaceVerts) surf->verts.push_back(v[k]);
+                    surf->centroid.x += v[k].x; surf->centroid.y += v[k].y; surf->centroid.z += v[k].z;
+                    if (v[k].x < surf->min.x) surf->min.x = v[k].x;  if (v[k].x > surf->max.x) surf->max.x = v[k].x;
+                    if (v[k].y < surf->min.y) surf->min.y = v[k].y;  if (v[k].y > surf->max.y) surf->max.y = v[k].y;
+                    if (v[k].z < surf->min.z) surf->min.z = v[k].z;  if (v[k].z > surf->max.z) surf->max.z = v[k].z;
+                }
                 ++surf->polyCount;
             }
         }
@@ -420,10 +438,44 @@ bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
 
     for (auto& e : out) {
         if (e.polyCount <= 0) continue;
-        const float n = static_cast<float>(e.polyCount);
+        const float n = static_cast<float>(e.polyCount) * 3.0f;   // three vertices per triangle
         e.centroid.x /= n; e.centroid.y /= n; e.centroid.z /= n;
     }
     return !out.empty();
+}
+
+bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out) {
+    static std::mutex                   s_mutex;
+    static std::vector<MapJumpSurface>  s_surf;
+    static int                          s_map     = -1;
+    static bool                         s_haveMap = false;
+
+    std::lock_guard<std::mutex> lk(s_mutex);
+    if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
+    // Nothing is cached until the walkmap is actually up: the first scan of a new map runs on its
+    // first frame, before the collision context exists, and caching an empty answer there would pin
+    // the map to "no exits" for as long as it stays loaded.
+    if (!s_haveMap && HasWorld()) {
+        ReadMapJumpSurfaces(s_surf);
+        s_haveMap = true;
+    }
+    out = s_surf;
+    return !out.empty();
+}
+
+bool PolyContainsXZ(const WalkGridInfo& g, uint32_t polyBase, float px, float pz) {
+    return PolyContainsXZDetail(g, polyBase, px, pz);
+}
+
+bool NearestPointOnSurface(const MapJumpSurface& s, const FVec3& from, FVec3& out) {
+    if (s.verts.empty()) return false;
+    float bestD2 = -1.0f;
+    for (const FVec3& v : s.verts) {
+        const float dx = v.x - from.x, dz = v.z - from.z;   // XZ only: a seam's Y is its own floor
+        const float d2 = dx * dx + dz * dz;
+        if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; out = v; }
+    }
+    return bestD2 >= 0.0f;
 }
 
 } // namespace MapQuery

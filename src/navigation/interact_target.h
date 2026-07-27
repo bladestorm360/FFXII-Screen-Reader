@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // The game's OWN chosen interaction target -- who Confirm will actually address.
@@ -51,6 +52,45 @@ struct Band {
     float hi            = 0.0f;
 };
 Band ReadBandFor(void* sceneObj);
+
+// `sceneObj+0x03 >> 5`. THERE ARE TWO INTERACTABLE CLASSES WITH DIFFERENT FIELD LAYOUTS, scored by
+// two different functions, and reading one class's offsets on the other returns plausible-looking
+// floats that are simply wrong. Every interaction read here branches on it.
+//   3 = character / NPC   (FUN_0025bad0)
+//   1 = gimmick / volume  (FUN_0025be50)
+uint8_t ObjectClass(void* sceneObj);
+
+// The engine's own HORIZONTAL INTERACTION REACH for a target -- the quantity `kApproachRadius = 4.0f`
+// was invented to stand in for. `FUN_0025bad0` rejects a candidate unless `FUN_003da5a0` returns < 0,
+// and that return is `dist2D - (ellipsePlayer + extraPlayer + ellipseTarget + extraTarget)`. Every one
+// of those four terms is a plain memory read (see the NavRva XFORM_*_SHAPE block), so the reach is
+// exactly replicable -- the "direction-dependent shape queries we do not replicate" note on
+// LogGatesFor is out of date.
+//
+// SELF-CHECKING. `FUN_0025bad0` stores `DAT_0209a2b0 = (dist2D - reach) + dist2D` for whichever
+// candidate won, and the mod already reads that as `Chosen::score`. So whenever this target IS the
+// chosen one, `2*dist2D - score` is the engine's own answer for the same quantity and `measured`
+// carries it. The two agreeing is what lifts the replica to the project's >=0.98 bar; until they do,
+// treat `radius` as unconfirmed and do NOT narrow the routing goal set with it.
+//
+// `radius` is direction-DEPENDENT (both shapes are ellipses evaluated along the line between them), so
+// it is only exact for the current relative position. `radiusMin` is the direction-independent lower
+// bound -- min semi-axis of each shape plus both extras -- which is what routing wants, because a cell
+// inside it is interactable from ANY approach angle.
+struct Reach {
+    bool  valid     = false;
+    float radius    = 0.0f;   // replica of the engine's reach for the CURRENT relative position
+    float radiusMin = 0.0f;   // direction-independent lower bound (safe for goal-cell admission)
+    float dist2D    = 0.0f;   // horizontal player->target distance, target position offset applied
+    bool  passes    = false;  // dist2D < radius, i.e. the distance gate accepts right now
+    // Components, so a wrong offset shows up as an absurd term rather than a plausible total.
+    float ellipsePlayer = 0.0f, ellipseTarget = 0.0f;
+    float extraPlayer   = 0.0f, extraTarget   = 0.0f;
+    // Engine cross-check; only meaningful when this target is the chosen one.
+    bool  haveMeasured = false;
+    float measured     = 0.0f;   // 2*dist2D - score
+};
+Reach ReadReachFor(void* sceneObj);
 
 // The FIELD half of the `;` key. No new binding: `;` is the target-status key, and it is
 // STRUCTURALLY silent outside battle (battle_target_reader.cpp -- ResolveTarget needs a commitment

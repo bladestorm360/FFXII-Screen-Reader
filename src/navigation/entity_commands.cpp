@@ -194,7 +194,12 @@ void CmdLabelFromClipboard() {
     text.erase(0, lead);
     if (text.size() > 64) text.resize(64);   // it gets SPOKEN every time the entity is announced
 
-    EntityLabels::SetLabel(MapNames::CurrentMapId(), e.container, e.slot, e.nameIdx, text);
+    // `baseLabel`, never `label`: by the time the player points at this entity its label may already
+    // carry a " 2" suffix, and keying on the suffixed words would file the label under an identity no
+    // later scan can reproduce.
+    const std::wstring& key = e.baseLabel.empty() ? e.label : e.baseLabel;
+    EntityLabels::SetLabel(MapNames::CurrentMapId(), e.nameIdx, key, e.pos,
+                           e.container, e.slot, text);
     RescanLocked();   // re-label the live list so the confirmation and the cursor agree immediately
 
     if (text.empty()) {

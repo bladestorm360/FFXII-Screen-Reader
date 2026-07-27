@@ -77,7 +77,19 @@ LeaderChain CaptureLeaderChain();
 // ---- Live world position / facing (offset pinned; FUN_00265020 chain) -------
 // World position of ANY scene object (leader, NPC, or static gimmick) via its
 // transform pointer at sceneObj+0xB8. Returns false on any read/guard failure.
+// The object's INTERACTION ANCHOR -- its transform position plus the offset at `xform+0x40..0x48`
+// when the byte at `xform+0x107` is set. That offset is what `FUN_0025bad0` adds before BOTH the
+// interaction distance gate and the vertical band test, so this is the point the engine actually
+// measures against; the raw transform origin is not.
+//
+// Every entity position in the mod comes through here, so the `/` describe, the `\` route and the
+// `;` readout all name the same point by construction.
 bool ReadSceneObjectPos(void* sceneObj, FVec3& out);
+
+// Log-only tally of how often the anchor offset above is actually present, and its largest magnitude.
+// The offset's semantics are unverified, so this measures rather than assumes -- see the comment on
+// ReadSceneObjectPos.
+void GetAnchorStats(int& withOffset, int& plain, float& maxOffset);
 // Live leader world position.
 bool ReadPlayerPos(FVec3& out);
 

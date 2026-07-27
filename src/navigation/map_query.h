@@ -47,11 +47,21 @@ struct WalkGridInfo {
     int  nCols = 0, nRows = 0;
     int  cellSizeX = 0, cellSizeZ = 0;
     int  originX = 0, originZ = 0;
+    // CSR holds FOUR layers: index = layer * (cellCount + 1) + cell (FUN_0022f830). Layer 0 is the
+    // floor polys, which is the only one we read -- and layer 0's index is just `cell`, so this is
+    // needed only if a caller ever reaches for volumes in layers 1-2.
+    int  cellCount = 0;
     bool valid = false;
     // Cached ctx0 sub-array bases (internal use by ReadCellFloor; not for callers).
     void* header = nullptr, *vertArr = nullptr, *polyArr = nullptr;
     void* csrTable = nullptr, *primList = nullptr;
 };
+
+// Point-in-triangle in the XZ plane for the poly at byte offset `polyBase` in the poly array --
+// the engine's FUN_002324f0 test, without which a poly's infinite PLANE extrapolates to nonsense
+// (a Clan Hall column once reported floors at -2089 and +2537). Exposed because the navmesh needs
+// exactly the same predicate to find which triangle you are standing on.
+bool PolyContainsXZ(const WalkGridInfo& g, uint32_t polyBase, float px, float pz);
 
 // Read the live walkmap grid header + origin + array bases. False if no walkmap / garbage.
 bool GetGridInfo(WalkGridInfo& out);
@@ -117,16 +127,37 @@ bool GroundInfoAt(float x, float z, float& outY, float& outCosSlope);
 // This is the thing five earlier models tried and failed to infer from the map-control blob. It was
 // never in the blob: transitions live in the WALKMAP, and interactable doors (shops, stairs) live in
 // the scene-object table. Two separate systems; do not use either as evidence about the other.
+constexpr size_t kMaxSurfaceVerts = 256;   // torn-read bound; a real seam is 2-28 polys
+
 struct MapJumpSurface {
     int   group     = 0;
     FVec3 centroid{};        // mean of the tagged polys' base vertices -- the middle of the seam
     FVec3 min{}, max{};      // bounding box, so a recorded crossing can be checked against it
     int   polyCount = 0;
+    // All three vertices of every tagged triangle, so a caller can aim at the seam's NEAR EDGE
+    // rather than its middle. Southern Plaza's seam is 28 polys spanning z[132.0..140.0], so its
+    // centroid overstates the walk by several steps and the route drives through the transition
+    // instead of to it.
+    std::vector<FVec3> verts;
+    // The tagged polys themselves -- navmesh node ids. A route to this exit is a search whose goal
+    // set is exactly these, and a reachability answer is whether any of them is in the player's
+    // component. Both questions are meaningless against a grid and exact against the mesh.
+    std::vector<int>   polys;
 };
 
-// Every map-jump surface on the current map, one entry per group. One full sweep of the walkmap grid
-// (~15k guarded reads on a large map); callers cache it per map. Empty when there is no walkmap.
+// One full sweep of the walkmap grid (~15k guarded reads). Prefer the cache below. Empty when there
+// is no walkmap.
 bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out);
+
+// The same answer, swept ONCE per map. Three subsystems want it (exit scan, breadcrumb trace, '-key
+// probe), so the cache lives here instead of being re-implemented in each. Mutex-guarded: the exit
+// scan reaches it from the input thread and the trace from the game thread. Returns a COPY, because
+// a reference into a cache another thread may rebuild is a dangling read waiting to happen.
+bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out);
+
+// Nearest point of `s` to `from` on the XZ plane, over the seam's own vertices. This is what the
+// player reaches first, and what both the spoken distance and the route goal should aim at.
+bool NearestPointOnSurface(const MapJumpSurface& s, const FVec3& from, FVec3& out);
 
 // Dense traversability of a straight segment (the string-pull validator). Samples every
 // `step` m; at each sample requires floor present (GroundAt), |dFloorY| <= maxStep vs the

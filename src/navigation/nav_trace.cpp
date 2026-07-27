@@ -1,5 +1,7 @@
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
+#include "navigation/map_query.h"
+#include "navigation/nav_common.h"
 #include "core/logger.h"
 
 #include <cmath>
@@ -16,7 +18,20 @@ constexpr size_t kTrail    = 64;
 constexpr float  kMinMove  = 1.0f;    // metres before a new crumb is worth recording
 constexpr size_t kDumpTail = 12;      // crumbs printed on a transition (the approach, in order)
 
-struct Crumb { float x, y, z; };
+struct Crumb {
+    float x, y, z;
+    // Distance from this crumb to the nearest map-jump seam VERTEX, and to that same group's
+    // CENTROID -- measured when the crumb is laid down, because at transition time the map has
+    // already changed and the old map's walkmap is gone.
+    //
+    // The last crumb before a transition therefore records, for free and with nothing for the tester
+    // to observe, how far the player actually was from the seam when it fired versus how far the mod
+    // was TELLING them it was. That difference is the reported "25 steps north for a transition that
+    // fires after five", and it is the only ground truth for it.
+    int   seamGroup = 0;              // 0 = no seam data for this crumb
+    float dNear     = -1.0f;
+    float dCentroid = -1.0f;
+};
 
 std::vector<Crumb> g_trail;
 size_t             g_next  = 0;       // ring write cursor once full
@@ -24,11 +39,38 @@ int                g_map   = -1;
 bool               g_have  = false;
 Crumb              g_last{};
 
-void Push(const FVec3& p) {
+// Seams of the map currently being walked. Filled from the shared per-map cache on the first crumb,
+// so the sweep is never paid twice and never runs before the walkmap is up.
+std::vector<MapQuery::MapJumpSurface> g_surf;
+bool                                  g_haveSurf = false;
+
+// Nearest seam to `p`, by vertex. Fills the crumb's measurement fields.
+void MeasureSeams(Crumb& c) {
+    if (!g_haveSurf) {
+        if (!MapQuery::HasWorld()) return;
+        MapQuery::CachedMapJumpSurfaces(g_map, g_surf);
+        g_haveSurf = true;
+    }
+    const FVec3 p{ c.x, c.y, c.z };
+    float best = -1.0f;
+    for (const auto& s : g_surf) {
+        FVec3 nearPt{};                       // NOT `near`: <windef.h> defines it as an empty macro
+        if (!MapQuery::NearestPointOnSurface(s, p, nearPt)) continue;
+        const float d = NavCommon::Distance2D(p, nearPt);
+        if (best < 0.0f || d < best) {
+            best = d;
+            c.seamGroup = s.group;
+            c.dNear     = d;
+            c.dCentroid = NavCommon::Distance2D(p, s.centroid);
+        }
+    }
+}
+
+void Push(const Crumb& c) {
     if (g_trail.size() < kTrail) {
-        g_trail.push_back(Crumb{ p.x, p.y, p.z });
+        g_trail.push_back(c);
     } else {
-        g_trail[g_next] = Crumb{ p.x, p.y, p.z };
+        g_trail[g_next] = c;
         g_next = (g_next + 1) % kTrail;
     }
 }
@@ -62,8 +104,27 @@ void DumpOrdered(const char* what, int mapId, size_t tail) {
 
     const size_t first = (o.size() > tail) ? (o.size() - tail) : 0;
     for (size_t i = first; i < o.size(); ++i) {
-        snprintf(m, sizeof(m), "  [%zu] (%.2f,%.2f,%.2f)%s", i, o[i].x, o[i].y, o[i].z,
+        char seam[112] = {};
+        if (o[i].seamGroup != 0)
+            snprintf(seam, sizeof(seam), " seam g%d: near=%.1fm/%dst centroid=%.1fm/%dst",
+                     o[i].seamGroup, o[i].dNear, NavCommon::DistanceToSteps(o[i].dNear),
+                     o[i].dCentroid, NavCommon::DistanceToSteps(o[i].dCentroid));
+        snprintf(m, sizeof(m), "  [%zu] (%.2f,%.2f,%.2f)%s%s", i, o[i].x, o[i].y, o[i].z, seam,
                  (i + 1 == o.size()) ? "   <== LAST POSITION ON THIS MAP" : "");
+        Log::Write("NAV-TRACE", m);
+    }
+
+    // The one line that answers the overshoot question outright: where the transition actually fired
+    // versus what the mod would have said the distance was. `centroid` is what an exit aims at today.
+    const Crumb& last = o.back();
+    if (last.seamGroup != 0) {
+        snprintf(m, sizeof(m),
+                 "  CROSSED seam g%d at %.1fm (%d steps) from its near edge, but %.1fm (%d steps) from "
+                 "its centroid -- the centroid overstates the walk by %.1fm (%d steps)",
+                 last.seamGroup, last.dNear, NavCommon::DistanceToSteps(last.dNear),
+                 last.dCentroid, NavCommon::DistanceToSteps(last.dCentroid),
+                 last.dCentroid - last.dNear,
+                 NavCommon::DistanceToSteps(last.dCentroid) - NavCommon::DistanceToSteps(last.dNear));
         Log::Write("NAV-TRACE", m);
     }
 }
@@ -86,15 +147,19 @@ void OnFieldFrame(int mapId, const FVec3& pos) {
         g_have = false;
         g_next = 0;
         g_trail.clear();
+        g_surf.clear();
+        g_haveSurf = false;        // the seams belong to the map we just left
     }
 
     if (g_have) {
         const float dx = pos.x - g_last.x, dz = pos.z - g_last.z;
         if (dx * dx + dz * dz < kMinMove * kMinMove) return;   // standing still / shuffling
     }
-    g_last = Crumb{ pos.x, pos.y, pos.z };
+    Crumb c{ pos.x, pos.y, pos.z };
+    MeasureSeams(c);
+    g_last = c;
     g_have = true;
-    Push(pos);
+    Push(c);
 }
 
 void DumpTrail() {

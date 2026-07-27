@@ -648,7 +648,7 @@ pass, and only the single best-scoring object survives.
 
 | Gate | Where | Rule | Conf |
 |---|---|---|---|
-| **Horizontal distance** | `FUN_003da5a0` | returns `sqrt(dx² + dz²) − Σradii`; must be **< 0**. **Y is excluded entirely** — interaction range is a cylinder, not a sphere | 0.98 |
+| **Horizontal distance** | `FUN_003da5a0` | returns `sqrt(dx² + dz²) − Σradii`; must be **< 0**. **Y is excluded entirely** — interaction range is a cylinder, not a sphere. `Σradii` is fully solved — see "The interaction REACH" below; it is 4 memory reads, not an unknown | 0.98 |
 | **Vertical band** | `FUN_0025bad0:77-80` | unless the target's `xform+0xDD != 0`, the player's Y must lie inside the target's vertical extent ± margins. A separate test from distance | **VALIDATED IN PLAY** |
 | **Facing cone** | `FUN_003a1bb0` (abs `0x3A1BB0`) | `\|wrap(atan2(tx−px, tz−pz) − playerYaw)\| < halfAngle`. Player yaw = `playerColl+0xA8`; half-angle is per-target | 0.99 |
 
@@ -699,7 +699,72 @@ That is why `PathSearch::Run` now takes the band: the goal is "a cell whose floo
 | `DAT_0209a2b4` | its container |
 | `DAT_0209a2bc` | `10` = talk / `2` = action |
 | `DAT_0209a2aa` | `1` = a target exists this frame |
-| `DAT_0209a2b0` | best score so far (minimised) |
+| `DAT_0209a2b0` | best score so far (minimised) — **= `2*dist2D − reach`**, see below |
+
+### The interaction REACH — the `Σradii` above, solved Session 74 (conf 0.97 offline, self-checking)
+
+The distance gate's `Σradii` is the engine's horizontal interaction reach. Session 73 recorded two of
+its four terms as "direction-dependent shape queries we do not replicate" and the mod shipped an
+invented `kApproachRadius = 4.0f` in their place. **All four are plain memory reads.**
+
+`FUN_0025bad0:83` calls
+`FUN_003da5a0(out, playerXform+0x50, playerXform, targetXform+0x70, targetPosAdj)`, whose return is
+`dist2D − reach` (accepted when `< 0`), with
+
+```
+reach = ellipse(playerShape -> target) + playerXform[+0x5C]
+      + ellipse(targetShape -> player) + targetXform[+0x7C]
+```
+
+`FUN_003da730` is the ellipse radius along the direction to the other party; `FUN_003a1d30` is
+`sqrtf(fabs(x))` applied to its (squared) result:
+
+```c
+w = cosf(-yaw)*dz - sinf(-yaw)*dx;   u = sinf(-yaw)*dz + cosf(-yaw)*dx;
+r2 = (u*u + w*w) / ( u*u/(A*A) + w*w/(B*B) );      // 0 when the two points coincide
+```
+
+| Field | Player | Target | Meaning |
+|---|---|---|---|
+| shape record | `xform+0x50` | `xform+0x70` | 4 floats — **different offsets, do not collapse** |
+| `+0x00` semi-axis A | `+0x50` | `+0x70` | pairs with `u` in the formula |
+| `+0x04` semi-axis B | `+0x54` | `+0x74` | pairs with `w` |
+| `+0x08` yaw | `+0x58` | `+0x78` | ellipse orientation (negated in the rotation) |
+| `+0x0C` extra radius | `+0x5C` | `+0x7C` | added flat, no direction term |
+
+**SELF-CHECKING — this is the important part, WITH ONE CLASS RESTRICTION (Session 76).**
+`FUN_0025bad0:139` stores `DAT_0209a2b0 = (dist2D − reach) + dist2D`, where the second term is
+`param_1[3]`, the distance `FUN_003da5a0:36` writes into its out-vector. The mod already reads that
+global as `InteractTarget::Chosen::score`, so for whichever candidate the engine chose:
+
+> **STRUCK as universal — the identity holds ONLY for class-3 (character) targets.** `DAT_0209a2b0`
+> mixes units between the two scorers: `FUN_0025be50` (class 1, gimmicks) instead stores
+> `FUN_003a1960(player, node)`, a plain distance measure. Applied to a class-1 winner the identity
+> yields a confident, meaningless number. There is no flag distinguishing them; the discriminator is
+> `sceneObj+0x03 >> 5`. See "Two interactable classes" below.
+
+```
+reach = 2*dist2D − score          <-- the engine's own answer, nothing replicated
+```
+
+`InteractTarget::ReadReachFor` returns replica and measured together; `NAV-PROBE` prints both. A
+confirmed value must land inside the play-measured bracket **0.51 < reach < 1.70**.
+
+**Direction dependence matters for routing.** Both shapes are ellipses evaluated along the line
+between the two parties, so `reach` is only exact for the current relative position. `Reach::radiusMin`
+(`min(A,B)` of each shape plus both extras) is the direction-independent lower bound — that is the one
+a goal-cell admission test must use, because a cell inside it is interactable from **any** approach
+angle.
+
+### Target position offset — `xform+0x107`, applied BEFORE both distance and band
+
+`FUN_0025bad0:72-76`: when the byte at `targetXform+0x107` has bit 0 set, the engine adds
+`targetXform[0x10..0x12]` (bytes `+0x40/+0x44/+0x48`) to the target's position **before** the distance
+gate and the vertical band test alike.
+
+**`InteractTarget::ReadBandFor` does not apply it** (it reads `XFORM_POS_Y` directly), so its band —
+and therefore the goal band `PathSearch` routes to — is wrong for any target carrying the flag.
+`InteractTarget::ReadGatePos` applies it correctly; `ReadBandFor` is corrected in the Phase 3 rebuild.
 
 Consumed by `FUN_00268d10` (the confirm handler). **Do not design a "cycle interaction target" key —
 the engine has no such concept.** A pure-read announcement of `DAT_0209a2b8` is, however, the exact
@@ -2278,3 +2343,218 @@ down.
 
 ⚠ **0.95, not 0.98:** that `FUN_00312280` is reached for *every* enemy death rests on a static
 "sole caller" xref, not observation. Failure mode is a kill that announces nothing.
+
+---
+
+## The field walkmap is a NAVMESH — Session 75 (2026-07-27)
+
+**Every walkmap floor triangle carries the index of its neighbour across each of its three edges. That
+adjacency IS the routing graph, and it is what the engine's own character mover walks.**
+
+### Poly record, stride 0x20 — complete
+
+| off | type | meaning |
+|---|---|---|
+| 0x00 | float | plane A |
+| 0x04 | float | plane B (divisor; gate `0.001 < B`, STRICTLY positive) |
+| 0x08 | float | plane C |
+| 0x0C | u32 | flags — type in bits 0-2, map-jump group in bits **3-6**, material group in bits 13-17 |
+| 0x10 | s16 | vertex index 0 |
+| 0x12 | s16 | vertex index 1 |
+| 0x14 | s16 | vertex index 2 |
+| **0x16** | **s16** | **neighbour poly across edge v0->v1; `< 0` = none** |
+| **0x18** | **s16** | **neighbour poly across edge v1->v2** |
+| **0x1A** | **s16** | **neighbour poly across edge v2->v0** |
+| 0x1C | u32 | second flags word (bit 0x400 observed) |
+
+There is **no plane D**: the plane passes through vertex 0, and `FUN_00231890` evaluates height as
+`y = v0.y + ((v0.x - px)*A + (v0.z - pz)*C) / B`. Conf 1.00 (read directly).
+
+### The mover — `FUN_002327d0`, conf 0.99
+
+Carries a CURRENT POLY INDEX across frames. When `FUN_002324f0` reports the position left the triangle
+across edge *e* (it returns the rejecting edge index, or `-1` while inside):
+
+```c
+sVar9 = *(short *)(param_1[2] + 0x16 + ((longlong)param_5 * 0x10 + (longlong)iVar8) * 2);
+if (iVar8 < 0 || sVar9 < 0 || FUN_00230a40(param_1,sVar9,*(undefined2 *)(param_2 + 0x50)) == 0)
+    { blocked }   else   { param_5 = sVar9; }
+```
+`param_1[2]` = `ctx+0x10` (poly array); `param_5*0x10*2 == param_5*0x20`. Visited set at
+`DAT_02088fe0` (count `DAT_020891e0`), capped at 127 per move step.
+
+**There is NO step-height or slope test anywhere in this path.** The engine's only geometric blockers
+are walls/volumes and the flag test below.
+
+### Walkability — `FUN_00230a40`
+
+Movement class is arg5 of `FUN_00230c10`, stored at `moveCtx+0x50`. Both actor movers
+(`FUN_0032bcc0`, `FUN_0032ca70`) pass **4** normally, `0xffff` only as an unstick mode when already
+inside a volume or jammed within 0.27 units of a wall.
+
+Class 4 matches none of the 0/1/2/3/5 branches, so it falls through to walkable. Therefore:
+
+> **For the party, floor walkability is exactly `(effectiveFlags & 7) == 0`.** Conf 0.97.
+
+(For the record: bit 23 blocks class 0, 24 class 5, 25 class 1, 26 class 2, 27 class 3.)
+
+### Effective flags — `FUN_00232020`
+
+```
+A   = (flags >> 13) & 0x1F           material bank, entries 0x00-0x1F
+C   = ((flags >> 3) & 0xF) + 0x40    group bank,    entries 0x40-0x4F
+entry i = { u32 mask; u32 value; }   at DAT_0209a3e0 (RVA 0x1F7A3E0) + i*8, 0x50 entries
+in  = (flags & ~mask[A]) | (value[A] & mask[A])
+eff = (value[C] & mask[C]) | (in & ~mask[C])
+```
+
+**Floor FINDING bypasses this** (`FUN_00231900` uses raw bits). **MOVEMENT does not.** Two different
+questions; the mod now replicates each where it belongs. This is also how a script opening a gate
+changes walkability without touching geometry.
+
+### CSR is four layers
+
+`index = layer * (cellCount + 1) + cell`, layer 0..3, per `FUN_0022f830`. Layer 0 = floor polys,
+1-2 = volumes, 3 = attribute/region polys. `cellCount` is the s16 at `ctx+0x40`. Layer 0's index is
+just `cell`, so a floor-only reader is unaffected — but the array is 4x longer than previously noted.
+
+### Prim index space — THREE ranges (`FUN_00232160`)
+
+| range | meaning |
+|---|---|
+| `[0x0000,0x4000)` | floor polygon, `polyArr + idx*0x20` |
+| `[0x4000,0x5000)` | static volume, `volArr + (idx-0x4000)*0x90` |
+| `[0x5000, …)` | **dynamic obstacle** — doors, moving platforms (`mgr+0x1D8` enable, `mgr+0x1A0` transform) |
+
+**STRUCK:** `">= 0x5000 => empty/sentinel"`. Consequence: blockers are NOT in floor adjacency, so the
+floor under a closed gate is still adjacent to the floor before it — a poly-graph route must test the
+shared edge with a walk-class segment.
+
+### Two collision contexts
+
+`FUN_0026e500(0)` -> `DAT_0209a678` (the WALKING one, what we read); `FUN_0026e500(n!=0)` ->
+`DAT_0209a680` (camera/LOS). Exactly two, per `FUN_0026e960` and `FUN_0026edb0`. Conf 1.00.
+
+### STRUCK — `MAP_GROUND_AT` returns "the floor height at (x,z)"
+
+`FUN_003208c0` -> `FUN_0026e3c0` is two-stage. Stage 1 is the topmost type-0 floor plane. **Stage 2
+climbs from it in 1-unit steps (up to 30) to the first point outside any collision volume, then casts
+a segment back DOWN with mask `0xFFFF` and flags `0`; if that hits anything, the returned Y is the
+HIT's Y.** Conf 0.97.
+
+It can therefore return a wall, a ceiling or a rooftop. Usable as a rough "is there floor here";
+**never** as the height a destination or a route is anchored to.
+
+### STRUCK — the map-jump group is 5 bits
+
+It is **four**: `(flags >> 3) & 0xF`, verified in both `FUN_00232020` and `FUN_00230a40`. With a 5-bit
+mask, a seam poly carrying bit 7 computed as `group + 16`, matched no `setmapjumpgroup(K)`, and was
+silently dropped — which is why Upper Apartments' Highhall seam read as a 0.3 m-deep sliver in the
+wrong place. Session 64's "the exact width of the field cannot matter" is struck.
+
+---
+
+## TWO interactable classes — Session 76 (2026-07-27)
+
+`FUN_0025b820` runs **two** loops over two index ranges of the same container, scored by two different
+functions. **The two classes do not share field offsets**, and reading one class's layout on the other
+returns plausible-looking floats that are simply wrong — the failure mode that survives review.
+
+Discriminator: **`sceneObj+0x03 >> 5`**.
+
+| | class 3 — characters / NPCs | class 1 — gimmicks / volumes |
+|---|---|---|
+| scorer | `FUN_0025bad0` | `FUN_0025be50` |
+| interaction point | `pos + node[+0x40/+0x44/+0x48]` when `node+0x107 & 1` | plain `pos` |
+| band lo/hi | `centre ± node+0xC8 / +0xCC`, scaled by `node+0x24` | `node.y + node+0x68` / `node.y − node+0x6C`, **no scale** |
+| band skip byte | `node+0xDD` | `node+0x5C` |
+| cone half-angle | `node+0xBC` | `node+0x50` |
+| cone aim point | the interaction point | **`node+0x10` (x) / `node+0x18` (z)** |
+| score into `DAT_0209a2b0` | `2*dist2D − reach` | `FUN_003a1960(player, node)` |
+
+Conf 0.98 — read from `FUN_0025be50` and `FUN_002646c0` directly.
+
+### `FUN_002646c0` (RVA `0x1446C0`) — the engine's own interaction-point getter
+
+```c
+bVar2 = *(byte *)(param_1 + 3) >> 5;
+if (bVar2 == 1) { pfVar1 = *(float **)(param_1 + 0xb8);
+                  *param_2 = *pfVar1; *param_3 = pfVar1[1]; *param_4 = pfVar1[2]; }
+else if (bVar2 == 3) { /* same, then + pfVar1[0x10..0x12] when (pfVar1+0x107)&1 */ }
+else { *param_2 = *param_3 = *param_4 = 0.0; }
+```
+
+`InteractTarget::ReadGatePos` replicates this, and `PlayerState::ReadSceneObjectPos` applies it so
+every entity position the mod reports is the point the engine measures interaction from.
+
+**Unidentified, deliberately:** `FUN_0026bb00`'s class-1 setter writes bytes `+0x10/+0x14/+0x18`, but
+the getter above does **not** read them — it returns the plain position for class 1. A subagent
+reported `+0x10` as class-1's interaction point; that is refuted by the getter. `+0x10/+0x18` is where
+`FUN_0025be50` aims the facing cone. What the `+0x10` field is for remains open — do not build on it.
+
+## Scene-object PRESENCE + the shop-name chain (Session 79, 2026-07-27)
+
+### Presence vs. mode — the inclusion test for a field object
+
+Two different questions, two different reads. Conflating them hid an entire class of NPC on every map.
+
+| question | read | meaning |
+|---|---|---|
+| does it EXIST / is a body standing there | `*(u8*)(sceneObj+0x14) & 0x20` (`READY_MODEL_BIT`) | model loaded |
+| may the player act on it RIGHT NOW | `*(u32*)(sceneObj+0x1C)` FLAG_TALK / FLAG_ACTION | **MODE state** — `FUN_0025ad10` clears both on a disabled object |
+| is the story gate open | `*(u8*)(sceneObj+0x0E) & 0x10` (`INTERACT_ENABLE_BIT`) | |
+
+**The `+0x1C` flags are NOT an existence test.** An enabled, placed, model-loaded CHARACTER whose
+script has not armed its talk hook reads `flags = 0`. Include by KIND (`+0x0E & 0xF`: 1 = TALK person,
+5 = ACTION gimmick) plus a loaded model; use the flags only for availability.
+
+**`cat` in the object dump prints in HEX.** `cat=66` is `0x66`: low-5 = 6 -> scene class 3 (character).
+Reading it as decimal gives class 2 and a wrong object model.
+
+### Shop name — `shopId` -> master table -> npcdic (decompiled, NOT yet probe-confirmed)
+
+Chain from `FUN_0057c010` -> `FUN_002fae40` -> `FUN_003eabe0`:
+
+```
+shopId = *(u8*)(DAT_02ca9790 + 0xC0)          // RVA 0x2B89790  shop controller (top menu)
+tbl    = DAT_02ebf158                          // RVA 0x2D9F158  shop master table
+  count  = *(u16*)(tbl + 6)                    // shopId must be < count
+  stride = *(u16*)(tbl + 4)
+  data   = *(u32*)(tbl + 8) + _DAT_01f83530    // RVA 0x1E63530 — FUN_0020e600 is just this add
+nameId = *(u16*)(data + stride * shopId)
+name   = npcdic slot (nameId*2 + 1)            // FUN_003eabe0 — the ODD slot
+```
+
+**Note the ODD slot.** The mod's own `NpcdicName()` replicates `FUN_003eac10` and uses the EVEN slot
+(display name); the shop title uses `nameId*2+1` (yomi/reading). This file already records that the
+odd slot is byte-identical to the even one in the US build — `probe_shop_name.js` reads both and
+prints them, because if they differ on this build that matters more than the feature.
+
+`FUN_0020e600(x)` is `x + _DAT_01f83530`, a plain base-relative resolver — replicable as a memory read,
+so nothing in this chain requires calling a game function.
+
+**STRUCK: "`FUN_0057c010` is the shop-OPEN event."** It is a **dialog callback** — `FUN_0057a4e0`
+stores it as `local_18` and hands it to `FUN_003f47e0`. The shop-open hook point is UNESTABLISHED.
+Confidence: the id/table/npcdic chain 0.97 (decompile only, probe pending); the hook point, none.
+
+### `phyre_types.h`'s `KIND_DEAD = 5` — still a misname, still counted not flipped
+
+`entity_scan.cpp`'s actor-pool skip still fires on it. The pre-registered falsification test stands:
+**a non-zero `KIND_DEAD` tally on a field map means the skip must go.** It has never printed in any
+log, so the premise (the pool holds no gimmicks) still stands.
+
+### CORRECTION — the shop binding is reachable by the EXISTING script reader
+
+The Session 79 note above called the NPC->shop binding unreachable because it lives in compiled map
+script. **Struck.** `map_script.cpp` already walks that blob live on every map: routine table
+`hdr+0x18`, name pool `hdr+0x4C`, code span `[codeOff, next codeOff)`, pattern
+`4f <lit:u16> 5d <nativeLo> <nativeHi>`. Recovering a shop id is the same scan with a different native
+id, and it is DATABASE RESOLUTION (present before the player acts), not a learned binding.
+
+**Also struck: "the shop-open native's id cannot be resolved by index arithmetic."** True but
+irrelevant — S63 resolves natives by symbol/behaviour (`dbgIndex = nativeId + 5140` against the
+archived .dbg symbol table), which is how `setmapjumpgroup = 0x011E` was named.
+
+Open, all answerable offline: the shop native's id; whether an NPC's `+0xDC` talk index reaches its
+routine by name convention or by direct table index; whether `shopId` is a literal. Check the
+interact-icon field first — a discriminating icon would be one memory read.

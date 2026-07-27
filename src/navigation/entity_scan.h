@@ -46,6 +46,11 @@ struct Entity {
     // fallback. The sign-twin drop compares labels, and an unnamed object whose label is merely the word
     // "Interactables" must never match another unnamed object.
     bool         gameNamed = false;
+    // `label` BEFORE NumberDuplicateLabels appends its " 1" / " 2" suffix, i.e. the words the number was
+    // assigned under. EntityLabels keys its store on this, so it must not drift: reading the suffixed
+    // `label` back would make "Nomad" and "Nomad 2" different identities and the number could never be
+    // found again. Empty until the label settles, at which point it mirrors `label`.
+    std::wstring baseLabel;
     // This entry is a map-jump TRANSITION whose position is the trigger surface itself (exit_scan.cpp),
     // so arriving at it IS crossing it. The planner uses this to say "At the exit" instead of grinding
     // out two-metre legs when the player is already standing on the seam.
@@ -77,6 +82,25 @@ constexpr float kSignMatchDist = 8.0f;
 // decorative sign of the same name. Every East End shop doorway matched inside ~2 m; its same-named twin,
 // which carries no jump info at all, is 6-15 m away.
 constexpr float kSignObjectDist = 2.5f;
+// Two PEOPLE this close together are one actor registered twice, not two NPCs. Deliberately tiny:
+// the rule is "literally the same coordinates", because at any real separation they are two people
+// the game happened to give one name, and deleting one of those cost a tester a story NPC.
+constexpr float kStackedDist    = 0.05f;
+
+// ---- POST-SCAN PASSES (entity_postscan.cpp) -----------------------------------------------------
+// Everything that runs over the FINISHED object list rather than finding objects. Declared here so
+// the two translation units cannot drift apart on a signature.
+//
+// Note the deliberate asymmetry between the two dedupe passes: FFXII reuses display names constantly
+// (109 npcdic ids all read "Rabanastran"), so NumberDuplicateLabels NUMBERS same-named objects while
+// TagDoorwaysAndDropSignTwins DELETES one -- and the latter is scoped hard, because getting that
+// scope wrong deleted four NPCs on Nomad Village, one of them story-critical (Session 77).
+uint16_t ObjectHandle(void* sceneObj);
+void LogObjectDump(const std::vector<Entity>& out);
+void DropShadowRegistrations(std::vector<Entity>& out);
+void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail);
+void ApplyPlayerLabels(std::vector<Entity>& out);
+void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail);
 
 // Slack allowed when testing an exit against the reachable set. Door triggers sit ON the map seam and are
 // routinely a cell or two past the last cell with a floor sample, so a zero-tolerance test would report

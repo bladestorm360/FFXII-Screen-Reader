@@ -112,7 +112,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `` ` `` | Nav: rescan + area name | free |
 | `;` | **Context-gated target readout.** In battle: **committed** target status (name + instance letter + HP), silent on a merely browsed cursor — see below. In the field: **who Confirm will address**, e.g. "Talk: Montblanc" / "Action: Save Crystal", silent when nothing is in reach | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
-| `'` | Nav: diagnostic dump | free |
+| `'` | Nav: diagnostic probe (speaks "Diagnostic logged") | free |
 | `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) | free |
 | `5` | Party: slot 2 status | free |
 | `6` | Party: slot 3 status | free |
@@ -220,3 +220,23 @@ why labelling entities (**F6**) reads the CLIPBOARD instead of capturing typing.
 > the mod said "Montblanc, right next to you" while the game had selected a Clan Member 1.86 units
 > away. **There is exactly one engine target and no cycling** (`FUN_0025b820` keeps the minimum
 > score, `FUN_0025d650` resets per frame) — do not add a "next interaction target" key.
+
+**Update, Session 74 (2026-07-27) — `'` is now a navigation PROBE, not a dump.**
+
+> The key kept its slot but not its contents. It used to emit the move-frame snapshot, a wall
+> self-test, the walkmap grid cross-check, the `+0x70` / `+0x54` legacy exit tables,
+> `ExitDiag::DumpCoverage` and `MapExits::DiagScanScriptMapjumps` — the last of which alone hex-dumped
+> 0x9000 bytes as roughly 1,152 log lines. All of it answered questions that were already settled.
+>
+> It now reports three things, under the new `NAV-PROBE` log category: every walkable floor layer in a
+> block of columns around the player and around each map transition (next to the engine's own ground
+> answer for the same point); the engine's interaction reach beside the mod's replica of it; and each
+> transition seam's middle beside its near edge, in metres and steps.
+>
+> Two behavioural notes. It **runs on the game thread** now — the key only raises a flag, and the probe
+> drains on the next field frame — because one of its reads is a game call that was never safe from the
+> input thread. And it is **field-only**, which the old dump was not: press it somewhere the field is
+> not live and nothing is logged at that moment. If the field is running but not yet settled (a map
+> still fading in) it retries for about a second and a half and then says "Diagnostic unavailable"; if
+> the field tick is not running at all, the request simply waits and fires when you are next on the
+> field. **Press it while standing in the area you want measured.**

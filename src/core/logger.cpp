@@ -190,7 +190,10 @@ void Write(const char* category, const char* message) {
                      // INTERACT is a single-press diagnostic: one `'` or `;` emits it and then the
                      // tester alt-F4s out. Exactly the PARTY/COMBAT failure above, so it joins them
                      // rather than waiting to be lost once.
-                     strcmp(category, "INTERACT") == 0)) {
+                     strcmp(category, "INTERACT") == 0 ||
+                     // NAV-PROBE is the same shape: the whole point of a `'` press is the block it
+                     // emits, and it is routinely the last thing before the tester quits.
+                     strcmp(category, "NAV-PROBE") == 0)) {
         fflush(g_logFile);
     }
 

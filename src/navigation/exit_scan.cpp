@@ -5,6 +5,7 @@
 #include "navigation/map_script.h"
 #include "navigation/map_query.h"
 #include "navigation/nav_common.h"
+#include "navigation/player_state.h"
 #include "core/logger.h"
 
 #include <cmath>
@@ -41,6 +42,10 @@ namespace {
 // Resolved ONCE per map and cached: the sweep is ~15k guarded reads, its answer cannot change while a
 // map is loaded, and the exit scan runs several times a second. Nothing is cached until the walkmap is
 // actually up, because the scan starts on the first frame of a new map.
+// The sweep itself now lives in MapQuery::CachedMapJumpSurfaces, because the breadcrumb trace and the
+// '-key probe want the same answer and re-sweeping per subsystem would pay ~15k reads three times a
+// map. This keeps a local copy so the several-times-a-second rescan does not copy the vector each
+// call; the shared cache is only consulted while this one is still empty for the map.
 const std::vector<MapQuery::MapJumpSurface>& CachedSurfaces(int mapId) {
     static std::vector<MapQuery::MapJumpSurface> s_surf;
     static int  s_map    = -1;
@@ -48,7 +53,7 @@ const std::vector<MapQuery::MapJumpSurface>& CachedSurfaces(int mapId) {
 
     if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
     if (!s_haveMap && MapQuery::HasWorld()) {
-        MapQuery::ReadMapJumpSurfaces(s_surf);
+        MapQuery::CachedMapJumpSurfaces(mapId, s_surf);
         s_haveMap = true;
     }
     return s_surf;
@@ -139,14 +144,28 @@ void ScanExits(std::vector<Entity>& out) {
         e.fixed     = true;                                          // fixed world pos, no scene node
         e.flags     = 0;
         e.nameIdx   = static_cast<int16_t>(-(1000 + d.ctrlIndex));   // stable cursor id, one per controller
-        e.pos       = surf->centroid;                                // the middle of the seam itself
         e.category  = Category::Exit;
         e.isTransition = true;                                       // the target IS the trigger surface
         e.label     = std::wstring(CategoryWord(Category::Exit)) + L", " + d.destName;
-        // Stand the target on the floor: the centroid averages polygon vertices, which on a ramp sits
-        // slightly off the walked surface, and the planner measures elevation against it.
-        float floorY = 0.0f;
-        if (MapQuery::HasWorld() && MapQuery::GroundAt(e.pos.x, e.pos.z, floorY)) e.pos.y = floorY;
+
+        // AIM AT THE NEAR EDGE, not the middle of the seam. A seam is a strip -- Southern Plaza's is
+        // 28 polys spanning z[132.0..140.0] -- so its centroid is metres past the point the player
+        // actually crosses, which is where "25 steps north" for a transition that fires after five
+        // came from. The nearest tagged vertex is the point you reach first, and using it fixes the
+        // spoken distance and the route goal together, so `/` and `\` agree by construction.
+        //
+        // Recomputed on every scan (which is every command) from the live player position; that read
+        // is memory-only, so it is safe on the input thread.
+        e.pos = surf->centroid;
+        FVec3 pp{};
+        if (PlayerState::ReadPlayerPos(pp)) {
+            FVec3 nearPt{};   // NOT `near`: <windef.h> defines it as an empty macro
+            if (MapQuery::NearestPointOnSurface(*surf, pp, nearPt)) e.pos = nearPt;
+        }
+        // The Y comes from the seam's OWN vertex. It used to come from MapQuery::GroundAt, which is
+        // not a floor query at all: FUN_0026e3c0 takes the topmost floor and THEN climbs up to 30
+        // units and casts back down with mask 0xFFFF, returning whatever it hits. On Upper
+        // Apartments that could not tell the Highhall seam from the floor 7.8 m beneath it.
         candidates.push_back(e);
 
         if (logDetail) {

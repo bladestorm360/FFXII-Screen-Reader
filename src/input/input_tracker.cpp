@@ -86,7 +86,13 @@ constexpr int DIK_UP = 0xC8, DIK_DOWN = 0xD0, DIK_LEFT = 0xCB, DIK_RIGHT = 0xCD;
 // built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
 // F5: nav availability filter (All <-> Story-gated). Same reasoning as F4 -- the game binds only
 // F1/F2/F3, so F5 is free.
-constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F;
+// F6: label the focused entity from the clipboard. Same reasoning as F4/F5 -- the game binds only
+// F1/F2/F3. The handler, the clipboard read, the persistence and the apply-before-numbering pass were
+// all built in Session 65 and BOTH Controls.md and README.md documented the key, but `DIK_F6` was
+// never defined and no edge was ever registered, so `case VK_F6:` has been dead code ever since and
+// pressing F6 did precisely nothing. Confirmed in play by the tester, and again by the label store:
+// 127 records, zero of them named.
+constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40;
 // The game's Confirm (Docs/Controls.md: Space / Enter / Left Mouse). Observed only -- the mod is
 // read-only on input and never swallows these, so the game's own text box advances exactly as it
 // always did; we just learn that it did. Mouse confirm is not observed (no hook for it), so a
@@ -97,7 +103,7 @@ constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[20]{};   // 0-15 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[21]{};   // 0-15 + 20 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
@@ -331,6 +337,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true);  // `  rescan
     DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 text-capture A/B
     DInputEdge(VK_F5,         g_extraDown[15],(dik[DIK_F5]         & 0x80) != 0, true);  // F5 all/story-gated
+    DInputEdge(VK_F6,         g_extraDown[20],(dik[DIK_F6]         & 0x80) != 0, true);  // F6 label from clipboard
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

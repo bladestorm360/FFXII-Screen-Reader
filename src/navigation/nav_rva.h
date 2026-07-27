@@ -106,10 +106,18 @@ constexpr uint32_t WALK_CTX_HEADER    = 0x00;  // ptr -> grid header (fields bel
 constexpr uint32_t WALK_CTX_VERTS     = 0x08;  // ptr -> vertex array   (stride 0x10: x@0,y@4,z@8)
 constexpr uint32_t WALK_CTX_POLYS     = 0x10;  // ptr -> floor-poly array (stride 0x20)
 constexpr uint32_t WALK_CTX_WALLS     = 0x18;  // ptr -> wall-segment array (stride 0x90) [phase 2]
-constexpr uint32_t WALK_CTX_CSR       = 0x20;  // ptr -> CSR cell->list offsets (u16[nCols*nRows+1])
+// CSR is FOUR LAYERS, not one: index = layer * (cellCount + 1) + cell. FUN_0022f830 drives every
+// cell visit through exactly that arithmetic with layer in 0..3, selected by an 8-bit layer mask.
+// Layer 0 = floor/plane polys, layers 1-2 = volumes, layer 3 = attribute/region polys. Reading
+// layer 0 only (as we do) is correct for floors -- but the array is 4x longer than the old comment.
+constexpr uint32_t WALK_CTX_CSR       = 0x20;  // ptr -> CSR offsets, u16[4 * (cellCount + 1)]
 constexpr uint32_t WALK_CTX_PRIMS     = 0x28;  // ptr -> primitive index list (u16[])
+constexpr uint32_t WALK_CTX_EXTENT_X  = 0x30;  // int nCols * cellSizeX (world width)
+constexpr uint32_t WALK_CTX_EXTENT_Z  = 0x34;  // int nRows * cellSizeZ (world depth)
 constexpr uint32_t WALK_CTX_ORIGIN_X  = 0x38;  // int originX (gridX = originX + worldX)
 constexpr uint32_t WALK_CTX_ORIGIN_Z  = 0x3C;  // int originZ
+constexpr uint32_t WALK_CTX_CELLCOUNT = 0x40;  // s16 nCols*nRows; the CSR layer stride is this + 1
+constexpr uint32_t WALK_CTX_VOLCOUNT  = 0x44;  // u32 count of the 0x90-byte volume records
 // grid header fields (at *ctx0):
 constexpr uint32_t WALK_HDR_NCOLS     = 0x08;  // int cols (X axis)
 constexpr uint32_t WALK_HDR_NROWS     = 0x0C;  // int rows (Z axis)
@@ -131,6 +139,25 @@ constexpr uint32_t WALK_POLY_VERT0    = 0x10;  // s16 vertex index 0 (== WALK_PO
 constexpr uint32_t WALK_POLY_VERT1    = 0x12;  // s16 vertex index 1
 constexpr uint32_t WALK_POLY_VERT2    = 0x14;  // s16 vertex index 2
 constexpr uint32_t WALK_POLY_TYPE_MASK = 0x7;
+
+// ---- THE NAVMESH: per-edge ADJACENCY, Session 74 -------------------------------------------------
+// The walkmap is not a soup of triangles indexed by a grid -- it is a connected NAVMESH, and these
+// three s16s are the edges. `< 0` means no neighbour (a map boundary or a wall).
+//
+// Verified in the character mover FUN_002327d0, which carries a CURRENT POLY INDEX across frames:
+//   iVar8 = FUN_002324f0(ctx, poly, &pos);                       // which edge did we cross? -1 = inside
+//   sVar9 = *(short *)(param_1[2] + 0x16 + (poly * 0x10 + iVar8) * 2);   // = polyArr + poly*0x20 + 0x16 + edge*2
+//   if (sVar9 < 0 || FUN_00230a40(ctx, sVar9, class) == 0) { blocked } else { poly = sVar9; }
+// Corroborated at FUN_0022f9b0:86. Edge i is the edge from VERT(i) to VERT((i+1)%3), matching the
+// index FUN_002324f0 returns.
+//
+// THIS IS THE ROUTING GRAPH. It is elevation-correct by construction -- a balcony and the floor
+// beneath it are two disconnected components sharing a cell -- which is exactly what a uniform
+// height-per-cell grid can never express.
+constexpr uint32_t WALK_POLY_NEIGHBOR0 = 0x16;  // s16 neighbour poly across edge v0->v1
+constexpr uint32_t WALK_POLY_NEIGHBOR1 = 0x18;  // s16 neighbour poly across edge v1->v2
+constexpr uint32_t WALK_POLY_NEIGHBOR2 = 0x1A;  // s16 neighbour poly across edge v2->v0
+constexpr uint32_t WALK_POLY_FLAGS2    = 0x1C;  // u32 second flags word (bit 0x400 observed)
 // Plane B must be STRICTLY POSITIVE, not merely non-zero: FUN_00231890 gates on `0.001 < B` and
 // FUN_00231900 repeats it. B <= 0 is a downward-facing poly (a ceiling); the engine never treats
 // one as ground. Our old `|B| > 0.001` accepted them.
@@ -148,15 +175,54 @@ constexpr float    WALK_POLY_EDGE_EPS  = 0.0001f;
 //
 // Measured on two maps: the field takes values 0x08/0x10/0x18/0x20/0x28/0x30 in the low byte, i.e.
 // group 1..6 at bit 3. Muthru Bazaar has groups {1,3} and exactly two usable transitions; East End has
-// {1..6}, one per controller. Callers additionally reject any id no controller on the map claims, so
-// the exact width of the field cannot matter.
+// {1..6}, one per controller.
+//
+// STRUCK (Session 74): the mask was 0x1F -- FOUR bits, not five. "the exact width of the field cannot
+// matter" was wrong, and it is what put the Highhall exit in the wrong place. The engine reads
+// `(flags >> 3) & 0xf` -- verified directly in BOTH FUN_00232020 (the flag-override decoder) and
+// FUN_00230a40 (floor walkability). Bit 7 belongs to the next field, so with a 5-bit mask any seam
+// polygon carrying it computed as `group + 16`, matched no `setmapjumpgroup(K)`, and was SILENTLY
+// DROPPED. Upper Apartments' Highhall seam then read as 2 polys spanning a 0.3 m depth with a 1.9 m
+// rise -- not a surface anyone can stand on, because it was a fragment of the real one.
 constexpr uint32_t WALK_POLY_MJ_SHIFT  = 3;
-constexpr uint32_t WALK_POLY_MJ_MASK   = 0x1F;
+constexpr uint32_t WALK_POLY_MJ_MASK   = 0xF;
 constexpr uint32_t WALK_VERT_STRIDE   = 0x10;
-// primitive index encoding (per-cell list entries): < 0x4000 => floor-poly index;
-// 0x4000-0x4FFF => wall segment (idx-0x4000); >= 0x5000 => empty/sentinel.
+// Primitive index encoding, from FUN_00232160 -- THREE ranges, not two:
+//   [0x0000,0x4000)  floor/plane polygon,  polyArr + idx*0x20
+//   [0x4000,0x5000)  static volume,        volArr  + (idx-0x4000)*0x90   (walls, pillars)
+//   [0x5000,   ...)  DYNAMIC obstacle,     (idx-0x5000) into the manager's runtime tables --
+//                    doors and moving platforms, enable at mgr+0x1D8, transform at mgr+0x1A0.
+// STRUCK: ">= 0x5000 => empty/sentinel". That range is live, and it is why the polygon graph alone
+// will happily route through a CLOSED GATE -- blockers are volumes, and volumes are not in floor
+// adjacency. Hence the per-edge SegmentClear validator in nav_mesh.
 constexpr uint16_t WALK_PRIM_FLOOR_MAX = 0x4000;
+constexpr uint16_t WALK_PRIM_VOLUME_MAX = 0x5000;
 constexpr uint32_t WALK_MAX_CELLS      = 32767; // 16-bit cell-index cap (sanity bound)
+
+// ---- Runtime flag-override table (FUN_00232020) --------------------------------------------------
+// A poly's EFFECTIVE flags are not the raw word: two banks of {u32 mask; u32 value;} rewrite it, and
+// that is how a script opening a gate changes what is walkable without touching geometry.
+//
+//   A   = (flags >> 13) & 0x1F           material bank, entries 0x00-0x1F
+//   C   = ((flags >> 3) & 0xF) + 0x40    group bank,    entries 0x40-0x4F
+//   in  = (flags & ~mask[A]) | (value[A] & mask[A])
+//   eff = (value[C] & mask[C]) | (in & ~mask[C])
+//
+// Floor FINDING deliberately bypasses this (FUN_00231900 uses raw bits, which is why our AllFloorsAt
+// is right to). MOVEMENT does not -- FUN_00230a40 decodes it first. So edges use effective flags and
+// floor lookup uses raw ones; they are different questions.
+constexpr uint32_t WALK_FLAG_TABLE     = 0x1F7A3E0;  // DAT_0209a3e0; entry i = {u32 mask, u32 value} at i*8
+constexpr uint32_t WALK_FLAG_ENTRIES   = 0x50;       // 0x00-0x1F material, 0x40-0x4F group
+constexpr uint32_t WALK_FLAG_GROUP_BASE = 0x40;
+
+// The party's movement class -- the third argument to FUN_00230a40. FUN_00230c10 takes it as arg5,
+// and both actor movers (FUN_0032bcc0, FUN_0032ca70) pass 4 normally, switching to 0xffff ONLY as an
+// unstick mode when already inside a volume or jammed within 0.27 units of a wall.
+//
+// Class 4 matches none of FUN_00230a40's 0/1/2/3/5 branches, so it falls through to "walkable" --
+// meaning for the player, floor walkability is EXACTLY `(effectiveFlags & 7) == 0`, with no per-class
+// opt-out bit. (Classes 1/2/3/5 gate on bits 25/26/27/24 and class 0 on bit 23; none apply to us.)
+constexpr uint16_t WALK_CLASS_PARTY    = 4;
 // Reference RVAs (read-only replication; NOT called):
 constexpr uint32_t WALK_GRID_ENUM      = 0x10FFE0; // FUN_0022ffe0 (full-grid enumerator; bake model)
 constexpr uint32_t WALK_WORLD_TO_CELL  = 0x113050; // FUN_00233050 (world XZ -> cell)
@@ -284,6 +350,73 @@ constexpr uint32_t BAND_STRUCT_HI          = 0x144;
 constexpr uint32_t XFORM_POS_X          = 0x00;   // float X (ground)
 constexpr uint32_t XFORM_POS_Y          = 0x04;   // float Y (elevation / up)
 constexpr uint32_t XFORM_POS_Z          = 0x08;   // float Z (ground)
+
+// ---- The interaction REACH (the distance gate's four extents) -------------------------------------
+// FUN_0025bad0 calls FUN_003da5a0(out, playerXform+0x50, playerXform, targetXform+0x70, targetPosAdj)
+// and rejects the candidate unless the return is < 0. That return is
+//
+//     dist2D - ( ellipse(playerShape -> target) + playerShape[+0x0C]
+//              + ellipse(targetShape -> player) + targetShape[+0x0C] )
+//
+// so the bracketed sum IS the engine's horizontal interaction reach. Y is excluded from dist2D
+// entirely -- interaction range is a CYLINDER (GameArchitecture.md).
+//
+// Each *_SHAPE is a 4-float record {semiAxisA, semiAxisB, yaw, extraRadius}. FUN_003da730 computes the
+// ellipse radius along the direction to the other party:
+//     w = cos(-yaw)*dz - sin(-yaw)*dx ; u = sin(-yaw)*dz + cos(-yaw)*dx
+//     r^2 = (u*u + w*w) / ( u*u/(A*A) + w*w/(B*B) )        (0 when the two points coincide)
+// and FUN_003a1d30 is sqrtf(fabs(x)) applied to that.
+//
+// The PLAYER shape sits at a different node offset than the TARGET shape -- the decompile passes
+// `param_3 + 0x14` (an undefined4*, so +0x50 bytes) for one and `pfVar1 + 0x1c` (a float*, so +0x70
+// bytes) for the other. They are NOT the same field; do not collapse them.
+//
+// Replaces the invented `kApproachRadius = 4.0f` (path_search.cpp), whose own comment records it as
+// made up with the true reach bracketed only as 0.51 < r < 1.70.
+constexpr uint32_t XFORM_PLAYER_SHAPE   = 0x50;   // player: {A,B,yaw,extra} at +0x50,+0x54,+0x58,+0x5C
+constexpr uint32_t XFORM_TARGET_SHAPE   = 0x70;   // target: {A,B,yaw,extra} at +0x70,+0x74,+0x78,+0x7C
+constexpr uint32_t SHAPE_SEMI_A         = 0x00;
+constexpr uint32_t SHAPE_SEMI_B         = 0x04;
+constexpr uint32_t SHAPE_YAW            = 0x08;
+constexpr uint32_t SHAPE_EXTRA_RADIUS   = 0x0C;
+
+// FUN_0025bad0:72-76 -- when this byte is set the engine ADDS this offset to the target's position
+// BEFORE both the distance gate and the vertical band test. InteractTarget::ReadBandFor does not
+// currently add it, so its band is wrong for any target carrying the flag.
+constexpr uint32_t XFORM_POS_OFFSET_FLAG = 0x107;  // byte; bit 0 set => apply the offset below
+constexpr uint32_t XFORM_POS_OFFSET_X    = 0x40;   // pfVar1[0x10]
+constexpr uint32_t XFORM_POS_OFFSET_Y    = 0x44;   // pfVar1[0x11]
+constexpr uint32_t XFORM_POS_OFFSET_Z    = 0x48;   // pfVar1[0x12]
+
+// ---- OBJECT CLASS: there are TWO interactable classes with DIFFERENT field layouts ---------------
+// `sceneObj+0x03 >> 5`. FUN_0025b820 runs two loops over two index ranges of the same container and
+// scores them with two different functions. Reading one class's offsets on the other yields garbage
+// that still looks like plausible floats, so every interaction read must branch on this.
+//
+//   class 3 -- characters / NPCs, scored by FUN_0025bad0
+//   class 1 -- gimmicks / volume objects, scored by FUN_0025be50
+//
+// Verified by reading FUN_002646c0 (the engine's own interaction-point getter) and FUN_0025be50.
+constexpr uint32_t SCENEOBJ_CLASS_SHIFT  = 5;      // byte at SCENEOBJ_TYPE_BYTE >> 5
+constexpr uint8_t  SCENEOBJ_CLASS_CHAR   = 3;
+constexpr uint8_t  SCENEOBJ_CLASS_VOLUME = 1;
+
+// Class-1 band fields. FUN_0025be50 rejects unless
+//     (node.y - node[+0x6C]) - playerPad*playerScale  <=  playerY  <=  node.y + node[+0x68]
+// with the whole test skipped when the byte at node+0x5C is non-zero. Note there is NO band-scale
+// multiplier here, unlike class 3 -- do not reuse XFORM_BAND_SCALE for these.
+constexpr uint32_t XFORM_V_BAND_UP        = 0x68;
+constexpr uint32_t XFORM_V_BAND_DOWN      = 0x6C;
+constexpr uint32_t XFORM_V_SKIP_BAND      = 0x5C;   // byte; non-zero => band test skipped
+constexpr uint32_t XFORM_V_CONE_HALF      = 0x50;   // class-1 facing-cone half angle
+constexpr uint32_t XFORM_V_CONE_TARGET_X  = 0x10;   // the cone aims at THIS, not at the origin
+constexpr uint32_t XFORM_V_CONE_TARGET_Z  = 0x18;
+
+// DAT_0209a2b0 MIXES UNITS BETWEEN THE TWO SCORERS.
+//   class 3 (FUN_0025bad0:139): score = (dist2D - reach) + dist2D  =>  reach = 2*dist2D - score
+//   class 1 (FUN_0025be50):     score = FUN_003a1960(player, node) -- a plain distance measure
+// So the self-checking reach identity is valid ONLY for class 3. There is no flag distinguishing
+// them; the class nibble is the discriminator.
 // Char component embedded 4x4 world matrix (row-major) at comp+0xE0:
 constexpr uint32_t COMP_MATRIX          = 0xE0;   // right row @ +0x00
 constexpr uint32_t COMP_MATRIX_FWD      = 0x100;  // NOT a forward row — internal point vector (see below)

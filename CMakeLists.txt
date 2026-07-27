@@ -67,6 +67,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/entity_list.cpp
     src/navigation/entity_commands.cpp
     src/navigation/entity_scan.cpp
+    src/navigation/entity_postscan.cpp
     src/navigation/exit_scan.cpp
     src/navigation/item_scan.cpp
     src/navigation/entity_classify.cpp
@@ -76,7 +77,8 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/exit_diag.cpp
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
-    src/navigation/nav_grid.cpp
+    src/navigation/nav_mesh.cpp
+    src/navigation/nav_probe.cpp
     src/navigation/nav_reach.cpp
     src/navigation/nav_trace.cpp
     src/navigation/path_search.cpp

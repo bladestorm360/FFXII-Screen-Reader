@@ -28,6 +28,17 @@ using namespace MemRead;
 namespace EntityScan {
 
 using EntityList::Category;
+
+// Instrumentation for two changes shipped on documented INFERENCE rather than observed evidence.
+// Log-only tallies; they exist so the next play log says whether each change does anything, instead
+// of leaving a no-op looking like a fix.
+namespace {
+int s_charByName = 0;   // characters admitted ONLY because they resolve a name (no interaction flags)
+int s_poolKind5  = 0;   // actor-pool entries skipped as KIND_DEAD, a constant documented as misnamed
+int s_newKind1   = 0;   // admitted ONLY by the KIND+model route, kind 1 (person)
+int s_newKind5   = 0;   // admitted ONLY by the KIND+model route, kind 5 (gimmick/story NPC)
+int s_newChar    = 0;   // of those, how many are CHARACTERS -- the class that used to be rejected
+}
 // --- helpers ---------------------------------------------------------------
 // The per-object judgement layer -- CategoryWord / ResolveObjectName / InGimmickBand /
 // ClassifyByNameKey / IsInteractionAvailable -- lives in entity_classify.{h,cpp}. This file finds
@@ -36,6 +47,17 @@ using EntityList::Category;
 bool AlreadyListed(const std::vector<Entity>& out, void* sceneObj) {
     for (const auto& e : out) if (e.sceneObj == sceneObj) return true;
     return false;
+}
+
+// "IS THERE A BODY STANDING THERE?" -- the engine's model-loaded bit, and the only honest test for
+// existence we can read. It is deliberately NOT the +0x1C prompt flags: those are MODE state that
+// FUN_0025ad10 clears on a disabled object, so they answer "may I act on this right now" (which
+// `available` carries) and say nothing about whether the thing exists. Same bit
+// IsInteractionAvailable already reads, used here for the separate question.
+bool HasModel(void* sceneObj) {
+    uint8_t ready = 0;
+    return SafeReadU8(sceneObj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
+           (ready & NavRva::READY_MODEL_BIT) != 0;
 }
 
 
@@ -74,7 +96,12 @@ void ScanCombatants(std::vector<Entity>& out) {
         uint8_t kindByte = 0;
         if (!SafeReadU8(sceneObj, NavRva::SCENEOBJ_KIND_OFF, &kindByte)) continue;
         const uint8_t kind = kindByte & NavRva::KIND_MASK;
-        if (kind == NavRva::KIND_DEAD) continue;                         // dead/removed
+        // COUNTED, NOT FLIPPED. `KIND_DEAD = 5` is a constant phyre_types.h itself labels "NAME IS
+        // WRONG", and debug.md records that on the field kind 5 = NPC -- so this line may be deleting
+        // NPCs out of the actor pool. Left in place because the combat track owns the constant and the
+        // pool is documented to hold no gimmicks (making it a no-op today). If this tally is ever
+        // non-zero on a field map, that premise is false and the skip has to go.
+        if (kind == NavRva::KIND_DEAD) { ++s_poolKind5; continue; }
 
         FVec3 pos;
         if (!PlayerState::ReadSceneObjectPos(sceneObj, pos)) continue;
@@ -107,190 +134,13 @@ void ScanCombatants(std::vector<Entity>& out) {
 // The scene object's own handle (u16 at +0x00 — the value the engine stores as the "nearest
 // interactable" id in FUN_0025bad0). Stable for as long as the map is loaded, so it is a sound
 // tie-break for numbering. 0xFFFF for a fixed exit, which has no scene object.
-uint16_t ObjectHandle(void* sceneObj) {
-    uint16_t h = 0xFFFF;
-    if (sceneObj) SafeReadU16(sceneObj, 0, &h);
-    return h;
-}
-
-// One line per handle-table object, once per map (see the detail latch in BuildLocked). This is the dump
-// that answers "what IS that thing" for an object the game gives no name to: the container slot says
-// whether the engine even considers it interactable, `act`/`talk` are the payloads it would run, and the
-// nearest named neighbour usually identifies it outright -- North End's anonymous `Interactables 2` sits
-// at the same distance and elevation as The Clan Hall, which is what marked it as that doorway's twin.
-void LogObjectDump(const std::vector<Entity>& out) {
-    int shown = 0;
-    for (const auto& e : out) {
-        if (!e.sceneObj) continue;
-        // Nearest OTHER object the game did name, so an anonymous entry is placed against a landmark.
-        // (Not `near` -- windows.h still defines that as a legacy empty macro.)
-        const Entity* landmark = nullptr;
-        float nearD = 1e9f;
-        for (const auto& o : out) {
-            if (&o == &e || !o.gameNamed) continue;
-            const float d = NavCommon::Distance2D(o.pos, e.pos);
-            if (d < nearD) { nearD = d; landmark = &o; }
-        }
-        char lbl[48] = {};
-        for (size_t k = 0; k < e.label.size() && k < 47; ++k)
-            lbl[k] = (e.label[k] < 128) ? static_cast<char>(e.label[k]) : '?';
-        char nb[64] = "-";
-        if (landmark) {
-            char n8[40] = {};
-            for (size_t k = 0; k < landmark->label.size() && k < 39; ++k)
-                n8[k] = (landmark->label[k] < 128) ? static_cast<char>(landmark->label[k]) : '?';
-            snprintf(nb, sizeof(nb), "\"%s\" %.1fm", n8, nearD);
-        }
-        char m[288];
-        snprintf(m, sizeof(m),
-                 "obj [%u:%u] kind=%u flags=%08X nameIdx=%d act=%u talk=%u door=%d named=%d avail=%d cat=%d pos=(%.2f,%.2f,%.2f) \"%s\" near=%s",
-                 e.container, e.slot, e.kind, e.flags, e.nameIdx, e.actionId, e.talkId,
-                 e.doorway ? 1 : 0, e.gameNamed ? 1 : 0, e.available ? 1 : 0,
-                 static_cast<int>(e.category), e.pos.x, e.pos.y, e.pos.z, lbl, nb);
-        Log::Write("NAV-DIAG", m);
-        if (++shown >= 128) { Log::Write("NAV-DIAG", "obj dump: capped at 128"); break; }
-    }
-}
-
-// Mark every object the map script bound to a location jump, then drop the same-named twins that were
-// NOT bound to one.
-//
-// WHAT THE TWINS ACTUALLY ARE (East End, `'` dump 2026-07-23): each shop appears twice, and the two
-// objects are indistinguishable by every field the engine exposes -- same scene category (0x21), same
-// kind (4), same enable bit, same flags (0x2134, ACTION + the on-screen name-draw bit), and BOTH sit
-// inside the container's action span [19,35), the exact range FUN_0025b820 walks to decide what the
-// player is near. They are 6-15 m apart, so no proximity radius separates them either. Both are genuine
-// field signs: `nameIdx = -1` means the name comes from `sceneObj+0xf8`, the string the map script writes
-// with `fieldsignmes` / `fieldsignmesbyid`.
-//
-// The one thing that DOES separate them is `setfieldsignlocationjumpinfo` -- the script native that binds
-// a sign to a map transition. A bound sign has a `+0x70` record; an unbound one does not. Every doorway
-// matched a record inside ~2 m; not one of its twins matched at all.
-//
-// So the twin is a sign that only repeats the doorway's name, and it earns no place in the list. A sign
-// carrying ANY other text (a slogan, a notice) has a different label and survives untouched -- the test
-// is exact string equality on the game's own words, so nothing is invented and nothing is paraphrased.
-// This is collection dedup, the same category as AlreadyListed; it never suppresses a repeat announcement.
-void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
-    const std::vector<MapExits::SignRec>& signs = CachedSigns();
-    if (signs.empty()) return;                 // no field-sign table on this map -> nothing to judge with
-
-    for (auto& e : out) {
-        if (!e.sceneObj) continue;             // fixed exits have no scene node
-        for (const auto& s : signs) {
-            if (NavCommon::Distance2D(s.pos, e.pos) <= kSignObjectDist) { e.doorway = true; break; }
-        }
-    }
-
-    for (size_t i = 0; i < out.size();) {
-        const Entity& cur = out[i];
-        if (cur.doorway || !cur.gameNamed || !cur.sceneObj) { ++i; continue; }
-        int twin = -1;
-        for (size_t j = 0; j < out.size(); ++j) {
-            if (j == i) continue;
-            if (out[j].doorway && out[j].gameNamed && out[j].label == cur.label) {
-                twin = static_cast<int>(j);
-                break;
-            }
-        }
-        if (twin < 0) { ++i; continue; }       // no doorway shares this name -> a sign in its own right
-        if (logDetail) {
-            char n8[64] = {};
-            for (size_t k = 0; k < cur.label.size() && k < 63; ++k)
-                n8[k] = (cur.label[k] < 128) ? static_cast<char>(cur.label[k]) : '?';
-            char m[256];
-            snprintf(m, sizeof(m),
-                     "sign-twin dropped \"%s\": [%u:%u] (%.2f,%.2f,%.2f) repeats doorway [%u:%u] (%.2f,%.2f,%.2f) %.1fm away",
-                     n8, cur.container, cur.slot, cur.pos.x, cur.pos.y, cur.pos.z,
-                     out[twin].container, out[twin].slot,
-                     out[twin].pos.x, out[twin].pos.y, out[twin].pos.z,
-                     NavCommon::Distance2D(cur.pos, out[twin].pos));
-            Log::Write("NAV-DIAG", m);
-        }
-        out.erase(out.begin() + static_cast<long long>(i));
-    }
-}
-
-// Append " 1", " 2", ... to labels that occur more than once, so fifteen identically-named townsfolk
-// become addressable. Labels that occur once are untouched: nothing gains a number it does not need.
-//
-// THE NUMBER IS ASSIGNED ONCE AND KEPT (Session 65). It used to be an ordinal within whatever group the
-// current scan happened to see, which meant it moved constantly: the handle table streams objects in
-// and out (measured NPC=14 <-> 15 across 118 rescans on one map) and every cycle keypress rebuilds the
-// list, so one flickering NPC renumbered everyone after it. The tester's "Rabanastran 7" kept becoming
-// "Rabanastran 5". EntityLabels now hands out the lowest number not yet used under that name on that
-// map and remembers it -- across rescans, streaming, reloads and sessions.
-//
-// This is NOT a fabricated label (see the no-invented-UI-text rule): the words are still the game's
-// own string; only a counting suffix is added, in the same spirit as the step counts already spoken.
-// The player's own name for an entity outranks everything the mod would otherwise say -- the game's
-// string, the duplicate number, the category word. Applied after all of those are settled and BEFORE
-// duplicate numbering, so a labelled entity leaves its old counting group entirely: name the gate guard
-// and the remaining Rabanastrans keep the numbers they already had.
-void ApplyPlayerLabels(std::vector<Entity>& out) {
-    const int mapId = MapNames::CurrentMapId();
-    for (auto& e : out) {
-        if (!e.sceneObj) continue;                      // fixed exits are named from the map script
-        std::wstring custom = EntityLabels::LabelFor(mapId, e.container, e.slot, e.nameIdx);
-        if (custom.empty()) continue;
-        e.label     = custom;
-        e.gameNamed = true;   // it is a real name for list purposes: never a category-word fallback
-    }
-}
-
-void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail) {
-    for (size_t i = 0; i < out.size(); ++i) {
-        if (out[i].label.empty()) continue;
-        std::vector<size_t> same;
-        for (size_t j = i; j < out.size(); ++j)
-            if (out[j].label == out[i].label) same.push_back(j);
-        if (same.size() < 2) continue;   // unique label -> speak it as the game wrote it
-        std::sort(same.begin(), same.end(), [&out](size_t a, size_t b) {
-            if (out[a].nameIdx != out[b].nameIdx) return out[a].nameIdx < out[b].nameIdx;
-            return ObjectHandle(out[a].sceneObj) < ObjectHandle(out[b].sceneObj);
-        });
-        // OPEN BUG (reported in play): every shop appears twice. Numbering makes the twins
-        // addressable but does NOT explain them, so dump each duplicate group ONCE PER MAP with the
-        // fields that tell twins apart from genuinely distinct objects: pointer, slot, kind, scene
-        // category, flags, position. Two entries at the SAME position with different pointers are a
-        // shadow/duplicate registration; two at different positions are two real objects that share
-        // the game's own name (which is normal -- 109 npcdic ids all read "Rabanastran").
-        // Cross-reference the slot against the container's grp0/grp1 spans logged by the ` dump.
-        if (logDetail) {
-            char m[128];
-            char n8[64] = {};
-            for (size_t k = 0; k < out[i].label.size() && k < 63; ++k)
-                n8[k] = (out[i].label[k] < 128) ? static_cast<char>(out[i].label[k]) : '?';
-            snprintf(m, sizeof(m), "dup-label \"%s\" x%zu:", n8, same.size());
-            Log::Write("NAV-DIAG", m);
-            for (size_t idx : same) {
-                const Entity& e = out[idx];
-                char l[208];
-                snprintf(l, sizeof(l),
-                         "    obj=%p handle=%u kind=%u nameIdx=%d flags=%08X avail=%d pos=(%.2f,%.2f,%.2f)",
-                         e.sceneObj, ObjectHandle(e.sceneObj), e.kind, e.nameIdx, e.flags,
-                         e.available ? 1 : 0, e.pos.x, e.pos.y, e.pos.z);
-                Log::Write("NAV-DIAG", l);
-            }
-        }
-        const int mapId = MapNames::CurrentMapId();
-        for (size_t idx : same) {
-            Entity& e = out[idx];
-            const int n = EntityLabels::NumberFor(mapId, e.container, e.slot, e.nameIdx, e.label);
-            e.label += L" " + std::to_wstring(n);
-        }
-    }
-}
-
-// Rebuild the set from the scene-object HANDLE TABLE — the game's own registry of live
-// interactive field objects (DAT_02098e10, 5 containers), populated at map load and
-// walked every frame by FUN_0025b820 to decide what the player is near. We list every
-// live talk/action object with a readable position: NPCs (FLAG_TALK) and action gimmicks
-// like gates/doors/switches/treasure/crystals (FLAG_ACTION) — the latter are present from
-// load, not spawned on approach. Positions come from the scene object's transform
-// (sceneObj+0xB8), the same chain the leader uses. Caller holds g_mutex.
 int BuildLocked(std::vector<Entity>& out) {
     out.clear();
+    s_charByName = 0;
+    s_poolKind5  = 0;
+    s_newKind1   = 0;
+    s_newKind5   = 0;
+    s_newChar    = 0;
     if (!PlayerState::IsFieldActive()) return 0;
 
     void* base = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
@@ -325,26 +175,84 @@ int BuildLocked(std::vector<Entity>& out) {
             uint8_t kindByte = 0;
             SafeReadU8(obj, NavRva::SCENEOBJ_KIND_OFF, &kindByte);
             const uint8_t kind = kindByte & NavRva::KIND_MASK;
-            // Include: interactive objects (talk/action), EVERY action gimmick whether or not it is
-            // currently offering a prompt, any named gimmick, AND — only for NON-character objects —
-            // anything with a resolvable name (gates/doors/field-sign path-markers, cat 1-4).
-            // Character objects (NPCs/party/enemies, cat 5-7) are deliberately NOT surfaced by the name
-            // widening: unflagged ones are left to the combatant scan (ally/Enemy/dead) or the talk-flag
-            // path, so defeated enemies and non-talk NPCs don't fall into the "Interactables" bucket.
+            // Include an object if ANY of these holds: it is offering a prompt (`interactive`); it is
+            // a non-character action gimmick (`gimmick`); it has an interaction KIND and a loaded
+            // model (`present`); it sits in the treasure/crystal npcdic band; or it resolves a name.
+            //
+            // STRUCK (Session 79) — "Character objects (cat 5-7) are deliberately NOT surfaced by the
+            // widening ... unflagged ones are left to the combatant scan or the talk-flag path". That
+            // was this comment's own claim, and it was wrong: the combatant scan reads the BtlWork
+            // pool, which holds no field NPCs, and the talk-flag path needs a flag the engine clears
+            // on any object the script has not armed. A character with neither was reachable by NO
+            // path at all and vanished on every map. See `present` below for the object that proved
+            // it. The fear behind the old rule -- defeated enemies falling into "Interactables" -- is
+            // handled where it belongs, in ClassifyByNameKey, whose `isCharacter` test dominates and
+            // sends every character to the NPC bucket.
             //
             // `kind == 5` is an inclusion reason in its OWN right because +0x1C is mode state: the
             // engine clears both prompt bits on a disabled object (FUN_0025ad10), so a story-gated
             // town gate had no flags, and unless it happened to carry a name it vanished from the
             // list entirely — exactly when the player most needs to find it (to find whoever gates it).
             const bool interactive = (flags & (NavRva::FLAG_TALK | NavRva::FLAG_ACTION)) != 0;
-            // NON-CHARACTER kind-5 only. Characters are excluded for the same reason they dominate in
-            // ClassifyByNameKey: an earlier version widened on kind alone and swept NPCs into
-            // Interactables. Characters already reach the list via the flags or the combatant scan.
+            // NON-CHARACTER kind-5, with no model requirement. Kept EXACTLY as it was so this pass
+            // stays purely additive: a trigger-volume gimmick that carries no model must not start
+            // falling out of the list as a side effect of the `present` route below.
             const bool gimmick     = (kind == NavRva::KIND_ACTION_GIMMICK) && !isCharacter;
+            // INCLUDE BY KIND — THE GLOBAL FIX (Session 79).
+            //
+            // The clause that used to decide this was `gimmick`'s `&& !isCharacter`, and it is not map
+            // data: it rejected an entire class of NPC on EVERY map in the game. Nomad Village is only
+            // where a tester needed one of them. The object that exposed it:
+            //
+            //   [0:55] cat=66 kind=5 en=1 r14=70 flags=00030000 nameIdx=-1 "" pos=(46.00,0.00,57.70)
+            //
+            // — a woman standing 1.28 m behind the Nomad Elder's tent, exactly where the elder's own
+            // dialogue sends the player, confirmed present by sighted assistance. cat 0x66 masks to 6,
+            // so she is class 3 (a CHARACTER); en=1 and r14=0x70 mean enabled with a model loaded. She
+            // failed all four inclusion routes at once, and the decisive one was being a character.
+            //
+            // debug.md already stated the rule -- "a disabled object has zero flags ... Include by
+            // KIND; use the flags only for 'what can I do with it right now'". That lesson was applied
+            // to gimmicks in Session 54 and to NAMED characters in Session 77; it was never applied to
+            // people without names, which is her and everyone like her.
+            //
+            // BOTH interaction kinds, deliberately. She is kind 5, but kind 1 is the same defect
+            // wearing the other kind -- a story NPC whose talk hook the script has not yet armed is
+            // exactly as invisible. Fixing only kind 5 would repair this map and leave the kind-1 case
+            // to be rediscovered on some later one.
+            const bool present     = (kind == NavRva::KIND_TALK_TARGET ||
+                                      kind == NavRva::KIND_ACTION_GIMMICK) && HasModel(obj);
+            // A CHARACTER'S NAME IS NOW AN INCLUSION REASON TOO (Session 77).
+            //
+            // Until now `name` was resolved only for non-characters, so the ONLY way a person could
+            // enter the list was non-zero `+0x1C` flags -- and this project's own record says that
+            // word is MODE STATE that reads zero on a disabled object (debug.md: "a disabled object
+            // has zero flags ... therefore dropped story-gated gates entirely ... Include by KIND;
+            // use the flags only for 'what can I do with it right now'"). That lesson was applied to
+            // gimmicks in Session 54 and never to people, so a story NPC whose talk hook the script
+            // has not yet armed was invisible by construction.
+            //
+            // A named character is a real person standing in the world whether or not you may talk to
+            // them yet; `available` already carries the "can I act on it" half.
             std::wstring name;
-            if (nameIdx != 0 && !isCharacter) name = ResolveObjectName(obj);
+            if (nameIdx != 0) name = ResolveObjectName(obj);
             const bool named = !name.empty();
-            if (!interactive && !gimmick && !InGimmickBand(nameIdx) && !named) continue;
+            // Counted, not assumed: this widening was shipped on a documented inference, not on
+            // evidence that it fires. The tally says whether it actually admits anything, and how
+            // much, before anyone treats it as the fix.
+            if (isCharacter && named && !interactive) ++s_charByName;
+            // BLAST RADIUS IS MEASURED, NOT ASSUMED. This widening could not be sized offline: the
+            // object dump is Session 77 code and every archived log predates it, so Nomad Village's is
+            // the only dump that exists. Rather than guess what a crowded city map costs, count what
+            // the KIND route admits that nothing else would have -- split by kind, because kind 1 is
+            // the half that could sweep in townspeople and it is the half that comes out if it does.
+            const bool droppedBefore =
+                !interactive && !gimmick && !InGimmickBand(nameIdx) && !named;
+            if (droppedBefore && present) {
+                if (kind == NavRva::KIND_TALK_TARGET) ++s_newKind1; else ++s_newKind5;
+                if (isCharacter) ++s_newChar;
+            }
+            if (droppedBefore && !present) continue;
 
             FVec3 pos;
             if (!PlayerState::ReadSceneObjectPos(obj, pos)) continue;
@@ -400,6 +308,10 @@ int BuildLocked(std::vector<Entity>& out) {
     const bool detail = out.size() > s_detailPeak;
     if (detail) s_detailPeak = out.size();
 
+    // Second registrations of somebody already listed, removed BEFORE doorway tagging so a shadow can
+    // never become a tagging anchor. Runs unconditionally: unlike the sign-twin filter it needs no
+    // field-sign table, and the include-by-KIND widening above is what makes shadows reachable at all.
+    DropShadowRegistrations(out);
     // Doorway tagging + sign-twin removal, while the list is still just handle-table objects.
     TagDoorwaysAndDropSignTwins(out, detail);
     if (detail) LogObjectDump(out);
@@ -447,6 +359,15 @@ int BuildLocked(std::vector<Entity>& out) {
              cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
              cc[(int)Category::Items], gated);
     Log::Write("NAV", msg);
+    if (s_charByName > 0 || s_poolKind5 > 0 || s_newKind1 > 0 || s_newKind5 > 0) {
+        char im[288];
+        snprintf(im, sizeof(im),
+                 "inclusion: by-KIND+model kind1=%d kind5=%d (of which %d are CHARACTERS) | "
+                 "%d character(s) admitted by NAME ONLY (no interaction flags) | "
+                 "%d actor-pool entr(ies) skipped as KIND_DEAD(5), which debug.md records as NPC",
+                 s_newKind1, s_newKind5, s_newChar, s_charByName, s_poolKind5);
+        Log::Write("NAV", im);
+    }
     return static_cast<int>(out.size());
 }
 

@@ -1700,28 +1700,37 @@ goal-set: reached alternate approach cell (355,142)     ... nearDist=2.1m
 ```
 A 0.9 m cell existed; the search stopped at a 2.1 m one.
 
-**Two defects, one fixed, one OPEN.**
+**Two defects, one fixed, one OPEN.** — *both entries below are superseded; see "Pathfinder 3D
+rebuild — Strikes + Solved (Session 74)" at the end of this file.*
 
-1. **FIXED (provisional).** A plain min-over-goals heuristic makes every goal look equally good, so
-   A* took whichever it popped first. The remaining gap is now a **terminal cost**:
-   `h(n) = min_g(euclid(n,g) + kGoalGapWeight * g.d)`, `kGoalGapWeight = 4.0`. Still admissible
-   (euclid <= true path cost), and a larger h is more informed so expansions go down. **It changes
-   only the PREFERENCE among goals, never the goal SET** — which is what guarantees it cannot make
-   Montblanc unreachable.
+1. ~~**FIXED (provisional).**~~ **STRUCK (Session 74) — it does not fix it.** The claim was that a
+   terminal cost `h(n) = min_g(euclid(n,g) + kGoalGapWeight * g.d)` with `kGoalGapWeight = 4.0` makes
+   a nearer-to-target goal win. Measured afterwards in the tester's log: `primary … d=0.7m` existed
+   and the search still finished on a **4.0 m** goal (`gap to target 4.0m`, `nearDist=3.4m`,
+   `expands=5`). **Why it cannot work:** the terminal cost is in the HEURISTIC, but termination is
+   `isGoal()`, which fires on **any** goal the moment it is popped — a far goal popped early ends the
+   search whatever the heuristic charged it. Raising the weight cannot help. Do not add a second
+   weight either; cap the goal SET instead (see 2).
 
-2. **OPEN — the real fix.** `kApproachRadius = 4.0f` is *made up*. It should be the engine's actual
-   horizontal interaction reach, which would make every goal cell interactable **by construction**
-   and render the weight above unnecessary. From `FUN_003da5a0`:
+2. ~~**OPEN — the real fix.**~~ **SOLVED (Session 74).** `kApproachRadius = 4.0f` is indeed made up,
+   and the note below that `fVar5`/`fVar6` are "direction-dependent shape queries, not yet
+   replicated" is **out of date — they are replicable**. `FUN_003da730` is an ellipse radius along a
+   direction and `FUN_003a1d30` is `sqrtf(fabs(x))`, so all four extents are plain memory reads; the
+   shapes are 4-float records `{A, B, yaw, extra}` at `playerNode+0x50` / `targetNode+0x70`. Better,
+   the result **self-checks**: `DAT_0209a2b0` (already read as `Chosen::score`) holds
+   `2*dist2D - reach`, so `reach = 2*dist2D - score` is the engine's own answer. Full derivation,
+   the confidence bar, and the "do not narrow the goal set until the log shows them agreeing" caveat
+   are in the Session 74 block at the end of this file. The measured bracket below still stands as
+   the acceptance test.
+
+   The original text, kept because the bracket is still the acceptance test:
    ```
    gap = sqrt(dx^2 + dz^2) - ( fVar6 + *(float*)(param_4+0x0C) + fVar5 + *(float*)(param_2+0x0C) )
    ```
    with `param_2 = playerNode+0x50` and `param_4 = targetNode+0x70`, so two of the four extents are
-   plain constants at **`playerNode+0x5C`** and **`targetNode+0x7C`**; `fVar5`/`fVar6` come from
-   `FUN_003da730` + `FUN_003a1d30` (direction-dependent shape queries, not yet replicated).
+   plain constants at **`playerNode+0x5C`** and **`targetNode+0x7C`**.
    **Bracket already measured:** `dist2D=0.51` PASSED the distance gate; `dist2D=1.70` had band and
    cone PASS yet the engine chose nothing, so the true reach lies **between 0.51 and 1.70**.
-   Next step: log those two constants per object in the `gates` line, confirm they sum into that
-   bracket, then use the sum as `kApproachRadius`.
 
 **Do NOT tighten `kApproachRadius` blind.** If the goal set comes up empty the code falls back to
 `SnapToWalkable` on the target's own cell — i.e. straight back to the unreachable dais, which is the
@@ -1730,3 +1739,779 @@ bug this whole change exists to fix. Widen-then-prefer, never narrow-then-hope.
 **Also still open:** enemies route with `band=[1.00,-1.00] (none -> target's own cell)` because the
 combatant-pool entries reach `ReadBandFor` with no usable scene object. Harmless today (enemies are
 on your level) but it means the approach-cell logic is inactive for them.
+
+---
+
+## Pathfinder 3D rebuild — Strikes + Solved (Session 74, 2026-07-27)
+
+**KEYWORDS: kGoalGapWeight struck isGoal terminal cost heuristic interaction reach solved
+FUN_003da5a0 FUN_003da730 ellipse radius 2*dist2D-score DAT_0209a2b0 self-check kApproachRadius
+Upper Apartments Highhall stacked exits single-height grid span graph GATE A GATE B ReadBandFor
+0x107 position offset bug NAV-PROBE**
+
+### STRUCK — "`kGoalGapWeight = 4.0` fixes the approach cell landing out of reach" (Session 73)
+
+Session 73's addendum 3 recorded this as **FIXED (provisional)**. It is not fixed. From the tester's
+own log, `FFXII-Screen-Reader-Latest.log` (Nalbina, routing to the Save Crystal):
+
+```
+request: interaction band=[-2.49,2.50]
+goal-set: 8 cell(s) in band [-2.49,2.50], primary (40,28)->(40,28) d=0.7m
+goal-set: reached alternate approach cell (39,26), gap to target 4.0m
+stats plan=Route pass=strict tgtCell=(39,26) expands=5 touched=21 nearest=(39,26) nearDist=3.4m
+```
+
+A 0.7 m goal existed; the search finished on a 4.0 m one, with `expands=5`.
+
+**Why the weight cannot work where it was put.** `h(n) = min_g(euclid(n,g) + w*g.d)` puts the terminal
+cost in the **heuristic**, but termination is `isGoal()` (`path_search.cpp:295-299`), which returns
+true for **any** member of the goal set the moment it is popped. A far goal reached early ends the
+search regardless of the terminal cost the heuristic assigned it. Raising `w` cannot fix this; it only
+changes the order goals are *approached* in, never the fact that the first one popped wins.
+
+**Do not "fix" this by raising `kGoalGapWeight`, and do not add a second weight.** The correct fix is
+the one `path_search.cpp:96-99` already names: cap the goal set at the engine's real interaction
+reach, so every goal is interactable **by construction** and first-popped is the right answer (it is
+then also the nearest by walking, which is what removes the 3-4 step overshoot the tester reports).
+
+### SOLVED — the engine's interaction reach, and it checks its own arithmetic
+
+Supersedes the OPEN item "`kApproachRadius = 4.0f` is made up" (this file, Session 73 block). The two
+extents that were written off as "direction-dependent shape queries we do not replicate" are
+replicable, and the whole reach is a memory-only read.
+
+`FUN_003da730` is an **ellipse radius along a direction**; `FUN_003a1d30` is `sqrtf(fabs(x))`:
+
+```
+w = cos(-yaw)*dz - sin(-yaw)*dx ;  u = sin(-yaw)*dz + cos(-yaw)*dx
+r^2 = (u*u + w*w) / ( u*u/(A*A) + w*w/(B*B) )        // 0 when the two points coincide
+```
+
+`FUN_0025bad0:83` calls
+`FUN_003da5a0(out, playerXform+0x50, playerXform, targetXform+0x70, targetPosAdj)` and rejects the
+candidate unless the return is `< 0`. That return is `dist2D - reach`, with
+
+```
+reach = ellipse(playerShape -> target) + playerXform[+0x5C]
+      + ellipse(targetShape -> player) + targetXform[+0x7C]
+```
+
+Each shape is a 4-float record `{semiAxisA, semiAxisB, yaw, extraRadius}` — player at `xform+0x50`,
+target at `xform+0x70`. **These are different node offsets; do not collapse them.**
+
+**THE SELF-CHECK.** `FUN_0025bad0:139` stores `DAT_0209a2b0 = (dist2D - reach) + dist2D`, where the
+second term is `param_1[3]` — the distance `FUN_003da5a0:36` writes into its out-vector. The mod
+already reads that global as `InteractTarget::Chosen::score`. Therefore, for whichever candidate the
+engine chose:
+
+```
+reach = 2*dist2D - score          <-- the engine's OWN answer, no replication involved
+```
+
+`InteractTarget::ReadReachFor` returns the replica and this measured value together, and `NAV-PROBE`
+prints them side by side marked **CONFIRMED** or **MISMATCH**. Offline confidence in the replica is
+**0.97**; the runtime identity is what lifts it over the project's 0.98 bar. **Until a log shows them
+agreeing, do NOT narrow the routing goal set with the replica** — the widen-then-prefer rule below
+still stands, and an empty goal set still falls back to the target's own cell.
+
+A confirmed value must also land inside the previously measured bracket: `dist2D = 0.51` PASSED the
+distance gate and `1.70` did not get chosen, so `0.51 < reach < 1.70`.
+
+### BUG in shipped code — `ReadBandFor` ignores the target's position offset
+
+`FUN_0025bad0:72-76`: when the byte at `targetXform+0x107` has bit 0 set, the engine adds
+`targetXform[0x10..0x12]` (byte offsets `+0x40/+0x44/+0x48`) to the target's position **before both**
+the distance gate and the vertical band test. `InteractTarget::ReadBandFor` reads `XFORM_POS_Y`
+directly and never adds it, so its band centre — and therefore the goal band `PathSearch` routes to —
+is wrong for any target carrying the flag. `InteractTarget::ReadGatePos` now applies it and
+`NAV-PROBE` reports the flag; `ReadBandFor` itself is corrected in Phase 3.
+
+### ROOT CAUSE — Upper Apartments routes to the wrong exit (tester report, Session 74)
+
+Not a regression in the Session 73 elevation work. It is the limit of a single-height grid.
+`FFXII-Screen-Reader-Latest.log:7781-7782`, map 280:
+
+```
+__MJ_CTRL000 group=1 -> "Nalbina Fortress: Lower Apartments" (279) at (53.5,-1.9,27.0) | box x[52.1..55.0] z[24.3..29.8]
+__MJ_CTRL001 group=2 -> "Nalbina Fortress: The Highhall"    (282) at (50.4,+7.8,29.6) | box x[49.0..51.7] z[29.5..29.8]
+```
+
+**~4 m apart horizontally, ~9.7 m apart vertically.** Three independent 2D blindnesses collapse them:
+
+1. `NavGrid::WalkableAt` stores **one height per 1.5 m cell**, a single `GroundAt` sample
+   (`nav_grid.cpp:39-51`).
+2. `SnapToWalkable` ring-searches up to `kSnapMax = 6` fine cells (~9 m) for a walkable cell
+   (`path_search.cpp:129-152`), so the Highhall goal can snap onto the Lower Apartments floor.
+3. The "At the exit" short-circuit is XZ-only with Y **deliberately** ignored
+   (`path_planner.cpp:304-305`), so it fires for a seam the player is standing 7.8 m beneath.
+
+Also note `exit_scan.cpp:148-149` overwrites the exit's Y with `GroundAt(x,z)`, which cannot tell the
+Highhall seam from the floor under it. Phase 3 takes the Y from the seam's own vertices instead.
+
+**Revision notice.** Adding a Y tolerance to the exit-arrival test deliberately revises the earlier
+rule in this file, *"never test 'am I at this exit' in 3D — X/Z only"*. That rule was correct when an
+exit's Y came from the map-control blob and was not necessarily a floor. Since Session 64 an exit's
+position is a **walkmap floor polygon**, so its Y is a floor. The rule is superseded for walkmap-
+derived exits only; it still stands for anything blob-derived.
+
+### The two gates Phase 1 must not be started without — BOTH RETIRED (Session 75)
+
+> **RETIRED, and both were the wrong question.** The engine does not resolve levels through stacked
+> lists in a column at all — it resolves them through **per-edge polygon adjacency** (`poly+0x16/
+> +0x18/+0x1A`), so "does any column stack" never had a bearing on the rebuild. And Gate B's
+> disagreements were an artefact of the oracle, not the reader: `MAP_GROUND_AT` is not a floor query
+> (`FUN_0026e3c0` takes the topmost floor and THEN climbs up to 30 units and casts back down with
+> mask 0xFFFF, returning whatever it hits). `AllFloorsAt` is an exact replica of `FUN_00231900` and
+> was right the whole time. See the Session 75 block at the end of this file.
+>
+> Kept below because the *reasoning* is still worth reading: a null result that would have been read
+> as a fact about the game was really a fact about our sampling.
+
+
+- **GATE A — does `MapQuery::AllFloorsAt` ever report >= 2 layers?** Across every log to date it never
+  has (`layers>=2` x0, zero `STACKED` lines) — which is precisely why Session 73 struck the layered
+  grid, and that strike was correct **on the evidence available**. The evidence was incomplete: the
+  diagnostic only sampled the player's column and each listed object's column, and Upper Apartments'
+  two seams sit in **different** columns 3.1 m apart, so the stacking in that room was never sampled.
+  `NAV-PROBE`'s SPAN-PROBE sweeps an 11x11 block instead. **If every column still reports one span,
+  the span graph is isomorphic to today's flat grid — stop and re-derive rather than build it.**
+- **GATE B — is span height trustworthy?** The `grid xcheck` diagnostic reports **100% walkability**
+  agreement between the memory-only walkmap read and the `GroundAt` oracle (416/416, 404/404,
+  520/520) but height agreement as low as **41/45** — 24% of walkable Nalbina cells differ by more
+  than 0.5 m while reporting a single layer. Walkability is settled at >= 0.98; **height is not**, and
+  span Y is what the entire rebuild keys on. SPAN-PROBE reports which span index `GroundAt` lands on
+  per column; the tie-break tally counts **only multi-span columns**, because on a flat map every
+  single-span column would score as "top" and manufacture an answer.
+
+### Still standing, carried into the rebuild
+
+- **Widen-then-prefer, never narrow-then-hope.** STILL LIVE, in a new form: the mesh goal test samples
+  the poly's centroid AND all three corners against the band and the reach, because a navmesh triangle
+  can be metres across and a centroid-only test would reject a poly whose near corner is comfortably
+  inside reach. (`SnapToWalkable` and the 4 m in-band tier are both gone with the grid — Session 75.)
+- **No slope gate, and now NO STEP GATE EITHER.** Session 68's finding stands and goes further: the
+  engine imposes no walkable-slope limit AND no step limit between adjacent polys — walkability is a
+  flag test (`FUN_00230a40`). `kStepDiscont = 0.35` was ours, and it made any staircase with a taller
+  riser unroutable. Deleted with the grid (Session 75). The tester
+  asked for steep slopes to be rejected; the decision taken was to **carry `cosSlope` on every span
+  and log it on every edge, with the gate inactive**, so the threshold can be set from evidence
+  instead of reintroducing a struck behaviour.
+- **Never route to an arrival/spawn point.** Exits stay anchored to the walkmap map-jump surface.
+- **Do not propose a sixth blob-derived transition model.** Seam geometry is `(polyFlags >> 3) & 0x1F`.
+
+---
+
+## The walkmap is a NAVMESH — Solved (Session 75, 2026-07-27)
+
+**KEYWORDS: navmesh poly adjacency 0x16 0x18 0x1A FUN_002327d0 nav_grid deleted kMaxStep kStepDiscont
+SnapToWalkable near-goal bridge removed WALK_POLY_MJ_MASK 0xF struck movement class 4 FUN_00230a40
+FUN_00232020 override table GroundAt not a floor query climb-and-drop volumes dynamic obstacles
+closed gate EdgePassable kAtExitDy stairs Waterways**
+
+### THE RULE
+
+> **Every walkmap floor triangle carries the index of its neighbour across each of its three edges at
+> `+0x16`, `+0x18`, `+0x1A` (`< 0` = none). That is the routing graph. It is the same graph the
+> character mover walks, and it is elevation-correct by construction — a balcony and the floor beneath
+> it are two disconnected components sharing a grid cell.**
+
+Verified by reading `FUN_002327d0` directly: it keeps a CURRENT POLY INDEX across frames and, when
+`FUN_002324f0` reports the position left the triangle across edge *e*, reads
+`polyArr + poly*0x20 + 0x16 + e*2` and steps onto that neighbour, gated by `FUN_00230a40`.
+Corroborated at `FUN_0022f9b0:86`. Confidence 0.99.
+
+**The mesh was never hidden — the mod has read it for height since Session 33. What was unknown is
+that the triangles are LINKED. We were using a navmesh as a heightfield.**
+
+### STRUCK — the entire grid pathfinder
+
+`nav_grid.h/.cpp` is deleted, and with it:
+
+| removed | why it was wrong |
+|---|---|
+| one height per 1.5 m cell | cannot hold a balcony over a walkway; stacked destinations collapsed |
+| `kMaxStep = 1.5`, `kStepDiscont = 0.35` | **the engine has NO step limit between adjacent polys.** Any staircase with a taller riser was unroutable — the likely whole story of "the Waterways fail completely" |
+| `SnapToWalkable` (9 m ring) | how a goal 7.8 m overhead got answered with the floor beneath it |
+| bridge + near-goal recovery passes | both existed to paper over invented connectivity; near-goal spoke a FAILED search as a confident route |
+| per-cell `GroundAt` sampling | see below — it is not a floor query |
+
+**Do not reintroduce a step or slope gate.** The engine's only geometric blockers are walls/volumes
+and the flag test. Both gates were ours, both refused edges the game walks.
+
+### STRUCK — `MAP_GROUND_AT` is "the floor height at (x,z)"
+
+`FUN_003208c0` → `FUN_0026e3c0` is TWO-STAGE. Stage 1 takes the topmost type-0 floor plane. **Stage 2
+then climbs from it in 1-unit steps (up to 30) to the first point outside any collision volume and
+casts a segment back down with mask `0xFFFF` / flags `0` — and if that hits anything, the returned Y
+is the HIT's Y.** Confidence 0.97.
+
+So it can return a wall, a ceiling or a rooftop. This is the source of the Session 74 "Gate B"
+height disagreements (1.2–1.5 m systematic, one 21.5 m outlier) that were wrongly read as evidence
+against our own reader. **`AllFloorsAt` is an exact replica of `FUN_00231900` and was correct.**
+
+Corollary: **`GroundAt` is fine for a rough "is there floor here", and must not be used as the height
+a route or a destination is anchored to.**
+
+### STRUCK — `WALK_POLY_MJ_MASK = 0x1F`
+
+The map-jump group field is **four** bits. Verified in two functions:
+`FUN_00232020` and `FUN_00230a40` both compute `(flags >> 3) & 0xf`.
+
+A seam poly with bit 7 set computed as `group + 16`, matched no `setmapjumpgroup(K)`, and was
+**silently dropped**. Upper Apartments' Highhall seam therefore read as 2 polys spanning a 0.3 m depth
+with a 1.9 m rise — geometrically impossible for a walkable threshold, because it was a fragment.
+**This is the "exit in completely the wrong direction" half of the bug**, independent of the routing
+half. Session 64's "the exact width of the field cannot matter" is struck with it.
+
+Also fixed: `ReadMapJumpSurfaces` recorded only `WALK_POLY_VERT0` — one corner of three per triangle.
+
+### RESOLVED — walkability, exactly
+
+`FUN_00230c10(ctx, from, to, out, class, radius)`; both actor movers pass class **4** normally
+(`0xffff` only as an unstick mode). Class 4 matches none of `FUN_00230a40`'s 0/1/2/3/5 branches and
+falls through to walkable, so:
+
+> **For the party, floor walkability is exactly `(effectiveFlags & 7) == 0`.**
+
+`effectiveFlags` = `FUN_00232020`: two banks of `{u32 mask, u32 value}` at `DAT_0209a3e0`
+(RVA `0x1F7A3E0`, 0x50 entries), indexed `(flags>>13)&0x1F` and `((flags>>3)&0xF)+0x40`.
+**Floor FINDING uses RAW flags** (`FUN_00231900` bypasses the table deliberately); **MOVEMENT uses
+effective flags.** They are different questions — do not collapse them.
+
+### The one raycast that survives — and why you cannot delete it
+
+Floor adjacency knows nothing about blockers. The prim index space has THREE ranges:
+
+| range | meaning |
+|---|---|
+| `[0x0000,0x4000)` | floor polygon — the graph |
+| `[0x4000,0x5000)` | static volume — walls, pillars |
+| `[0x5000, …)` | **dynamic obstacle** — doors, moving platforms |
+
+So **the floor under a closed gate is still adjacent to the floor before it**, and a pure poly-graph
+A* routes straight through it. `NavMesh::EdgePassable` casts one short walk-class segment straddling
+the shared edge (not centroid-to-centroid: a long diagonal between two large triangles passes close
+to unrelated geometry, which is exactly how the old grid's clearance rays islanded doorway cells).
+
+The struck `">= 0x5000 => empty/sentinel"` comment in `nav_rva.h` was wrong; that range is live.
+
+### Also this session
+
+- **`kAtExitDy = 3.0`** — the "At the exit" test now gates on height too. This deliberately revises
+  *"never test 'am I at this exit' in 3D"*: that was correct when an exit's Y came from the map-control
+  blob, and stopped being correct in Session 64 when an exit became a walkmap FLOOR POLYGON. Without
+  it, Upper Apartments announced "At the exit" for a seam 7.8 m overhead.
+- **Exits aim at the seam's nearest vertex**, with the seam's own vertex Y — not the centroid with a
+  `GroundAt` height.
+- `NavReach` floods the mesh (memory reads, no raycasts) instead of the grid.
+
+### OPEN — the only thing unmeasured
+
+Whether the mesh is CONNECTED from the player to a given seam on a given map. Everything says it
+should be, but that is an assertion about map data, and asserting things about exit data is how six
+sessions of the exit saga went wrong. `NAV-PROBE` answers it: the `FLOOD:` line and one
+`seam group=N ... inPlayerComponent=` line per exit, with the poly ids when the answer is no.
+
+---
+
+## Destinations disagreed: the search never ran — Solved (Session 76, 2026-07-27)
+
+**KEYWORDS: expands=1 touched=0 IsGoal too generous corner sampling centroid arrival mismatch
+destinations disagree crow-flies turn-by-turn Waterways save crystal two interactable classes
+class 1 class 3 FUN_0025be50 score units reach identity struck ObjectClass ClosestPointOnPoly**
+
+### Symptom
+
+`/` crow-flies "Save Crystal. North, 6 steps" (correct) vs `\` turn-by-turn "Save Crystal. South 1.
+1 steps". Direction wrong, distance wrong, and the answer changed as the player shuffled in place.
+
+### Cause — A* terminated on its first pop
+
+```
+mesh: start=41 goal=33 end=41 polys=1 expands=1 touched=0 rays=0
+pass=mesh-reach startPoly=41 goalPoly=33 endPoly=41
+```
+
+`start == end`, `expands=1`, on **20 of 30 routes**. Two Session-75 errors compounding:
+
+1. `IsGoal` accepted any poly with ANY of {centroid, 3 corners} in the interaction band and within
+   `reachRadius`. Navmesh triangles are whole corridors, so the player's own triangle nearly always
+   has a corner within ~1.6 m of a target a few steps away — the goal test passed before the search
+   moved.
+2. On a non-goal finish the polyline ended at `Centroid(reached)` — **not** the corner that passed
+   the test. So the destination was the centroid of the triangle the player was standing in.
+
+**LESSON: `expands=1 touched=0` in a route dump means the search never ran.** It is the single
+cheapest tell for this whole class of bug and it was sitting in the log unremarked. Watch for it.
+
+**LESSON: if a predicate tests point A, the code must ARRIVE at point A.** Testing a triangle's
+corners and then walking to its centroid is not a rounding error, it is a different destination.
+
+### Fix
+
+`IsGoal` is `p == goal`. Reconstruction **always appends `to`**, so both direction keys name the same
+`FVec3` from the same source and cannot disagree. Overshoot is impossible — a path ending at the
+target cannot end past it, which was the original Session 74 complaint.
+
+The "cannot stand on the target" case (Montblanc's dais) is recorded DURING the main search — the
+first qualifying poly A* pops — and used only when the goal poly is never reached, arriving at
+`NavMesh::ClosestPointOnPoly`, the exact point tested. No second search, no change to the common case.
+
+### STRUCK — `reach = 2*dist2D - score` is universal
+
+It is **class-3 only**. `DAT_0209a2b0` mixes units between the two scorers; `FUN_0025be50` stores
+`FUN_003a1960(player, node)`, a plain distance. Applied to a class-1 winner the identity produces a
+confident, meaningless number — and the probe printed it next to the word CONFIRMED, which is exactly
+how a wrong value gets promoted to fact. `haveMeasured` is now gated on class 3.
+
+**LESSON: a self-checking identity is only self-checking within the code path that established it.**
+
+### STRUCK — one interaction field layout
+
+There are **two** interactable classes (`sceneObj+0x03 >> 5`), and they share almost no offsets —
+band, cone, cone aim point and score units all differ. `ReadBandFor` had been reading character-band
+fields on gimmick objects and returning plausible garbage. See `GameArchitecture.md` §"TWO
+interactable classes" for the table. Every interaction read now branches on `ObjectClass`.
+
+### Refuted subagent claim, recorded so it is not re-derived
+
+A subagent reported class-1's interaction point at `node[+0x10/+0x14/+0x18]` (absolute world pos).
+`FUN_002646c0`, the engine's own getter, returns `pfVar1[0..2]` = bytes `0x00/0x04/0x08` — **the plain
+position** — for class 1. `+0x10/+0x18` is where `FUN_0025be50` aims the facing cone.
+`FUN_0026bb00`'s class-1 setter does write `+0x10/+0x14/+0x18`, so a field exists there, but the
+getter does not read it and the two are unreconciled. **Class-1 interaction point = the plain
+position (0.98). The `+0x10` field is UNIDENTIFIED — do not build on it.**
+
+### Carried forward from DQ7R (read for the idiom this session)
+
+- **The interaction point is authored game data, not geometry the mod computes.**
+  `RefreshEntityPosition` overwrites `entry.pos` with the interaction volume's cached world position,
+  and everything downstream consumes that one field. That is the "one destination, both keys" design.
+- **Not yet ported, worth having:** `if (e.hasBoxComponent) { e.reachable = true; return true; }` —
+  an entity with an authored interaction point is reachable **by definition**; do not ask the walkmap.
+- **Does not port:** DQ7R's box is *where the player stands*. FFXII has no such point — its
+  equivalent is a computed region (`dist2D(P,anchor) < reach && band`), which is strictly more
+  information. Do not stretch the analogy.
+
+---
+
+## Route reversals + four deleted NPCs — Solved (Session 77, 2026-07-27)
+
+**KEYWORDS: reversal doubles back funnel string pull portal midpoints not elevation sign-twin
+dropped Nomad name equality no proximity kStackedDist NumberDuplicateLabels contradiction orphaned
+diagnostic character inclusion mode state flags KIND_DEAD counted REVERSAL invariant**
+
+### STRUCK — "a polyline through portal midpoints is a route"
+
+Session 75 built the route as `[from] + midpoint of every shared edge + [to]` with `outPoly = rawPoly`
+— no string-pull at all. On a navmesh whose triangles are often whole corridors, successive edge
+midpoints sit at opposite ends of their portals and the line saws between them:
+
+```
+"Dire Rat 1. South 2, North 7, West 5, North 5, West 14, then 3 more. 36 steps"
+"Dire Rat 1. West 2, East 12, North 5, East 11, North 16, then 4 more. 50 steps"
+```
+
+**The A* was never wrong** — `pass=mesh`, `nearDist=0.0m`, 11-poly chain in 12 expansions. Only the
+line drawn through it was. Replaced with the **funnel algorithm**, which returns the shortest path
+inside the corridor and therefore *cannot* double back.
+
+**LESSON: `PathDirections` cannot fix a bad polyline.** Its RDP pass PRESERVES shape by design, so a
+zigzag survives simplification — the zigzag *is* the shape. Smoothing belongs in the search, not the
+describer. If routes ever zigzag again, look at the polyline, not the wording.
+
+**Elevation was the natural guess and it was wrong.** Ruled out three ways: the searches were clean,
+the routes were flat (y=0 both ends), and the *same* start/goal produced the bug with and without a
+spurious first leg purely from the player shuffling inside one triangle. Height cannot do that.
+
+**Guard: the REVERSAL invariant.** `PathDirections::Describe` now logs any two consecutive legs
+turning >= 135°. Do not remove it — this class of bug was invisible in the log for a whole session.
+
+### STRUCK — the sign-twin filter's name-only twin test
+
+`TagDoorwaysAndDropSignTwins` deleted **four NPCs** on Nomad Village, one story-critical:
+
+```
+sign-twin dropped "Nomad": [0:40] (45.97,0.00,67.37) repeats doorway [0:38] (53.80,0.00,38.80) 29.6m away
+   ... three more at 20.5m, 27.6m, 17.1m
+```
+
+Two compounding defects:
+1. **Doorway tagging by proximity alone** — any object within 2.5 m of a `+0x70` field-sign record
+   became a "doorway", including an NPC standing near a shop sign.
+2. **The twin test was name equality with NO proximity check.** The distance printed in the log line
+   was computed *only for the message*. So one mis-tagged "Nomad" erased every other "Nomad" on the
+   map, at any distance.
+
+**The codebase already contained the correct rule, in the other duplicate handler.**
+`NumberDuplicateLabels`: *"two at different positions are two real objects that share the game's own
+name (which is normal — 109 npcdic ids all read 'Rabanastran')"*. That pass NUMBERS them; this one
+DELETED them, and runs first. Same map: `dup-label "Nomad Youth" x4`, `dup-label "Cockatrice" x6`.
+
+**Fixed scope (tester's rule):**
+- Doorway tagging **never applies to a person** — a character can no longer become the anchor.
+- The doorway-twin removal is **interactables only**: same name, the other carries the location jump
+  (`Entity::doorway`), this one does not. That is the shop-sign case it was written for.
+- **NPCs dedupe only when literally stacked** (`kStackedDist = 0.05 m`). `j < i` so the first of a
+  stacked pair survives.
+- **Every drop logs unconditionally.** It used to log only on a new population high-water mark, so a
+  twin removed on any later rescan was silent.
+
+**LESSON: two subsystems held opposite policies on the same fact and the destructive one ran first.**
+When one pass numbers duplicates and another deletes them, they cannot both be right.
+
+### LESSON — an orphaned diagnostic makes its bug invisible, not absent
+
+`EntityList::LogDiagnostic` / `EntityDiag::DumpLocked` (the raw handle-table walk, which shows objects
+the scan REJECTED) lost its only caller when the `'` dump was stripped in Session 74. For three
+sessions the log could only show what PASSED the filters — which is exactly why four deleted NPCs
+went unnoticed. Re-keyed onto the `'` probe. **Before stripping a diagnostic, check what question it
+was the only answer to.**
+
+### OPEN, instrumented — characters can only enter the list via mode-state flags
+
+`entity_scan.cpp`'s inclusion gate had both `gimmick` and `named` written `&& !isCharacter`, so a
+person's ONLY route in was non-zero `+0x1C` flags — mode state that this file already records as
+reading **zero on a disabled object** (see the S54 entry above: *"Include by KIND; use the flags only
+for 'what can I do with it right now'"*). Applied to gimmicks in S54, never to people.
+
+A named character is now included, but **this shipped on inference, not evidence**, so it counts
+itself: `inclusion: N character(s) admitted by NAME ONLY (no interaction flags)`. If N is always 0,
+the change is a no-op and should be reported as one, not left looking like a fix.
+
+`ScanCombatants`' `kind == KIND_DEAD` skip is **counted, not flipped** — `phyre_types.h` labels that
+constant "NAME IS WRONG" and kind 5 = NPC on the field, but the combat track owns it and the pool is
+documented to hold no gimmicks. A non-zero tally on a field map falsifies that premise and the skip
+must then go.
+
+---
+
+## The route reversal is a PASSED WAYPOINT — Solved (Session 78, 2026-07-27)
+
+**KEYWORDS: reversal leg0 leg1 80% passed waypoint drop leading corner static target immune mobile
+target Dire Rat Rogue Tomato log forensics 1059 routes 109 reversals grid pass=strict 86 not new
+dual-polarity funnel measured not derived funnel longer than midpoints invariant corridor quality
+portal crossing cost camera ref swing**
+
+### The archive settles the history
+
+Forensics across all 20 archived logs: **1,059 spoken routes, 109 with an immediate reversal.**
+
+- **GRID era: 86 / 998.** ALL from `pass=strict` — completed searches, up to 601 expands and 55,628
+  rays. **Zero** from recovery: the 24 `pass=near-goal` routes contain none, and no `bridge:` line
+  exists anywhere in any log.
+- **NAVMESH era: 23 / 61.**
+
+**The tester's recollection was correct — this is not a rewrite regression.** But they are two bugs
+with one name, and the difference is magnitude: grid reversals wasted up to **20 steps**
+(`"Rogue Tomato. South 24, Northwest 20, North 22. 66 steps"`); navmesh reversals never more than 6.
+"North 7, South 25" is a grid-era memory; the navmesh has never produced one that large.
+
+### ROOT CAUSE — the first waypoint is behind the player
+
+**87 of 109 (80%) are leg 0 -> leg 1**, in both eras. The target distribution names it:
+
+```
+Dire Rat 1     14/22  (64%)     Save Crystal      0/36  (0%)
+Rogue Tomato   38/113 (34%)     Stair to Lowtown  0/55  (0%)
+Montblanc      25/183 (14%)     Rabanastre exits  0/41  (0%)
+```
+
+**Static targets are immune. Moving targets dominate — but the target's motion is not the cause.** A
+moving target makes the player re-press *while walking*. The route's first corner is fixed; the player
+drifts across it; from one step past it, leg 0 points BACKWARDS to that corner and leg 1 turns around.
+The archive caught the identical path (`firstLeg=(46.5,160.0)`, same `expands=38`) spoken four
+different ways in six seconds as the player rocked over one waypoint.
+
+**FIX: drop leading waypoints the player has already passed.** Project the player onto the
+corner->next-corner segment; positive parameter = beyond it = history, not a waypoint. Iterate. This is
+independent of the funnel, the corridor, and which pathfinder is underneath — which is why it also
+addresses the grid-era symptom.
+
+**LESSON: a reversal at leg 0 is not a geometry bug, it is a STALE waypoint.** Check *where* in the
+route a defect sits before theorising about how the route was built — the position is the diagnosis.
+
+### The funnel was not string-pulling (Session 77's fix, incomplete)
+
+Every route: `portals=6 corners=7`, `7->8`, `8->9` — one corner per portal, three for three. A working
+funnel collapses a corridor to a handful of corners.
+
+I derived the left/right convention (FFXII has north at **-Z**, which flips handedness against every
+reference implementation of this algorithm), traced both branches against Mononen's reference twice,
+and the code looked correct. The log disagreed.
+
+**So the polarity is now MEASURED, not derived:** the funnel runs both ways and keeps the shorter
+path. The correct polarity is the shortest path through the corridor by definition; the inverted one
+is the zigzag. Impossible to get wrong, and it logs which won so the branch can be deleted **on
+evidence** rather than on a third round of my sign reasoning.
+
+**LESSON: when a hand-derived sign convention and the log disagree, stop deriving.** Two sessions were
+spent on this; the resolution cost six lines.
+
+### The invariant that would have caught it in one line
+
+The funnel's output can never be longer than the portal-midpoint path through the same corridor — it
+is the *shortest* path in that corridor by definition. Now logged, along with a corridor-quality check
+(taut length vs straight-line distance). Together they separate **"the funnel is wrong"** from
+**"A\* chose a wandering corridor"** — the exact distinction three sessions of reading code could not
+make. **The funnel can never shorten past its corridor.**
+
+### A* edge cost — STRUCK: centroid-to-centroid distance
+
+It was `Dist3(centroidA, centroidB)`. On a mesh where a triangle is often a whole corridor, centroid
+hops are a poor proxy for walking distance: two huge adjacent triangles score far apart even when the
+player barely clips the shared edge. Now costs the actual crossing,
+`centroid -> portal midpoint -> centroid`. Heuristic stays Euclidean, so still admissible.
+
+### Correction — the REVERSAL detector's attribution
+
+`path_directions.cpp` credited the bug to Session 77. The archive shows 86 grid-era reversals three
+days earlier, from `pass=strict`, and considerably worse. Amended. The detector postdates every
+archived log, so none of that history was ever caught by it.
+
+### Not the bug, but half of what is seen — camera-relative rotation
+
+`ref` swung **-24.2 -> -72.3 deg** across six presses while the leg distances stayed fixed at 11, 11,
+6, 8. Identical geometry, different words, because directions are camera-relative. Session 56 already
+rejected the camera lock, the travel-anchored frame and the spoken notice — **do not re-propose them.**
+But it masks real geometry defects, so when testing a reversal, hold the camera still between presses.
+
+---
+
+## SOLVED — an NPC missing from EVERY map, not just Nomad Village (Session 79, 2026-07-27)
+
+**KEYWORDS: missing NPC behind tent elder slot 55 cat 66 hex class 3 character kind 5 isCharacter
+clause include by KIND loaded model presence blast radius unmeasured per-kind tally shadow
+registration exact stacked entity_labels container slot unstable nameIdx -1 collision position anchor
+claim self-inclusion creep 1 3 5 6 7 F6 never bound dead code VK_F6 merchant no marker shop name
+odd npcdic slot Frida-first**
+
+### The one clause
+
+`entity_scan.cpp`'s `gimmick = (kind == KIND_ACTION_GIMMICK) && !isCharacter`. The `&& !isCharacter`
+rejected a placed, enabled, model-loaded CHARACTER whose interaction flags were zero — **on every map
+in the game.** A tester needed one of them (a woman behind the Nomad Elder's tent, story-critical,
+confirmed present by sighted assistance) and she was reachable by no inclusion path at all.
+
+**`cat` prints in HEX in the dump.** `cat=66` is 0x66 -> low-5 = 6 -> class 3 (character). Reading it
+as decimal 66 gives class 2 and a completely wrong object model. Cost part of a session.
+
+**FIX: include by KIND + a LOADED MODEL** (`+0x14 & READY_MODEL_BIT`) — the honest test for "there is
+a body standing there". Kinds 1 AND 5. Kept purely additive: the old `gimmick` term is unchanged, so a
+model-less trigger volume cannot start vanishing as a side effect.
+
+### STRUCK — "unflagged characters are left to the combatant scan or the talk-flag path"
+
+The comment that justified the exclusion. Both escape hatches are fictional: the combatant scan reads
+the **BtlWork pool**, which holds no field NPCs, and the talk-flag path needs a flag the engine clears
+(`FUN_0025ad10`) on anything the script has not armed.
+
+### The blast radius was UNMEASURABLE — instrument, do not guess
+
+The object dump is Session 77 code; **all 20 archived logs predate it**. Only one map was ever dumped.
+The `inclusion:` tally now splits admissions by kind so the next log states the cost per map. **If a
+change cannot be sized offline, ship the counter with it** rather than an assurance.
+
+### STRUCK — `mapId . container . slot` as an entity's identity
+
+The slot is assigned at map load in script order and is NOT stable across loads. Map 243 held five
+Nomads numbered **1, 3, 5, 6, 7**: a re-slotted object looked new, and `NumberFor`'s "lowest free"
+scan counted **the record it was renumbering** as taken, so a number could only creep upward.
+
+Now `{mapId, baseLabel, nameIdx}` + a **position anchor when that triple repeats**. The anchor is not
+optional: every anonymous object is `{map, "NPC", -1}`, and the widening above admits exactly those —
+keying on `nameIdx` alone would have broken the people it just added. **Unique triple = match on
+identity alone**, so a wandering NPC with its own id stays stable wherever it walks.
+
+**Known limit, not a bug:** objects sharing a label, a `nameIdx` AND a roaming path (the six
+`nameIdx=238` Cockatrices) have no distinguishing identity in the game's own data. Their numbers may
+move between visits. Inventing an identity for them would be a fabrication.
+
+### F6 was never bound to a key — the feature was 100% built and 0% reachable
+
+Handler, clipboard read, persistence and the apply-before-numbering pass all shipped in Session 65,
+and BOTH `Controls.md` and `README.md` documented the key. **`DIK_F6` was never defined and no
+`DInputEdge` ever registered it**, so `case VK_F6:` in `nav_commands.cpp` was dead code from the day it
+was written. Independent proof: the label store held **127 records and zero player labels**.
+
+**LESSON: documenting a key is not binding it.** A feature whose docs, handler and persistence all
+exist can still be unreachable; the binding is a separate artifact and nothing tests it.
+
+### The merchant — CLEAR NEGATIVE, do not re-attempt
+
+No per-NPC merchant marker exists:
+- `sceneObj+0xCC` / `+0xDC` are slots 2 and 10 of an 18-entry `u16[]` at `+0xC8` indexed by
+  interaction mode — per-map **event indices**, not shop ids. Every Nomad Village NPC reads `0xFFFF`,
+  `5`, `8` or `9`.
+- **npcdic has no merchant band.** Candidates are scattered (23, 24, 118, 285, 505, 676, 839, 1134 …)
+  and 429/505/507 straddle the existing gimmick band. The game names this merchant `Nomad` anyway.
+- The NPC->shop binding exists only in compiled map script behind `openfullscreenmenu(10, shopId)`.
+
+**A learned NPC->shop binding was deliberately NOT built.** It would work and it is the Session 62
+mistake by definition.
+
+The shop's own NAME is readable: `shopId = *(u8*)(DAT_02ca9790+0xC0)` -> master table `DAT_02ebf158`
+-> npcdic id via the **ODD** slot. **No C++ written** — FRIDA-FIRST governs a new behavioral feature;
+`probe_shop_name.js` confirms it first.
+
+**STRUCK before it shipped: "`FUN_0057c010` is the shop-open event."** It is a **dialog callback**
+(`local_18 = FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`). The shop-open hook
+point is still unestablished; the probe reads from the confirmed `FUN_0056e5d0` instead.
+
+### STRUCK PERMANENTLY — the learned NPC->shop binding (S79, tester directive)
+
+**Verbatim:** *"labelling any NPC after a visit is unacceptable unless the player chooses to custom
+label it. if you can't get the lookup from database resolution like we do for named NPCs or NPCs with
+custom identifiers, then we don't do it."*
+
+The design that is now banned: catch the shop-open event, attribute it to whichever NPC the player had
+just interacted with, persist the binding, and thereafter speak the merchant as
+`"Nomad 3, Antiqued Armors"`. It would have worked, the identity key from this session would have made
+it stable, and the game genuinely has **no** per-NPC merchant marker.
+
+**It is still banned, and "there is no other way to get it" is a reason to ship NOTHING.** A learned
+label is the mod asserting a fact the game never told it: right until it is silently wrong (a shop
+opened by a cutscene, a bazaar counter, a mis-attributed window), with a blind player unable to catch
+it. It also only helps AFTER the player has solved the problem it claims to solve.
+
+**A label has exactly two legitimate sources:** database resolution (npcdic via `nameIdx`, the map
+script's custom string at `sceneObj+0xF8`, a field-sign record, a map-jump destination), or the
+player's own F6 text. Nothing the mod observed.
+
+**NOT struck by this:** speaking a shop's own name when the shop opens. That names the SCREEN the
+player is in from the game's own text — the same category as reading a menu title — and involves no
+NPC and no inference.
+
+**The only door still open** for "which NPC is the merchant" is **static script resolution**: the
+NPC's talk event index (`sceneObj+0xDC`; Nomad Village NPCs read `0xFFFF`, `5`, `8`, `9`) resolved
+through the map's own loaded EBP2 script to the shop-open native and its `shopId` literal. That is
+game data present before the player touches anything. **Unproven** — it needs the loaded script to be
+walkable at runtime, `talkId` to map to a routine, and the shop-open native resolved BY BEHAVIOUR
+(index arithmetic is struck). Do not start it without a decision that the cost is worth it.
+
+#### CORRECTION (same session) — "only in compiled map script" is NOT a dead end
+
+The entry above filed the NPC->shop binding under "unreachable" because it lives in the map's compiled
+script. **The tester rejected that reasoning and was right: it is not different from how exit
+destinations already resolve.**
+
+`map_script.cpp` **already walks the loaded field-script blob at runtime** and does precisely this
+operation, generically, on every map:
+
+- routine table at `hdr+0x18` (`{+0x00 nameOff, +0x08 codeOff}`, stride 0x30), name pool at `hdr+0x4C`
+- a routine's code span is `[codeOff, next-highest codeOff)`
+- scan that span for `4f <lit:u16> 5d <nativeLo> <nativeHi>` — `0x4F` push-u16, `0x5D` CALLACTPOPA
+- that is how `mapjump` (native `0x8D`) gives the destination and `setmapjumpgroup` (`0x011E`) gives
+  the group binding
+
+**A shop native is the same scan with a different native id.** Reading a literal out of the map's own
+compiled script is DATABASE RESOLUTION — the data is present before the player touches anything, which
+is exactly what separates it from the banned learned binding.
+
+**What is actually still unknown** (all answerable offline, no play session):
+
+1. **The shop-open native's id.** S63's procedure applies unchanged: `dbgIndex = nativeId + 5140`
+   against the archived .dbg symbol table (20,417 symbols) — the same lookup that named
+   `setmapjumpgroup`. A name lookup, not new research. **STRIKE the note that this native "cannot be
+   resolved by index arithmetic"** — S63 resolves natives by SYMBOL/BEHAVIOUR, and index arithmetic was
+   never the proposed method.
+2. **The NPC -> routine link.** Exits use the toolchain's auto-generated routine NAME
+   (`__MJ_CTRL<NNN>`). NPCs carry `sceneObj+0xDC` (talk) / `+0xCC` (action) event indices. Does the
+   toolchain auto-name talk handlers the same way, or does the index address the routine table
+   directly? **Settled by dumping the routine-name pool of a shop-bearing map** — the reader already
+   reads that pool.
+3. **Whether `shopId` is a bytecode literal** or computed at runtime. Only a literal is readable.
+
+**Two cheaper routes to check first, both also database resolution:**
+
+- **The interact icon.** If the engine selects a different icon for a shop NPC, that is a single
+  memory read on the scene object and moots the whole script walk. Cheapest possible answer.
+- **The speaker name.** If a talk routine references a message id, the dialogue's speaker resolves
+  statically — that would not say "merchant", but it replaces "Nomad 3" with a real name.
+
+---
+
+## NEXT SESSION — START HERE (written end of Session 79, 2026-07-27)
+
+**KEYWORDS: next session cold start interact icon identify NPC interactable label shop native
+routine name pool talk index 0xDC script resolution verification checklist S79 deployed unverified**
+
+### Priority 1 — THE INTERACT ICON (tester's call: *"will help a massive amount in labelling the game"*)
+
+The engine draws an icon when the player can interact. **If the icon TYPE is a readable field, it is a
+classifier the mod does not currently use** — and unlike anything script-based it is one memory read
+per object, on every map, for free. This is the highest-value/lowest-cost item open.
+
+What the mod reads today, and why the icon might beat it:
+
+| field | what it gives | limit |
+|---|---|---|
+| `sceneObj+0x1C` FLAG_TALK `0x400` / FLAG_ACTION `0x004` | talk vs action | **MODE state** — reads 0 on anything the script has not armed (this is the S79 bug) |
+| `sceneObj+0x0E & 0xF` KIND | 1 person / 5 gimmick | coarse; does not separate a shop from a door |
+| `sceneObj+0x03 & 0x1F` scene class | 3 = character, 1 = volume | coarse |
+
+**Do this, in order:**
+
+1. **Find where the icon type is chosen.** Start from the two interaction predicates already
+   identified — `FUN_0025bad0` (class 3, characters) and `FUN_0025be50` (class 1, gimmicks) — and walk
+   their callers to whatever selects the prompt sprite. `FUN_0025b820` is the per-frame walk that
+   decides what the player is near; the icon choice is at or below it.
+2. **Enumerate the distinct icon ids.** If the set is richer than {talk, action} — a distinct shop /
+   save / door / examine icon — that is a real classifier and it should drive `Category` directly.
+3. **Check whether the icon id is stored on the object or computed per frame.** Stored = the mod can
+   read it in the scan. Computed = it may still be derivable from its inputs.
+4. **Only if the icon is a dead end**, fall through to Priority 2.
+
+**Confidence bar applies: ≥0.98, offline in the decompile first, and no C++ until a Frida probe
+confirms it against the live process.**
+
+### Priority 2 — the shop binding by SCRIPT RESOLUTION (only if the icon fails)
+
+See the CORRECTION above. `map_script.cpp` **already** walks the loaded field script generically:
+routine table `hdr+0x18` (`{+0x00 nameOff, +0x08 codeOff}`, stride 0x30), name pool `hdr+0x4C`, code
+span `[codeOff, next-highest codeOff)`, pattern `4f <lit:u16> 5d <nativeLo> <nativeHi>`.
+
+Three unknowns, all answerable offline:
+
+1. **The shop-open native's id** — S63's procedure unchanged: `dbgIndex = nativeId + 5140` against the
+   archived .dbg symbol table (20,417 symbols), the same lookup that named `setmapjumpgroup = 0x011E`.
+2. **How an NPC reaches its routine.** Exits use the auto-generated name `__MJ_CTRL<NNN>`. NPCs carry
+   `sceneObj+0xDC` (talk) / `+0xCC` (action) event indices (Nomad Village reads `0xFFFF`, `5`, `8`,
+   `9`; `0xFFFF` means INHERIT from the map's object record, so some need a second hop). **Settled by
+   dumping a shop-bearing map's routine-name pool** — the reader already reads that pool.
+3. **Whether `shopId` is a bytecode literal** rather than computed. Only a literal is readable.
+
+**Priority 3 — the speaker name.** If a talk routine references a message id, the dialogue speaker
+resolves statically. It will not say "merchant", but it replaces "Nomad 3" with a real name for
+anonymous NPCs generally — a broader win than the merchant case.
+
+**BANNED, do not revisit:** any binding learned by watching the player (see the strike above and the
+tester's directive). Database resolution or nothing.
+
+### Session 79 shipped but NOT play-confirmed — verify these first
+
+Built, deployed, committed; no play session yet. Read the next log for:
+
+1. **`inclusion: by-KIND+model kind1=N kind5=N (of which N are CHARACTERS)`** — the blast radius that
+   could not be measured offline (all 20 archived logs predate the object dump). **A large `kind1` on a
+   city map means that half is sweeping crowd NPCs and the kind-1 clause comes out.**
+2. **The missing NPC appears** — Nomad Village should list an unnamed NPC ~1.3 m from the Nomad Elder,
+   routable with `\`. Slots 51 and 56 too. **Slot 39 must NOT** (exact-position shadow of slot 38).
+3. **`shadow dropped:`** lines — should fire on slot 39 and nothing else.
+4. **Numbering survives a round trip** — note which Nomad is "Nomad 2", leave, return: same person,
+   numbers contiguous. The store version bumped 1 -> 2, so the old 1/3/5/6/7 records are discarded and
+   **numbers will differ from the last session on purpose, once.**
+5. **F6 works at all** — it never has. Copy text, select an entity, press F6, hear "Labelled <text>".
+6. **`KIND_DEAD` in the tally** — non-zero on a field map falsifies the actor-pool skip and it must go.
+7. **S78's passed-waypoint fix** — the tester confirms loopbacks fired on SHORT routes inside the camp,
+   so the camp is a valid test bed (an earlier note wrongly said a long route was required). Look for
+   `dropped N leading waypoint(s)`.
+
+### Also open, unrelated to the above
+
+- `probe_shop_name.js` (authored, never run) confirms shopId -> master table -> npcdic. Reading the
+  shop's own name when a shop OPENS is **not** covered by the learned-label ban (it names the screen,
+  not an NPC) — but the shop-OPEN event itself is still unestablished (`FUN_0057c010` is a dialog
+  callback, struck).
+- `map_query.h` is 157 lines, over the 150 header ceiling.
+- ~1,000 lines of exit/entity diagnostics have zero call sites (deliberate — see PerformanceIssues.md).
