@@ -21,7 +21,25 @@ const wchar_t* CategoryWord(EntityList::Category c);
 
 // The game's own display name for a field object, read memory-only from its scene object. Empty
 // when unresolvable -- callers fall back to a category word rather than inventing one.
+//
+// It resolves to the PERSONAL name whenever the npcdic carries a distinct one: slot id*2+1 beats
+// id*2, so a "Nomad" reads "Dania". Not gated on whether the game has introduced the character --
+// the name is in the map's own dictionary either way, and speaking it removes five invented numbers
+// per map. See the definition for why the pointer pre-check is equivalent to comparing the strings.
 std::wstring ResolveObjectName(void* sceneObj);
+
+// Has the player been introduced to this npcdic character? A live per-id bit in the game's own state
+// block (replica of FUN_0032a930, written by the `settalknpcname` / `releasetalknpcname` natives).
+//
+// DIAGNOSTIC ONLY since Session 81 -- it no longer chooses the slot the mod speaks. Its one caller is
+// the `inclusion:` tally, where it reports how many of the personal names we speak belong to
+// characters the player has actually met.
+bool TalkNameKnown(int id);
+
+// How many objects spoke the ODD npcdic slot during the last scan -- the names this build reveals
+// that earlier ones did not. Reset at the top of every scan.
+void ResetNameStats();
+int  OddSlotWins();
 
 // True when an npcdic name key falls in the field gimmick-object band (433-469).
 bool InGimmickBand(int16_t nameIdx);

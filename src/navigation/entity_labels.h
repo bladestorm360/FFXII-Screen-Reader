@@ -5,30 +5,38 @@
 #include <cstdint>
 #include <string>
 
-// PLAYER LABELS and STABLE NUMBERS for field entities.
+// PLAYER LABELS for field entities. **Only** the player's own words.
 //
-// Two problems, one store:
+// The game leaves a lot of things anonymous -- fifteen townsfolk all called "Rabanastran", signs with
+// no name at all -- and the one that opens the east gate is not distinguishable from the other
+// fourteen. The player names it "gate guard" and it stays named.
 //
-//  * **The player's own words.** The game leaves a lot of things anonymous -- fifteen townsfolk all
-//    called "Rabanastran", signs with no name at all -- and the one that opens the east gate is not
-//    distinguishable from the other fourteen. The player names it "gate guard" and it stays named.
-//  * **A number that does not move.** Duplicate labels get a " 1" / " 2" suffix. That suffix used to be
-//    an ordinal within whatever set the last scan happened to see, and the handle table streams objects
-//    in and out (measured: NPC=14 <-> 15 across 118 rescans on one map), so everyone was renumbered
-//    constantly. Assign each object a number ONCE and keep it.
+// **NUMBERS USED TO LIVE HERE TOO, AND THAT WAS THE BUG (Session 81).** The duplicate " 1" / " 2"
+// suffix was persisted so it would never move. For stationary objects that worked; for anything that
+// ROAMS it was unbounded growth, because a record's anchor is deliberately never refreshed -- so a
+// moving object outran its own record and `NumberFor` minted a new one, with the free-number search
+// counting every leaked record as taken, so the number could only climb. Measured on the live store:
+// **39 records labelled "Cockatrice", numbered 1..39, for six real animals**, and the tester heard
+// "Cockatrice 37". Numbering now happens within a single scan, in EntityScan::NumberDuplicateLabels,
+// and is never written down. A store cannot leak numbers it does not hold.
 //
 // **This is not the Session 62 mistake.** That store had the mod DISCOVER game facts by playing and then
-// present them as truth. This one holds the player's own text, and which ordinal we already gave an
-// object -- presentation state we authored, never a claim about the game. Every game fact (position,
+// present them as truth. This one holds nothing but text the player typed. Every game fact (position,
 // name, category, availability) is still read fresh from the handle table on every scan.
 //
 // IDENTITY (Session 79): `mapId . baseLabel . nameIdx`, disambiguated by POSITION when that triple is
 // not unique on the map.
 //
-// **STRUCK: `mapId . container . slot`.** The slot is assigned at map load in script order, so it is not
-// stable across loads -- a re-slotted object looked new and took a fresh number, which is exactly the
-// drift this store exists to prevent (map 243 held five Nomads numbered 1, 3, 5, 6, 7). `nameIdx` is the
-// object's npcdic id and comes from the map's own data, identical every load.
+// **STRUCK as the PERSISTENT key: `mapId . container . slot`.** The slot is assigned at map load in
+// script order, so it is not stable across loads -- a re-slotted object looked new and took a fresh
+// number. `nameIdx` is the object's npcdic id, from the map's own data, identical every load.
+//
+// That strike is about PERSISTENCE and does NOT forbid within-scan numbering on the same pair.
+// `{container, slot}` is the engine's own name for a handle-table object -- the interaction scorer
+// writes exactly that pair into the globals the confirm handler dereferences to act on what the player
+// is facing -- and it is perfectly stable for as long as the map is loaded. Unstable across loads is
+// why it may not be stored; stable while loaded is why it is the right key for a number recomputed
+// every scan.
 //
 // **The position anchor is not optional.** Every object the game leaves anonymous carries `nameIdx = -1`
 // and falls back to one category word, so `{map, "NPC", -1}` is the SAME key for all of them. Without a
@@ -41,6 +49,17 @@
 // admittedly is not for a roaming group that also shares one id (the six `nameIdx=238` Cockatrices).
 // They have no distinguishing identity in the game's own data and inventing one would be a fabrication.
 //
+// The roaming limitation above now costs only a player LABEL on a roamer. It can no longer leak
+// records, because the roaming case is exactly what stopped being written to this file.
+//
+// KNOWN CONSEQUENCE of the odd-slot name read: `baseLabel` is part of the key, so a label filed under
+// `{map, "Nomad", 223}` will not match once that object resolves to "Dania". Since Session 81 the name
+// no longer flips DURING play -- the personal name is preferred from the first scan rather than from
+// the story beat that introduces the character -- so this is a one-time consequence of upgrading, and
+// the format bump discards the file anyway. If player labels ever accumulate, the fix is to re-home a
+// record when its `nameIdx` matches and only the words moved, never to stop reading the name the game
+// is showing.
+//
 // Not thread-safe by design: every caller is the input thread holding the entity-list mutex.
 namespace EntityLabels {
 
@@ -48,7 +67,8 @@ namespace EntityLabels {
 void Init();
 
 // Start a matching pass. Records already handed out during this pass are not handed out again, so two
-// live objects sharing a key can never collapse onto one record (and one number). Call once per pass.
+// live objects sharing a key can never collapse onto one record -- which would put one person's chosen
+// name onto a body they never named. Call once per pass.
 void BeginScan();
 
 // The player's label for this entity, or empty when they have not named it. Overrides EVERYTHING --
@@ -60,11 +80,6 @@ std::wstring LabelFor(int mapId, int16_t nameIdx, const std::wstring& baseLabel,
 // they are NOT part of the identity (see the strike above).
 void SetLabel(int mapId, int16_t nameIdx, const std::wstring& baseLabel, const FVec3& pos,
               uint8_t container, uint16_t slot, const std::wstring& label);
-
-// The duplicate-suffix number for this entity, assigning the lowest not yet used under `baseLabel` on
-// this map if it has none. Stable across rescans, streaming, reloads and sessions.
-int NumberFor(int mapId, int16_t nameIdx, const std::wstring& baseLabel, const FVec3& pos,
-              uint8_t container, uint16_t slot);
 
 // Drop the in-memory view and reload from disk. Called on map change so a hand-edit of the file takes
 // effect without restarting the game.

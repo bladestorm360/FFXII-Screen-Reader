@@ -114,3 +114,13 @@ party keys silent for two sessions. Re-run this after adding addresses.
    run over the FINISHED list -- `ObjectHandle`, `LogObjectDump`, `TagDoorwaysAndDropSignTwins`,
    `ApplyPlayerLabels`, `NumberDuplicateLabels` -- moved to `entity_postscan.cpp` (327 / 251 lines).
    Signatures live in `entity_scan.h` so the two units cannot drift apart.
+
+## Session 81 — file-size debt (logged, not paid)
+
+| file | lines | limit | note |
+|---|---|---|---|
+| `src\navigation\nav_rva.h` | **541** | 150 (header rule) | Pre-existing 3.5x breach, +15 this session for the scene-category constants. It is the canonical offset registry, so the constants belong here; the file needs its own split (by subsystem: scene object / walkmap / actor pool / map jump). |
+| `src\navigation\entity_scan.cpp` | **457** | 500 (hard), 400 (plan a split) | Past the planning mark. Obvious seam: the diagnostic/tally block (`s_*` counters, `LogPartyBodyOnce`, the `inclusion:` line) into `entity_scan_diag.cpp`. Deliberately not done in a bug-fix change. |
+
+`entity_labels.cpp` shrank (273 -> 264) and `entity_labels.h` (75 -> 88, prose rewritten). Everything
+else is comfortably inside the limits.

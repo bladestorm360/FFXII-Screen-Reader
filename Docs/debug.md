@@ -2436,7 +2436,14 @@ is exactly what separates it from the banned learned binding.
 **KEYWORDS: next session cold start interact icon identify NPC interactable label shop native
 routine name pool talk index 0xDC script resolution verification checklist S79 deployed unverified**
 
-### Priority 1 — THE INTERACT ICON (tester's call: *"will help a massive amount in labelling the game"*)
+### Priority 1 — THE INTERACT ICON — **SUPERSEDED by Session 80, see "The 18 interaction MODES" below**
+
+> The icon hunt was overtaken before it started. Walking the two interaction predicates upward found
+> something better and cheaper: `sceneObj+0x1C` is an **18-bit interaction-MODE mask** and
+> `sceneObj+0xC8` is a parallel **18-entry event-index array**, with the mode index equal to the bit
+> index. The table below is still correct about what the mod reads today; the "limit" column is now
+> understood as *two of eighteen bits*. **The icon was never located and is no longer the lead** —
+> nothing here is struck as wrong, it is simply no longer the cheapest route.
 
 The engine draws an icon when the player can interact. **If the icon TYPE is a readable field, it is a
 classifier the mod does not currently use** — and unlike anything script-based it is one memory read
@@ -2515,3 +2522,285 @@ Built, deployed, committed; no play session yet. Read the next log for:
   callback, struck).
 - `map_query.h` is 157 lines, over the 150 header ceiling.
 - ~1,000 lines of exit/entity diagnostics have zero call sites (deliberate — see PerformanceIssues.md).
+
+---
+
+## The 18 interaction MODES — Session 80 (2026-07-27)
+
+**KEYWORDS: interaction mode mask 18 bits sceneObj 0x1C bit index equals mode index 0xC8 event index
+array FUN_002652d0 FUN_0026b4a0 arm FUN_0025d5e0 disarm FUN_00266bd0 default mask by scene category
+category 7 talk native table offline Ghidra dump_script_native_table delta 5140 two anchors
+setmapjumpgroup mpk no EBP2 mapctrl_ebp_disasm mis-based address order refuted classification**
+
+### SOLVED — what `sceneObj+0x1C` actually is
+
+An **18-bit interaction-MODE mask**, not "a flags word with a talk bit and an action bit". The mode
+index IS the bit index; `sceneObj+0xC8` is a parallel `u16[18]` of per-mode event indices. Full detail,
+offsets and the eight-mode confirmation table are in `GameArchitecture.md` — do not re-derive them here.
+
+The two constants the mod ships are now *derived*: mode 2 = ACTION = bit `0x004` = `+0xCC`;
+mode 10 = TALK = bit `0x400` = `+0xDC`.
+
+### The correction that matters for classification
+
+`FUN_00266bd0` sets the **default mask from the scene CATEGORY alone** (cat 5/6 -> `0x00030004`,
+cat 7 -> `0x00034c85`, and so on). So the mask's resting value carries no information the mod does not
+already have from `sceneCat`. **A classifier must be built on the `+0xC8` array — static per-object map
+data — never on the mask.** Corroborates Session 79 from the other side: the Nomad Elder's
+`flags=0x00030004` *is* the cat-5/6 default, and the woman behind the tent's `0x00030000` is that same
+default with bit 2 cleared by script. She was a standard character with one mode switched off.
+
+### TRIED & FAILED — three offline routes to the native ids
+
+The remaining unknown is **native id -> handler function**, needed to name the 16 unnamed modes and to
+find the shop-open native. It cannot come from the decompile export, which holds function bodies and
+**no `.data` bytes**. These were tried first; do not retry them:
+
+1. ~~**Interpolating ids from handler ADDRESSES** ... **Handlers are not laid out in native-id order.**~~
+   **STRUCK the same session** — that refutation was itself computed from the bad stride-8 assumption.
+   Run 1's data shows handler addresses *mostly* ascend with slot order (895/1179 adjacent pairs), so
+   ordering is **unresolved**, not refuted. Moot either way: the stride is measured now, not inferred.
+2. **The extracted `.mpk` map controllers.** All 20 files under
+   `extracted\ps2data\plan_master\map_ctrl\` were scanned for the `EBP2` magic. **Zero hits** — they are
+   map data, not bytecode. There is no map script to disassemble offline from that directory.
+3. **`output\mapctrl_ebp_disasm.txt`.** Mis-based: routine 0 opens on `PREQ`/`LABEL`/`LABEL` and the
+   sweep is decoding data as instructions. Unusable as a native-call listing without fixing the code
+   base first.
+
+### What DOES resolve it offline — and it is the exit chain's own method
+
+A **Ghidra script**, exactly like `dump_mapjump_native.java`, which is where the `0x1EEE8B0` table slot
+came from in the first place. `ghidra\dump_script_native_table.java` (authored this session, USER-RUN,
+`-process -noanalysis`): validates the `mapjump` anchor before emitting anything, searches for the exe's
+**own native NAME table** so natives can be named with **no delta assumed**, joins the archived `.dbg`
+list as a second opinion and **reports every disagreement**, then reverse-looks-up which native calls
+the arm/disarm/event primitives (the constant at the call site names the MODE) and forward-looks-up
+`openfullscreenmenu` / `setshopname`. **No play session needed.**
+
+### STRUCK — "the delta has a second anchor now"
+
+Claimed and withdrawn the same session. `setmapjumpgroup`'s id `0x011E` came from bytecode and was then
+*named* via the 5140 delta; re-deriving 5140 from that name is the same fact counted twice. **`mapjump`
+is still the only true anchor**, because its handler was identified by behaviour (it calls the
+transition-loader chain `FUN_00314440`), independent of any delta.
+
+### TRIED & FAILED — run 1 of `dump_script_native_table.java` refuted its own assumption
+
+It validated the anchor, then assumed a **dense qword array** with `mapjump` at index `0x8D`. Its own
+output kills that, and the evidence is worth keeping:
+
+- **1197 `.text` pointers over 4096 slots, 776 gaps of exactly 3** — a pointer every 4th qword. A dense
+  qword array has no such period.
+- **Names nonsense against handlers known by behaviour**: `FUN_00355830` (disarms interaction mode 2)
+  -> `@SWCOD_000162`, a compiler switch label; `FUN_00346020` -> `sin`, though its body is a wait-poll
+  identical in shape to `waitv`.
+- **`FUN_00355540` (arm), `FUN_003558f0` (disarm), `FUN_00351f40` were not in the window at all**, yet
+  all three are certainly natives — four-arg signature and **zero references anywhere in `.text`**.
+- **No exe-side native NAME table** exists at either probed layout, so naming still depends on the `.dbg`
+  join, which makes the stride the whole problem.
+
+**`output\script_native_table.txt` is kept as evidence. Cite NOTHING from it but the anchor.** The
+replacement, `ghidra\dump_native_slots.java`, assumes no layout: it locates the slot of ~26
+behaviourally-identified natives, takes the **GCD of the slot deltas** as the stride, and **self-checks**
+by requiring `FUN_00355540`/`FUN_003558f0` to land on a matched enable/disable name pair — reporting
+**NOT COHERENT** and withholding the ids if they do not.
+
+### Secondary, and NOT required for the chain
+
+`frida\probe_interact_modes.js` dumps the mask and the whole `+0xC8[18]` array for every scene object,
+once per map. It exists to break a tie if the native names leave a mode ambiguous — it is not the route.
+
+### RUN 2 — `dump_native_slots.java`: right verdict, wrong stride. The table is 32-byte RECORDS.
+
+Reported `stride=8 self-check=NOT COHERENT`. The **NOT COHERENT was correct and saved a wrong mapping
+from being adopted** — but the stride is 8 only because the GCD was taken over samples that hit
+*different fields of the same record*. Three samples land exactly `0x20` apart: ARM `FUN_00355540` /
+DISARM `FUN_003558f0` (`0x1eedc60`/`0x1eedc80`); fire `FUN_0034e5c0` / fire-all `FUN_0034f380`
+(`0x1eeec60`/`0x1eeec80`); and `FUN_003537b0` registered **four times** at `0x1eeed30/50/70/90`.
+
+**The quad settles it** — one handler serving four adjacent natives is the
+`keyscan`/`keyscanr`/`keyscant`/`keyscantr` family shape from the `.dbg` list. And **ARM/DISARM one
+record apart is the `reqenable`/`reqdisable` adjacency the self-check wanted: it PASSED at stride 32.**
+
+**LESSON (new): a GCD of address deltas measures stride only when every sample is the SAME field.**
+Mixed-field samples collapse the GCD to the pointer size and silently produce a plausible wrong answer.
+
+### TRIED & FAILED — reading the record's 2nd field as a native
+
+Three functions the id-join named as natives are **not natives**:
+`FUN_00346020` (`sin`) and `FUN_003453d0` (`waitv`) are the identical wait-poll shape; `FUN_00342f50`
+(`settalkiconstatus`) **takes no arguments** and only polls + yields. A `set…` native with no argument
+is impossible. They are the record's **continuation/poll field** (the Athena VM's blocking-native
+mechanism). `FUN_00356990` (`lastjumpindex`) likewise *pops an arg and writes*, which no getter does.
+
+**Neither `script_native_table.txt` nor `native_slots.txt`'s PROBE IDS may be cited for any id or name.**
+Established so far: 32-byte records, ≥3 function-pointer fields per record, arm/disarm adjacency.
+`ghidra\dump_native_raw.java` dumps three known windows raw, 32-byte aligned, every qword resolved,
+asserting nothing.
+
+### SOLVED (run 3) — the native table, and why two scripts got it wrong
+
+`dump_native_raw.java` read the bytes; the layout was immediate. Full detail in `GameArchitecture.md`
+("SOLVED — the Athena script-native table"). The short version:
+
+```
+BASE = abs 0x1EED720 (RVA 0x1ECD720), stride 32, name = dbg[k + 5140]
+simple[k] = BASE+32k      init[k] = BASE+32k-24      poll[k] = BASE+32k-16
+```
+
+**Root cause of both earlier failures: the `-24`/`-16`.** A native's init and poll live in the physical
+row *below* its simple slot, so one 32-byte row holds `simple[k]` beside `init[k+1]` and `poll[k+1]`.
+Every reader that treated a row as one native blended two natives together — which is why
+`FUN_00346020` came out `sin` (it is a POLL) and `FUN_00342f50` came out `settalkiconstatus` (also a
+POLL, and it takes no arguments). **The give-away was there all along and was misread as noise: a
+handler whose argument count contradicts its name is in the wrong FIELD, not at the wrong id.**
+
+Confirmed by 13 handlers identified from their code before any name lookup, including
+`mapjump = 141 = 0x8D` reproducing Session 63's bytecode-derived id, and one sync poll (`FUN_003537b0`)
+shared by four adjacent `voice*` natives. Delta 5140 now validated across ids 42..703.
+
+**Answers unlocked:** `reqenable` = native **42 (0x2A)**, `reqdisable` = **43 (0x2B)** arm/disarm
+interaction modes; `sysreq`/`sysreqall` = **170/171** fire a mode's event; `fieldsign` = **374**;
+`talktreasure` = **703**. Mode names so far: **12 = map-jump/transition** (from S63's `reqenable(12)`),
+**13 = name label** (`fieldsign` arms it and sets the display name; matches `FUN_00268d10`'s `& 0x2000`).
+
+**Shop natives are EXTRAPOLATED, not confirmed:** `openfullscreenmenu` -> 1138/1165, `setshopname` ->
+1193, all past the validated band. Below the 0.98 bar until their handlers are seen to be menu openers.
+
+### SOLVED + SHIPPED — the mod was speaking the GENERIC name for every NPC the player has met
+
+`FUN_00263990` picks the npcdic slot as **`id*2 + (FUN_0032a930(id) != 0)`**. The mod always read the
+EVEN slot, so it said "Nomad" where the game says "Arjie".
+
+**STRIKES Session 54's "the odd slot is byte-identical in the US build; even-only is correct; there is
+no second name to mine."** That was a **48-id sample** — ids 0-11 and the 433-469 gimmick band, i.e.
+crowd filler and crystals/urns/treasure, the two ranges that cannot hold a personal name. Across **all
+1141 ids, 247 differ**, and the odd slot is the character's real name: 221 Nomad -> **Arjie**, 228 Nomad
+-> **Lesina**, 239 Nomad Elder -> **Elder Brunoa**, 159 Viera -> **Ktjn**, 220 Cockatrice -> **Agytha**.
+
+**LESSON: a sample drawn from the ranges you already understand cannot falsify a claim about the ranges
+you do not.** The sampled bands were chosen because they were the ones already being validated for
+crystals and treasure — which is exactly why they were the wrong evidence for this question.
+
+**Shipped** (`entity_classify.cpp`): `TalkNameKnown(id)` replicates `FUN_0032a930` —
+`byte[&DAT_02164280 + 0x15B4 + (id>>3)] & (1 << (id&7))`, rejecting `id >= 0x800`. `DAT_02164280` is a
+**static array** (`FUN_002ef640` returns its address), RVA `0x2044280`; `0x15B4` folds `FUN_002ef2b0`'s
+`+0x200` and `FUN_0032a930`'s `+0x13B4`. `NpcdicName(id, known)` takes the selector, and falls back to
+the even slot if the odd one is past the table. The bit is live state (`settalknpcname` /
+`releasetalknpcname` write it) so it **flips mid-session** — read per scan, never cached.
+
+`inclusion:` now ends with `N speaking their PERSONAL npcdic name`, so the next log sizes it in play.
+
+**Known consequence, documented not papered over** (`entity_labels.h`): `baseLabel` is part of the label
+store's key, so a revealed name orphans a player label and moves the object out of its "Nomad 1..5"
+numbering group. The numbering change is CORRECT, and the store holds zero player labels today.
+
+## SOLVED — the label store leaked numbers without bound (Session 81)
+
+**KEYWORDS: Cockatrice 37 numbering leak entity_labels NumberFor anchor never refreshed roaming
+unbounded growth 39 records six animals stateless numbering container slot within scan version 3
+rewrite on mismatch repeating discarded line party roster bodies scene category 5 NPC 1..6 phantom
+odd npcdic slot always Dania Lesina Masyua Nanau Jinn grace window numbered list not spoken list**
+
+Four defects, reported together, three with one root cause: **the mod kept state about objects instead
+of looking them up.** The tester named it: *"you're tracking the interaction component for all NPCs
+instead of just resolving the NPC location to its interaction component label in the database."*
+
+### 1. The number leak — `NumberFor` allocated a record per roaming step
+
+`EntityLabels::Match` returned null when `{mapId, baseLabel, nameIdx}` was ambiguous *and* no stored
+anchor was within `kAnchorDist = 1.5 m`. The anchor is frozen at creation and deliberately never
+refreshed, so **a roaming object permanently outran its own record**; `NumberFor` then minted a new
+one, and the free-number search counted every leaked record as taken, so the number could only climb.
+No cap, no eviction, no cleanup existed anywhere in the file.
+
+**Proof on disk:** the live v2 store held **39 records labelled "Cockatrice", numbered 1..39, for six
+real animals** (only slots 49/63/64/65/66/67 ever appeared), plus 6 `NPC` and 4 `Nomad`, and **zero
+player labels** — the store's only product was numbers, and the numbers were wrong.
+
+**Fix: numbers left the store entirely.** `NumberDuplicateLabels` now ranks a duplicate group within
+the current scan, keyed on `{container, slot}` — the object's place in the game's own handle table,
+which is the pair the engine itself uses to name an interaction target, and which is stable for exactly
+as long as the map is loaded. Session 79's strike on `container.slot` was about PERSISTENCE and does not
+forbid this: unstable across loads is why it may not be stored, stable while loaded is why it is right
+for a number recomputed every scan. **A store cannot leak numbers it does not hold.**
+
+### 2. The numbered list was never the list the player heard
+
+`ApplyPlayerLabels` + `NumberDuplicateLabels` ran at the end of `BuildLocked`, but `RescanLocked` merges
+the 2-second grace-window survivors **after** `Build` returns. The persistent store hid this (a number,
+once assigned, was permanent). Stateless numbering would not have: a group member streaming out for a
+frame leaves the survivors to compact to 1..N-1 while the carried entity still holds its old suffix, so
+two entries answer to one number for up to the whole grace window. **Both passes moved into
+`RescanLocked`, after the merge**, and both were made idempotent (`baseLabel` frozen once; `label` reset
+from it before re-suffixing).
+
+### 3. "store is version N -- discarded" repeated forever
+
+`Load()` returned early on a version mismatch **without rewriting the file**, and `Reload()` is unguarded
+and runs on every area change. Once numbers stopped triggering saves, nothing would ever have overwritten
+it. **`Load()` now calls `Save()` on the mismatch path**, which silences the repeat *and* deletes the
+leaked records. The success line is also gated on a non-empty store.
+
+### 4. Phantom "NPC" entries — party/roster bodies
+
+Three scene-category-5 objects (kind 1, no name, all at one position 6 m above the floor) were admitted
+by the `present` route and announced as "NPC 1..3", making **six** indistinguishable `NPC n` entries out
+of three real anonymous townsfolk — which is why the Session 79 NPC was reported as *still* unfindable
+although she was in the list all along. `DropShadowRegistrations` could not reach them: it requires the
+ANCHOR of a stacked pair to be `gameNamed`, and all three are unnamed. Now dropped when
+`sceneCat == 5 && !named`; see `GameArchitecture.md` for why that is narrowed and instrumented.
+
+### 5. "Nomad 1..5" — the numbers should never have existed
+
+Each of those NPCs has a distinct personal name in its own npcdic record. The mod now reads the odd slot
+regardless of whether the game has made the introduction, so the group dissolves into Dania, Lesina,
+Masyua, Nanau and Jinn and needs no numbering at all. Only genuinely identical objects (npcdic 238, whose
+two slots both read "Cockatrice") still get numbers.
+
+**LESSON: when a disambiguator keeps breaking, check whether the thing it disambiguates should exist.**
+Four sessions were spent making a number stable across rescans, streaming, reloads and sessions. Five of
+the six numbered groups on that map had distinct real names available in data the mod was already
+reading — one slot over.
+
+## SOLVED — a filter that logged success and changed nothing (Session 83)
+
+**KEYWORDS: grace window re-admits filtered entities lastSeenMs never ages out shadow drop undone
+WasFilteredThisScan NoteFiltered phantom NPC spawn point floating above floor FindPolyAt no rejection
+threshold NavReach unplaced characters majority guard stood down**
+
+### The bug under the bug
+
+`EntityList::Internal::RescanLocked` carries an entity over when its scene object is missing from the
+freshly built list — the 2-second grace window that stops the handle table streaming somebody out
+mid-approach. **It cannot distinguish "the engine stopped reporting it" from "a scan pass deleted it",**
+and the consequence is permanent rather than transient:
+
+1. A filtered object is a **live engine object**, so `RefreshPositionsLocked` keeps reading its
+   transform and keeps stamping `lastSeenMs`.
+2. So `now - lastSeenMs` never exceeds `kEntityGraceMs`, so it never ages out.
+3. So once it is carried in **it is in for the life of the map** — while `Build` rebuilds from scratch
+   every scan, re-finds it, re-deletes it, and re-logs the drop.
+
+Net effect: `shadow dropped:` firing on every single rescan while the object stayed in the list the
+player heard. This had been quietly undoing `DropShadowRegistrations`, and would have undone the new
+placement pass identically.
+
+**Fix:** `EntityScan::NoteFiltered(sceneObj)` from every drop pass, `WasFilteredThisScan()` consulted by
+the merge. **LESSON: a "still there?" test that compares against a list some other pass is allowed to
+delete from is not asking the question it looks like it is asking.**
+
+### TRIED & FAILED — `NavReach` alone cannot find a floating object
+
+`NavMesh::FindPolyAt` resolves by **XZ containment with Y as a tie-break and no rejection threshold**,
+so an object 6 m above the ground still resolves to the triangle beneath it and `NavReach::Reachable`
+calls it reachable. The height test has to be a separate question (`PolyHeightAt`, `kFloatingDrop`).
+
+The same fact explains "routed to an obstacle": `PathSearch` resolves its goal with the same call, so a
+body on top of an obstacle snaps vertically onto the floor under it and the player is walked to its base.
+
+### STRUCK — the Session 82 story gate (`+0x0E & 0x10`)
+
+Shipped with a counter that would falsify it; the counter read **zero** on the map that motivated it —
+every candidate has `en=1`. Removed. Third theory in four sessions killed by its own instrumentation
+inside one play session.

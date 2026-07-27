@@ -167,12 +167,42 @@ constexpr uint32_t EXITBUF_AREAID_OFF = 0x04;  // buf: u16 destination area id (
 constexpr uint32_t SCENEOBJ_NAME_IDX = 0x102;  // *(s16): >=0 npcdic index, <0 -> use +0xf8
 constexpr uint32_t SCENEOBJ_NAME_STR = 0xf8;   // *(codec*): per-map custom string (when idx<0)
 // npcdic.bin ("NPC0") is loaded once at boot into DAT_02b5e0d8 (resource cat 9/id
-// 0x1f); the global holds the blob base pointer. Lookup (FUN_003eac10): slot = id*2
-// (base name; odd slot = yomi/reading); name codec* = *(s32)(base + 0xc + slot*4).
+// 0x1f); the global holds the blob base pointer. Lookup (FUN_003eac10):
+//     slot = id*2 + (the player KNOWS this character's name ? 1 : 0)
+// and the name codec* = *(s32)(base + 0xc + slot*4).
 constexpr uint32_t NPCDIC_BASE       = 0x2A3E0D8;  // DAT_02b5e0d8 (ptr to npcdic blob)
-constexpr uint32_t NPCDIC_COUNT_OFF  = 0x08;       // *(int)(blob+8) = slot count (name+yomi pairs)
+constexpr uint32_t NPCDIC_COUNT_OFF  = 0x08;       // *(int)(blob+8) = slot count (name+known pairs)
 constexpr uint32_t NPCDIC_TABLE_OFF  = 0x0c;       // s32 offset table at blob+0xc, indexed by slot
 constexpr uint32_t NPCDIC_NAME_MASK  = 0xffffbfff; // idx & this = npcdic id (game masks bit 14)
+
+// ---- The ODD npcdic slot is the PERSONAL NAME, gated on a live "you know this
+//      person" bit. STRIKES "odd slot = yomi/reading, byte-identical, even-only is
+//      correct" (Session 54, repeated in tools/parse_npcdic.py). -----------------
+// That conclusion was drawn from a 48-id SAMPLE (ids 0-11 and the 433-469 gimmick
+// band) — precisely the two ranges that hold crystals, urns and crowd filler, none
+// of which has a personal name. Across ALL 1141 ids, **247 have a different odd
+// slot**, and the odd slot is the character's real name:
+//     221 "Nomad"       -> "Arjie"          239 "Nomad Elder" -> "Elder Brunoa"
+//     228 "Nomad"       -> "Lesina"         159 "Viera"       -> "Ktjn"
+//     220 "Cockatrice"  -> "Agytha"         104 "Rabanastran" -> "Arryl"
+// So the mod has been speaking the generic word for every NPC the player has
+// already been introduced to. This is the game's own display string in all 12
+// locales — reading it is DATABASE resolution, not a learned label.
+//
+// The selector is FUN_0032a930(id), replicated by EntityScan::TalkNameKnown:
+//     if (id < 0 || id >= 0x800) -> false
+//     bit = byte[ &DAT_02164280 + 0x200 + 0x13B4 + (id >> 3) ] & (1 << (id & 7))
+// FUN_002ef2b0() is `FUN_002ef640() + 0x200` and FUN_002ef640 returns the ADDRESS
+// of the static block DAT_02164280 — so this is a fixed array, NOT a pointer to
+// deref. The two halves are folded into one offset below.
+//
+// The bit is live game state: the `settalknpcname` / `releasetalknpcname` script
+// natives set and clear it, and `istalknpcname` reads it back. It therefore flips
+// mid-session the moment a story beat introduces someone, which is exactly when the
+// player expects the mod's wording to change too.
+constexpr uint32_t TALK_NAME_STATE   = 0x2044280;  // &DAT_02164280 (a static block, do NOT deref)
+constexpr uint32_t TALK_NAME_BITMAP  = 0x15B4;     // + 0x200 (FUN_002ef2b0) + 0x13B4 (FUN_0032a930)
+constexpr int      TALK_NAME_MAX_ID  = 0x800;      // FUN_0032a930 rejects id >= 0x800
 // AREA NAMES — the two paths are NOT interchangeable. See the planmapname table-A/B block above for the
 // authoritative layout; the constants live there (MAPAREA_NAME_BY_ID / MAPREGION_NAME_BY_IDX).
 //   SUB-AREA ("Lower Apartments") = FUN_00377b60(mapId)                 -> MAPAREA_NAME_BY_ID    = 0x257B60

@@ -18,7 +18,15 @@ namespace {
 // loads. Discarding cost nothing when this shipped -- the store held 127 records and ZERO player
 // labels, because F6 had never been bound to a key (see input_tracker.cpp), so there was no player
 // work in it to lose.
-constexpr int kFormatVersion = 2;
+//
+// 2 -> 3 (Session 81): NUMBERS LEFT THE STORE. `NumberFor` allocated a new record whenever an
+// ambiguous key failed the anchor test, with no cap, no eviction and no cleanup, so the file grew
+// without bound and the assigned number could only climb: the v2 store held 39 records labelled
+// "Cockatrice" numbered 1..39 for SIX real objects, and the tester heard "Cockatrice 37". Numbering
+// is now worked out within each scan and never written down. Discarding again costs nothing -- the
+// v2 file held zero player labels, and the discard path now logs the count so that is proven rather
+// than assumed.
+constexpr int kFormatVersion = 3;
 
 // How near a live object must be to a record's stored anchor for them to be the same object -- used
 // ONLY to break a tie between records that share `{mapId, baseLabel, nameIdx}`. Generous on purpose:
@@ -29,15 +37,16 @@ constexpr float kAnchorDist = 1.5f;
 struct Rec {
     int          mapId    = 0;
     int16_t      nameIdx  = 0;
-    std::wstring baseLabel;      // the game name (or category word) the number was assigned under
+    std::wstring baseLabel;      // the game's own words for this object, before any " 2" suffix
     FVec3        anchor{};       // where this object stood when the record was created
-    int          number   = 0;   // 0 = none assigned
     std::wstring label;          // the player's own words; empty = not named
     // Diagnostics only. STRUCK as identity in Session 79 -- see the header.
     uint8_t      container = 0xFF;
     uint16_t     slot      = 0xFFFF;
     // Which matching pass last handed this record out, so two live objects sharing a key cannot both
-    // be given it (and therefore the same number). Never persisted.
+    // be given it. STILL LOAD-BEARING after numbering left this file: without it, two objects sharing
+    // {mapId, baseLabel, nameIdx} and both inside kAnchorDist of one anchor would BOTH speak the
+    // player's label -- one person's chosen name on a body they never named. Never persisted.
     uint32_t     claim    = 0;
 };
 
@@ -104,13 +113,15 @@ void Save() {
     FILE* f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"w, ccs=UTF-8") != 0 || !f) return;
     fwprintf(f, L"version %d\n", kFormatVersion);
-    fwprintf(f, L"# <mapId> <nameIdx> <number> <x> <y> <z> <container> <slot> | <baseLabel> = <your label>\n");
+    fwprintf(f, L"# <mapId> <nameIdx> <x> <y> <z> <container> <slot> | <baseLabel> = <your label>\n");
     fwprintf(f, L"# Edit freely; reloaded on every area change. Clear a label by emptying it.\n");
     fwprintf(f, L"# container/slot are diagnostics only -- the identity is mapId + baseLabel + nameIdx,\n");
     fwprintf(f, L"# with the position breaking ties between objects that share all three.\n");
+    fwprintf(f, L"# Only entries YOU named live here. Duplicate numbering is NOT stored -- it is worked\n");
+    fwprintf(f, L"# out fresh on every scan, so it can neither drift nor accumulate in this file.\n");
     for (const auto& r : g_recs) {
-        fwprintf(f, L"%d %d %d %.2f %.2f %.2f %u %u | %s = %s\n", r.mapId,
-                 static_cast<int>(r.nameIdx), r.number, r.anchor.x, r.anchor.y, r.anchor.z,
+        fwprintf(f, L"%d %d %.2f %.2f %.2f %u %u | %s = %s\n", r.mapId,
+                 static_cast<int>(r.nameIdx), r.anchor.x, r.anchor.y, r.anchor.z,
                  static_cast<unsigned>(r.container), static_cast<unsigned>(r.slot),
                  r.baseLabel.empty() ? L"-" : r.baseLabel.c_str(), r.label.c_str());
     }
@@ -135,18 +146,26 @@ void Load() {
     int     ver = 0;
     if (!fgetws(line, 512, f) || swscanf_s(line, L"version %d", &ver) != 1 || ver != kFormatVersion) {
         fclose(f);
-        char m[128];
-        snprintf(m, sizeof(m), "entity labels: store is version %d, this build wants %d -- discarded",
+        char m[160];
+        snprintf(m, sizeof(m), "entity labels: store is version %d, this build wants %d -- discarded "
+                               "and rewritten empty",
                  ver, kFormatVersion);
         Log::Write("NAV-DIAG", m);
+        // REWRITE, don't merely refuse. The old code left the stale file on disk, and `Reload()` runs
+        // on EVERY area change, so this line repeated for the rest of the session -- and once numbers
+        // stopped being persisted, nothing would ever have overwritten the file at all. Writing the
+        // empty store at the new version makes the next Load silent and DELETES the leaked records
+        // (the v2 file held 39 "Cockatrice" rows for six real animals). Save() does not call Load(),
+        // so this is not re-entrant.
+        Save();
         return;
     }
     while (fgetws(line, 512, f)) {
         if (line[0] == L'#' || line[0] == L'\n') continue;
         Rec r;
-        int   mp = 0, ni = 0, num = 0, ct = 0, sl = 0;
+        int   mp = 0, ni = 0, ct = 0, sl = 0;
         float x = 0.0f, y = 0.0f, z = 0.0f;
-        if (swscanf_s(line, L"%d %d %d %f %f %f %d %d", &mp, &ni, &num, &x, &y, &z, &ct, &sl) != 8)
+        if (swscanf_s(line, L"%d %d %f %f %f %d %d", &mp, &ni, &x, &y, &z, &ct, &sl) != 7)
             continue;
         const wchar_t* bar = wcschr(line, L'|');
         if (!bar) continue;
@@ -154,7 +173,6 @@ void Load() {
         if (!eq) continue;
         r.mapId     = mp;
         r.nameIdx   = static_cast<int16_t>(ni);
-        r.number    = num;
         r.anchor    = FVec3{ x, y, z };
         r.container = static_cast<uint8_t>(ct);
         r.slot      = static_cast<uint16_t>(sl);
@@ -165,6 +183,9 @@ void Load() {
     }
     fclose(f);
 
+    // Silent on an empty store: Reload() fires on every area change and an empty file has nothing
+    // to say. CONSOLE OUTPUT BUDGET.
+    if (g_recs.empty()) return;
     int named = 0;
     for (const auto& r : g_recs) if (!r.label.empty()) ++named;
     char m[128];
@@ -228,46 +249,16 @@ void SetLabel(int mapId, int16_t nameIdx, const std::wstring& baseLabel, const F
     Save();   // persist immediately -- a crash must not cost the player the naming they just did
 }
 
-int NumberFor(int mapId, int16_t nameIdx, const std::wstring& baseLabel, const FVec3& pos,
-              uint8_t container, uint16_t slot) {
-    Init();
-    Rec* r = Match(mapId, nameIdx, baseLabel, pos, /*claim=*/true);
-    if (r && r->number > 0) return r->number;
-
-    // Lowest number not yet handed out under this name on this map. Small and speakable, and it never
-    // moves once assigned -- which is the entire point.
-    //
-    // `&o == r` SKIPS THE RECORD BEING RENUMBERED. Without it a record already holding 2 saw its own 2
-    // as taken and moved to 3, so numbers could only ever creep upward and a vacated one was never
-    // reclaimed -- which is how map 243 ended up with Nomads 1, 3, 5, 6 and 7.
-    int n = 1;
-    for (bool taken = true; taken; ++n) {
-        taken = false;
-        for (const auto& o : g_recs) {
-            if (&o == r) continue;
-            if (o.mapId == mapId && o.number == n && o.baseLabel == baseLabel) { taken = true; break; }
-        }
-        if (!taken) break;
-    }
-
-    if (!r) {
-        Rec nr;
-        nr.mapId     = mapId;
-        nr.nameIdx   = nameIdx;
-        nr.baseLabel = baseLabel;
-        nr.anchor    = pos;
-        nr.number    = n;
-        nr.container = container;
-        nr.slot      = slot;
-        nr.claim     = g_scanSeq;
-        g_recs.push_back(nr);
-    } else {
-        r->number    = n;
-        r->container = container;
-        r->slot      = slot;
-    }
-    Save();
-    return n;
-}
+// `NumberFor` LIVED HERE AND IS GONE (Session 81).
+//
+// It allocated a fresh record whenever `Match` failed, which for an object that ROAMS was every time
+// it wandered more than kAnchorDist from an anchor that is deliberately never refreshed. Nothing
+// capped, evicted or cleaned up, and the free-number search counted every leaked record as taken, so
+// the number could only climb. The live v2 store held **39 records labelled "Cockatrice", numbered
+// 1..39, for six real animals**, and the tester heard "Cockatrice 37".
+//
+// Duplicate numbering now happens in EntityScan::NumberDuplicateLabels, within one scan, keyed on the
+// object's own slot in the game's handle table, and is never written down. A store cannot leak
+// numbers it does not hold. What remains here is what this file was always for: the player's own words.
 
 } // namespace EntityLabels

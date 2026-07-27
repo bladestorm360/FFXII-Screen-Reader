@@ -321,6 +321,18 @@ constexpr uint32_t CTX_WORLD_OFF = 0x60;  // *(context+0x60) = live Bullet world
 constexpr uint32_t SCENEOBJ_TYPE_BYTE   = 0x03;   // low5 = category, high3 = class (diagnostic only)
 constexpr uint32_t SCENEOBJ_XFORM_PTR   = 0xB8;   // *(sceneObj+0xB8) -> transform node
 
+// Scene CATEGORY = the low 5 bits of SCENEOBJ_TYPE_BYTE. 5-7 are the classes carrying a char
+// component (people/actors); 1-4 are position-only props and 0 is a null-node trigger. That much is
+// established. There is NO established meaning for 5 vs 6 vs 7 individually.
+//
+// **STRUCK (Session 82) — `SCENE_CAT_PARTY/MAP_NPC/CREATURE = 5/6/7`.** Added the session before on
+// one map's dump, where category 5 held the leader plus three unnamed bodies and 6 held every map
+// NPC, and read as "5 = the party". The tester refuted it immediately: *"these are not party members,
+// I have no other party members currently."* The falsification dump agreed -- every object the
+// exclusion removed sat at the world ORIGIN, i.e. it was an unplaced reserve slot, which is a fact
+// about POSITION that was misread as a fact about ROLE. The constants are deleted rather than
+// renamed: nothing may key on this split until something other than one map says what it means.
+
 // ---- The game's OWN chosen interaction target (Session 73) ---------------------------------------
 // Written by FUN_0025bad0 / FUN_0025be50 (the scorers, reached from the per-field-frame scanner
 // FUN_0025b820), reset every frame by FUN_0025d650, consumed by the confirm handler FUN_00268d10.

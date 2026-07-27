@@ -86,6 +86,18 @@ constexpr float kSignObjectDist = 2.5f;
 // the rule is "literally the same coordinates", because at any real separation they are two people
 // the game happened to give one name, and deleting one of those cost a tester a story NPC.
 constexpr float kStackedDist    = 0.05f;
+// An unnamed character standing this far ABOVE the floor beneath it is not standing on the map. Three
+// bodies on Nomad Village sat at the player's spawn point at Y=6.06 with the only floor at that XZ
+// 6.06 below, and were announced as "NPC 1..3" -- they are the ones the tester heard say "(above)".
+//
+// ONE-SIDED, and generous. An object BELOW the floor is untouched (that is what a basement or a sunken
+// walkway looks like), and the threshold sits between the existing kTierStep (1.5) and kAtExitDy (3.0)
+// so a person standing on a crate the walkmap does not model is nowhere near it.
+constexpr float kFloatingDrop   = 2.0f;
+// Slack when testing an unnamed character against the reachable set. Much tighter than kExitReachTol
+// (4.5) below: a door trigger legitimately sits a cell or two past the last walkable sample, a person
+// standing in a village does not.
+constexpr float kNpcReachTol    = 1.5f;
 
 // ---- POST-SCAN PASSES (entity_postscan.cpp) -----------------------------------------------------
 // Everything that runs over the FINISHED object list rather than finding objects. Declared here so
@@ -99,6 +111,29 @@ uint16_t ObjectHandle(void* sceneObj);
 void LogObjectDump(const std::vector<Entity>& out);
 void DropShadowRegistrations(std::vector<Entity>& out);
 void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail);
+
+// Unnamed characters that are not standing on the map, or that the party cannot walk to. Runs right
+// after the shadow drop, while the list is still just handle-table objects.
+void DropUnplacedCharacters(std::vector<Entity>& out, bool logDetail);
+
+// ---- What this scan DELIBERATELY removed --------------------------------------------------------
+// Every drop pass records the scene object it erased, and `Build` publishes the list.
+//
+// THE CALLER'S GRACE WINDOW MUST CONSULT IT. RescanLocked carries an entity over when its scene object
+// is missing from the fresh list, to survive the handle table streaming an object out for a frame --
+// and it cannot otherwise tell "the engine stopped reporting it" from "we just filtered it out". A
+// filtered object is a LIVE engine object, so its transform keeps reading, so `lastSeenMs` keeps being
+// refreshed, so it never ages out: once carried it is permanent for the life of the map, while Build
+// goes on logging the drop on every rescan. That is a filter that logs success and changes nothing.
+void NoteFiltered(void* sceneObj);
+bool WasFilteredThisScan(void* sceneObj);
+
+// Tally for the `inclusion:` line: true = dropped for floating, false = dropped as unreachable.
+void NoteUnplacedDrop(bool floating);
+// These two run in the CALLER (EntityList::Internal::RescanLocked), after it has merged its
+// grace-window survivors -- not inside Build. Numbering is assigned within one scan now, so it has to
+// see the same list the player hears or a carried entity keeps a suffix the survivors have re-used.
+// Order matters: player labels first, so a named entity leaves its duplicate group entirely.
 void ApplyPlayerLabels(std::vector<Entity>& out);
 void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail);
 
@@ -109,7 +144,11 @@ constexpr float kExitReachTol = 4.5f;
 
 // Rebuild `out` from scratch: handle-table objects, then combatants, then map exits. Returns the
 // count; empty and 0 when the field isn't active. The caller holds its own list lock.
-int Build(std::vector<Entity>& out);
+//
+// `outDetail` receives the once-per-map diagnostic latch. The caller needs it because the two LABEL
+// passes below no longer run in here -- they run after the caller has merged its grace-window
+// survivors, so that the list which gets numbered is the list the player actually hears.
+int Build(std::vector<Entity>& out, bool* outDetail = nullptr);
 
 // Bitmask of currently-active handle-table containers (bit c set iff container c is active).
 // Memory-only; touches only the handle table, so the per-frame tick can detect a container-set

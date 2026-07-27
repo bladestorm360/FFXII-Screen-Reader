@@ -59,7 +59,8 @@ constexpr uint64_t kEntityGraceMs = 2000;
 // Full rebuild, then carry over anything that has only just stopped being reported.
 int RescanLocked() {
     std::vector<Entity> fresh;
-    EntityScan::Build(fresh);
+    bool detail = false;
+    EntityScan::Build(fresh, &detail);
     const uint64_t now = GetTickCount64();
 
     // Anything present this scan is current; anything missing keeps the timestamp it already had, so
@@ -76,9 +77,30 @@ int RescanLocked() {
         bool stillThere = false;
         for (const auto& e : fresh) if (e.sceneObj == old.sceneObj) { stillThere = true; break; }
         if (stillThere) continue;
+        // MISSING BECAUSE WE DELETED IT, not because the engine stopped reporting it.
+        //
+        // This loop cannot tell those apart on its own, and the difference is permanent: a filtered
+        // object is a LIVE engine object, so RefreshPositionsLocked keeps reading its transform and
+        // keeps stamping `lastSeenMs`, so it can never age out of the grace window. Once carried in,
+        // it stays for the life of the map -- while the scan goes on logging the drop on every single
+        // rescan. That is a filter that reports success and changes nothing, and it silently undid
+        // both the shadow drop and the unplaced-character pass.
+        if (EntityScan::WasFilteredThisScan(old.sceneObj)) continue;
         if (old.lastSeenMs == 0 || now - old.lastSeenMs > kEntityGraceMs) continue;   // really gone
         fresh.push_back(old);                              // keep it, with its last known position
     }
+
+    // LABELLING RUNS HERE, NOT INSIDE Build -- after the merge above, so the list that gets numbered
+    // is the list the player actually hears. It used to run at the end of Build, which the persistent
+    // store made harmless (a number, once assigned, was permanent). Now that numbers are worked out
+    // within a scan it would be a live bug: a group member that streams out for a frame leaves the
+    // survivors to compact to 1..N-1 while the carried entity still holds its old suffix, so two
+    // entries would answer to one number for up to the whole grace window.
+    //
+    // Both passes are idempotent, which is what makes it safe to run them over carried entities that
+    // have already been through them once.
+    EntityScan::ApplyPlayerLabels(fresh);
+    EntityScan::NumberDuplicateLabels(fresh, detail);
 
     g_entities.swap(fresh);
     return static_cast<int>(g_entities.size());
@@ -149,6 +171,11 @@ bool ReadPlayer(FVec3& pos) {
 // the focused NPC unrecognisable. FindFocusInViewLocked then returned -1 and CycleLocked restarted at
 // view[0] -- the NEAREST. That is the reported "tracking Rabanastran 7, kept dropping back to 5".
 //
+// CORRECTED (Session 81): that fix reached tier 2 only. Tier 1 still compared the SUFFIXED label, so
+// the same failure survived through the re-lock door -- and stateless numbering, which recompacts a
+// group the moment a member streams out, makes a renumber more likely rather than less. Tier 1 now
+// compares `baseLabel`, the un-suffixed words, which no renumber can change.
+//
 // A nearer entity can now change nothing the cursor looks at, so it can never steal the focus.
 int CursorMatch(const Entity& e) {
     if (!g_cursor.valid) return 0;
@@ -160,7 +187,8 @@ int CursorMatch(const Entity& e) {
         return 2;
     }
     // Re-lock only when the object itself is gone and something equivalent took its place.
-    if (e.nameIdx == g_cursor.nameIdx && e.label == g_cursor.label && e.category == g_cursor.cat)
+    const std::wstring& base = e.baseLabel.empty() ? e.label : e.baseLabel;
+    if (e.nameIdx == g_cursor.nameIdx && base == g_cursor.baseLabel && e.category == g_cursor.cat)
         return 1;
     return 0;
 }
@@ -181,7 +209,10 @@ int FindFocusInViewLocked(const std::vector<size_t>& view) {
 void SetFocusLocked(const Entity& e) {
     g_cursor.obj = e.sceneObj;
     g_cursor.nameIdx = e.nameIdx;
-    g_cursor.label = e.label;
+    // Un-suffixed, so a renumber cannot make the focused entity unrecognisable. `baseLabel` is empty
+    // only for an entity that reached here without passing ApplyPlayerLabels; fall back to the spoken
+    // label so the re-lock still has something to compare.
+    g_cursor.baseLabel = e.baseLabel.empty() ? e.label : e.baseLabel;
     g_cursor.cat = e.category;
     g_cursor.valid = true;
 }

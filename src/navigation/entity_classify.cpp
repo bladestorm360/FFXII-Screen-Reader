@@ -29,17 +29,46 @@ const wchar_t* CategoryWord(Category c) {
     }
 }
 
-// npcdic codec-string pointer for a name index — replicates FUN_003eac10 (the game's
-// own npcdic lookup) memory-only. The blob is loaded once at boot; DAT_02b5e0d8 holds
-// its base. Even slot = display name (odd = yomi/reading). The offset table stores
-// relocated absolute pointers as s32, read here exactly as the game does; 0 /
-// out-of-range -> null.
-const uint8_t* NpcdicName(int id) {
+// How many objects this scan spoke the ODD npcdic slot -- i.e. a name the mod would NOT have
+// said before Session 81. Paired with the `TalkNameKnown` tally on the same log line, the
+// difference is exactly what this change newly reveals. Session 79's rule: a change that cannot
+// be sized offline ships with its own counter.
+int s_oddSlotWins = 0;
+
+void ResetNameStats() { s_oddSlotWins = 0; }
+int  OddSlotWins()    { return s_oddSlotWins; }
+
+// Has the player been introduced to this character? Replicates FUN_0032a930 — a live
+// per-name-id bitfield in the game's own state block, which the `settalknpcname` /
+// `releasetalknpcname` script natives write and `istalknpcname` reads back.
+//
+// DEMOTED TO DIAGNOSTICS (Session 81). It used to select which npcdic slot the mod spoke; it no
+// longer does, because the mod now prefers the personal name whenever the dictionary carries a
+// distinct one. Its only caller is the `inclusion:` tally, where it answers "how many of the
+// personal names we are speaking has the player actually been introduced to".
+// Pure reads; TALK_NAME_STATE is a static array, never dereferenced.
+bool TalkNameKnown(int id) {
+    if (id < 0 || id >= NavRva::TALK_NAME_MAX_ID) return false;
+    void* base = Hooks::ResolveRva(NavRva::TALK_NAME_STATE);
+    if (!base) return false;
+    uint8_t bits = 0;
+    if (!SafeReadU8(base, NavRva::TALK_NAME_BITMAP + static_cast<uint32_t>(id >> 3), &bits))
+        return false;
+    return (bits & (1u << (id & 7))) != 0;
+}
+
+namespace {
+
+// npcdic codec-string pointer for one SLOT — replicates FUN_003eac10 (the game's own npcdic
+// lookup) memory-only. The blob is loaded once at boot; DAT_02b5e0d8 holds its base. The offset
+// table stores relocated absolute pointers as s32, read here exactly as the game does; 0 /
+// out-of-range -> null. `odd` picks slot id*2+1 over id*2.
+const uint8_t* NpcdicSlot(int id, bool odd) {
     void* blob = PtrAt(Hooks::ResolveRva(NavRva::NPCDIC_BASE), 0);
     if (!blob) return nullptr;
     uint32_t count = 0;
     if (!SafeReadU32(blob, NavRva::NPCDIC_COUNT_OFF, &count)) return nullptr;
-    uint32_t slot = static_cast<uint32_t>(id) * 2;
+    const uint32_t slot = static_cast<uint32_t>(id) * 2 + (odd ? 1u : 0u);
     if (slot >= count) return nullptr;
     uint32_t entry = 0;
     if (!SafeReadU32(blob, NavRva::NPCDIC_TABLE_OFF + slot * 4, &entry) || entry == 0)
@@ -49,22 +78,67 @@ const uint8_t* NpcdicName(int id) {
         static_cast<intptr_t>(static_cast<int32_t>(entry)));
 }
 
+// Decode + validate ONE codec pointer. Empty for null, for the engine's EMPTY_STRING sentinel, and
+// for a blob that does not decode to printable text. Both npcdic slots go through this, so the
+// sentinel check now guards both -- it used to guard only the single chosen pointer.
+std::wstring DecodeCodec(const uint8_t* codec) {
+    if (!codec) return std::wstring();
+    void* empty = Hooks::ResolveRva(NavRva::EMPTY_STRING);
+    if (reinterpret_cast<void*>(const_cast<uint8_t*>(codec)) == empty) return std::wstring();
+    std::wstring s = GameText::Decode(codec, 256);
+    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
+// The name the mod SPEAKS for an npcdic id. Slot = id*2 (generic) or id*2+1 (personal), chosen the
+// way the ENGINE chooses it: `FUN_00263990` uses `id*2 + FUN_0032a930(id)`, so the personal name
+// appears only once the story has introduced that character.
+//
+// **STRUCK (Session 82): "the odd slot wins whenever the dictionary carries a distinct one."** That
+// shipped for one session and was wrong in play. It read "Dania" for someone the game still calls
+// "Nomad", i.e. it told the player a name the game had deliberately not given them yet -- a spoiler,
+// and a divergence from the label on screen. The tester had already confirmed the gated behaviour was
+// correct ("was Nomad 2 before, then Dania once interacted with") and reverted it on sight.
+//
+// The lesson is about the ORDER of the two questions. Reading the odd slot was a genuine fix for the
+// mod reading the WRONG slot for characters the player had met. Extending it to characters they had
+// NOT met was a separate decision dressed up as the same one, and it traded a correctness fix for a
+// behaviour change nobody had asked for. Ship the fix; leave the behaviour alone.
+//
+// POINTER equality is still tested before decoding when the bit is set: the same s32 offset is the
+// same bytes, so it is exactly equivalent to comparing the decoded strings and it keeps the common
+// case (894 of 1141 ids share both slots) at a single decode.
+std::wstring NpcdicDisplayName(int id) {
+    const uint8_t* even = NpcdicSlot(id, /*odd=*/false);
+    if (TalkNameKnown(id)) {
+        const uint8_t* odd = NpcdicSlot(id, /*odd=*/true);
+        if (odd && odd != even) {
+            std::wstring personal = DecodeCodec(odd);
+            if (!personal.empty()) { ++s_oddSlotWins; return personal; }
+        }
+    }
+    return DecodeCodec(even);
+}
+
+}  // namespace
+
 // The game's own (current-locale) display name for a field object, read memory-only
 // from its SCENE OBJECT exactly as FUN_00263990 does: a name index at +0x102 selects
 // the global npcdic dictionary; a negative index means a per-map custom string at
 // +0xf8 (set by the map's fieldsignmes script). Empty on failure -> caller falls back
 // to a category word. No game-function call — pure reads, SEH-guarded via MemRead.
+//
+// The odd-slot preference lives HERE rather than in the scanner on purpose: `entity_diag.cpp`'s
+// dump and `interact_target.cpp`'s "what am I about to press Enter on" announcement both call this,
+// so the list and the interaction prompt can never disagree about a person's name.
 std::wstring ResolveObjectName(void* sceneObj) {
     if (!sceneObj) return L"";
     int16_t idx = 0;
     if (!SafeReadS16(sceneObj, NavRva::SCENEOBJ_NAME_IDX, &idx)) return L"";
-    const uint8_t* codec =
-        (idx < 0) ? reinterpret_cast<const uint8_t*>(PtrAt(sceneObj, NavRva::SCENEOBJ_NAME_STR))
-                  : NpcdicName(static_cast<int>(static_cast<uint32_t>(idx) & NavRva::NPCDIC_NAME_MASK));
-    void* empty = Hooks::ResolveRva(NavRva::EMPTY_STRING);
-    if (!codec || reinterpret_cast<void*>(const_cast<uint8_t*>(codec)) == empty) return L"";
-    std::wstring s = GameText::Decode(codec, 256);
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+    if (idx < 0)   // per-map custom string, written by the map's fieldsignmes script
+        return DecodeCodec(
+            reinterpret_cast<const uint8_t*>(PtrAt(sceneObj, NavRva::SCENEOBJ_NAME_STR)));
+    return NpcdicDisplayName(static_cast<int>(static_cast<uint32_t>(idx) &
+                                             NavRva::NPCDIC_NAME_MASK));
 }
 
 // (The current-area name is resolved via MapNames::CurrentMapId + ResolveMapName/ResolveRegionName —

@@ -26,7 +26,11 @@ using EntityScan::Entity;
 struct CursorId {
     void*        obj     = nullptr;
     int16_t      nameIdx = 0;
-    std::wstring label;
+    // The UN-SUFFIXED words, not the spoken label. The re-lock tier compares this because a duplicate
+    // number is not identity: it is a position within a group, and it legitimately changes when a
+    // group member streams out and the survivors compact. Comparing the suffixed label there is the
+    // bug the CursorMatch comment describes as already fixed -- it was fixed in tier 2 only.
+    std::wstring baseLabel;
     Category     cat     = Category::All;
     bool         valid   = false;
 };

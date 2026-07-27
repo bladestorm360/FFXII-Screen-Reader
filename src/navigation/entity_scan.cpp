@@ -1,5 +1,4 @@
 #include "navigation/entity_scan.h"
-#include "navigation/entity_labels.h"
 #include "navigation/entity_classify.h"
 #include "navigation/nav_rva.h"
 #include "navigation/map_rva.h"
@@ -38,6 +37,26 @@ int s_poolKind5  = 0;   // actor-pool entries skipped as KIND_DEAD, a constant d
 int s_newKind1   = 0;   // admitted ONLY by the KIND+model route, kind 1 (person)
 int s_newKind5   = 0;   // admitted ONLY by the KIND+model route, kind 5 (gimmick/story NPC)
 int s_newChar    = 0;   // of those, how many are CHARACTERS -- the class that used to be rejected
+int s_knownName  = 0;   // objects speaking the PERSONAL npcdic name because the player knows it
+                        // (odd slot; e.g. "Arjie" rather than "Nomad"). Shipped WITH the change that
+                        // introduced it -- Session 79's lesson was that a change which cannot be sized
+                        // offline must carry its own counter, not an assurance.
+int s_unplaced   = 0;   // unnamed characters dropped for floating above the floor
+int s_unreach    = 0;   // unnamed characters dropped for being outside the reachable component
+
+// Scene objects this scan deliberately erased. Published so the caller's grace window cannot carry
+// them straight back in -- see the note on NoteFiltered in entity_scan.h.
+std::vector<void*> s_filtered;
+}
+
+void NoteFiltered(void* sceneObj) { if (sceneObj) s_filtered.push_back(sceneObj); }
+
+void NoteUnplacedDrop(bool floating) { if (floating) ++s_unplaced; else ++s_unreach; }
+
+bool WasFilteredThisScan(void* sceneObj) {
+    if (!sceneObj) return false;
+    for (void* p : s_filtered) if (p == sceneObj) return true;
+    return false;
 }
 // --- helpers ---------------------------------------------------------------
 // The per-object judgement layer -- CategoryWord / ResolveObjectName / InGimmickBand /
@@ -59,7 +78,6 @@ bool HasModel(void* sceneObj) {
     return SafeReadU8(sceneObj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
            (ready & NavRva::READY_MODEL_BIT) != 0;
 }
-
 
 // Append live COMBATANTS (allies + enemies) from the BtlWork pool. Field NPCs/gimmicks come
 // from the handle table above; battle combatants (party, guests, enemies) live in this pool
@@ -134,13 +152,18 @@ void ScanCombatants(std::vector<Entity>& out) {
 // The scene object's own handle (u16 at +0x00 — the value the engine stores as the "nearest
 // interactable" id in FUN_0025bad0). Stable for as long as the map is loaded, so it is a sound
 // tie-break for numbering. 0xFFFF for a fixed exit, which has no scene object.
-int BuildLocked(std::vector<Entity>& out) {
+int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     out.clear();
     s_charByName = 0;
     s_poolKind5  = 0;
     s_newKind1   = 0;
     s_newKind5   = 0;
     s_newChar    = 0;
+    s_knownName  = 0;
+    s_unplaced   = 0;
+    s_unreach    = 0;
+    s_filtered.clear();
+    ResetNameStats();
     if (!PlayerState::IsFieldActive()) return 0;
 
     void* base = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
@@ -220,6 +243,17 @@ int BuildLocked(std::vector<Entity>& out) {
             // wearing the other kind -- a story NPC whose talk hook the script has not yet armed is
             // exactly as invisible. Fixing only kind 5 would repair this map and leave the kind-1 case
             // to be rediscovered on some later one.
+            //
+            // STRUCK (Session 83) -- the `&& storyOn` story gate this route carried for one session.
+            //
+            // It required `+0x0E & 0x10`, the engine's own interactivity switch, on the theory that the
+            // bare "NPC n" entries were bodies the script had not switched on. It shipped with the
+            // counter that would falsify it, and the counter came back **zero**: every one of those
+            // objects reads `en=1`. The theory was wrong and the clause is gone.
+            //
+            // What replaced it is not another guess about what these objects ARE. It is
+            // DropUnplacedCharacters, which asks where they are -- on the floor, and reachable -- and
+            // that is a question the walkmap can answer. See entity_postscan.cpp.
             const bool present     = (kind == NavRva::KIND_TALK_TARGET ||
                                       kind == NavRva::KIND_ACTION_GIMMICK) && HasModel(obj);
             // A CHARACTER'S NAME IS NOW AN INCLUSION REASON TOO (Session 77).
@@ -234,9 +268,31 @@ int BuildLocked(std::vector<Entity>& out) {
             //
             // A named character is a real person standing in the world whether or not you may talk to
             // them yet; `available` already carries the "can I act on it" half.
-            std::wstring name;
-            if (nameIdx != 0) name = ResolveObjectName(obj);
+            // ONE resolve per object. This used to run under `if (nameIdx != 0)` and then again
+            // unconditionally further down, which was pure repetition for anything that resolved
+            // empty -- and it now costs a codec decode pair, so the second call is gone.
+            std::wstring name = ResolveObjectName(obj);
             const bool named = !name.empty();
+            // How many of the names spoken are the PERSONAL one, i.e. a character the player has been
+            // introduced to. Session 81 briefly made this decide nothing by preferring the odd slot
+            // unconditionally; that was struck the same day (see NpcdicDisplayName), so it is once
+            // again both the selector and the measurement. `OddSlotWins()` should now track it.
+            if (named && nameIdx > 0 &&
+                TalkNameKnown(static_cast<int>(static_cast<uint32_t>(nameIdx) &
+                                               NavRva::NPCDIC_NAME_MASK))) ++s_knownName;
+            // STRUCK (Session 82) -- the "party / roster body" exclusion that used to sit here.
+            //
+            // It dropped unnamed scene-category-5 objects on the theory that they were the player's
+            // party. The tester refuted it in one line: *"these are not party members, I have no other
+            // party members currently."* The falsification dump it shipped with says the same thing
+            // from the other side -- every object it removed read `pos=(0.00,0.00,0.00)`, i.e. the
+            // WORLD ORIGIN, which the unplaced-reserve guard further down already drops. The
+            // exclusion was simultaneously built on a wrong premise and doing nothing.
+            //
+            // LESSON: the three bodies that inspired it sat at ONE shared position 6 m above the
+            // floor. That is "unplaced", which is a fact about their position, and I read it as
+            // "party", which is a claim about their role. The dump was added to catch exactly this
+            // and it did -- on the first map that was not the one the theory came from.
             // Counted, not assumed: this widening was shipped on a documented inference, not on
             // evidence that it fires. The tally says whether it actually admits anything, and how
             // much, before anyone treats it as the fix.
@@ -277,10 +333,9 @@ int BuildLocked(std::vector<Entity>& out) {
             e.slot = static_cast<uint16_t>(i);
             SafeReadU16(obj, NavRva::SCENEOBJ_ACTION_ID, &e.actionId);
             SafeReadU16(obj, NavRva::SCENEOBJ_TALK_ID, &e.talkId);
-            e.label = name;   // resolved above (empty for a flagged/character object)
+            e.label = name;   // resolved ONCE above, for every object
             e.category = ClassifyByNameKey(flags, e.nameIdx, isCharacter, kind);
             e.available = IsInteractionAvailable(obj, kind, flags);
-            if (e.label.empty()) e.label = ResolveObjectName(obj);         // flagged char/gimmick name
             // `gameNamed` records whether the words came from the GAME or from our category fallback.
             // The sign-twin drop keys on it, so two anonymous objects that both fell back to the word
             // "Interactables" can never be mistaken for a duplicate pair.
@@ -312,6 +367,9 @@ int BuildLocked(std::vector<Entity>& out) {
     // never become a tagging anchor. Runs unconditionally: unlike the sign-twin filter it needs no
     // field-sign table, and the include-by-KIND widening above is what makes shadows reachable at all.
     DropShadowRegistrations(out);
+    // Unnamed characters that are not standing on the map, or that the party cannot walk to. After the
+    // shadow drop so a phantom cannot have been someone else's stacking anchor first.
+    DropUnplacedCharacters(out, detail);
     // Doorway tagging + sign-twin removal, while the list is still just handle-table objects.
     TagDoorwaysAndDropSignTwins(out, detail);
     if (detail) LogObjectDump(out);
@@ -329,19 +387,16 @@ int BuildLocked(std::vector<Entity>& out) {
     // not the handle table, not the actor pool, but the engine's own 10-slot drop pool.
     ItemScan::ScanDrops(out);
 
-    // Same-label disambiguation. The game itself gives 109 different npcdic ids the display name
-    // "Rabanastran" (1141 ids, 554 distinct names), and there is no second name to fall back on --
-    // FUN_00263990's odd npcdic slot is byte-identical to the even one in the US build. So a list of
-    // twelve "Rabanastran"s is the game's own text, and the only honest fix is to NUMBER them rather
-    // than invent descriptions. Labels that occur once are left alone.
-    //
-    // This also numbers the exits whose destination did not resolve: several bare "Exit" entries become
-    // "Exit 1", "Exit 2", which keeps them separable without inventing a destination for any of them.
-    //
-    // The player's own labels are applied FIRST, so a named entity leaves its counting group entirely
-    // and the rest keep the numbers they already had.
-    ApplyPlayerLabels(out);
-    NumberDuplicateLabels(out, detail);
+    // ApplyPlayerLabels + NumberDuplicateLabels USED TO RUN HERE, and that was a latent bug the
+    // persistent store happened to hide. RescanLocked merges the grace-window survivors into this
+    // list AFTER Build returns, so the list the player hears was never the list that got numbered.
+    // While numbers were persistent that was harmless -- a carried entity's number was permanent and
+    // could not collide. Once numbers are assigned within a scan it is not: a group member that
+    // streams out for a frame leaves the survivors to compact 1..N-1 while the carried entity still
+    // holds its old suffix, so two entries can answer to the same number for up to the 2 s grace
+    // window. Both passes now run in RescanLocked, after the merge, over the list that is actually
+    // spoken. `detail` rides out through the out-param so the dup-group dump still fires once per map.
+    if (outDetail) *outDetail = detail;
 
     // Per-category breakdown (confirms the categorization: NPCs/Enemies stay out of Interactables).
     int cc[static_cast<int>(Category::Count)] = {};
@@ -359,13 +414,18 @@ int BuildLocked(std::vector<Entity>& out) {
              cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
              cc[(int)Category::Items], gated);
     Log::Write("NAV", msg);
-    if (s_charByName > 0 || s_poolKind5 > 0 || s_newKind1 > 0 || s_newKind5 > 0) {
-        char im[288];
+    if (s_charByName > 0 || s_poolKind5 > 0 || s_newKind1 > 0 || s_newKind5 > 0 ||
+        s_unplaced > 0 || s_unreach > 0 || OddSlotWins() > 0) {
+        char im[416];
         snprintf(im, sizeof(im),
                  "inclusion: by-KIND+model kind1=%d kind5=%d (of which %d are CHARACTERS) | "
                  "%d character(s) admitted by NAME ONLY (no interaction flags) | "
-                 "%d actor-pool entr(ies) skipped as KIND_DEAD(5), which debug.md records as NPC",
-                 s_newKind1, s_newKind5, s_newChar, s_charByName, s_poolKind5);
+                 "%d actor-pool entr(ies) skipped as KIND_DEAD(5), which debug.md records as NPC | "
+                 "%d unnamed dropped as NOT ON THE FLOOR, %d as UNREACHABLE | "
+                 "%d spoke the PERSONAL npcdic name, %d of them already introduced (%d newly revealed)",
+                 s_newKind1, s_newKind5, s_newChar, s_charByName, s_poolKind5,
+                 s_unplaced, s_unreach,
+                 OddSlotWins(), s_knownName, OddSlotWins() - s_knownName);
         Log::Write("NAV", im);
     }
     return static_cast<int>(out.size());
@@ -386,6 +446,6 @@ uint32_t ActiveContainerMask() {
     return mask;
 }
 
-int Build(std::vector<Entity>& out) { return BuildLocked(out); }
+int Build(std::vector<Entity>& out, bool* outDetail) { return BuildLocked(out, outDetail); }
 
 } // namespace EntityScan

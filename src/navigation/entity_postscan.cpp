@@ -2,6 +2,8 @@
 #include "navigation/entity_classify.h"
 #include "navigation/entity_list_internal.h"
 #include "navigation/nav_rva.h"
+#include "navigation/nav_mesh.h"
+#include "navigation/nav_reach.h"
 #include "navigation/nav_common.h"
 #include "navigation/map_exits.h"
 #include "navigation/map_names.h"
@@ -63,10 +65,17 @@ void LogObjectDump(const std::vector<Entity>& out) {
                 n8[k] = (landmark->label[k] < 128) ? static_cast<char>(landmark->label[k]) : '?';
             snprintf(nb, sizeof(nb), "\"%s\" %.1fm", n8, nearD);
         }
-        char m[288];
+        // `en` = the engine's own interactivity switch (+0x0E & 0x10), read live. It is in this dump
+        // because Session 82 needed it and it was the one field the dump did not carry: nineteen bare
+        // "NPC n" entries could not be told from real story NPCs without it, and the answer had to wait
+        // for a `'` dump that was never taken on that map.
+        uint8_t enByte = 0;
+        MemRead::SafeReadU8(e.sceneObj, NavRva::SCENEOBJ_ENABLE_OFF, &enByte);
+        char m[312];
         snprintf(m, sizeof(m),
-                 "obj [%u:%u] kind=%u flags=%08X nameIdx=%d act=%u talk=%u door=%d named=%d avail=%d cat=%d pos=(%.2f,%.2f,%.2f) \"%s\" near=%s",
-                 e.container, e.slot, e.kind, e.flags, e.nameIdx, e.actionId, e.talkId,
+                 "obj [%u:%u] kind=%u en=%d flags=%08X nameIdx=%d act=%u talk=%u door=%d named=%d avail=%d cat=%d pos=(%.2f,%.2f,%.2f) \"%s\" near=%s",
+                 e.container, e.slot, e.kind, (enByte & NavRva::INTERACT_ENABLE_BIT) ? 1 : 0,
+                 e.flags, e.nameIdx, e.actionId, e.talkId,
                  e.doorway ? 1 : 0, e.gameNamed ? 1 : 0, e.available ? 1 : 0,
                  static_cast<int>(e.category), e.pos.x, e.pos.y, e.pos.z, lbl, nb);
         Log::Write("NAV-DIAG", m);
@@ -117,8 +126,105 @@ void DropShadowRegistrations(std::vector<Entity>& out) {
                  cur.container, cur.slot, cur.nameIdx, cur.pos.x, cur.pos.y, cur.pos.z, n8,
                  out[anchor].container, out[anchor].slot);
         Log::Write("NAV-DIAG", m);
+        NoteFiltered(cur.sceneObj);   // so the caller's grace window cannot carry it straight back in
         out.erase(out.begin() + static_cast<long long>(i));
     }
+}
+
+// UNNAMED CHARACTERS THAT ARE NOT ON THE MAP, OR THAT THE PARTY CANNOT REACH.
+//
+// The complaint this exists for: "a lot of extraneous NPC1, NPC2 etc entries in the NPC category".
+// Three earlier attempts tried to say what those objects ARE -- party members, roster bodies, bodies
+// the story had not switched on -- and each was refuted, because the fields they read do not carry
+// that meaning. The tester supplied the discriminator that does: *"try reachability."* Where an object
+// IS, is something the walkmap can answer; what it is, the game data does not state.
+//
+// On Nomad Village the six bare "NPC n" were: three at the player's SPAWN POINT at Y=6.06 with the
+// only floor 6.06 below them (they are the ones that announced "(above)"), one the tester routed to
+// and was walked into an obstacle, one duplicate registration 0.6 m from a named Nomad, and ONE REAL
+// STORY NPC. The first four are what this removes; the fifth is left alone (see the note at the end);
+// the sixth must survive, and her surviving is the pass/fail condition for the whole change.
+//
+// CANDIDATES ARE THE NARROWEST SET POSSIBLE: `Category::NPC`, `!gameNamed`, and a scene object. So the
+// only thing this can ever delete is an entry that was going to be announced as the bare word "NPC"
+// and a number. Anything the game names, anything in another category, every exit, every drop and
+// every combatant is never even examined.
+//
+// FAIL-OPEN THREE WAYS, because this hides things from a player who cannot see what was hidden:
+//   1. Nothing is filtered until NavReach has closed the component.
+//   2. A query that cannot answer -- no poly under the object, no readable plane height -- KEEPS it.
+//   3. If it would drop more than HALF the candidates it drops NOTHING and says so. A filter eating
+//      most of its input is measuring its own predicate, not the map.
+void DropUnplacedCharacters(std::vector<Entity>& out, bool logDetail) {
+    // Two reasons, decided once per candidate so the majority guard can count before anything is cut.
+    enum class Verdict { Keep, Floating, Unreachable };
+    const bool reachReady = NavReach::Ready();
+
+    auto Judge = [&](const Entity& e, float& floatBy) -> Verdict {
+        floatBy = 0.0f;
+        // NOT ON THE FLOOR. FindPolyAt resolves by XZ containment with Y only as a tie-break and NO
+        // rejection threshold, so an object floating 6 m up still resolves to the triangle beneath it
+        // -- which is exactly why NavReach alone calls these three reachable, and why the height test
+        // has to be its own question. (It is also the mechanism behind "routed to an obstacle": the
+        // goal snaps vertically onto whatever floor is under the object.)
+        const NavMesh::PolyId poly = NavMesh::FindPolyAt(e.pos.x, e.pos.y, e.pos.z);
+        if (poly != NavMesh::kNoPoly) {
+            float floorY = 0.0f;
+            if (NavMesh::PolyHeightAt(poly, e.pos.x, e.pos.z, floorY)) {
+                const float dy = e.pos.y - floorY;
+                // ONE-SIDED: only ABOVE. Something below the floor is a basement or a sunken walkway,
+                // and this pass is not in the business of inventing verticality rules.
+                if (dy > kFloatingDrop) { floatBy = dy; return Verdict::Floating; }
+            }
+        }
+        if (reachReady && !NavReach::Reachable(e.pos, kNpcReachTol)) return Verdict::Unreachable;
+        return Verdict::Keep;
+    };
+
+    size_t candidates = 0, wouldDrop = 0;
+    for (const auto& e : out) {
+        if (e.gameNamed || !e.sceneObj || e.category != EntityList::Category::NPC) continue;
+        ++candidates;
+        float f = 0.0f;
+        if (Judge(e, f) != Verdict::Keep) ++wouldDrop;
+    }
+    if (candidates == 0 || wouldDrop == 0) return;
+
+    if (wouldDrop * 2 > candidates) {
+        char m[192];
+        snprintf(m, sizeof(m),
+                 "unplaced-NPC filter stood down: would drop %zu of %zu unnamed NPCs "
+                 "(reachable cells=%d) -- measuring the predicate, not the map",
+                 wouldDrop, candidates, NavReach::CellCount());
+        Log::Write("NAV-DIAG", m);
+        return;
+    }
+
+    for (size_t i = 0; i < out.size();) {
+        const Entity& cur = out[i];
+        if (cur.gameNamed || !cur.sceneObj || cur.category != EntityList::Category::NPC) { ++i; continue; }
+        float floatBy = 0.0f;
+        const Verdict v = Judge(cur, floatBy);
+        if (v == Verdict::Keep) { ++i; continue; }
+
+        // ALWAYS logged, with the number that caused it. A deletion the player cannot see must never
+        // be one the log cannot show, and a threshold nobody can check is a threshold nobody can fix.
+        char m[224];
+        if (v == Verdict::Floating)
+            snprintf(m, sizeof(m),
+                     "unplaced NPC dropped: [%u:%u] floating %.2fm above the floor pos=(%.2f,%.2f,%.2f)",
+                     cur.container, cur.slot, floatBy, cur.pos.x, cur.pos.y, cur.pos.z);
+        else
+            snprintf(m, sizeof(m),
+                     "unreachable NPC dropped: [%u:%u] pos=(%.2f,%.2f,%.2f) (reachable cells=%d)",
+                     cur.container, cur.slot, cur.pos.x, cur.pos.y, cur.pos.z, NavReach::CellCount());
+        Log::Write("NAV-DIAG", m);
+
+        NoteFiltered(cur.sceneObj);
+        NoteUnplacedDrop(v == Verdict::Floating);
+        out.erase(out.begin() + static_cast<long long>(i));
+    }
+    (void)logDetail;   // this pass logs unconditionally; the flag is kept for signature symmetry
 }
 
 // Mark every object the map script bound to a location jump, then drop the same-named twins that were
@@ -232,14 +338,22 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
 // string, the duplicate number, the category word. Applied after all of those are settled and BEFORE
 // duplicate numbering, so a labelled entity leaves its old counting group entirely: name the gate guard
 // and the remaining Rabanastrans keep the numbers they already had.
+// IDEMPOTENT ON PURPOSE. This pass and the numbering below now run in RescanLocked over a list that
+// can contain grace-window survivors -- entities carried over from the previous scan, which already
+// went through both passes and are therefore already suffixed. Re-running must not append a second
+// suffix or freeze a suffixed label as the identity words.
 void ApplyPlayerLabels(std::vector<Entity>& out) {
     const int mapId = MapNames::CurrentMapId();
     EntityLabels::BeginScan();   // one record per live object for the duration of this pass
     for (auto& e : out) {
         if (!e.sceneObj) continue;                      // fixed exits are named from the map script
         // Freeze the identity words BEFORE anything appends a number to them. Every later lookup keys
-        // on this, so `label` and `baseLabel` must not be allowed to diverge.
-        e.baseLabel = e.label;
+        // on this, so `label` and `baseLabel` must not be allowed to diverge. Only ONCE: a carried
+        // entity already has its `baseLabel`, and overwriting it with the suffixed `label` would make
+        // the identity drift a number further every scan.
+        if (e.baseLabel.empty()) e.baseLabel = e.label;
+        // Strip whatever suffix a previous pass appended, so this pass starts from the game's words.
+        e.label = e.baseLabel;
         std::wstring custom = EntityLabels::LabelFor(mapId, e.nameIdx, e.baseLabel, e.pos);
         if (custom.empty()) continue;
         e.label     = custom;
@@ -247,17 +361,45 @@ void ApplyPlayerLabels(std::vector<Entity>& out) {
     }
 }
 
+// NUMBERS ARE WORKED OUT HERE AND NOWHERE ELSE, fresh on every scan (Session 81).
+//
+// They used to come from the persistent store, so that a number "never moved". For stationary
+// objects that held; for anything that ROAMS it was unbounded growth -- the store's anchor is never
+// refreshed, so a moving object outran its own record every scan, minted a new one, and the
+// free-number search counted every leaked record as taken. Six Cockatrices produced 39 records
+// numbered 1..39 and the tester heard "Cockatrice 37".
+//
+// The key is `{container, slot}` -- the object's position in the game's OWN handle table, which is
+// the pair the engine itself uses to name an interaction target. It is stable for exactly as long as
+// the map is loaded, which is exactly as long as a number computed this way needs to hold. Numbers
+// may differ after leaving and re-entering a map; for objects that share one npcdic id and roam, the
+// game's data contains no identity that would survive that, and inventing one is what leaked.
 void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail) {
-    EntityLabels::BeginScan();   // one record per live object for the duration of this pass
+    // The old loop relied on `label += " 2"` mutating the field it grouped on to stop a group being
+    // re-scanned as fresh groups. Numbering from a reset `baseLabel` removes that side effect, so
+    // membership is tracked explicitly.
+    std::vector<bool> done(out.size(), false);
     for (size_t i = 0; i < out.size(); ++i) {
-        if (out[i].label.empty()) continue;
+        if (done[i] || out[i].label.empty()) continue;
         std::vector<size_t> same;
         for (size_t j = i; j < out.size(); ++j)
-            if (out[j].label == out[i].label) same.push_back(j);
+            if (!done[j] && out[j].label == out[i].label) same.push_back(j);
         if (same.size() < 2) continue;   // unique label -> speak it as the game wrote it
+        // {container, slot} first -- the game's own identity for a handle-table object. Entities from
+        // the other three sources leave both at their sentinels (0xFF / 0xFFFF) and sort after, each
+        // separated by its own stable discriminator: exits and ground drops encode a controller index
+        // or pool slot in `nameIdx`, and combatants (all nameIdx -1) fall to the scene-object handle,
+        // which entity_scan.cpp documents as stable while the map is loaded. The final index compare
+        // makes the order total, never arbitrary: each scanner appends in its own pool order.
         std::sort(same.begin(), same.end(), [&out](size_t a, size_t b) {
-            if (out[a].nameIdx != out[b].nameIdx) return out[a].nameIdx < out[b].nameIdx;
-            return ObjectHandle(out[a].sceneObj) < ObjectHandle(out[b].sceneObj);
+            const Entity& x = out[a];
+            const Entity& y = out[b];
+            if (x.container != y.container) return x.container < y.container;
+            if (x.slot      != y.slot)      return x.slot      < y.slot;
+            if (x.nameIdx   != y.nameIdx)   return x.nameIdx   < y.nameIdx;
+            const uint16_t hx = ObjectHandle(x.sceneObj), hy = ObjectHandle(y.sceneObj);
+            if (hx != hy) return hx < hy;
+            return a < b;
         });
         // OPEN BUG (reported in play): every shop appears twice. Numbering makes the twins
         // addressable but does NOT explain them, so dump each duplicate group ONCE PER MAP with the
@@ -273,38 +415,32 @@ void NumberDuplicateLabels(std::vector<Entity>& out, bool logDetail) {
                 n8[k] = (out[i].label[k] < 128) ? static_cast<char>(out[i].label[k]) : '?';
             snprintf(m, sizeof(m), "dup-label \"%s\" x%zu:", n8, same.size());
             Log::Write("NAV-DIAG", m);
+            int seq = 0;
             for (size_t idx : same) {
                 const Entity& e = out[idx];
-                char l[208];
+                char l[240];
                 snprintf(l, sizeof(l),
-                         "    obj=%p handle=%u kind=%u nameIdx=%d flags=%08X avail=%d pos=(%.2f,%.2f,%.2f)",
-                         e.sceneObj, ObjectHandle(e.sceneObj), e.kind, e.nameIdx, e.flags,
-                         e.available ? 1 : 0, e.pos.x, e.pos.y, e.pos.z);
+                         "    -> %d  obj=%p [%u:%u] handle=%u kind=%u nameIdx=%d flags=%08X avail=%d "
+                         "pos=(%.2f,%.2f,%.2f)",
+                         ++seq, e.sceneObj, e.container, e.slot, ObjectHandle(e.sceneObj), e.kind,
+                         e.nameIdx, e.flags, e.available ? 1 : 0, e.pos.x, e.pos.y, e.pos.z);
                 Log::Write("NAV-DIAG", l);
             }
         }
-        const int mapId = MapNames::CurrentMapId();
         // `baseLabel` is the un-suffixed words. ApplyPlayerLabels froze it, but a fixed exit never goes
         // through that pass, so fall back to the current label before any suffix is appended.
         for (size_t idx : same)
             if (out[idx].baseLabel.empty()) out[idx].baseLabel = out[idx].label;
 
-        // Did the GAME's words form this group, or the PLAYER's? The store scopes its counters by the
-        // game name, so a group whose members share a label only because the player typed the same text
-        // twice would draw from two different counters and both come back "1" -- two entities announced
-        // identically, which is worse than a number that moves. Rank them within the group instead.
-        bool gameFormed = true;
-        for (size_t idx : same)
-            if (out[idx].baseLabel != out[same[0]].baseLabel) { gameFormed = false; break; }
-
-        int rank = 0;
+        // A dense rank over the group, in the order settled above. The old code had to ask whether the
+        // GAME's words or the PLAYER's had formed the group, because the store scoped its counters by
+        // the game name and a player-formed group would draw from two counters and get "1" twice. One
+        // counter per group cannot do that, so both branches collapsed into this and the distinction
+        // is gone.
+        int n = 0;
         for (size_t idx : same) {
-            Entity& e = out[idx];
-            const int n = gameFormed
-                              ? EntityLabels::NumberFor(mapId, e.nameIdx, e.baseLabel, e.pos,
-                                                        e.container, e.slot)
-                              : ++rank;
-            e.label += L" " + std::to_wstring(n);
+            out[idx].label += L" " + std::to_wstring(++n);
+            done[idx] = true;
         }
     }
 }

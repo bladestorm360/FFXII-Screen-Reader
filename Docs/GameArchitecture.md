@@ -1431,11 +1431,36 @@ The game's own `FUN_00263990(sceneObj)` (RVA `0x143990`) reads a name key at **`
 - **The odd slot is NOT a yomi (Session 54, offline).** `FUN_00263990` computes the slot as
   `id*2 + (FUN_0032a930(id) != 0)`, and `FUN_0032a930` (RVA `0x20A930`) reads a **per-id bitfield at
   `FUN_002ef2b0() + 0x13B4`** — a live game-state flag, not a phonetic reading. So the odd slot is a
-  *state-selected second name*. **In the US build it is byte-identical to the even slot**: decoded
-  straight out of `extracted/ps2data/image/ff12/us/bin/npcdic.bin` (2282 slots / 1141 ids), ids 0-11 and
-  433-469 all give `even == odd`. The mod's even-slot-only read is therefore correct as shipped, and
-  **there is no second name to mine** — do not re-attempt it. `tools/parse_npcdic.py`'s "odd slot is the
-  yomi/reading" comment is corrected in place.
+  *state-selected second name*.
+- ~~**In the US build it is byte-identical to the even slot** … ids 0-11 and 433-469 all give
+  `even == odd`. The mod's even-slot-only read is therefore correct as shipped, and **there is no second
+  name to mine** — do not re-attempt it.~~ **STRUCK (Session 80).** That rested on a **48-id sample**,
+  and it sampled the only two ranges that cannot hold a personal name: low crowd filler, and the 433-469
+  crystal/urn/treasure gimmick band. Decoded across **all 1141 ids, 247 have a DIFFERENT odd slot, and
+  it is the character's real name**:
+
+  | id | even (generic) | odd (personal) |
+  |---|---|---|
+  | 221 | Nomad | **Arjie** |
+  | 228 | Nomad | **Lesina** |
+  | 239 | Nomad Elder | **Elder Brunoa** |
+  | 159 | Viera | **Ktjn** |
+  | 220 | Cockatrice | **Agytha** |
+  | 104 | Rabanastran | **Arryl** |
+
+  **The mod was speaking the generic word for every NPC the player had already been introduced to.**
+  `EntityScan::TalkNameKnown` now replicates `FUN_0032a930` and `NpcdicName(id, known)` picks the slot,
+  so the mod says what the game draws. This is the game's own display string in all 12 locales —
+  database resolution, not a learned label. **LESSON: a sample drawn from the ranges you already
+  understand cannot falsify a claim about the ranges you do not.**
+
+  **RVAs (verified by adding back):** the bitfield block is the static array `&DAT_02164280`
+  (RVA `0x2044280`; `FUN_002ef640` returns its ADDRESS, so it is **not** a pointer to dereference), and
+  the bitmap sits at `+0x200` (`FUN_002ef2b0`) `+ 0x13B4` = **`+0x15B4`**. Test:
+  `byte[base + 0x15B4 + (id >> 3)] & (1 << (id & 7))`, rejecting `id < 0 || id >= 0x800`.
+  The bit is written by the `settalknpcname` / `releasetalknpcname` script natives and read back by
+  `istalknpcname` (`FUN_0034e980`), so it **flips mid-session** on the story beat that makes the
+  introduction — read per scan, never cached.
 - **The duplicate-name problem is the game's own data.** Of 1141 ids / 554 distinct names, **109 ids all
   render "Rabanastran"** (85 "Archadian Gentry", 51 "Bhujerban", 42 "Imperial", …). No engine path gives
   a townsperson a finer name, so the mod numbers same-label entities instead of inventing descriptors
@@ -2525,10 +2550,16 @@ nameId = *(u16*)(data + stride * shopId)
 name   = npcdic slot (nameId*2 + 1)            // FUN_003eabe0 — the ODD slot
 ```
 
-**Note the ODD slot.** The mod's own `NpcdicName()` replicates `FUN_003eac10` and uses the EVEN slot
-(display name); the shop title uses `nameId*2+1` (yomi/reading). This file already records that the
-odd slot is byte-identical to the even one in the US build — `probe_shop_name.js` reads both and
-prints them, because if they differ on this build that matters more than the feature.
+**Note the ODD slot** — and note that the reason given here for shrugging at it was wrong.
+`FUN_003eabe0` asks for `nameId*2 + 1` unconditionally, which is a *different* thing from
+`FUN_00263990`'s state-gated `id*2 + known`.
+
+~~"the odd slot is byte-identical to the even one in the US build"~~ — **STRUCK (Session 80): 247 of
+1141 ids differ, and the odd slot is the personal name** (see the npcdic section above). So a shop
+title taken from the odd slot is a deliberate choice by the game, not a harmless alias, and
+`probe_shop_name.js` printing both is now the point rather than a formality. `NpcdicName(id, known)`
+takes the slot selector as a parameter, so the shop path can request the odd slot directly without
+disturbing the field-object path.
 
 `FUN_0020e600(x)` is `x + _DAT_01f83530`, a plain base-relative resolver — replicable as a memory read,
 so nothing in this chain requires calling a game function.
@@ -2558,3 +2589,380 @@ archived .dbg symbol table), which is how `setmapjumpgroup = 0x011E` was named.
 Open, all answerable offline: the shop native's id; whether an NPC's `+0xDC` talk index reaches its
 routine by name convention or by direct table index; whether `shopId` is a literal. Check the
 interact-icon field first — a discriminating icon would be one memory read.
+
+---
+
+## `sceneObj+0x1C` IS AN 18-BIT INTERACTION-MODE MASK — Session 80 (2026-07-27)
+
+**This supersedes the reading of `+0x1C` as "a flags word with a TALK bit and an ACTION bit".** It is a
+bitmask over the engine's **18 interaction MODES**, and **the mode index IS the bit index**. The mod has
+been reading two of eighteen bits.
+
+Conf **0.99** — read from four independent functions that all index the same way:
+
+| function | what it shows | RVA |
+|---|---|---|
+| `FUN_00269a90:21` | `(*(u32*)(obj+0x1c) >> (mode & 0x1f)) & 1` — the mode arrives as a parameter and indexes the bit | `0x149A90` |
+| `FUN_00269ba0:11` | same test, same shape | `0x149BA0` |
+| `FUN_00269ad0:20` | same test, over every object in a container; guarded by `mode < 0x12` | `0x149AD0` |
+| `FUN_0026b4a0(obj, mode)` | **ARM**: `obj+0x1c \|= 1 << mode` | `0x14B4A0` |
+| `FUN_0025d5e0(obj, mode)` | **DISARM**: `obj+0x1c &= ~(1 << mode)` | `0x13D5E0` |
+
+The two constants already in `nav_rva.h` fall straight out of it and are now *derived*, not observed:
+
+```
+mode  2 = ACTION  ->  bit 2  = 0x00000004  ->  event index at +0xCC
+mode 10 = TALK    ->  bit 10 = 0x00000400  ->  event index at +0xDC
+```
+
+### `FUN_002652d0` (RVA `0x1452D0`) — the engine's per-mode event-index getter
+
+```c
+uint FUN_002652d0(longlong *container, longlong obj, uint mode) {
+    if (0x11 < mode) return 0xffffffff;                       // 18 modes, 0..0x11
+    if (mode == 0xe && (*(uint*)*container & 0xffff) < 6) mode = 7;   // one aliased mode
+    u16 v = *(u16*)(obj + 0xC8 + mode*2);
+    if (v != 0xffff) return v;
+    // 0xFFFF == INHERIT: fall back to this object's record in the map data blob
+    rec = container[0] + FUN_0020e600(*(u32*)(*(void**)(obj + 0x40) + 0x18));
+    if (mode < *(s16*)rec) return ((s16*)rec)[mode + 1];      // rec[0] is the entry count
+    return 0xffffffff;
+}
+```
+
+`FUN_0020e600(x)` (RVA `0xEE600`) is nothing but `x + _DAT_01f83530` (RVA `0x1E63530`).
+
+**So `sceneObj+0xC8` is a `u16[18]` parallel to the mask** — one event index per mode, `0xFFFF` meaning
+"inherit from the map's own object record". The mod's `SCENEOBJ_ACTION_ID = 0xCC` and
+`SCENEOBJ_TALK_ID = 0xDC` are slots 2 and 10 of that array.
+
+### The mode/offset/bit correspondence is confirmed at EIGHT distinct modes
+
+Not inferred from two — every row below is a separate function reading a specific bit and the matching
+array slot, including the same `mode 0xE -> 7` alias `FUN_002652d0` carries:
+
+| mode | bit mask | inline slot | record index | read by |
+|---|---|---|---|---|
+| 0 | `0x00000001` | `+0xC8` | 1 (`rec+2`) | `FUN_00269640:18` |
+| 2 | `0x00000004` | `+0xCC` | 3 (`rec+6`) | `FUN_0025b820:60`, `FUN_00268d10:36` — **ACTION** |
+| 7 | `0x00000080` | `+0xD6` | 8 (`rec+0x10`) | `FUN_00269860:48` |
+| 10 | `0x00000400` | `+0xDC` | 11 (`rec+0x16`) | `FUN_0025b820:44`, `FUN_002675c0:25` — **TALK** |
+| 11 | `0x00000800` | `+0xDE` | 12 (`rec+0x18`) | `FUN_00269640:48` |
+| 14 | `0x00004000` | `+0xE4` | 15 | `FUN_00269860:22` — **carries the `0xE -> 7` alias too** |
+| 16 | `0x00010000` | `+0xE8` | 17 (`rec+0x22`) | `FUN_00268ea0:35` |
+| 17 | `0x00020000` | `+0xEA` | 18 (`rec+0x24`) | `FUN_00268ea0:21` |
+
+### `FUN_00266bd0` (RVA `0x146BD0`) — the DEFAULT mask is a pure function of the scene CATEGORY
+
+This is the correction that keeps the mask honest. An object does not choose its modes; it is *born*
+with the set its scene category dictates, and the script adds or removes from there:
+
+```c
+switch (*(u8*)(obj + 3) & 0x1f) {           // scene CATEGORY (the mod's `sceneCat`)
+  case 0:              obj+0x1c = 0x00000000;  break;   // no modes at all
+  case 1: case 2:      obj+0x1c = 0x00000038;  break;   // modes 3,4,5
+  case 3: case 4:      obj+0x1c = 0x00000040;  break;   // mode 6
+  case 5: case 6:      obj+0x1c = 0x00030004;  break;   // modes 2(ACTION),16,17
+  case 7:              obj+0x1c = 0x00034c85;  break;   // modes 0,2(ACTION),7,10(TALK),11,14,16,17
+}
+```
+
+**Category 7 is the only category born with TALK.** Categories 5 and 6 get ACTION and nothing else.
+
+This **directly corroborates the Session 79 diagnosis from the other side**: the Nomad Elder read
+`flags=0x00030004`, which is *exactly* the cat-5/6 default, and the woman behind his tent read
+`0x00030000` — the same default with bit 2 cleared by `FUN_0025ad10`. She was never a different kind of
+object; she was a standard character whose one default mode the script had switched off.
+
+**So the MASK is not a rich classifier** — its resting value is category, which the mod already reads.
+What is per-object is the **`+0xC8[18]` array**: static map data, present before the player touches
+anything, and the only part of this that can distinguish two objects of the same category. Any
+classifier must be built on the array (or on what its event indices resolve to), never on the mask.
+
+### What is NOT established — do not build on these
+
+- **The meaning of modes 0, 1, 3-9, 11-15.** Sixteen of eighteen modes are unnamed. Nothing here names
+  them and nothing may be shipped that assumes one.
+- **Modes 16 and 17** are read by `FUN_00268ea0` (RVA `0x148EA0`) from `+0xE8` / `+0xEA` and auto-fired
+  through `thunk_FUN_003dbbf0`; they are also the only two with special teardown in `FUN_0025d5e0`.
+  Conf 0.98 that they are auto/ambient event slots — **but the Nomad Village dump shows `0x00030000` on
+  ordinary NPCs, i.e. bits 16+17 set on objects with no other mode**, so they are common, not
+  discriminating. `flags=00030004` (the Nomad Elder) is bits 16, 17 and **2 = ACTION**.
+- **`reqenable` / `reqdisable` (dbg indices 5182 / 5183) as the arm/disarm natives — HYPOTHESIS ONLY,
+  conf ~0.6, BELOW THE BAR.** The shape fits: `FUN_00355540` and `FUN_003558f0` are both
+  `(ctx, obj, ret, args)` natives that do `mode = popArg(); arm/disarm(obj, mode)`, and the dbg list puts
+  `reqenable`/`reqdisable` immediately beside `talkang`/`talkradius` — the interaction-geometry natives.
+  **But the addresses contradict the id math**: `mapjump` is native `0x8D` at handler `0x355350`, so
+  `dbgIndex - 5140` would make `reqenable` native 42, whose handler should sit *below* `0x355350`, not
+  at `0x355540`. Either the delta does not hold in that band or these are not those natives.
+  **Settled by `ghidra\dump_script_native_table.java`, not by argument.**
+
+### STRUCK — "the delta now has TWO anchors" (claimed and withdrawn the same session)
+
+It was claimed that `setmapjumpgroup` (native `0x011E` = 286, dbg index 5426, 5426 - 286 = 5140)
+independently confirms the delta. **It does not — the reasoning is circular.** Session 63 obtained the
+id `0x011E` from bytecode and then *named* it via the 5140 delta; re-deriving 5140 from that name is the
+same fact twice. `mapjump` remains the only true anchor, because its handler was identified by
+BEHAVIOUR (it calls the transition-loader chain `FUN_00314440`) independently of any delta.
+
+### Why the exit-chain method does NOT close this one offline by itself
+
+The map-exit chain was solved by reading map DATA the mod can walk. This is different: the fact needed
+is **native id -> handler function**, which lives in the exe's `.data` (the pointer to the `mapjump`
+handler `FUN_00355350` sits at abs `0x1EEE8B0`, found by `dump_mapjump_native.java`). The decompile
+export contains function bodies only — **no `.data` bytes** — so no amount of reading `output\decompile`
+can produce it. Three cheaper routes were tried and are dead ends, recorded so they are not retried:
+
+- ~~**Address order.** ... **Handlers are not laid out in native-id order globally.**~~ **STRUCK — the
+  refutation was itself built on the bad stride-8 assumption** (see the run-1 result below). Handler
+  addresses are in fact *mostly* ascending with slot order (895 of 1179 adjacent pairs), so ordering is
+  **unresolved**, not refuted. It is simply not needed: `dump_native_slots.java` measures the stride.
+- **The extracted `.mpk` map controllers** (`extracted\ps2data\plan_master\map_ctrl\`, 20 files)
+  **contain no `EBP2` magic** — they are map data, not bytecode. Verified by scanning all 20.
+- **`output\mapctrl_ebp_disasm.txt` is mis-based** — its code base is wrong and it decodes data as
+  instructions (routine 0 opens on `PREQ`/`LABEL`/`LABEL`). It cannot be read as a native-call listing.
+
+**So the offline route is a Ghidra script — the same class of artifact as `dump_mapjump_native.java`,
+which is how the exit chain got its anchor in the first place.** No play session is required.
+
+### RUN 1 RESULT — `dump_script_native_table.java` refuted its own assumption. Do not trust its ids.
+
+It validated the anchor (a pointer to `FUN_00355350` does sit at `0x1EEE8B0`) and then **assumed a dense
+qword array with `mapjump` at index `0x8D`**. Its own output kills that:
+
+- **1197 `.text` pointers over 4096 slots, with 776 gaps of EXACTLY 3** — a pointer every 4th qword. A
+  dense qword array has no such period.
+- **The names it emitted are nonsense against handlers we know by behaviour.** `FUN_00355830` (disarms
+  interaction mode 2) came out as `@SWCOD_000162`, a compiler switch label. `FUN_00346020` came out as
+  `sin`, but its body is a wait-poll structurally identical to the one named `waitv`.
+- **`FUN_00355540` (ARM mode), `FUN_003558f0` (DISARM mode) and `FUN_00351f40` were not in the window at
+  all** — yet all three are certainly natives: four-argument native signature and **zero references
+  anywhere in `.text`**, so only a dispatch table can reach them. Wrong window -> wrong base -> every id
+  wrong.
+
+**`output\script_native_table.txt` is retained as evidence, but NOTHING in it may be cited except the
+anchor.** No exe-side native name table exists at the layouts probed, so naming still depends on the
+`.dbg` join — which makes getting the stride right the whole ball game.
+
+### The artifact that actually measures it (authored Session 80, USER-RUN)
+
+- **`ghidra\dump_native_slots.java`** — assumes no layout. A native is identifiable *without* its id:
+  four-arg signature and zero `.text` callers. The script finds the `.data`/`.rdata` slot holding a
+  pointer to each of ~26 such handlers, **takes the GCD of the sorted slot deltas as the stride**,
+  anchors the base on `mapjump` (id `0x8D`, from bytecode, handler identified by behaviour), and then
+  **self-checks**: `FUN_00355540` and `FUN_003558f0` provably arm and disarm the same bitfield, so their
+  names *must* form a matched enable/disable pair. If they do, the mapping is confirmed and the natives
+  that call arm/disarm with a CONSTANT name the interaction modes. If they do not, the script says
+  **NOT COHERENT** and the ids stay unusable. It also dumps the raw record bytes around the anchor so
+  the field layout is read rather than inferred.
+- `ghidra\dump_script_native_table.java` — superseded by the above; keep for its reverse-lookup section,
+  which is layout-independent (it lists which functions call the arm/disarm/event primitives).
+- `frida\probe_interact_modes.js` — **secondary, not required for the chain.** Dumps the mask and the
+  full `+0xC8[18]` array for every scene object, once per map. Useful for correlating a mode with an
+  object whose identity is already known, if the native names leave a mode ambiguous.
+
+### RUN 2 RESULT — the native table is a 32-BYTE RECORD array, and the self-check passed at that stride
+
+`dump_native_slots.java` reported `stride=8 self-check=NOT COHERENT`. **The verdict is right and the
+stride is wrong**, and its own slot list says why. Three independent samples land exactly `0x20` apart:
+
+| sample | slots | spacing |
+|---|---|---|
+| ARM `FUN_00355540` / DISARM `FUN_003558f0` | `0x1eedc60`, `0x1eedc80` | **0x20** |
+| fire-mode-event `FUN_0034e5c0` / fire-all `FUN_0034f380` | `0x1eeec60`, `0x1eeec80` | **0x20** |
+| `FUN_003537b0` registered **four times** | `0x1eeed30/50/70/90` | **0x20, 0x20, 0x20** |
+
+**The quad is the giveaway**: one handler serving four *adjacent* natives is exactly the shape of the
+`keyscan`/`keyscanr`/`keyscant`/`keyscantr` and `keywait`/`keywaitr`/`keywaitt`/`keywaittr` families in
+the `.dbg` list. And ARM/DISARM sitting **one record apart** is precisely the `reqenable`/`reqdisable`
+adjacency the self-check was looking for — **it passed at stride 32 and was only reported as failing
+because the script measured stride 8.**
+
+**Why the GCD gave 8:** the handler's offset *within* a record is not constant across the samples —
+`0x00` for ARM/DISARM/fire/fire-all, `0x10` for `mapjump` and the quad, `0x08` for `FUN_00351f40` and
+`FUN_00355830`. So a record holds **more than one function pointer**, the samples hit different fields,
+and a GCD over mixed-field addresses collapses to the pointer size. **LESSON: a GCD of address deltas
+only measures stride when every sample is the SAME field.**
+
+### The record's second field is a POLL function — which is why the id-join read as nonsense
+
+Three functions the join named as natives are not natives at all:
+
+- `FUN_00346020` (named `sin`) and `FUN_003453d0` (named `waitv`) are the **same wait-poll shape**:
+  `if (cond) { if (FUN_0035a0a0()) { FUN_00314d40(1); return 1; } }`.
+- `FUN_00342f50` (named `settalkiconstatus`) **takes no arguments at all** and just polls
+  `FUN_0037cb80()` then yields via `FUN_00314d40(1)`.
+
+A `set…` native that takes no argument is impossible. These are the **continuation / "is it still
+running" field** of the record — the Athena VM's blocking-native mechanism — so reading them as natives
+was guaranteed to produce unrelated names. Also refuted by this: `FUN_00356990` (named `lastjumpindex`)
+*pops an argument and writes*, which no `last…index` getter would do.
+
+**So: nothing about the id numbering is established yet, and `native_slots.txt`'s PROBE IDS table is as
+unusable as run 1's.** What IS established: 32-byte records, multiple function-pointer fields, and the
+arm/disarm adjacency. `ghidra\dump_native_raw.java` (authored, USER-RUN) dumps three known windows as
+raw 32-byte-aligned rows with every qword resolved, asserting nothing — the field order is to be READ.
+
+## SOLVED — the Athena script-native table (Session 80, run 3)
+
+`dump_native_raw.java` read the bytes and the layout fell out. **A native has up to three
+implementations because Athena natives can BLOCK** (the script waits for them):
+
+```
+BASE      = abs 0x1EED720   (RVA 0x1ECD720)   -- the SIMPLE slot of native 0
+stride    = 32
+simple[k] = BASE + 32k        non-blocking: does the whole job in one call
+init[k]   = BASE + 32k - 24   blocking: pops the arguments into a state block
+poll[k]   = BASE + 32k - 16   blocking: returns 1 while still running
+name      = dbg_symbols_mapctrl.csv[ k + 5140 ]
+```
+
+**The `-24`/`-16` is what defeated two earlier scripts.** A native's init and poll sit in the physical
+row *below* its simple slot, so one 32-byte row holds `simple[k]` next to `init[k+1]` and `poll[k+1]`.
+Any reader that treated a row as one native blended two natives and produced confident nonsense.
+
+### Why it is believed — 13 behavioural matches, not one anchor
+
+Every handler below was identified from its **code** before any name was looked up:
+
+| id | field | handler | what the code does | name |
+|---|---|---|---|---|
+| 42 | SIMPLE | `FUN_00355540` | pops a mode, `obj+0x1c \|= 1<<mode` | **`reqenable`** |
+| 43 | SIMPLE | `FUN_003558f0` | pops a mode, `obj+0x1c &= ~(1<<mode)` | **`reqdisable`** |
+| 86 | INIT | `FUN_00351f40` | arms mode 11 | `setupbattle` |
+| 140 | SIMPLE | `FUN_00352db0` | pops 1 arg, releases a voice slot | `voicedispose` |
+| 141 | INIT | `FUN_00354d00` | pops **three** args (dest, entrance, flags) | **`mapjump`** |
+| 141 | POLL | `FUN_00355350` | polls; calls the transition loader `FUN_00314440` | **`mapjump`** |
+| 170 | SIMPLE | `FUN_0034e5c0` | fires a mode's event on ONE object | **`sysreq`** |
+| 171 | SIMPLE | `FUN_0034f380` | fires a mode's event on EVERY object | **`sysreqall`** |
+| 177-180 | POLL | `FUN_003537b0` ×4 | one sync poll shared by four adjacent natives | `voicepan`, `voicevolume`, `voicechangevolume`, `voicechangepan` |
+| 332 | POLL | `FUN_00342f50` | a no-argument poll | `partystdmotionrecover` |
+| 374 | SIMPLE | `FUN_00355a00` | sets display NAME + style + position + cone; arms 8 & 13, disarms 3 | **`fieldsign`** |
+| 703 | INIT | `FUN_00355830` | disarms mode 2 (ACTION) on hand-off | **`talktreasure`** |
+
+`mapjump = 141 = 0x8D` reproduces **Session 63's id read straight from bytecode**, independently. The
+`FUN_003537b0` quad landing on four adjacent `voice*` natives is a second independent confirmation.
+**The delta 5140 now holds across ids 42..703** — a 660-id span, against the single anchor it had.
+
+### What this gives the interaction-mode question
+
+- **`reqenable(mode)` = native 42 (`0x2A`) and `reqdisable(mode)` = native 43 (`0x2B`)** are the natives
+  that arm and disarm the 18 interaction modes. A map script's literal argument names the mode.
+- **Session 63's decoded `__MJ_CTRL` routine opens with `reqenable(12)`** -> **mode 12 is the map-jump /
+  transition mode.** First mode named from script rather than from engine code.
+- **`fieldsign` arms modes 8 and 13 and sets the object's display name** -> **mode 13 is the name-label
+  mode**, which is exactly the `& 0x2000` test in `FUN_00268d10` that renders `FUN_00263990`'s string.
+- **`talktreasure` disarms mode 2** -> treasure chests use the ACTION mode.
+- `sysreq` / `sysreqall` fire a mode's event — the script-side counterpart of the `+0xC8` array.
+
+### Shop natives — ids derived, handlers NOT yet checked
+
+`openfullscreenmenu` = dbg 6278 and 6305 -> natives **1138 (`0x472`)** and **1165 (`0x48D`)**;
+`setshopname` = dbg 6333 -> native **1193 (`0x4A9`)**. **These are EXTRAPOLATIONS past the validated
+band (42..703)** and are below the 0.98 bar until their handlers are seen to be menu-openers.
+`dump_native_table_v2.java` prints them with their handlers for exactly that judgement.
+
+`ghidra\dump_native_table_v2.java` (authored, USER-RUN) asserts this layout, **re-proves all 13 checks on
+every run and refuses to emit anything if one fails**, then dumps the full table.
+
+### The object's GAME-DRAWN LABEL — two fields the mod does not read (Session 80)
+
+This is the practically useful part of the mode work, and it needed none of the native-table research.
+From `FUN_00268d10` (the confirm-press handler), the engine's own label render:
+
+```c
+if ((*(u32*)(obj + 0x1c) & 0x2000) != 0 &&                 // mode 13 armed
+    (name = FUN_00263990(obj))[0] != '\0') {               // and a name resolves
+    style = *(u8*)(obj + 0xF4);
+    FUN_003df760(handleOf(obj), 3, style, <map ctx>, name); // draw it
+}
+```
+
+| field | meaning | mod today |
+|---|---|---|
+| `sceneObj+0x1C & 0x2000` (mode 13) | **the game itself labels this object** | **not read** |
+| `sceneObj+0xF4` (u8) | label STYLE — `FUN_00267cc0` sets `2`, `FUN_002659a0` sets `0`, `fieldsign` sets it from the map record via `FUN_003df790` | **not read** |
+| `sceneObj+0x102` / `+0xF8` | the name itself | already read (`ResolveObjectName` mirrors `FUN_00263990`) |
+
+**`FUN_00269fe0(obj, kind)` ties bits 8 and 13 to KIND 4**: it arms both when the kind nibble is set to
+`4` and clears both otherwise (`& 0xffffdeff` = clear `0x2100`). So kind-4 objects are the ones the game
+gives a drawn label — matching `FUN_0025bad0`'s filter where kind 4 is the "talk AND action" class.
+
+**Why this matters more than the native ids:** mode 13 answers *"does the game show this NPC a label of
+its own?"* with one bit the scan already fetches, and the string is the game's own text in all 12
+locales — never a mod-invented or learned label. It distinguishes an object the game names from one it
+leaves anonymous, which is exactly the line the F6 manual-labelling workflow should respect.
+
+Confidence 0.98 — read directly from `FUN_00268d10` and `FUN_00269fe0`. **Not yet probe-confirmed and no
+C++ written.**
+
+### CORRECTION (Session 81) — the mod prefers the ODD slot ALWAYS, not only after the introduction
+
+The Session 80 entry above is right about the engine: `FUN_00263990` picks `id*2 + FUN_0032a930(id)`,
+so the game shows the generic word until the story introduces a character. **The mod deliberately no
+longer follows that half.** It takes the odd slot whenever the dictionary carries a distinct one.
+
+Why: on Nomad Village ids 223/228/229/231/225 all read "Nomad" / "Nomad Youth" in the even slot and
+**Dania / Lesina / Masyua / Nanau / Jinn** in the odd one. Following the engine exactly left five
+entities sharing one label, which the mod then had to disambiguate with invented numbers — and those
+numbers are what leaked (see below). Reading the personal name deletes the problem instead of managing
+it, and the words are the game's own, in all 12 locales, present in the map's dictionary before the
+player touches anything. `TalkNameKnown` is kept and demoted to the `inclusion:` tally, which now
+reports `spoke the PERSONAL name / of them already introduced / newly revealed`.
+
+Implementation: `EntityScan::ResolveObjectName` -> file-local `NpcdicDisplayName`, which compares the
+two slot POINTERS before decoding — identical offsets are identical bytes, so that is exactly
+equivalent to comparing the decoded strings and keeps the common case (894 of 1141 ids) at one decode.
+
+### Scene CATEGORY 5 / 6 / 7 — an OBSERVATION with a counter, not an established fact
+
+`sceneObj+0x03 & 0x1f`. One map's `'` dump (Nomad Village, 2026-07-27) separates cleanly:
+
+| value | what it held on that map |
+|---|---|
+| **5** | the party/roster bodies — the leader Vaan, plus three unnamed bodies stacked at one point 6 m above the floor |
+| **6** | every map NPC |
+| **7** | the creatures (also the only entries in the combatant pool) |
+
+**This is below the 0.98 bar and is used for one narrow thing:** `entity_scan.cpp` drops a category-5
+object *that resolves no name*, because those three bodies were being announced as "NPC 1..3" and made
+six indistinguishable `NPC n` entries out of three real anonymous townsfolk. Named category-5 objects
+still list, so if the split is wrong elsewhere the cost is bounded. The engine does **not** corroborate
+the 5-vs-6 half — `FUN_00266bd0` gives categories 5 and 6 the same default mode mask — which is exactly
+why the skip ships with a per-scan tally *and* a per-map dump (`party body dropped:`) naming every
+object it removed. A dropped body that sits on the walkable floor at its own position, rather than
+stacked well above it, falsifies the rule.
+
+### STRUCK (Session 82) — both Session 81 claims above
+
+Two entries written the previous session are wrong and are struck here rather than left to be built on.
+
+**1. ~~"the mod prefers the ODD slot ALWAYS"~~ — REVERTED.** It shipped, and in play it told the player
+"Dania" for someone the game still calls "Nomad" — a name the game had deliberately withheld, and a
+divergence from the label on screen. The tester had already confirmed the gated behaviour was the
+correct one (*"was Nomad 2 before, then Dania once interacted with"*) and reverted it on sight.
+`NpcdicDisplayName` is back to the engine's own rule, `id*2 + FUN_0032a930(id)`.
+
+The Session 80 half — reading the odd slot at all, for characters the player HAS met — was a real fix
+for a real bug and stands. **LESSON: reading the wrong slot and choosing a different policy for the
+slot are two changes. The first was a correctness fix; the second was a behaviour change nobody asked
+for, and bundling them let the second ride in on the first's evidence.**
+
+**2. ~~"Scene CATEGORY 5 / 6 / 7"~~ — REFUTED.** Category 5 was read as "party/roster bodies" from one
+map, where it held the leader plus three unnamed bodies. The tester: *"these are not party members, I
+have no other party members currently."* The exclusion's own falsification dump said the same thing —
+**every object it removed sat at `pos=(0.00,0.00,0.00)`**, the world origin, i.e. an unplaced reserve
+slot that the existing unplaced guard already drops. It was built on a wrong premise *and* was a no-op.
+The three bodies that inspired it shared one position 6 m above the floor: that is a fact about
+POSITION, and it was written down as a fact about ROLE. Constants deleted from `nav_rva.h`.
+
+**What the dump did right:** it named what it removed, on the first map that was not the one the theory
+came from, and that is what killed the theory inside one play session.
+
+### The `en` bit is now in the object dump
+
+`LogObjectDump` prints `en=` (the `+0x0E & 0x10` story gate) alongside `flags`/`avail`. It was the one
+field the dump lacked, and its absence is why nineteen bare `NPC n` entries on Rabanastre could not be
+told apart from real story NPCs without a `'` dump that had not been taken. `flags` is mode state and
+`avail` folds four tests together; `en` is the engine's own single "has the script switched this object
+on" bit, set by the dedicated setter `FUN_0026ba60` from map script.
