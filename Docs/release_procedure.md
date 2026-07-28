@@ -124,6 +124,64 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.2.1-shotgun-build — 2026-07-27
+
+**Built from:** `877ed2a` (Sessions 74–83 — the navigation rebuild). Tree clean before and after;
+no code change for the release. Three commits since `V0.2-test-build`: `44efdcc` (navmesh routing
+rebuild + an NPC class that was invisible on every map), `676e86c` (readme + doc rename), `877ed2a`
+(NPC personal names from the game's own npcdic slot; phantom entries dropped by placement +
+reachability).
+
+**Zip:** `FFXII-Screen-ReaderV0.2.1-shotgun-build.zip`, 339,420 bytes, four files, root flat.
+`dinput8.dll` 435,712 bytes (sha256 `530607ea…c3f01f`) — *smaller* than V0.2's 446,464, which is
+the `nav_grid` deletion of Session 75, not a truncated build. All three DLLs verified PE machine
+`8664`. TTS pair carried over unchanged from `V0.2-test-build`.
+
+**ReadMe: CHANGED** — first release since `V0.1.1` where it did. `README.md` was edited in
+`676e86c`, so the converted `ReadMe.txt` is 9,526 bytes / 136 lines against V0.2's 9,164 / 132.
+Validated by diffing the new conversion against `V0.2-test-build\ReadMe.txt`: **the only delta is
+the four-line Status-screen block**, and all 132 shared lines come out byte-identical — that is what
+confirms the converter, since a byte-identical whole-file `cmp` is no longer available once the
+source changes. Conversion is reproducible and unchanged: strip heading/bullet markers, unescape
+`\[` `\-` `\\` `\_`, drop `&#x20;`, flatten `[text](url)`, collapse doubled spaces, right-trim,
+drop trailing blank lines, CRLF, UTF-8 no BOM. Output re-checked for leftover markup: zero `#`,
+zero `**`, zero `](`, and exactly one backtick — line 83's literal `` ` `` key name, which is
+content.
+
+**Correction to the V0.2-test-build record below — two of its claims are false.** That record says
+its `ReadMe.txt` was "byte-identical to `V0.1.1-shotgun-build\ReadMe.txt` (verified with `cmp`, not
+by eye)" and lists `g` and `;` among the readme gaps it shipped. Neither holds: the two files are
+8,979 vs 9,164 bytes and differ, and `V0.2-test-build\ReadMe.txt` already carries the `g:`, `;:`
+and `':` entries. What actually happened is that V0.2's `ReadMe.txt` was
+converted from an **uncommitted working-tree `README.md`** — those edits did not reach git until
+`676e86c`, three days later. So the shipped V0.2 zip documented `g` and `;` while its own record
+says it did not, and the `cmp` gate was recorded as passing when it cannot have been run. **The
+lesson for future releases: convert from the committed `README.md`** (`git show HEAD:README.md`)
+if there is any doubt, and never write down a `cmp` result that was not actually produced.
+
+**Readme gaps still shipped in this build (flagged, not fixed).** `676e86c` closed three of the
+seven gaps V0.2 flagged — `g`, the reworded `;`, and the Status screen all now have entries. Still
+undocumented for testers of this zip:
+- **Shop reader** — Buy, Sell and Bazaar (Session 69). No entry at all.
+- **Inventory quantity + category switching** (Session 70).
+- **Ground loot appearing in the navigation Items category** (Session 72). The combat-log paragraph
+  mentions "loot, gil" as spoken battle events, which is a different surface and does not cover it.
+- **The EXP/LP defeat line** (Session 72) — `"Dire Rat defeated. 34 EXP, 2 LP."` is mod-emitted and
+  has no readme entry.
+
+Not fixed here because readme edits are a separate commit made *before* the release trigger (see
+"What this procedure does NOT do"). **These belong in a readme commit ahead of the next release.**
+
+**Purpose:** play test of the Sessions 74–83 navigation rebuild, **none of which is
+play-confirmed.** The walkmap is now understood as a navmesh (per-edge neighbours at `+0x16/+0x18/
++0x1A`) and `nav_grid` is gone, so this build routes on a fundamentally different graph than V0.2
+did — a routing regression here is expected to look like a wrong turn, not a crash. Also new and
+unconfirmed: NPCs speak their personal name from the npcdic slot rather than a generic one, an
+NPC class that was invisible on every map is now listed, and phantom entries are filtered by
+placement + reachability. **Do not tighten the reachability filter blind** — the grace window bug
+it replaced silently re-admitted everything the old filters deleted, so a filter that appears to
+do nothing has precedent for being genuinely inert rather than correctly quiet.
+
 ## V0.2-test-build — 2026-07-24
 
 **Built from:** `fd459de` (Session 73 — elevation-aware navigation: `AllFloorsAt`, approach-cell
@@ -133,20 +191,26 @@ routing, `;` interact target). Tree clean before and after; no code change for t
 `dinput8.dll` 446,464 bytes (sha256 `55d8fbde…31d6ed`). All three DLLs verified PE machine `8664`.
 TTS pair carried over from `V0.1.1-shotgun-build`.
 
-**ReadMe:** unchanged — `README.md` has not been touched since Session 67, so the converted
+**ReadMe:** ~~unchanged — `README.md` has not been touched since Session 67, so the converted
 `ReadMe.txt` is **byte-identical** to `V0.1.1-shotgun-build\ReadMe.txt` (verified with `cmp`, not by
-eye). Conversion is reproducible: strip heading/bullet markers, unescape `\[` `\-` `\\` `\_`, drop
-`&#x20;`, collapse doubled spaces, CRLF, no BOM. The one surviving backtick is line 83's literal
-`` ` `` key name — content, not markup.
+eye).~~ **STRUCK 2026-07-27 — both halves are false.** The two files are 8,979 vs 9,164 bytes and
+differ; V0.2's copy was converted from an uncommitted working-tree `README.md` whose edits only
+reached git in `676e86c`. See the V0.2.1 record above. Conversion is reproducible: strip
+heading/bullet markers, unescape `\[` `\-` `\\` `\_`, drop `&#x20;`, collapse doubled spaces, CRLF,
+no BOM. The one surviving backtick is line 83's literal `` ` `` key name — content, not markup.
 
 **Readme gaps shipped in this build (flagged, not fixed).** Sessions 69–73 added player-facing
-surfaces that never reached `README.md`, so testers of this zip have no documentation for:
-- **`g`** — party gil total (Session 69). No entry at all.
+surfaces that never reached `README.md`, so testers of this zip have no documentation for
+(**note:** the `g` and `;` items below are ~~struck~~ — the shipped `ReadMe.txt` did carry them,
+see the correction above; the rest stand):
+- ~~**`g`** — party gil total (Session 69). No entry at all.~~ **STRUCK** — present in the shipped
+  `ReadMe.txt`.
 - **Shop reader** (Buy/Sell/Bazaar), **inventory quantity + category switching** (Session 70),
   **Status screen** (Session 71).
 - **Ground loot in the Items category** and the **EXP/LP defeat line** (Session 72).
-- **`;`** — the readme says "status of the active target"; since Session 73 it also falls through to
-  the interact-target readout when there is no battle target.
+- ~~**`;`** — the readme says "status of the active target"; since Session 73 it also falls through
+  to the interact-target readout when there is no battle target.~~ **STRUCK** — the shipped
+  `ReadMe.txt` already carried the reworded `;` entry covering the interact-target fallthrough.
 
 Not fixed here because readme edits are a separate commit made *before* the release trigger (see
 "What this procedure does NOT do"). **These belong in a readme commit ahead of the next release.**

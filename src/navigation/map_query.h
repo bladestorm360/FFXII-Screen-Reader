@@ -149,11 +149,36 @@ struct MapJumpSurface {
 // is no walkmap.
 bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out);
 
-// The same answer, swept ONCE per map. Three subsystems want it (exit scan, breadcrumb trace, '-key
-// probe), so the cache lives here instead of being re-implemented in each. Mutex-guarded: the exit
-// scan reaches it from the input thread and the trace from the game thread. Returns a COPY, because
-// a reference into a cache another thread may rebuild is a dangling read waiting to happen.
+// ---- The per-map seam cache: ONE gated writer, many pure readers ---------------------------------
+//
+// HasWorld() IS A LIVENESS SIGNAL, NOT AN IDENTITY SIGNAL. It says a walkmap is resident; it does
+// NOT say the walkmap belongs to the map id you are holding. The map id flips BEFORE the engine
+// swaps the walkmap, so a sweep taken the moment the id changed reads the PREVIOUS map's polygons --
+// and the old cache then latched that answer for the whole visit. Garamsythe Waterway served map
+// 311's three seams to map 315 and 315's two seams back to 311, which mislabelled every exit,
+// dropped the one whose group did not exist on the wrong map, and put another 199 steps away.
+//
+// So the sweep is no longer something a reader can trigger. PrimeMapJumpSurfaces is the only writer
+// and runs on the GAME THREAD behind PlayerState::IsFieldNavSafe() -- the same gate that makes
+// NavMesh/NavReach correct across transitions -- and PathPlanner::OnMapTeardown drops the answer on
+// the way out, exactly as it drops the navmesh and the reachable set.
+
+// GAME THREAD ONLY, and only from inside a nav-safe frame. Sweeps when `mapId` is not the map
+// already cached; otherwise a no-op. See PathPlanner::OnGameFrame for the single call site.
+void PrimeMapJumpSurfaces(int mapId);
+
+// Any thread. Serves a COPY of the seams IF AND ONLY IF they were swept for `mapId` -- a caller can
+// never be handed another map's geometry. NEVER sweeps: before the first primed frame of a map this
+// returns false and an empty vector, and the caller says nothing. Silence, not wrong speech.
+// (A copy rather than a reference because the writer thread may rebuild the vector underneath.)
+//
+// The return is SWEPT-ness, not emptiness: "not looked yet" and "looked, and this map has no seams"
+// are different answers, and only the second makes a controller with no surface a MISSING EXIT.
 bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out);
+
+// GAME THREAD. Drop the cached seams — called from PathPlanner::OnMapTeardown beside
+// NavMesh::Invalidate / NavReach::Invalidate, so a map reloaded onto its own id re-sweeps too.
+void InvalidateMapJumpSurfaces();
 
 // Nearest point of `s` to `from` on the XZ plane, over the seam's own vertices. This is what the
 // player reaches first, and what both the spoken distance and the route goal should aim at.

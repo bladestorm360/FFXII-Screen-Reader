@@ -3178,3 +3178,134 @@ read back yet — the crossing oracle needs the tester to walk through a Waterwa
 inventory and span dump need a `'` dump from a map where exits are wrong.
 
 Build clean, deployed.
+
+---
+
+## Session 85 — 2026-07-28 — [navigation] The seam cache was a full map behind: `HasWorld()` is liveness, not identity
+
+**KEYWORDS: exit swapped mislabelled missing exit 199 steps waterway Garamsythe Central Spur Stairs
+Northern Sluiceway map-jump surface seam cache stale HasWorld liveness identity PrimeMapJumpSurfaces
+CachedMapJumpSurfaces InvalidateMapJumpSurfaces IsFieldNavSafe nav-safe gate teardown epoch
+PublishClaims round trip crossing oracle false MISMATCH NavTrace transient mapId 0 route label
+turn-by-turn destination name dropped**
+
+### Session 84's diagnostics read back, and they solved it in one pass
+
+Session 84 shipped four exit diagnostics as measurement-only and said they were unconfirmed. This is
+that read-back. The tester walked Garamsythe Waterway 311 → 315 → 311 and reported exits correct on
+the first load, then scrambled: the exit they spawned next to mislabelled, one exit gone, one
+announced ~200 steps away and unpathable. **The surface inventory answered it outright** — no new
+model, no RE, no Frida probe.
+
+| log line | map | surfaces reported |
+|---|---|---|
+| 1937–1939 | 311 (first load) | g2 (13.3,4.3,116.4) · g1 (36.0,3.0,131.6) · g3 (49.0,−0.0,137.0) |
+| 2178–2180 | **315** | **byte-identical to the three above — 311's** |
+| 2298–2299 | **311 (re-entry)** | g2 (170.0,9.1,57.4) 16 polys · g1 (13.7,4.3,119.8) — **315's** |
+
+The destination half was correct on every map (2282–2292: 311's re-entry read its own fresh blob,
+`routineTable=+0x4990 count=18`, same three controllers, same three destinations as the first load).
+Only the POSITIONS were stale, and since the join is `controller.group == surface.group`, stale
+positions scramble which name lands on which doorway. All three symptoms are one fact:
+
+- `2295` `group=3 dest=321 -> no map-jump surface on this map, dropped` + `nogroup=1` — **the missing
+  exit** (No. 10 Channel); 315's walkmap has no group 3.
+- `2317` `Exit, Lowtown: North Sprawl. right next to you` — group 1 bound to 315's surface at
+  (13.7,4.3,119.8), which is where the player spawned.
+- `2322` `Northwest, 199 steps (above)` — **the 200-step exit**; group 2 bound to 315's 16-poly seam
+  at (170.0,9.1,57.4), off 311 entirely.
+- `2281` `CROSSING ORACLE … <== MISMATCH — the group->destination binding is WRONG` — **a false
+  accusation.** The binding was right; the oracle read the same poisoned surfaces. Session 84 wrote
+  that map 311's non-identity controller→group mapping was "a lead to measure, not a conclusion".
+  Correctly hedged: it was a coincidence, and the span dump ruled span bleed out on the same lines.
+
+### Root cause: `HasWorld()` is a LIVENESS signal, not an IDENTITY signal
+
+`MapQuery::CachedMapJumpSurfaces` latched on it:
+
+```cpp
+if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
+if (!s_haveMap && HasWorld()) { ReadMapJumpSurfaces(s_surf); s_haveMap = true; }
+```
+
+`HasWorld()` proves *a* walkmap is resident, never that it is *this map's*. The map id flips BEFORE
+the engine swaps the walkmap, so the first scan of a new map swept the PREVIOUS map's polygons and
+then pinned them for the whole visit. The comment above it anticipated the *empty* case and never the
+*stale* case. `exit_scan.cpp` had a second copy of the same latch on top, so fixing one alone would
+have changed nothing.
+
+### The rest of the nav stack was already right, and the log proves it
+
+`NavMesh`/`NavReach` invalidate on the **teardown epoch** and re-read behind
+`PlayerState::IsFieldNavSafe()`. Their flood counts are exact on all three loads: **139** polys on
+311, **1997** on 315, **139** again on 311's re-entry (log 1949, 2190, 2311). The seam cache was the
+one cache in the stack with neither mechanism. **The fix was to give it the two mechanisms that were
+already there and already measured working** — not to invent a walkmap fingerprint, which was the
+tempting third option and would have been a new unproven model.
+
+### Shipped
+
+- **`map_query.{h,cpp}`** — the cache split into one gated writer and pure readers.
+  `PrimeMapJumpSurfaces(mapId)` (GAME THREAD, nav-safe frames only) is now the **only** caller of
+  `ReadMapJumpSurfaces`; `CachedMapJumpSurfaces(mapId, out)` **never sweeps** and serves only when the
+  cached answer was swept for that same `mapId`, so a reader can be handed this map's seams or
+  nothing — never another map's. `InvalidateMapJumpSurfaces()` added.
+- **`path_planner.cpp`** — `PrimeMapJumpSurfaces` called from inside the EXISTING nav-safe +
+  non-origin-position block in `OnGameFrame` (ahead of `NavReach` and `NavTrace`, both of which read
+  the seams); `InvalidateMapJumpSurfaces()` added to `OnMapTeardown` beside the other two. Bonus: the
+  ~15k guarded reads moved off the input thread.
+- **`exit_scan.cpp`** — the duplicate `CachedSurfaces` deleted outright. Not-yet-swept now logs ONE
+  line instead of one "dropped" per controller; the per-controller line is kept for the real case
+  (seams known, this group not among them), which is what makes a missing exit visible.
+- **`exit_scan.cpp` `PublishClaims`** — made idempotent. Two independent defects, **both hit by
+  exactly the A→B→A round trip the tester walks**: (1) `if (mapId == g_claimMapA) return;` latched on
+  the FIRST call, so a map whose script was not readable yet published zero rows and could never
+  republish — the oracle then said "the mod claimed NOTHING for that group" for the whole visit;
+  (2) re-entering the map held in `g_claimMapB` skipped BOTH the prune and the `B = A` update, so old
+  rows survived and new ones were appended beside them, and `ClaimedDestForGroup` returns the FIRST
+  match — the stale one.
+- **`nav_trace.cpp`** — `g_haveSurf` deleted; the seams are re-read per crumb. The oracle is the
+  instrument the exit work is verified with; it does not get to be the last thing holding a stale
+  copy. Also `mapId <= 0` now returns early: the transient 0 fired every crossing TWICE
+  (`701 -> 0`, then `0 -> 311`) and the first of those CLEARED THE TRAIL, so the second had no crumbs
+  and the oracle silently returned with nothing to say about the crossing that actually happened.
+- **`nav_probe.cpp`** — both `'` sites now say "NOT SWEPT YET" rather than looking like "this map has
+  no seams".
+
+### Also shipped: `\` and `p` no longer speak the destination name
+
+Tester request: *"there is no need to speak the destination name first … Destination can be inferred
+from context."* Confirmed with them as **all four** planner utterances, so there is nothing to
+remember about which one names its target:
+
+| before | after |
+|---|---|
+| `Exit, Garamsythe Waterway: Northern Sluiceway. North 23. 23 steps` | `North 23. 23 steps` |
+| `Exit, …: North Spur Sluiceway. At the exit. Northeast 3.` | `At the exit. Northeast 3.` |
+| `Save Crystal. No path` | `No path` |
+| `Save Crystal. Route unavailable` | `Route unavailable` |
+
+`p` shares the drain and changes with it — confirmed with the tester. The label is still CARRIED and
+now goes to the `NAV-ROUTE` drain lines (`target="…"`), because the log has to keep being able to say
+which target a route was for.
+
+### Play confirmation
+
+**CONFIRMED IN PLAY** — the tester played the fix and reported *"works"*. That is the Waterway
+transition case they reported at the top of this session: exits stay correct across a map change and
+back again. Build clean, deployed, committed.
+
+**Scope of the confirmation, stated honestly.** The tester confirmed the OUTCOME they could
+experience — exits no longer scramble across a transition. The log-side checks below were **not**
+individually read back, so they remain the falsifiers for this change and are the first thing to look
+at if anything exit-shaped regresses:
+
+- the `surface gN:` block after `announce: mapId=315` must NOT repeat 311's coordinates;
+- `exits: controllers=3 surfaces=3 listed=3 | dropped: nogroup=0` on **both** visits to 311;
+- no `<== NO CONTROLLER CLAIMS THIS GROUP` on 315;
+- **CROSSING ORACLE = MATCH on both crossings** — the single strongest signal, belief against outcome;
+- no `199 steps`; no `TRANSITION FIRED: mapId N -> 0`.
+
+**Not separately exercised: the `PublishClaims` round-trip fix.** It needs a fourth leg
+(311 → 315 → 311 → 315) with the oracle still reporting MATCH. The two defects it fixes are proven by
+reading the code, not by this play session.

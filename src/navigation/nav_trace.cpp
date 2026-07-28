@@ -41,18 +41,20 @@ int                g_map   = -1;
 bool               g_have  = false;
 Crumb              g_last{};
 
-// Seams of the map currently being walked. Filled from the shared per-map cache on the first crumb,
-// so the sweep is never paid twice and never runs before the walkmap is up.
+// Seams of the map currently being walked, re-read from the shared per-map cache on every crumb.
+//
+// NOT latched on the first crumb, which is what it used to do. That first crumb is laid down within
+// a frame or two of a map change, when the shared cache was still serving the PREVIOUS map's
+// geometry -- so every crumb of the visit was measured against the wrong seams, and the CROSSING
+// ORACLE below then read out "MISMATCH -- the group->destination binding is WRONG" about a binding
+// that was perfectly correct. The oracle is the instrument the exit work is verified with; it does
+// not get to be the last thing holding a stale copy. Crumbs are >= kMinMove apart, so this is a
+// handful of vector copies a second against a cache that no longer sweeps on demand.
 std::vector<MapQuery::MapJumpSurface> g_surf;
-bool                                  g_haveSurf = false;
 
 // Nearest seam to `p`, by vertex. Fills the crumb's measurement fields.
 void MeasureSeams(Crumb& c) {
-    if (!g_haveSurf) {
-        if (!MapQuery::HasWorld()) return;
-        MapQuery::CachedMapJumpSurfaces(g_map, g_surf);
-        g_haveSurf = true;
-    }
+    MapQuery::CachedMapJumpSurfaces(g_map, g_surf);   // empty until this map's seams are swept
     const FVec3 p{ c.x, c.y, c.z };
     float best = -1.0f;
     for (const auto& s : g_surf) {
@@ -198,6 +200,12 @@ void CrossingOracle(int leftMap, int arrivedMap) {
 } // namespace
 
 void OnFieldFrame(int mapId, const FVec3& pos) {
+    // A map id of 0 is the engine mid-transition, not a place. Treating it as a real map made every
+    // crossing fire TWICE -- "TRANSITION FIRED: mapId 701 -> 0" and then "0 -> 311" -- and the first
+    // of those CLEARED THE TRAIL, so the second had no crumbs and the oracle silently returned with
+    // nothing to say about the crossing that actually happened. Hold the trail across the gap.
+    if (mapId <= 0) return;
+
     if (mapId != g_map) {
         // The trail belongs to the map we just LEFT, and its last crumb is within kMinMove of wherever
         // the trigger fired. Dump before resetting, and only when there is something to say (the first
@@ -214,8 +222,7 @@ void OnFieldFrame(int mapId, const FVec3& pos) {
         g_have = false;
         g_next = 0;
         g_trail.clear();
-        g_surf.clear();
-        g_haveSurf = false;        // the seams belong to the map we just left
+        g_surf.clear();            // the seams belong to the map we just left
     }
 
     if (g_have) {

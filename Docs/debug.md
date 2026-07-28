@@ -2870,3 +2870,91 @@ body on top of an obstacle snaps vertically onto the floor under it and the play
 Shipped with a counter that would falsify it; the counter read **zero** on the map that motivated it —
 every candidate has `en=1`. Removed. Third theory in four sessions killed by its own instrumentation
 inside one play session.
+
+---
+
+## SOLVED — the seam cache was a full map behind (Session 85, 2026-07-28)
+
+**KEYWORDS: exits swapped mislabelled missing exit 199 steps unpathable waterway Garamsythe 311 315
+Central Spur Stairs Northern Sluiceway No. 10 Channel seam cache stale HasWorld liveness identity
+PrimeMapJumpSurfaces CachedMapJumpSurfaces InvalidateMapJumpSurfaces IsFieldNavSafe teardown epoch
+crossing oracle FALSE MISMATCH PublishClaims round trip A B A NavTrace transient mapId 0 double
+TRANSITION FIRED**
+
+### Symptom
+
+Waterway exits correct on the first load of a map, scrambled after any transition: the exit the player
+spawns beside mislabelled, one exit gone, one announced ~200 steps away and unreachable. Reported for
+Garamsythe but not map-specific — it applies to **every** transition after the first.
+
+### THE LESSON — `HasWorld()` is a LIVENESS signal, not an IDENTITY signal
+
+```cpp
+if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
+if (!s_haveMap && HasWorld()) { ReadMapJumpSurfaces(s_surf); s_haveMap = true; }   // WRONG
+```
+
+`HasWorld()` proves **a** walkmap is resident. It does not prove it is **this map's**. The map id
+flips BEFORE the engine swaps the walkmap, so this swept the PREVIOUS map's polygons on the first
+frame of every map and then latched them (`s_haveMap = true`) for the whole visit. The comment above
+it anticipated the *empty* case and never the *stale* case — the cache was, permanently, one map
+behind.
+
+**Generalised rule, now in `GameArchitecture.md`: any per-map cache invalidates on the TEARDOWN epoch
+and fills only behind `PlayerState::IsFieldNavSafe()`. Never on `HasWorld()`.** `IsFieldNavSafe()` is
+false for the whole of a transition (`CondAreaId` rejects `0xFFFFFFFF`, `CondLeaderPtr` is zeroed at
+teardown start), which is exactly the property needed. This is not a new mechanism — `NavMesh` /
+`NavReach` already had both halves and were measured **correct on every load** in the same log
+(139 / 1997 / 139 polys across 311 → 315 → 311). The seam cache was the one cache in the stack with
+neither.
+
+**And: never a private second copy in a consumer.** `exit_scan.cpp` had its own `CachedSurfaces` with
+the identical latch, justified as "saves the rescan a vector copy" — it saved nothing (the shared
+cache returns a copy by design) and it meant fixing the shared one alone would have changed nothing.
+
+### How it was found — Session 84's diagnostics, read back, no RE at all
+
+The surface inventory printed the seams per map and they were **byte-identical across two different
+maps** (log 1937–1939 vs 2178–2180). That single comparison localised it. The controller dump on the
+same frames showed the destination half fresh and correct, so it could only be the positions. No
+Ghidra, no Frida, no new model.
+
+### TRIED & FAILED — the tempting third option
+
+**A walkmap fingerprint** (hash the ctx pointer, the four array bases, the grid dims/origin, re-sweep
+when it changes). Rejected: it is a NEW unproven identity model invented to solve a problem two
+existing, measured-correct mechanisms already solve. It would also have needed its own invalidation
+story for `NavMesh`. Do not reach for it.
+
+### FALSE LEAD, worth recording — the crossing oracle accused a correct binding
+
+`CROSSING ORACLE: left map 315 via seam g2 | mod claimed 313 | ACTUALLY ARRIVED 311 <== MISMATCH --
+the group->destination binding is WRONG` (log 2281). **The binding was right.** The oracle reads the
+same poisoned surfaces to decide WHICH seam group was crossed, so it mis-attributed the crossing and
+then blamed the (correct) group→destination map. Session 84 had separately flagged that 311 is the
+one map whose controller→group mapping is not the identity (CTRL000→2, 001→3, 002→1) and that it was
+the map reported swapping — a coincidence, correctly hedged there as "a lead to measure, not a
+conclusion", and the span dump ruled span bleed out on the same lines.
+
+**A diagnostic that shares a data source with the thing it measures can only be trusted about the
+other half.** `NavTrace` no longer latches the seams.
+
+### Two more defects fixed in passing, both real
+
+- **`PublishClaims` was latched, not idempotent**, and an **A→B→A round trip hit both bugs** — which
+  is precisely what walking between two waterway maps is. (1) `if (mapId == g_claimMapA) return;`
+  fired on the FIRST call, so a map whose field script was not readable yet published zero rows and
+  could never republish; the oracle then said "the mod claimed NOTHING for that group" for the rest
+  of the visit. (2) Re-entering the map still held in `g_claimMapB` skipped BOTH the prune and the
+  `B = A` update, so old rows survived and new ones were appended beside them — and
+  `ClaimedDestForGroup` returns the FIRST match, i.e. the stale one, while the store grew every trip.
+- **`NavTrace::OnFieldFrame` treated a transient `mapId == 0` as a real map.** Every crossing fired
+  TWICE (`TRANSITION FIRED: mapId 701 -> 0`, then `0 -> 311`) and the first CLEARED THE TRAIL, so the
+  second had no crumbs and the oracle silently returned — the real crossing was never oracled at all.
+  Now returns early on `mapId <= 0`.
+
+### KNOWN-SIMILAR, deliberately not touched
+
+`EntityScan::CachedSigns` (`exit_scan.cpp`) has the same latch shape against the `+0x70` field-sign
+table. It feeds **door naming only**, not transitions, and there is no evidence it misfires. Recorded
+here so it is greppable if door names ever come back wrong after a transition.

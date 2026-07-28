@@ -104,7 +104,8 @@ void DumpMeshConnectivity(const FVec3& player, int mapId) {
     // Per seam: are its own polys in that component? A "no" here is the whole bug, stated in one
     // line, and it names the group so the next question is which edge the flood stopped at.
     std::vector<MapQuery::MapJumpSurface> surf;
-    MapQuery::CachedMapJumpSurfaces(mapId, surf);
+    if (!MapQuery::CachedMapJumpSurfaces(mapId, surf))
+        Log::Write(kTag, "   seams: NOT SWEPT YET for this map -- not the same thing as 'this map has none'");
     for (const auto& s : surf) {
         int inComp = 0;
         for (int pid : s.polys) if (reach.count(pid)) ++inComp;
@@ -192,12 +193,12 @@ void DumpInteractReach() {
 
 void DumpExitAim(const FVec3& player, int mapId) {
     std::vector<MapQuery::MapJumpSurface> surf;
-    MapQuery::CachedMapJumpSurfaces(mapId, surf);
+    const bool swept = MapQuery::CachedMapJumpSurfaces(mapId, surf);
 
     char m[320];
     snprintf(m, sizeof(m),
-             "==== EXIT-AIM: seam centroid vs near edge | %zu group(s), mask now 0xF (was 0x1F) ====",
-             surf.size());
+             "==== EXIT-AIM: seam centroid vs near edge | %zu group(s), mask now 0xF (was 0x1F)%s ====",
+             surf.size(), swept ? "" : " -- NOT SWEPT YET for this map");
     Log::Write(kTag, m);
 
     for (const auto& s : surf) {

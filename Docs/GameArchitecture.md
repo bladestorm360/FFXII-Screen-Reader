@@ -348,6 +348,40 @@ Observed low-byte values `08/10/18/20/28/30` = groups 1–6 at bit 3. Readers ad
 no controller on the map claims, so the exact field width cannot matter. Implemented as
 `MapQuery::ReadMapJumpSurfaces` + `MapScript::ExitDest::group`, consumed by `exit_scan.cpp`.
 
+### The seam cache — ONE gated writer, pure readers (corrected Session 85)
+
+The sweep is ~15k guarded reads and its answer cannot change while a map is loaded, so it is cached.
+**How that cache is keyed is a correctness question, not a performance one**, and it was wrong from
+S64 to S85:
+
+> **`MapQuery::HasWorld()` is a LIVENESS signal, NEVER an IDENTITY signal.** It says a walkmap is
+> resident. It does **not** say the walkmap belongs to the map id you are holding. **The map id flips
+> BEFORE the engine swaps the walkmap**, so anything that sweeps the instant the id changes reads the
+> PREVIOUS map's polygons.
+
+The old cache did exactly that and then latched (`s_haveMap = true`) for the whole visit, so it was
+permanently one map behind. In Garamsythe Waterway it served map 311's three seams to map 315 and
+315's two back to 311 — mislabelling every exit, dropping the one whose group did not exist on the
+wrong map, and putting another 199 steps away off the map entirely. It also fed `NavTrace`, so the
+crossing oracle reported `MISMATCH — the group->destination binding is WRONG` about a **correct**
+binding. `exit_scan.cpp` carried a second copy of the same latch on top.
+
+The shape that is correct — and it is the one `NavMesh` / `NavReach` already used, measured right on
+every load (139 / 1997 / 139 polys across 311 → 315 → 311):
+
+| | |
+|---|---|
+| **writer** | `MapQuery::PrimeMapJumpSurfaces(mapId)` — GAME THREAD, called **only** from inside `PathPlanner::OnGameFrame`'s nav-safe + non-origin-position block. The only caller of `ReadMapJumpSurfaces`. |
+| **why that gate** | `PlayerState::IsFieldNavSafe()` is false for the **whole** of a transition (`CondAreaId` rejects `0xFFFFFFFF`, `CondLeaderPtr` is zeroed at teardown start), so it is the cheap proof that the resident walkmap belongs to the id we tag the answer with. |
+| **invalidation** | `MapQuery::InvalidateMapJumpSurfaces()` from `PathPlanner::OnMapTeardown`, beside `NavMesh::Invalidate` / `NavReach::Invalidate`. Handles a map reloaded onto its own id. |
+| **readers** | `CachedMapJumpSurfaces(mapId, out)` — any thread, **never sweeps**, serves only when the cached answer was swept for that same `mapId`. The two possible answers are "this map's seams" and "nothing yet". |
+
+**The rule this generalises to: any per-map cache must invalidate on the TEARDOWN epoch and fill only
+behind `IsFieldNavSafe()`. Never on `HasWorld()`, and never a private second copy in a consumer** —
+two layers of latch meant fixing one changed nothing. Cost: the exit list is empty for one extra
+frame after a map load (`EntityList::OnFieldFrame` runs before `PathPlanner::OnGameFrame` in
+`NavHooks::HookedFieldFrame`), which is right — silence, not another map's geometry.
+
 ### TRANSITIONS vs DOORS — two systems, never mix them
 
 | | **TRANSITION** (district ↔ district) | **DOOR** (shop, Stair to Lowtown) |
@@ -427,9 +461,16 @@ one pair by walking them:
 | Muthru `mapjump(291, 2)` | East End slot 2 -> Muthru. Tester spawned on East End `+0x54[2]`=(26,58), walked west, arrived Muthru |
 | East End `mapjump(290, 2)` | Muthru slot 2 -> East End. Tester spawned in Muthru `+0x54[2]`=(48,-9,64), walked east, arrived East End |
 
-Implemented as `ExitLinks` (`exit_links.h`), persisted to
-`%LOCALAPPDATA%\FFXII-Screen-Reader\map_links.txt` behind a `version` header. `ExitDest::arrivalSlot`
-carries the `+0x54` index (recovered by exact match against `+0x84`).
+> **STRUCK (S63) — the IMPLEMENTATION only, not the relation above.** This paragraph used to read
+> "Implemented as `ExitLinks` (`exit_links.h`), persisted to
+> `%LOCALAPPDATA%\FFXII-Screen-Reader\map_links.txt` behind a `version` header." **`exit_links.{h,cpp}`
+> and that file were DELETED in Session 63** as a no-learned-labels rule violation, and are not in
+> `CMakeLists.txt`. Do not reintroduce a learned/persisted link store. Session 64 replaced it with a
+> purely LOCAL binding that needs no neighbour and no cache: the controller's own `setmapjumpgroup(K)`
+> against the walkmap poly tag `K` — see "Transitions are walkmap surfaces". `ExitDest::arrivalSlot`
+> still carries the `+0x54` index but is diagnostics-only; `entrance` is parsed and unused.
+> This entry stood as fact for 22 sessions after the code was gone. Left here because the ARRIVAL
+> RELATION itself is still true and still the reasoning trail for why local binding rules were needed.
 
 **STRUCK, do not reintroduce even as a fallback** -- every local binding rule, all refuted:
 - **blob table order** (the `+0x84` pair order vs controller order): labelled Muthru's DEAD slot

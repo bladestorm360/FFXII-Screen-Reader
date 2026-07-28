@@ -68,6 +68,21 @@ constexpr float kOnExitDist = 1.0f;
 // old rule survives for anything blob-derived; this applies to walkmap seams, which is all of them.
 constexpr float kAtExitDy   = 3.0f;
 
+// THE DESTINATION NAME IS NOT SPOKEN. A route is requested for the thing the player just heard
+// named by `[`/`]`, or for the target they just locked, so "Eastgate. 3 north, 2 east" spends the
+// first second of every route repeating something they already know before reaching the part they
+// pressed the key for. Requested by the tester, 2026-07-28: speak the RESULT, nothing else -- and
+// the same rule for all four outcomes ("At the exit", "No path", "Route unavailable", the legs), so
+// there is nothing to remember about which one names its target.
+//
+// The label is still CARRIED, because the log has to be able to say which target a route was for.
+// It goes to the NAV-ROUTE drain line instead of to speech; see LabelForLog.
+void LabelForLog(const std::wstring& label, char* out, size_t cap) {
+    size_t n = 0;
+    for (wchar_t wc : label) { if (n + 1 >= cap) break; out[n++] = (wc < 128) ? static_cast<char>(wc) : '?'; }
+    out[n] = '\0';
+}
+
 // Clear the pending flag only if no newer request arrived while we were planning.
 void ClearIfSeq(uint64_t seq) {
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -108,6 +123,7 @@ void OnMapTeardown() {
     g_epoch.fetch_add(1, std::memory_order_acq_rel);   // any pending request is now stale
     NavMesh::Invalidate();                             // drop the cached walkmap arrays for the dead map
     NavReach::Invalidate();                            // and the reachable-set answer built on it
+    MapQuery::InvalidateMapJumpSurfaces();             // and the seams, which are walkmap geometry too
     std::lock_guard<std::mutex> lk(g_mutex);
     g_hasRequest.store(false, std::memory_order_release);
 }
@@ -126,6 +142,15 @@ void OnGameFrame() {
         FVec3 pp;
         if (PlayerState::IsFieldNavSafe() && PlayerState::ReadPlayerPos(pp) &&
             !(pp.x == 0.0f && pp.y == 0.0f && pp.z == 0.0f)) {
+            // Sweep the map's transition seams, ONCE per map, from inside this gate. It has to be
+            // here and nowhere else: IsFieldNavSafe() is false for the whole of a transition (the
+            // area id reads 0xFFFFFFFF and the leader pointer is zeroed at teardown start), so it
+            // is the only cheap proof that the resident walkmap belongs to the map id we are about
+            // to tag the answer with. Sweeping on MapQuery::HasWorld() instead -- which only proves
+            // SOME walkmap is up -- is what left the seam cache a full map behind and scrambled
+            // every exit in Garamsythe Waterway. Runs before the two consumers below, both of which
+            // read the seams. See MapQuery::PrimeMapJumpSurfaces.
+            MapQuery::PrimeMapJumpSurfaces(MapNames::CurrentMapId());
             NavReach::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
             // Breadcrumb the walked path. Piggybacks on the position read this block already does, and
             // is the only measurement we have of where a transition ACTUALLY fires -- see nav_trace.h.
@@ -186,9 +211,11 @@ void OnGameFrame() {
             Log::Write("NAV-ROUTE", m);
         }
         if (giveUp) {
-            Log::Write("NAV-ROUTE", "drain: gave up (never nav-safe within window) -> Route unavailable");
-            Speech::Output(label.empty() ? L"Route unavailable"
-                                         : (label + L". Route unavailable"), true);
+            char lm[128]; LabelForLog(label, lm, sizeof(lm));
+            char m[208];
+            snprintf(m, sizeof(m), "drain: gave up (never nav-safe within window) for \"%s\" -> Route unavailable", lm);
+            Log::Write("NAV-ROUTE", m);
+            Speech::Output(L"Route unavailable", true);
         }
         return;
     }
@@ -207,8 +234,7 @@ void OnGameFrame() {
     if (isTransition && exitDist <= kAtExitDist && exitDy <= kAtExitDy) {
         float facing = 0.0f;
         PlayerState::ReadCameraForwardStable(facing);
-        std::wstring say = label.empty() ? std::wstring() : (label + L". ");
-        say += L"At the exit.";
+        std::wstring say = L"At the exit.";
         // Beyond arm's reach, still say where it is: standing BESIDE the seam rather than on it is a
         // real difference the player can act on.
         if (exitDist > kOnExitDist) {
@@ -218,9 +244,10 @@ void OnGameFrame() {
             say += std::to_wstring(NavCommon::DistanceToSteps(exitDist));
             say += L".";
         }
-        char m[192];
-        snprintf(m, sizeof(m), "drain seq=%llu: at transition d2D=%.2fm dY=%.2fm from=(%.2f,%.2f,%.2f) tgt=(%.2f,%.2f,%.2f)",
-                 (unsigned long long)seq, exitDist, exitDy, from.x, from.y, from.z,
+        char lm[128]; LabelForLog(label, lm, sizeof(lm));
+        char m[320];
+        snprintf(m, sizeof(m), "drain seq=%llu: at transition \"%s\" d2D=%.2fm dY=%.2fm from=(%.2f,%.2f,%.2f) tgt=(%.2f,%.2f,%.2f)",
+                 (unsigned long long)seq, lm, exitDist, exitDy, from.x, from.y, from.z,
                  target.x, target.y, target.z);
         Log::Write("NAV-ROUTE", m);
         Speech::Output(say, true);
@@ -233,9 +260,12 @@ void OnGameFrame() {
     PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st);
 
     const char* planName = (r == PathSearch::Plan::Route) ? "Route" : "NoPath";
-    char m[160];
-    snprintf(m, sizeof(m), "drain seq=%llu: from=(%.2f,%.2f,%.2f) plan=%s legs=%zu",
-             (unsigned long long)seq, from.x, from.y, from.z, planName, poly.size());
+    // The label is logged here and NOT spoken -- this line is the only record of which target a
+    // route was for, now that the speech is bare directions.
+    char lm[128]; LabelForLog(label, lm, sizeof(lm));
+    char m[288];
+    snprintf(m, sizeof(m), "drain seq=%llu: target=\"%s\" from=(%.2f,%.2f,%.2f) plan=%s legs=%zu",
+             (unsigned long long)seq, lm, from.x, from.y, from.z, planName, poly.size());
     Log::Write("NAV-ROUTE", m);
     // Search stats — diagnoses a NoPath (startFloor=0 => the player's own fine cell has no
     // floor; expands maxed => budget/maze). gridSamples = fine GroundAt samples this map
@@ -301,9 +331,8 @@ void OnGameFrame() {
     // L-shaped route across open ground becomes one diagonal chord, and the player is told to walk a
     // line the route never takes -- then any drift off that imaginary diagonal comes back as a
     // completely different direction. `poly` stays the validated geometry and the diagnostic below.
-    std::wstring say = label.empty() ? std::wstring() : (label + L". ");
-    if (r == PathSearch::Plan::Route) say += PathDirections::Describe(rawPoly, facingRad);
-    else                  say += L"No path";
+    std::wstring say = (r == PathSearch::Plan::Route) ? PathDirections::Describe(rawPoly, facingRad)
+                                                      : std::wstring(L"No path");
 
     // Log the spoken directions (ASCII cardinals/digits) so the exact leg text is diagnosable.
     {

@@ -39,44 +39,54 @@ namespace {
 // interactable door (a shop, a stair) is a scene object you press Enter on. Separate systems, separate
 // readers -- never use one as evidence about the other.
 //
-// Resolved ONCE per map and cached: the sweep is ~15k guarded reads, its answer cannot change while a
-// map is loaded, and the exit scan runs several times a second. Nothing is cached until the walkmap is
-// actually up, because the scan starts on the first frame of a new map.
-// The sweep itself now lives in MapQuery::CachedMapJumpSurfaces, because the breadcrumb trace and the
-// '-key probe want the same answer and re-sweeping per subsystem would pay ~15k reads three times a
-// map. This keeps a local copy so the several-times-a-second rescan does not copy the vector each
-// call; the shared cache is only consulted while this one is still empty for the map.
-const std::vector<MapQuery::MapJumpSurface>& CachedSurfaces(int mapId) {
-    static std::vector<MapQuery::MapJumpSurface> s_surf;
-    static int  s_map    = -1;
-    static bool s_haveMap = false;
-
-    if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
-    if (!s_haveMap && MapQuery::HasWorld()) {
-        MapQuery::CachedMapJumpSurfaces(mapId, s_surf);
-        s_haveMap = true;
-    }
-    return s_surf;
-}
+// Resolved ONCE per map: the sweep is ~15k guarded reads, its answer cannot change while a map is
+// loaded, and the exit scan runs several times a second. The sweep AND the cache both live in
+// MapQuery now (PrimeMapJumpSurfaces / CachedMapJumpSurfaces), driven once per map from
+// PathPlanner's nav-safe frame, so this file only ever READS.
+//
+// There used to be a second cache here, on the theory that it saved the several-times-a-second
+// rescan a vector copy. It saved nothing -- the shared cache returns a copy by design -- and it
+// carried its own copy of the bug that shared cache had: both latched the first sweep that found
+// MapQuery::HasWorld() true, which on the first frame of a new map is the PREVIOUS map's walkmap.
+// Two layers of latch meant fixing one still left the exits a map behind. Do not reintroduce a
+// local seam cache; ask MapQuery, and take "nothing yet" for an answer.
 
 // The group -> destination binding, per map, so the crossing oracle can still read it after the map
 // has unloaded. Two maps' worth is enough: the one being left and the one being entered.
 struct ClaimRow { int mapId = -1; int group = 0; uint16_t dest = 0; };
 std::vector<ClaimRow> g_claims;
-int                   g_claimMapA = -1;
-int                   g_claimMapB = -1;
+int                   g_claimMapA = -1;   // current map
+int                   g_claimMapB = -1;   // the one before it, kept for the oracle
 
+// IDEMPOTENT, not latched. Two bugs lived in the latched version, and an A -> B -> A round trip --
+// which is what walking between two waterway maps is -- hit both:
+//
+//   * `if (mapId == g_claimMapA) return;` fired on the FIRST call for a map. If the field script
+//     was not readable yet that call carried zero rows, so the map was published empty and could
+//     never be republished; the oracle then reported "the mod claimed NOTHING for that group" for
+//     the rest of the visit.
+//   * Re-entering the map still held in g_claimMapB skipped BOTH the prune and the B = A update, so
+//     that map's old rows survived and the new ones were appended beside them. ClaimedDestForGroup
+//     returns the FIRST match, i.e. the stale one, and the store grew on every round trip.
+//
+// So: republish whenever the map changed OR the row count is not yet what this scan says it should
+// be, and always clear the map's own rows before appending.
 void PublishClaims(int mapId, const std::vector<MapScript::ExitDest>& dests) {
-    if (mapId == g_claimMapA) return;                    // already published for this map
-    // Keep the previous map's rows -- the crossing oracle reads them one frame AFTER the map changed.
-    if (mapId != g_claimMapB) {
-        for (size_t i = 0; i < g_claims.size();) {
-            if (g_claims[i].mapId != g_claimMapA) g_claims.erase(g_claims.begin() + static_cast<long long>(i));
-            else ++i;
-        }
-        g_claimMapB = g_claimMapA;
+    size_t want = 0;
+    for (const auto& d : dests) if (d.group > 0) ++want;
+    size_t held = 0;
+    for (const auto& r : g_claims) if (r.mapId == mapId) ++held;
+    if (mapId == g_claimMapA && held == want) return;   // already current and complete
+
+    if (mapId != g_claimMapA) { g_claimMapB = g_claimMapA; g_claimMapA = mapId; }
+    // Drop this map's own rows (a re-entry re-publishes them fresh) plus anything that is neither of
+    // the two maps we keep.
+    for (size_t i = 0; i < g_claims.size();) {
+        const int m = g_claims[i].mapId;
+        if (m == mapId || (m != g_claimMapA && m != g_claimMapB))
+            g_claims.erase(g_claims.begin() + static_cast<long long>(i));
+        else ++i;
     }
-    g_claimMapA = mapId;
     for (const auto& d : dests)
         if (d.group > 0) g_claims.push_back(ClaimRow{ mapId, d.group, static_cast<uint16_t>(d.destMapId) });
 }
@@ -109,7 +119,7 @@ const std::vector<MapExits::SignRec>& CachedSigns() {
 
 // Append the current map's EXITS = its map-jump TRANSITIONS: the walkmap surfaces the player walks
 // onto to change area. Each becomes a fixed-position Category::Exit entity with a synthetic stable
-// identity. See the note above CachedSurfaces for the mechanism and the evidence.
+// identity. See MapQuery::PrimeMapJumpSurfaces for the mechanism and the evidence.
 //
 // NOT interactable doors. Shop entrances, "Stair to Lowtown" and the like are scene objects you press
 // Enter on; they come through entity_scan's handle-table walk and their names from `+0x70` field signs.
@@ -135,8 +145,28 @@ void ScanExits(std::vector<Entity>& out) {
     std::vector<MapScript::ExitDest> dests;
     MapScript::ReadExitDests(dests, logDetail);
 
-    const std::vector<MapQuery::MapJumpSurface>& surfaces = CachedSurfaces(mapId);
+    // WHERE: the map's transition seams, swept once per map on a nav-safe game frame. Before that
+    // frame arrives this is legitimately empty, and an empty answer means WE LIST NO EXITS -- never
+    // that we fall back on whatever was cached last, which is how every exit on this map ended up
+    // wearing the previous map's geometry.
+    std::vector<MapQuery::MapJumpSurface> surfaces;
+    const bool haveSurfaces = MapQuery::CachedMapJumpSurfaces(mapId, surfaces);
     PublishClaims(mapId, dests);
+
+    // One line, not one per controller: on the first frames of every map the seams are simply not
+    // swept yet, and printing "dropped" for each controller there would bury the real drops.
+    if (!haveSurfaces && !dests.empty()) {
+        static int s_notSweptMap = -1;
+        if (mapId != s_notSweptMap) {
+            s_notSweptMap = mapId;
+            char m[176];
+            snprintf(m, sizeof(m),
+                     "map-jump seams not swept for map %d yet (%zu controller(s) waiting) -- no exits "
+                     "listed this scan",
+                     mapId, dests.size());
+            Log::Write("NAV-DIAG", m);
+        }
+    }
 
     // Why each candidate was rejected. Counted rather than only logged, because the summary below has
     // to be able to say "3 controllers, 3 surfaces, 3 listed" or "3 controllers, 3 surfaces, 1 listed"
@@ -151,16 +181,22 @@ void ScanExits(std::vector<Entity>& out) {
             for (const auto& sf : surfaces) if (sf.group == d.group) { surf = &sf; break; }
         if (!surf) {
             ++dropNoGroup;
-            // ALWAYS logged. This used to be gated on `logDetail`, which is once per map id, so a
-            // surface that streamed in a moment late -- or one that never arrives at all -- produced
-            // exactly one line at the start of the visit and silence afterwards. A missing exit that
-            // the log mentioned once, minutes ago, is a missing exit nobody can diagnose.
-            char m[192];
-            snprintf(m, sizeof(m),
-                     "  __MJ_CTRL%03d group=%d dest=%u -> no map-jump surface on this map, dropped "
-                     "(map has %zu surface(s))",
-                     d.ctrlIndex, d.group, d.destMapId, surfaces.size());
-            Log::Write("NAV-DIAG", m);
+            // ALWAYS logged -- but only once the seams for THIS map actually exist. This used to be
+            // gated on `logDetail`, which is once per map id, so a surface that streamed in a moment
+            // late -- or one that never arrives at all -- produced exactly one line at the start of
+            // the visit and silence afterwards. A missing exit that the log mentioned once, minutes
+            // ago, is a missing exit nobody can diagnose. The `haveSurfaces` gate is not a step back
+            // towards that: with no seams swept yet EVERY controller misses, and the one-line notice
+            // above says so; here we want the case where the seams are known and this group is not
+            // among them, which is a genuinely missing exit.
+            if (haveSurfaces) {
+                char m[192];
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d group=%d dest=%u -> no map-jump surface on this map, dropped "
+                         "(map has %zu surface(s))",
+                         d.ctrlIndex, d.group, d.destMapId, surfaces.size());
+                Log::Write("NAV-DIAG", m);
+            }
             continue;
         }
 

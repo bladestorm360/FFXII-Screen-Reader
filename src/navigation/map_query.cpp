@@ -444,23 +444,41 @@ bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
     return !out.empty();
 }
 
-bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out) {
-    static std::mutex                   s_mutex;
-    static std::vector<MapJumpSurface>  s_surf;
-    static int                          s_map     = -1;
-    static bool                         s_haveMap = false;
+// The one cache, and the three entry points that reach it. See the block comment in map_query.h for
+// why the sweep is gated on the caller's frame rather than on HasWorld().
+namespace {
+std::mutex                   g_seamMutex;
+std::vector<MapJumpSurface>  g_seams;
+int                          g_seamMap = -1;   // the map these seams were swept FOR; -1 = nothing cached
+} // namespace
 
-    std::lock_guard<std::mutex> lk(s_mutex);
-    if (s_map != mapId) { s_map = mapId; s_haveMap = false; s_surf.clear(); }
-    // Nothing is cached until the walkmap is actually up: the first scan of a new map runs on its
-    // first frame, before the collision context exists, and caching an empty answer there would pin
-    // the map to "no exits" for as long as it stays loaded.
-    if (!s_haveMap && HasWorld()) {
-        ReadMapJumpSurfaces(s_surf);
-        s_haveMap = true;
-    }
-    out = s_surf;
-    return !out.empty();
+void PrimeMapJumpSurfaces(int mapId) {
+    if (mapId <= 0) return;                       // 0 = mid-transition, no map to attribute a sweep to
+    std::lock_guard<std::mutex> lk(g_seamMutex);
+    if (g_seamMap == mapId) return;               // already swept for this map
+    g_seams.clear();
+    g_seamMap = -1;
+    if (!HasWorld()) return;                      // caller's gate should preclude this; cost nothing if not
+    ReadMapJumpSurfaces(g_seams);
+    // Tagged with the map it was swept FOR. Every reader matches on this, so the only two answers a
+    // reader can get are "this map's seams" and "nothing yet".
+    g_seamMap = mapId;
+}
+
+bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out) {
+    std::lock_guard<std::mutex> lk(g_seamMutex);
+    if (g_seamMap != mapId) { out.clear(); return false; }
+    out = g_seams;
+    // SWEPT-ness, not emptiness. "We have not looked yet" and "we looked and this map has no seams"
+    // are different answers and only the second one means a controller with no surface is a genuinely
+    // MISSING EXIT worth logging as one.
+    return true;
+}
+
+void InvalidateMapJumpSurfaces() {
+    std::lock_guard<std::mutex> lk(g_seamMutex);
+    g_seams.clear();
+    g_seamMap = -1;
 }
 
 bool PolyContainsXZ(const WalkGridInfo& g, uint32_t polyBase, float px, float pz) {
