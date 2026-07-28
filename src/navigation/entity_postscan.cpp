@@ -131,101 +131,49 @@ void DropShadowRegistrations(std::vector<Entity>& out) {
     }
 }
 
-// UNNAMED CHARACTERS THAT ARE NOT ON THE MAP, OR THAT THE PARTY CANNOT REACH.
+// STRUCK (this session) -- `DropUnplacedCharacters`, the placement + reachability filter.
 //
-// The complaint this exists for: "a lot of extraneous NPC1, NPC2 etc entries in the NPC category".
-// Three earlier attempts tried to say what those objects ARE -- party members, roster bodies, bodies
-// the story had not switched on -- and each was refuted, because the fields they read do not carry
-// that meaning. The tester supplied the discriminator that does: *"try reachability."* Where an object
-// IS, is something the walkmap can answer; what it is, the game data does not state.
+// It dropped an unnamed `Category::NPC` that floated more than `kFloatingDrop` above its own floor,
+// or that fell outside `NavReach`'s component. It was the FOURTH attempt at one complaint ("a lot of
+// extraneous NPC1, NPC2 etc entries"), after three that guessed what those objects ARE -- party
+// members, roster bodies, bodies the story had not switched on -- each refuted in play.
 //
-// On Nomad Village the six bare "NPC n" were: three at the player's SPAWN POINT at Y=6.06 with the
-// only floor 6.06 below them (they are the ones that announced "(above)"), one the tester routed to
-// and was walked into an obstacle, one duplicate registration 0.6 m from a named Nomad, and ONE REAL
-// STORY NPC. The first four are what this removes; the fifth is left alone (see the note at the end);
-// the sixth must survive, and her surviving is the pass/fail condition for the whole change.
+// Deleted for two reasons, and the second is the one that matters:
 //
-// CANDIDATES ARE THE NARROWEST SET POSSIBLE: `Category::NPC`, `!gameNamed`, and a scene object. So the
-// only thing this can ever delete is an entry that was going to be announced as the bare word "NPC"
-// and a number. Anything the game names, anything in another category, every exit, every drop and
-// every combatant is never even examined.
+//  1. Its candidate set is now empty by construction. BuildLocked no longer admits an object the game
+//     does not name, so there is no unnamed NPC left for it to judge.
 //
-// FAIL-OPEN THREE WAYS, because this hides things from a player who cannot see what was hidden:
-//   1. Nothing is filtered until NavReach has closed the component.
-//   2. A query that cannot answer -- no poly under the object, no readable plane height -- KEEPS it.
-//   3. If it would drop more than HALF the candidates it drops NOTHING and says so. A filter eating
-//      most of its input is measuring its own predicate, not the map.
-void DropUnplacedCharacters(std::vector<Entity>& out, bool logDetail) {
-    // Two reasons, decided once per candidate so the majority guard can count before anything is cut.
-    enum class Verdict { Keep, Floating, Unreachable };
-    const bool reachReady = NavReach::Ready();
+//  2. IT ONLY EVER WORKED ON ONE MAP, and that was luck rather than scope. Every map carries three
+//     unnamed bodies stacked on one authored coordinate. On Nomad Village that coordinate is 6.06 m
+//     up, so the floating test caught them and the map came out clean. On Lowtown, Eastgate and
+//     Garamsythe the identical three stand ON the floor and inside the reachable set -- so the very
+//     same code looked straight at them and kept them. The code was never map-specific; its EFFECT
+//     was, which is what a threshold read off a single map's dump will always be.
+//
+// The thresholds went with it (`kFloatingDrop`, `kNpcReachTol`, entity_scan.h). `NavReach` stays:
+// exit_scan.cpp filters exits with it, where the question genuinely is about position.
+//
+// LESSON, and it is the fourth session in a row to pay for it: when a filter keeps needing new
+// evidence to justify itself, check whether the thing it filters should be in the list at all.
 
-    auto Judge = [&](const Entity& e, float& floatBy) -> Verdict {
-        floatBy = 0.0f;
-        // NOT ON THE FLOOR. FindPolyAt resolves by XZ containment with Y only as a tie-break and NO
-        // rejection threshold, so an object floating 6 m up still resolves to the triangle beneath it
-        // -- which is exactly why NavReach alone calls these three reachable, and why the height test
-        // has to be its own question. (It is also the mechanism behind "routed to an obstacle": the
-        // goal snaps vertically onto whatever floor is under the object.)
-        const NavMesh::PolyId poly = NavMesh::FindPolyAt(e.pos.x, e.pos.y, e.pos.z);
-        if (poly != NavMesh::kNoPoly) {
-            float floorY = 0.0f;
-            if (NavMesh::PolyHeightAt(poly, e.pos.x, e.pos.z, floorY)) {
-                const float dy = e.pos.y - floorY;
-                // ONE-SIDED: only ABOVE. Something below the floor is a basement or a sunken walkway,
-                // and this pass is not in the business of inventing verticality rules.
-                if (dy > kFloatingDrop) { floatBy = dy; return Verdict::Floating; }
-            }
-        }
-        if (reachReady && !NavReach::Reachable(e.pos, kNpcReachTol)) return Verdict::Unreachable;
-        return Verdict::Keep;
-    };
-
-    size_t candidates = 0, wouldDrop = 0;
-    for (const auto& e : out) {
-        if (e.gameNamed || !e.sceneObj || e.category != EntityList::Category::NPC) continue;
-        ++candidates;
-        float f = 0.0f;
-        if (Judge(e, f) != Verdict::Keep) ++wouldDrop;
+// The category-word fallback -- "NPC", "Interactables", "Sign" -- for anything the game named.
+//
+// IT RUNS HERE, AFTER TagDoorwaysAndDropSignTwins, AND THAT IS THE POINT. These two lines used to sit
+// inline in BuildLocked, and the "Sign" half was DEAD CODE from the day it was written: `doorway` is
+// assigned by a pass over the FINISHED list, so on a freshly-built entity it is always false. The word
+// the tester authorised specifically -- for the North End sign the game itself shows as "???" /
+// "(You're not sure what this sign is for.)" -- could never once be spoken, and every unnamed doorway
+// said "Interactables" instead. The logic is unchanged; only the point at which it runs.
+void ApplyFallbackLabels(std::vector<Entity>& out) {
+    for (auto& e : out) {
+        if (!e.label.empty()) continue;
+        // An unnamed object carrying a `+0x70` field-sign record IS a sign: the map script bound it
+        // with `setfieldsignlocationjumpinfo`, which is what `doorway` records. Shop doorways carry
+        // the same record but resolve a real name, so they never reach here.
+        e.label = e.doorway ? std::wstring(L"Sign") : std::wstring(CategoryWord(e.category));
     }
-    if (candidates == 0 || wouldDrop == 0) return;
-
-    if (wouldDrop * 2 > candidates) {
-        char m[192];
-        snprintf(m, sizeof(m),
-                 "unplaced-NPC filter stood down: would drop %zu of %zu unnamed NPCs "
-                 "(reachable cells=%d) -- measuring the predicate, not the map",
-                 wouldDrop, candidates, NavReach::CellCount());
-        Log::Write("NAV-DIAG", m);
-        return;
-    }
-
-    for (size_t i = 0; i < out.size();) {
-        const Entity& cur = out[i];
-        if (cur.gameNamed || !cur.sceneObj || cur.category != EntityList::Category::NPC) { ++i; continue; }
-        float floatBy = 0.0f;
-        const Verdict v = Judge(cur, floatBy);
-        if (v == Verdict::Keep) { ++i; continue; }
-
-        // ALWAYS logged, with the number that caused it. A deletion the player cannot see must never
-        // be one the log cannot show, and a threshold nobody can check is a threshold nobody can fix.
-        char m[224];
-        if (v == Verdict::Floating)
-            snprintf(m, sizeof(m),
-                     "unplaced NPC dropped: [%u:%u] floating %.2fm above the floor pos=(%.2f,%.2f,%.2f)",
-                     cur.container, cur.slot, floatBy, cur.pos.x, cur.pos.y, cur.pos.z);
-        else
-            snprintf(m, sizeof(m),
-                     "unreachable NPC dropped: [%u:%u] pos=(%.2f,%.2f,%.2f) (reachable cells=%d)",
-                     cur.container, cur.slot, cur.pos.x, cur.pos.y, cur.pos.z, NavReach::CellCount());
-        Log::Write("NAV-DIAG", m);
-
-        NoteFiltered(cur.sceneObj);
-        NoteUnplacedDrop(v == Verdict::Floating);
-        out.erase(out.begin() + static_cast<long long>(i));
-    }
-    (void)logDetail;   // this pass logs unconditionally; the flag is kept for signature symmetry
 }
+
 
 // Mark every object the map script bound to a location jump, then drop the same-named twins that were
 // NOT bound to one.
@@ -317,6 +265,13 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
                  out[twin].pos.x, out[twin].pos.y, out[twin].pos.z,
                  NavCommon::Distance2D(cur.pos, out[twin].pos));
         Log::Write("NAV-DIAG", m);
+        // THE SAME GRACE-WINDOW BUG SESSION 83 FIXED IN THE OTHER TWO PASSES, still live here.
+        // RescanLocked carries an entity over when its scene object is missing from the fresh list,
+        // and it cannot tell "the engine stopped reporting it" from "we just deleted it" -- a
+        // filtered object is a LIVE engine object whose transform keeps reading, so `lastSeenMs`
+        // keeps being refreshed and it never ages out. Without this the twin came straight back,
+        // permanently, while this pass logged the deletion on every single rescan.
+        NoteFiltered(cur.sceneObj);
         out.erase(out.begin() + static_cast<long long>(i));
     }
     (void)logDetail;   // drops are unconditional now; the flag remains for the caller's signature

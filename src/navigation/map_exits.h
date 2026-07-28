@@ -57,8 +57,21 @@ struct SignRec {
 };
 
 // Every +0x70 record, unfiltered and unlogged — including the ones whose destination will not resolve.
-// This is the completeness source: on East End it covers a doorway that NO `__MJ_CTRL` routine owns,
-// i.e. a transition the map-jump reader alone cannot see. Clears `out`.
+//
+// STRUCK — "This is the completeness source: on East End it covers a doorway that NO `__MJ_CTRL`
+// routine owns, i.e. a transition the map-jump reader alone cannot see."
+//
+// East End is not missing an exit. The thing being hunted there was a GATE, and it turned out not to
+// be in that area at all — so the one piece of evidence for "`__MJ_CTRL` is incomplete, and `+0x70`
+// is what completes it" never existed. Left standing, that sentence is a standing invitation to build
+// a second exit source on top of a map that does not need one, which is how the `+0x54` ∪ `+0x70`
+// union got built and refuted once already (Session 55).
+//
+// `__MJ_CTRL` may still turn out to be incomplete — the tester reports missing exits in the Waterway
+// — but that has to be MEASURED, and it now is: `ScanExits` logs a full surface inventory including
+// any walkmap map-jump group no controller claims, which is what an exit the script reader cannot
+// see would actually look like. Until that inventory shows an unclaimed group, this array's role is
+// naming doorways, not finding them. Clears `out`.
 void EnumerateFieldSignRaw(std::vector<SignRec>& out);
 
 // Enumerate the current map's EXITS from the field-sign array at mapData+0x70, through the game's own

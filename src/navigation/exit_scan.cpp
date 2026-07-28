@@ -59,7 +59,35 @@ const std::vector<MapQuery::MapJumpSurface>& CachedSurfaces(int mapId) {
     return s_surf;
 }
 
+// The group -> destination binding, per map, so the crossing oracle can still read it after the map
+// has unloaded. Two maps' worth is enough: the one being left and the one being entered.
+struct ClaimRow { int mapId = -1; int group = 0; uint16_t dest = 0; };
+std::vector<ClaimRow> g_claims;
+int                   g_claimMapA = -1;
+int                   g_claimMapB = -1;
+
+void PublishClaims(int mapId, const std::vector<MapScript::ExitDest>& dests) {
+    if (mapId == g_claimMapA) return;                    // already published for this map
+    // Keep the previous map's rows -- the crossing oracle reads them one frame AFTER the map changed.
+    if (mapId != g_claimMapB) {
+        for (size_t i = 0; i < g_claims.size();) {
+            if (g_claims[i].mapId != g_claimMapA) g_claims.erase(g_claims.begin() + static_cast<long long>(i));
+            else ++i;
+        }
+        g_claimMapB = g_claimMapA;
+    }
+    g_claimMapA = mapId;
+    for (const auto& d : dests)
+        if (d.group > 0) g_claims.push_back(ClaimRow{ mapId, d.group, static_cast<uint16_t>(d.destMapId) });
+}
+
 } // namespace
+
+bool ClaimedDestForGroup(int mapId, int group, uint16_t& destMapId) {
+    for (const auto& r : g_claims)
+        if (r.mapId == mapId && r.group == group) { destMapId = r.dest; return true; }
+    return false;
+}
 
 // The map's `+0x70` field-sign records, read ONCE per map and reused.
 //
@@ -108,6 +136,12 @@ void ScanExits(std::vector<Entity>& out) {
     MapScript::ReadExitDests(dests, logDetail);
 
     const std::vector<MapQuery::MapJumpSurface>& surfaces = CachedSurfaces(mapId);
+    PublishClaims(mapId, dests);
+
+    // Why each candidate was rejected. Counted rather than only logged, because the summary below has
+    // to be able to say "3 controllers, 3 surfaces, 3 listed" or "3 controllers, 3 surfaces, 1 listed"
+    // -- a missing exit is invisible unless the count that produced it is printed beside it.
+    int dropNoGroup = 0, dropNotUsed = 0, dropUnreach = 0;
 
     std::vector<Entity> candidates;
     for (const auto& d : dests) {
@@ -116,26 +150,29 @@ void ScanExits(std::vector<Entity>& out) {
         if (d.group > 0)
             for (const auto& sf : surfaces) if (sf.group == d.group) { surf = &sf; break; }
         if (!surf) {
-            if (logDetail) {
-                char m[192];
-                snprintf(m, sizeof(m),
-                         "  __MJ_CTRL%03d group=%d dest=%u -> no map-jump surface on this map, dropped",
-                         d.ctrlIndex, d.group, d.destMapId);
-                Log::Write("NAV-DIAG", m);
-            }
+            ++dropNoGroup;
+            // ALWAYS logged. This used to be gated on `logDetail`, which is once per map id, so a
+            // surface that streamed in a moment late -- or one that never arrives at all -- produced
+            // exactly one line at the start of the visit and silence afterwards. A missing exit that
+            // the log mentioned once, minutes ago, is a missing exit nobody can diagnose.
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "  __MJ_CTRL%03d group=%d dest=%u -> no map-jump surface on this map, dropped "
+                     "(map has %zu surface(s))",
+                     d.ctrlIndex, d.group, d.destMapId, surfaces.size());
+            Log::Write("NAV-DIAG", m);
             continue;
         }
 
         // WHERE TO: this same routine's own `mapjump` literal. "NOT USED" means exactly that.
         if (!MapNames::HasRealAreaName(static_cast<int>(d.destMapId))) {
-            if (logDetail) {
-                char m[192];
-                snprintf(m, sizeof(m),
-                         "  __MJ_CTRL%03d group=%d surface at (%.1f,%.1f,%.1f) -> dest=%u is NOT USED, dropped",
-                         d.ctrlIndex, d.group, surf->centroid.x, surf->centroid.y, surf->centroid.z,
-                         d.destMapId);
-                Log::Write("NAV-DIAG", m);
-            }
+            ++dropNotUsed;
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "  __MJ_CTRL%03d group=%d surface at (%.1f,%.1f,%.1f) -> dest=%u is NOT USED, dropped",
+                     d.ctrlIndex, d.group, surf->centroid.x, surf->centroid.y, surf->centroid.z,
+                     d.destMapId);
+            Log::Write("NAV-DIAG", m);
             continue;
         }
 
@@ -209,20 +246,60 @@ void ScanExits(std::vector<Entity>& out) {
         Log::Write("NAV-DIAG", m);
     }
 
+    size_t listed = 0;
     for (const auto& c : candidates) {
         if (filter && !NavReach::Reachable(c.pos, kExitReachTol)) {
-            if (logDetail) {
-                char n8[96] = {};
-                for (size_t k = 0; k < c.label.size() && k < 95; ++k)
-                    n8[k] = (c.label[k] < 128) ? static_cast<char>(c.label[k]) : '?';
-                char m[224];
-                snprintf(m, sizeof(m), "  unreachable, dropped: \"%s\" at (%.1f,%.1f,%.1f)",
-                         n8, c.pos.x, c.pos.y, c.pos.z);
-                Log::Write("NAV-DIAG", m);
-            }
+            ++dropUnreach;
+            char n8[96] = {};
+            for (size_t k = 0; k < c.label.size() && k < 95; ++k)
+                n8[k] = (c.label[k] < 128) ? static_cast<char>(c.label[k]) : '?';
+            char m[224];
+            snprintf(m, sizeof(m), "  unreachable, dropped: \"%s\" at (%.1f,%.1f,%.1f)",
+                     n8, c.pos.x, c.pos.y, c.pos.z);
+            Log::Write("NAV-DIAG", m);
             continue;
         }
         out.push_back(c);
+        ++listed;
+    }
+
+    // ---- THE EXIT INVENTORY -------------------------------------------------------------------
+    // One line that says how many exits this map HAS and how many the player is being told about.
+    //
+    // Re-logged whenever the numbers change, NOT once per map id. That distinction is the whole
+    // reason it exists: the walkmap and the field script stream in after the map id does, so the
+    // first scan of a visit legitimately sees zero surfaces, and a "once per map" latch prints that
+    // zero and then goes quiet for the rest of the visit. The tester reports missing exits and the
+    // log has been agreeing that everything is fine, because it only ever spoke at the one moment
+    // when nothing was loaded yet.
+    static int    s_invMap = -1;
+    static size_t s_invSig = 0;
+    const size_t  sig = (dests.size() * 1000003u) ^ (surfaces.size() * 10007u) ^ (listed * 101u) ^
+                        static_cast<size_t>(dropNoGroup * 31 + dropNotUsed * 7 + dropUnreach);
+    if (mapId != s_invMap || sig != s_invSig) {
+        s_invMap = mapId;
+        s_invSig = sig;
+        char m[240];
+        snprintf(m, sizeof(m),
+                 "exits: controllers=%zu surfaces=%zu listed=%zu | dropped: nogroup=%d notused=%d "
+                 "unreachable=%d",
+                 dests.size(), surfaces.size(), listed, dropNoGroup, dropNotUsed, dropUnreach);
+        Log::Write("NAV-DIAG", m);
+
+        // EVERY walkmap map-jump group, including the ones no controller claims. An unclaimed group
+        // is a transition surface the player can walk onto with no destination attached to it -- a
+        // MISSING EXIT, and until now completely invisible, because the loop above only ever iterates
+        // controllers and so can only report the failures it happens to walk past.
+        for (const auto& sf : surfaces) {
+            bool claimed = false;
+            for (const auto& d : dests) if (d.group == sf.group) { claimed = true; break; }
+            snprintf(m, sizeof(m),
+                     "  surface g%d: %d polys at (%.1f,%.1f,%.1f) box x[%.1f..%.1f] z[%.1f..%.1f]%s",
+                     sf.group, sf.polyCount, sf.centroid.x, sf.centroid.y, sf.centroid.z,
+                     sf.min.x, sf.max.x, sf.min.z, sf.max.z,
+                     claimed ? "" : "   <== NO CONTROLLER CLAIMS THIS GROUP -- unreachable exit");
+            Log::Write("NAV-DIAG", m);
+        }
     }
 }
 } // namespace EntityScan

@@ -86,18 +86,12 @@ constexpr float kSignObjectDist = 2.5f;
 // the rule is "literally the same coordinates", because at any real separation they are two people
 // the game happened to give one name, and deleting one of those cost a tester a story NPC.
 constexpr float kStackedDist    = 0.05f;
-// An unnamed character standing this far ABOVE the floor beneath it is not standing on the map. Three
-// bodies on Nomad Village sat at the player's spawn point at Y=6.06 with the only floor at that XZ
-// 6.06 below, and were announced as "NPC 1..3" -- they are the ones the tester heard say "(above)".
-//
-// ONE-SIDED, and generous. An object BELOW the floor is untouched (that is what a basement or a sunken
-// walkway looks like), and the threshold sits between the existing kTierStep (1.5) and kAtExitDy (3.0)
-// so a person standing on a crate the walkmap does not model is nowhere near it.
-constexpr float kFloatingDrop   = 2.0f;
-// Slack when testing an unnamed character against the reachable set. Much tighter than kExitReachTol
-// (4.5) below: a door trigger legitimately sits a cell or two past the last walkable sample, a person
-// standing in a village does not.
-constexpr float kNpcReachTol    = 1.5f;
+// STRUCK (this session) -- `kFloatingDrop = 2.0f` and `kNpcReachTol = 1.5f`, the thresholds
+// DropUnplacedCharacters judged unnamed NPCs by. Both were read off ONE map's object dump, and the
+// pass only ever fired on that map: Nomad Village's three stacked bodies float at Y=6.06, while the
+// identical three on Lowtown, Eastgate and Garamsythe stand on the floor and inside the reachable
+// set, so the same code kept them. Deleted with the pass. Nothing about an object's POSITION decides
+// whether it is listed any more -- whether the game names it does.
 
 // ---- POST-SCAN PASSES (entity_postscan.cpp) -----------------------------------------------------
 // Everything that runs over the FINISHED object list rather than finding objects. Declared here so
@@ -112,9 +106,10 @@ void LogObjectDump(const std::vector<Entity>& out);
 void DropShadowRegistrations(std::vector<Entity>& out);
 void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail);
 
-// Unnamed characters that are not standing on the map, or that the party cannot walk to. Runs right
-// after the shadow drop, while the list is still just handle-table objects.
-void DropUnplacedCharacters(std::vector<Entity>& out, bool logDetail);
+// The category-word fallback for anything the game gave no name. Runs LAST, after doorway tagging,
+// because "Sign" depends on `Entity::doorway` — which only exists once TagDoorways has run. It used
+// to sit inline in BuildLocked, where `doorway` is always false, so the word was unreachable.
+void ApplyFallbackLabels(std::vector<Entity>& out);
 
 // ---- What this scan DELIBERATELY removed --------------------------------------------------------
 // Every drop pass records the scene object it erased, and `Build` publishes the list.
@@ -128,8 +123,6 @@ void DropUnplacedCharacters(std::vector<Entity>& out, bool logDetail);
 void NoteFiltered(void* sceneObj);
 bool WasFilteredThisScan(void* sceneObj);
 
-// Tally for the `inclusion:` line: true = dropped for floating, false = dropped as unreachable.
-void NoteUnplacedDrop(bool floating);
 // These two run in the CALLER (EntityList::Internal::RescanLocked), after it has merged its
 // grace-window survivors -- not inside Build. Numbering is assigned within one scan now, so it has to
 // see the same list the player hears or a carried entity keeps a suffix the survivors have re-used.

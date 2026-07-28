@@ -259,8 +259,21 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
         const uint32_t start = codeOffs[i];
         auto nx = std::upper_bound(sorted.begin(), sorted.end(), start);
         const uint32_t end = (nx == sorted.end()) ? (start + static_cast<uint32_t>(CODE_SPAN_MAX)) : *nx;
-        if (end <= start) continue;
-        size_t span = std::min<size_t>(end - start, CODE_SPAN_MAX);
+        if (end <= start) {
+            // A routine whose span computes to nothing is DROPPED, i.e. one exit fewer on this map,
+            // and until now it happened in silence. Every abandonment of a controller is now logged.
+            if (logDetail) {
+                char m[176];
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d SPAN EMPTY: codeOff=+0x%X next=+0x%X -- routine dropped, "
+                         "this map loses an exit",
+                         idx, start, end);
+                Log::Write("NAV-DIAG", m);
+            }
+            continue;
+        }
+        const size_t spanWanted = std::min<size_t>(end - start, CODE_SPAN_MAX);
+        size_t span = spanWanted;
         code.assign(span, 0);
         // The LAST routine has no successor to bound it, so its span is a guess; shrink until the
         // read lands inside mapped memory rather than dropping the routine.
@@ -268,18 +281,30 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             span /= 2;
             code.assign(span, 0);
         }
-        if (span < 0x40) continue;
+        if (span < 0x40) {
+            if (logDetail) {
+                char m[176];
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d SPAN UNREADABLE: codeOff=+0x%X wanted=0x%zX shrank to 0x%zX "
+                         "-- routine dropped, this map loses an exit",
+                         idx, start, spanWanted, span);
+                Log::Write("NAV-DIAG", m);
+            }
+            continue;
+        }
         const std::vector<uint8_t>& b = code;
 
         // The routine's MAP-JUMP GROUP: `setmapjumpgroup(K)`, compiled as `4f <K:u16> 5d 1e 01`. It is
         // the first distinguishing call in every controller, and K is what the walkmap tags this
         // transition's floor polygons with -- so it is what turns "this routine jumps to X" into
         // "the surface you walk on to reach X is HERE". Take the first match; a controller calls it once.
-        int group = -1;
+        int    group    = -1;
+        size_t groupOff = 0;
         for (size_t o = 0; o + 6 <= b.size(); ++o) {
             if (b[o] != OP_PUSH_U16 || b[o + 3] != OP_CALLACTPOPA) continue;
             if (static_cast<uint16_t>(b[o + 4] | (b[o + 5] << 8)) != NATIVE_SETMAPJUMPGROUP) continue;
             group = static_cast<int>(U16(b, o + 1));
+            groupOff = o;
             break;
         }
 
@@ -299,6 +324,29 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             d.codeOff   = start;
             d.destName  = MapNames::ResolveFullAreaName(d.destMapId);
             out.push_back(d);
+
+            // SPAN BLEED IS THE ONLY WAY THESE TWO LITERALS CAN BELONG TO DIFFERENT ROUTINES.
+            //
+            // A controller's code span runs from its own offset to the NEXT routine's, and for the
+            // last routine it is a guess capped at CODE_SPAN_MAX. If a span overruns into the next
+            // routine's code, this loop reads THAT routine's `setmapjumpgroup` or `mapjump` -- and
+            // the result is an exit whose surface belongs to one doorway and whose destination
+            // belongs to another. That is precisely what "exit swapping" looks like from the outside.
+            //
+            // So print where in the span each literal was found. A group or mapjump sitting near the
+            // END of a span, or a span that had to be shrunk to be read, is the tell. Nothing here
+            // concludes anything -- it is the measurement that decides whether the hypothesis lives.
+            if (logDetail) {
+                char m[224];
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d span=+0x%X..+0x%X (0x%zX bytes%s) | setmapjumpgroup(%d) at "
+                         "+0x%zX (%zu%% in) | mapjump at +0x%zX (%zu%% in)",
+                         idx, start, static_cast<uint32_t>(start + span), span,
+                         (span != spanWanted) ? ", SHRUNK" : "",
+                         group, groupOff, span ? (groupOff * 100 / span) : 0,
+                         o, span ? (o * 100 / span) : 0);
+                Log::Write("NAV-DIAG", m);
+            }
             break;
         }
     }

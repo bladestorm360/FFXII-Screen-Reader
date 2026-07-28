@@ -2,10 +2,12 @@
 #include "navigation/map_names.h"
 #include "navigation/map_query.h"
 #include "navigation/nav_common.h"
+#include "navigation/exit_scan.h"   // ClaimedDestForGroup -- the crossing oracle's other half
 #include "core/logger.h"
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace NavTrace {
@@ -129,6 +131,70 @@ void DumpOrdered(const char* what, int mapId, size_t tail) {
     }
 }
 
+// THE CROSSING ORACLE -- belief next to outcome, on every transition, for free.
+//
+// The tester reports exits that are SWAPPED as well as exits that are missing, and nothing the mod
+// prints today can tell those apart: every existing line reports what the mod BELIEVES an exit leads
+// to, so a wrong belief reads exactly like a right one. This prints the belief and then the fact.
+//
+// The player walks onto a seam and the game loads a map. The last crumb already records which seam
+// group they were standing nearest when it fired (MeasureSeams, above -- measured while the OLD map's
+// walkmap was still loaded, which is the only time it can be). ScanExits publishes what that map
+// claimed each group leads to. `mapId` is where we actually ended up. If the claim and the arrival
+// disagree, the group -> destination binding is wrong, and there is nothing left to infer.
+//
+// Deliberately NOT another model of the trigger. Session 60's rule stands: five models of the
+// transition have been inferred from the blob and refuted in play, and this proposes no sixth. It
+// only measures, and it costs one lookup per map change.
+void CrossingOracle(int leftMap, int arrivedMap) {
+    std::vector<Crumb> o;
+    Ordered(o);
+    if (o.empty()) return;
+    const Crumb& last = o.back();
+
+    char arrived[96] = {};
+    {
+        const std::wstring n = MapNames::ResolveFullAreaName(arrivedMap);
+        for (size_t k = 0; k < n.size() && k < 95; ++k)
+            arrived[k] = (n[k] < 128) ? static_cast<char>(n[k]) : '?';
+    }
+
+    char m[352];
+    if (last.seamGroup == 0) {
+        snprintf(m, sizeof(m),
+                 "CROSSING ORACLE: left map %d -> arrived %d (\"%s\"), but the last crumb matched NO "
+                 "seam group -- this map published no map-jump surface near where the player crossed",
+                 leftMap, arrivedMap, arrived);
+        Log::Write("NAV-TRACE", m);
+        return;
+    }
+
+    uint16_t claimed = 0;
+    if (!EntityScan::ClaimedDestForGroup(leftMap, last.seamGroup, claimed)) {
+        snprintf(m, sizeof(m),
+                 "CROSSING ORACLE: left map %d via seam g%d (%.1fm from its near edge) -> arrived %d "
+                 "(\"%s\"); the mod claimed NOTHING for that group -- no controller owns it, so this "
+                 "exit was never listed",
+                 leftMap, last.seamGroup, last.dNear, arrivedMap, arrived);
+        Log::Write("NAV-TRACE", m);
+        return;
+    }
+
+    char claimedName[96] = {};
+    {
+        const std::wstring n = MapNames::ResolveFullAreaName(static_cast<int>(claimed));
+        for (size_t k = 0; k < n.size() && k < 95; ++k)
+            claimedName[k] = (n[k] < 128) ? static_cast<char>(n[k]) : '?';
+    }
+    const bool match = (static_cast<int>(claimed) == arrivedMap);
+    snprintf(m, sizeof(m),
+             "CROSSING ORACLE: left map %d via seam g%d (%.1fm from its near edge) | mod claimed "
+             "%u (\"%s\") | ACTUALLY ARRIVED %d (\"%s\")  <== %s",
+             leftMap, last.seamGroup, last.dNear, claimed, claimedName, arrivedMap, arrived,
+             match ? "MATCH" : "MISMATCH -- the group->destination binding is WRONG");
+    Log::Write("NAV-TRACE", m);
+}
+
 } // namespace
 
 void OnFieldFrame(int mapId, const FVec3& pos) {
@@ -142,6 +208,7 @@ void OnFieldFrame(int mapId, const FVec3& pos) {
                      g_map, mapId);
             Log::Write("NAV-TRACE", m);
             DumpOrdered("trail of the map just left", g_map, kDumpTail);
+            CrossingOracle(g_map, mapId);
         }
         g_map  = mapId;
         g_have = false;

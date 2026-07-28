@@ -7,6 +7,72 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### Session 84 — STRUCK: include-by-KIND+model (`present`). ONE route, THREE symptoms
+
+**KEYWORDS: present route include by kind model HasModel shadow NPC bare NPC n phantom stacked bodies
+party slots enemies in NPC category DropUnplacedCharacters kFloatingDrop kNpcReachTol Session 79
+widening nameless interactable icon**
+
+**Struck: `present = (kind == 1 || kind == 5) && HasModel(obj)` in `entity_scan.cpp`.** Added in
+Session 79 to surface characters the scan rejected. It caused three separate reported defects:
+
+1. **Shadow NPCs.** Unnamed `kind=5` characters standing 0.6–1.3 m from a named NPC entered the list
+   and spoke as bare `NPC n` — 40+ across four maps. Tester: *"Masui is 'Nomad2' in my game so she has
+   a classification. She just also now has an extra NPC shadow that never gets named, even after
+   talking to her."*
+2. **Three stacked bodies on EVERY map.** Unnamed `kind=1` objects sharing one authored coordinate:
+   Lowtown `[0:24-26]` (92.00,−0.19,51.77) · Eastgate `[0:75-77]` (200.00,−10.00,81.00) · Nomad
+   Village `[0:32-34]` (37.89,**6.06**,71.87) · Garamsythe `[0:15-17]` (32.52,0.00,121.96).
+   `inclusion: kind1=3` on all four.
+3. **Enemies classified as NPCs.** A field enemy is a character with a loaded model, so `present`
+   admitted it from the handle table, where `ClassifyByNameKey`'s `isCharacter` test files it as
+   `Category::NPC`. `BuildLocked` runs before `ScanCombatants`, which skips anything `AlreadyListed`
+   — so the dedicated enemy classifier (faction from the actor pool) never saw it. Before `present`,
+   an enemy failed every route and fell through to the pool, which is why it used to work.
+
+**Also struck — Session 79's founding premise.** It claimed an unnamed woman behind the Nomad Elder's
+tent was "reachable by NO inclusion path" and built the widening for her. She was listed the whole
+time under her own npcdic name (`Nomad N`); what the widening added was her **shadow**. Everything
+built on that premise across Sessions 79–83 rests on a fact that was never checked.
+
+**Also struck — `DropUnplacedCharacters` + `kFloatingDrop` (2.0) + `kNpcReachTol` (1.5), Session 83.**
+It dropped an unnamed NPC floating >2 m above its floor or outside the reachable set. It appeared to
+fix Nomad Village and nothing else, and the reason is #2 above: that map's three stacked bodies are
+the only ones 6 m in the air. The identical three on the other maps stand on the floor, inside the
+reachable set, and the same code looked at them and kept them. **The code was never map-specific; its
+EFFECT was — which is what a threshold read off one map's dump will always be.**
+
+**Replaced by one test:** `if (!named && !interactive) continue;` — the game names it, or the engine
+offers an interaction on it. Basis, from the tester: *"there is no such thing as an interactive but
+nameless object. Every object in the game has a little icon that says something like 'action: nomad'
+… no objects are interactable that don't have one of these."* Verified against all 130 dumped objects
+across four maps: every real NPC is `nameIdx≥0, flags=0x…0004, avail=1`; every phantom is
+`nameIdx=-1, flags=0x…0000, avail=0`.
+
+**Known accepted cost, MEASURED not argued:** `+0x1C` is mode state and a disabled object reads zero
+flags, so a story-gated town gate that carries no name is not listed until the script arms it (the
+Session 54 case). `s_dropPayload` counts every drop that carried a real `+0xCC`/`+0xDC` payload id —
+non-zero means the cost was actually paid and the gate needs a route back keyed on that field.
+
+**LESSON (fourth session running to pay for it): when a filter keeps needing new evidence to justify
+itself, check whether the thing it filters should be in the list at all.** Sessions 81, 82 and 83 each
+guessed what these objects *are* — party members, roster bodies, story-gated bodies — and each guess
+was refuted. The question was never what they are.
+
+### Session 84 — STRUCK: "on East End `+0x70` covers a doorway no `__MJ_CTRL` routine owns"
+
+**KEYWORDS: East End missing exit +0x70 field sign completeness source __MJ_CTRL incomplete gate**
+
+`map_exits.h` justified treating the `+0x70` field-sign array as an exit *completeness* source with a
+single piece of evidence: an East End doorway supposedly invisible to the map-jump reader. **There is
+no missing exit in East End.** The thing being hunted there was a GATE, and it was not in that area at
+all. Left standing, that sentence invites a second exit source on a map that does not need one —
+which is how the `+0x54` ∪ `+0x70` union got built and refuted in Session 55.
+
+`__MJ_CTRL` may still be incomplete (the tester reports missing exits in the Waterway), but that must
+be measured. `ScanExits` now logs a full surface inventory including any walkmap map-jump group **no
+controller claims** — which is exactly what an exit the script reader cannot see would look like.
+
 ### Session 68 — PATHFINDER ELEVATION root-caused: STEP-DISCONTINUITY, not slope; slope-gate idea STRUCK
 
 **KEYWORDS: pathfinder elevation step discontinuity ledge no slope limit walk-type flags FUN_0022cc50

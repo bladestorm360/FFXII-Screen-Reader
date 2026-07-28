@@ -22,10 +22,14 @@ const wchar_t* CategoryWord(EntityList::Category c);
 // The game's own display name for a field object, read memory-only from its scene object. Empty
 // when unresolvable -- callers fall back to a category word rather than inventing one.
 //
-// It resolves to the PERSONAL name whenever the npcdic carries a distinct one: slot id*2+1 beats
-// id*2, so a "Nomad" reads "Dania". Not gated on whether the game has introduced the character --
-// the name is in the map's own dictionary either way, and speaking it removes five invented numbers
-// per map. See the definition for why the pointer pre-check is equivalent to comparing the strings.
+// The slot is the engine's own rule, `id*2 + FUN_0032a930(id)`: the PERSONAL name (odd slot, "Arjie")
+// only once the game has introduced that character, the generic one ("Nomad") before.
+//
+// CORRECTED -- this comment used to claim the odd slot wins unconditionally, "not gated on whether
+// the game has introduced the character". That WAS the behaviour for one session (81) and it was
+// reverted the same day as a spoiler: it named people the player had not met yet. The .cpp has been
+// gated ever since; only this sentence was left behind, which is exactly how a struck design gets
+// re-shipped by the next person to read the header instead of the code.
 std::wstring ResolveObjectName(void* sceneObj);
 
 // Has the player been introduced to this npcdic character? A live per-id bit in the game's own state

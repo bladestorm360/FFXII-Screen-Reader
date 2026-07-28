@@ -2530,8 +2530,34 @@ Two different questions, two different reads. Conflating them hid an entire clas
 | is the story gate open | `*(u8*)(sceneObj+0x0E) & 0x10` (`INTERACT_ENABLE_BIT`) | |
 
 **The `+0x1C` flags are NOT an existence test.** An enabled, placed, model-loaded CHARACTER whose
-script has not armed its talk hook reads `flags = 0`. Include by KIND (`+0x0E & 0xF`: 1 = TALK person,
-5 = ACTION gimmick) plus a loaded model; use the flags only for availability.
+script has not armed its talk hook reads `flags = 0`. That much stands, and the table above is still
+the correct reading of the three fields.
+
+**STRUCK (Session 84) — the conclusion drawn from it: "Include by KIND (`+0x0E & 0xF`: 1 = TALK
+person, 5 = ACTION gimmick) plus a loaded model."**
+
+The premise is true and the conclusion does not follow. A loaded model says a body EXISTS; it does not
+say the body is anything the mod can tell a player about. Shipped as `present` in `entity_scan.cpp`,
+that rule produced three separate defects at once — bare `NPC n` shadows beside real NPCs, three
+unnamed bodies stacked on one coordinate on every map, and **enemies classified as NPCs** (a field
+enemy is a character with a loaded model, so the handle-table walk claimed it before `ScanCombatants`,
+which skips anything `AlreadyListed`, could apply the actor pool's faction test).
+
+**STRUCK with it — the sentence "Conflating them hid an entire class of NPC on every map," and the
+object it rested on.** The unnamed woman on Nomad Village at (46.00, 0.00, 57.70) was NOT invisible;
+she was listed under her own npcdic name as `Nomad N` the whole time. What the widening added was her
+SHADOW. That premise was never checked, and Sessions 79–83 were all built on it.
+
+**The rule now:** the game names it (`+0x102` npcdic id, or the `+0xF8` custom string), or the engine
+is offering an interaction on it (`+0x1C` TALK/ACTION). Otherwise it is not listed. Basis, from the
+tester: the engine has no nameless interactable — every interactable object draws an icon reading
+`"Action: <name>"`. Verified against 130 dumped objects on four maps.
+
+**`Category::Enemy` has exactly ONE producer** — `ScanCombatants` in `entity_scan.cpp`, faction from
+the actor pool (`kind == KIND_ALLY ? NPC : Enemy`). `ClassifyByNameKey` has no enemy branch at all.
+**The handle-table walk runs FIRST and wins every tie**, because `ScanCombatants` skips anything
+`AlreadyListed`. Any future widening of handle-table inclusion must be checked against that ordering
+or it will silently re-file enemies as NPCs. `inclusion:` now counts the overlap between the two pools.
 
 **`cat` in the object dump prints in HEX.** `cat=66` is `0x66`: low-5 = 6 -> scene class 3 (character).
 Reading it as decimal gives class 2 and a wrong object model.

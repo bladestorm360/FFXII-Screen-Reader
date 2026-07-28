@@ -3070,3 +3070,111 @@ place; if the two new tests do not remove it as a side effect, the next step is 
 across several maps, not guessing a radius.
 
 Build clean, zero warnings, deployed. **NOT play-confirmed.**
+
+## Session 84 — 2026-07-28 — [navigation] One route, three defects: `present` struck; the enemy classifier gets its inputs back
+
+**KEYWORDS: present include-by-KIND model HasModel shadow NPC bare NPC n stacked bodies party slots
+enemies NPC category DropUnplacedCharacters kFloatingDrop kNpcReachTol nameless interactable icon
+ApplyFallbackLabels Sign dead code NoteFiltered grace window crossing oracle exit inventory span bleed**
+
+### The evidence: four maps, one log
+
+The tester collected `FFXII-Screen-Reader-Latest.log` across Lowtown North Sprawl (701), Rabanastre
+Eastgate (305), Nomad Village (243) and Garamsythe Central Spur Stairs (311) — the last of which
+should have **no NPCs at all** and reported `NPC=4`.
+
+Every map showed `inclusion: kind1=3`, and in every case those three were unnamed `kind=1` bodies on
+one shared authored coordinate:
+
+| Map | slots | shared position |
+|---|---|---|
+| Lowtown North Sprawl (701) | `[0:24][0:25][0:26]` | (92.00, −0.19, 51.77) |
+| Rabanastre Eastgate (305) | `[0:75][0:76][0:77]` | (200.00, −10.00, 81.00) |
+| Nomad Village (243) | `[0:32][0:33][0:34]` | (37.89, **6.06**, 71.87) |
+| Garamsythe Central Spur (311) | `[0:15][0:16][0:17]` | (32.52, 0.00, 121.96) |
+
+Nomad Village is the only one where that point is in the air. That, and nothing else, is why Session
+83's floating test appeared to fix that map and no other.
+
+### One route caused all three reported defects
+
+`present = (kind == 1 || kind == 5) && HasModel(obj)` — Session 79. Struck. Full account in
+`debug.md`. Shadows beside real NPCs; the three stacked bodies above; and **enemies in the NPC
+category**, because a field enemy is a character with a loaded model, `BuildLocked` runs before
+`ScanCombatants`, and `ScanCombatants` skips anything `AlreadyListed` — so the widening took the
+enemy classifier's inputs away. There was never a missing enemy classifier; faction has always come
+from the actor pool in `ScanCombatants`.
+
+**Session 79's founding premise is struck with it.** The unnamed woman it was built for was listed
+the whole time under her own npcdic name; what the widening added was her shadow. The tester
+identified the pattern from play: *"Masui is 'Nomad2' in my game so she has a classification. She just
+also now has an extra NPC shadow that never gets named, even after talking to her."*
+
+### Shipped
+
+- **`entity_scan.cpp`** — five inclusion routes replaced with `if (!named && !interactive) continue;`.
+  `present`, `gimmick`, `InGimmickBand`, `droppedBefore` and `HasModel` all deleted.
+- **`entity_postscan.cpp` / `entity_scan.h`** — `DropUnplacedCharacters` deleted with `kFloatingDrop`
+  and `kNpcReachTol`. `DropShadowRegistrations` and `kStackedDist` kept; `NavReach` kept (exits use it).
+- **`ApplyFallbackLabels` (new)** — the category-word fallback moved out of `BuildLocked` to after
+  doorway tagging. **The `"Sign"` word was dead code from the day it was written**: `e.doorway` is set
+  by a pass over the finished list, so it is always false on a fresh entity, and the word the tester
+  explicitly authorised could never be spoken. Every unnamed doorway said "Interactables" instead.
+- **`entity_postscan.cpp:320`** — `TagDoorwaysAndDropSignTwins` erased without `NoteFiltered`, so the
+  2 s grace window could carry a twin straight back in, permanently, while the pass logged the
+  deletion every rescan. Session 83 fixed this in the other two passes and missed this one.
+- **`entity_classify.h`** — the header still documented the unconditional odd-slot naming policy that
+  Session 82 reverted as a spoiler. Corrected; that is how a struck design gets re-shipped.
+
+### Counters shipped WITH the change (every one a falsifier)
+
+`nameless dropped: kind1= kind5= other=` · `of which carried a PAYLOAD ID` (**must be 0** — non-zero
+means a real gimmick was deleted, the Session 54 regression) · `kept while nameless BUT INTERACTIVE`
+(should be 0; each is dumped in full) · `handle-table object(s) also in the ACTOR POOL` (counter only,
+no behaviour — this is how enemies-as-NPCs would come back).
+
+### Exits — audited, then instrumented. NO new model.
+
+The NPC work cannot have removed an exit: `ScanExits` runs after all drop passes; both NPC passes bail
+unless `category == NPC`; the grace window skips null `sceneObj` and exits are built with one;
+`RefreshPositionsLocked` has an explicit `fixed` branch. On 311 the scan listed everything it found.
+
+Session 60's rule stands — no sixth transition model. Four diagnostics only:
+
+- **Crossing oracle** (`nav_trace.cpp`): on every map change, prints the seam group crossed, **what
+  the mod claimed it led to**, and **the map that actually loaded**. Mismatch = the group→destination
+  binding is wrong, proven, needing no sight. `EntityScan::ClaimedDestForGroup` caches the binding per
+  map because the script it came from unloads with the map.
+- **Exit inventory** (`exit_scan.cpp`): `exits: controllers= surfaces= listed= | dropped: nogroup=
+  notused= unreachable=`, re-logged whenever the numbers **change** rather than once per map id — the
+  walkmap streams in after the map id, so a once-per-map latch printed the empty state and went quiet.
+- **Surface inventory**: every walkmap map-jump group, flagging any **no controller claims** — a
+  transition surface with no destination, i.e. a missing exit, previously invisible.
+- **Span dump** (`map_script.cpp`): per `__MJ_CTRL`, its code span and where in that span the
+  `setmapjumpgroup` and `mapjump` literals were found, plus explicit logging of the two silent drops
+  (`SPAN EMPTY`, `SPAN UNREADABLE`). A routine's span runs to the next routine's offset, so a span
+  that bleeds reads the NEXT controller's literals — which is what swapping would look like. Map 311
+  is the one map whose controller→group mapping is not the identity (CTRL000→2, 001→3, 002→1) and the
+  one the tester reports swapping on. **A lead to measure, not a conclusion.**
+
+**Struck: "on East End `+0x70` covers a doorway no `__MJ_CTRL` routine owns."** Per the tester there is
+no missing exit in East End — that was a gate, and it was not in that area. See `debug.md`.
+
+### Play confirmation
+
+**NPC classification CONFIRMED IN PLAY** — *"NPC classification looks good for now, will be tested
+further but verified working for now."* The bare `NPC n` entries, the stacked bodies and the
+enemies-as-NPCs regression are all gone from the tester's session.
+
+Confirmed as a side effect the same session: the Session 80 npcdic naming rule, seen working live.
+Interacting with a Seeq fired `settalknpcname`, his introduced bit flipped, and the mod moved from the
+generic even slot to the personal odd slot — "Balzac". The dialogue box that followed read `...`, an
+ellipsis-only line, so nothing was spoken. **Open, not a defect and deliberately not "fixed":** an
+ellipsis-only line means the mod is silent for a whole interaction. Whether that deserves a cue is a
+design question for the tester, and it needs a count of how common those lines are first.
+
+**Still NOT confirmed: the exit work.** All four diagnostics are measurement only and have not been
+read back yet — the crossing oracle needs the tester to walk through a Waterway exit, and the surface
+inventory and span dump need a `'` dump from a map where exits are wrong.
+
+Build clean, deployed.

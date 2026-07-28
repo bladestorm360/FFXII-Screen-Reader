@@ -19,4 +19,16 @@ const std::vector<MapExits::SignRec>& CachedSigns();
 // Append this map's exits to `out` as fixed-position Category::Exit entities. Caller holds the mutex.
 void ScanExits(std::vector<Entity>& out);
 
+// WHAT THIS MAP CLAIMED A SEAM LEADS TO -- the group -> destination binding, kept per map so it can
+// still be read after the map has changed.
+//
+// This exists for the CROSSING ORACLE in nav_trace. The tester reports exits that are swapped as well
+// as exits that are missing, and neither can be diagnosed from the mod's own output today, because the
+// mod only ever prints what it BELIEVES. The oracle prints belief next to outcome: the player walks
+// onto a seam, the game loads a map, and if that map is not the one this table names for that seam,
+// the binding is wrong and there is nothing left to argue about. The script the claim came from is
+// gone by then -- it lives in the map that just unloaded -- so the answer has to be cached while the
+// map is still up. Returns false when this map never published a claim for that group.
+bool ClaimedDestForGroup(int mapId, int group, uint16_t& destMapId);
+
 } // namespace EntityScan
