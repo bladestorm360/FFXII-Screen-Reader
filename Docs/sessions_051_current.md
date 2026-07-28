@@ -3309,3 +3309,278 @@ at if anything exit-shaped regresses:
 **Not separately exercised: the `PublishClaims` round-trip fix.** It needs a fourth leg
 (311 → 315 → 311 → 315) with the oracle still reporting MATCH. The two defects it fixes are proven by
 reading the code, not by this play session.
+
+## Session 86 — 2026-07-28 — [navigation] A sign error the polarity switch hid, and the second door into NPC
+
+KEYWORDS: funnel polarity TriArea2 dtTriArea2D portal left right winding string-pull routing through
+walls impassable terrain corridor breach SegmentClear duplicate corners passed waypoint enemies as
+NPCs Category::Enemy faction roster list 3 party member drop Penelo Urstrix Hyena actor pool overlap
+
+Three defects reported from a Giza Plains session (Nomad Village 243 -> Toam Hills 239). **They were
+two bugs**: the tester confirmed the "blocked exit" was the routing failure, not an exit failure
+(*"same issue as 1, blocked. as in routed through impassible terrain"*). Exits were not touched.
+
+### 1. The pathfinder routed through walls — a negated helper, papered over since Session 74
+
+`TriArea2` (`path_search.cpp:57`) is the **exact negation** of Recast's `dtTriArea2D`, while
+`Funnel`'s four comparisons were transcribed from Recast **verbatim**. Negated helper + unnegated
+comparisons = the funnel's whole notion of left and right inverted. Expand both and the terms cancel;
+this is arithmetic, conf 1.00.
+
+`FunnelBestPolarity` had been masking it since the Session 74 rebuild by running both polarities and
+keeping the shorter path. **The log proves that was never a measurement:** 75 routes FLIPPED, 14
+as-labelled, and every one of the 14 had <=1 portal, where mirroring cannot change the length. 75 of
+75 real routes flipped — a constant, not an observation.
+
+The masking was not neutral. Portal left/right was ALSO being decided per portal by a
+centroid-to-centroid side test, which only separates the two endpoints when the triangle pair forms a
+convex-enough quad. On this mesh a triangle is often an entire corridor; obtuse/sliver pairs put both
+endpoints on the same side. **A global mirror cannot repair a per-portal error, and shortest-wins
+actively PREFERS the corrupted run** — a funnel that accepts a bound on the wrong side cuts through
+the wall, so the invalid path is the shorter one. The route through impassable terrain was selected
+*because* it was invalid.
+
+**The correct labelling needed no test at all.** `PolyContainsXZDetail` pins the winding: it rejects a
+point on edge `v[i]->v[j]` when `crossY <= -eps`, and `crossY == -TriArea2(v[i],v[j],p)`, so the
+interior is always on the `TriArea2 <= 0` side — the RIGHT of `v[e]->v[e+1]`. Travelling parent->child
+crosses right to left, giving **`left = v[e]`, `right = v[(e+1)%3]`, always**. Recorded in
+`GameArchitecture.md` ("VERTEX WINDING").
+
+Shipped: winding-derived labelling; the four comparisons flipped to match `TriArea2`'s own sign
+(NOT the helper negated — its doc comment is the one that is correct for this frame); duplicate
+corners collapsed at the two emit sites.
+
+**The duplicate collapse is not cosmetic.** A duplicate at index 1/2 gave the passed-waypoint drop a
+zero-length segment, tripping its `len2 < 1e-6f` guard on the first iteration and silently disabling
+the whole Session 78 leg-0 reversal fix. The log shows exact duplicates on several routes.
+
+### 2. The invariant that could never have fired
+
+Both shipped invariants are LENGTH tests, and a path that leaves the corridor is SHORTER. They sat at
+**zero hits** across the entire session that produced the bug report. Added `CORRIDOR BREACH`: walk
+consecutive corners through `MapQuery::SegmentClear` — the game's own walk-class feeler — and name the
+first leg the party cannot actually walk. Log-only and bounded; a breach means the geometry is wrong
+and the fix belongs upstream, so rerouting here would only hide the next regression.
+
+`FunnelBestPolarity` is kept for one release as a **self-check, not a crutch**: `as-labelled` must now
+win every route with >=2 portals, and a FLIPPED win logs `POLARITY SELF-CHECK FAILED`. That is the
+falsifier, and it answers the standing note in that function ("collapse this to one branch ON
+EVIDENCE").
+
+### 3. Enemies as NPCs — Session 84 closed one door of two
+
+**Not a post-S84 regression.** One commit exists since `86365a2` (`3ddd129`, the seam cache) and it
+touches no classification file. S84 struck the `present` (KIND+model) route and left the older
+`named` route open, so the fix held on four enemy-free maps and failed on the first map with enemies.
+
+Chain: `ResolveObjectName` decodes `sceneObj+0xf8` when `nameIdx < 0`, so a field enemy is *named*;
+`if (!named && !interactive)` therefore never fires; `ClassifyByNameKey` returns NPC for anything
+`isCharacter`; and `ScanCombatants` — the only pass that knows friend from foe — then skips it as
+`AlreadyListed`. **NPC=4, Enemy=0** with a Hyena, two Urstrix and Penelo in the list.
+
+**The falsifier S84 shipped for exactly this fired and changed nothing.** `s_poolOverlap` was declared
+"COUNTER ONLY, no behaviour attached … a non-zero here on a map with enemies is how 'enemies show up
+as NPCs' would come back" — and it read **4**. It now drives the fix.
+
+Shipped: a faction override in `BuildLocked` for handle-table objects that are also live actor-pool
+entries. Party members (tester's call) are **dropped**; a positive `Faction::Foe` verdict re-files to
+`Category::Enemy`; everything else keeps its category. Guest/Ally/Neutral/Unknown are deliberately
+left alone — this pass exists to stop enemies being called NPCs, not to re-adjudicate the map.
+
+**Party membership is tested against roster list 3, not a kind byte.** The scene-kind nibble reads
+`kind=1` for Penelo AND all three enemies, so keying on it would have filed the player's own party as
+Enemy. `entity_scan.cpp`'s claim that it is "the game's own faction test" is **STRUCK**.
+`ScanCombatants` still uses it for the battle-only population, which has been correct in play; the
+comment now records the strike and names `FactionOf` as the replacement rather than changing a
+working path blind.
+
+`NoteFiltered` on the party drop is **mandatory**, not tidiness: a party member is a live engine
+object, so its transform keeps refreshing `lastSeenMs` and the grace window would carry it back
+forever while the pass logged the drop every rescan — the exact failure Session 83 hit.
+
+Also fixed: the `inclusion:` log line measured **507 characters into a 512-byte buffer** before this
+session added two counters. Bumped to 768. `snprintf` truncates silently and the counters at the end
+are the falsifiers.
+
+### Status
+
+Built clean and deployed. **NOT play-confirmed.** The three falsifiers to read back:
+`polarity=as-labelled` on every route with >=2 portals; zero `CORRIDOR BREACH` lines; `Enemy` = 3 and
+`NPC` = 0 on Toam Hills with Penelo absent.
+
+Paused for this: the four-item probe work (battle command character switch, notice board, dialogue
+choice options, enemy cast logging). The battle-char-switch probe already returned good data and is
+ready to wire up.
+
+### Session 86 (cont.) — the funnel was only HALF of it: a portal is an OPENING, not an edge
+
+The sign fix above is **CONFIRMED CORRECT** by the next play log: `polarity=FLIPPED` **0**,
+`as-labelled` **26**, `POLARITY SELF-CHECK FAILED` **0**. Enemy classification also confirmed in play
+by the tester.
+
+**But `CORRIDOR BREACH` fired 20 times** — the new invariant earning its keep on its first outing.
+Every one read `leg 1/1`, i.e. the whole route was a single straight segment. One example:
+
+```
+funnel: polarity=as-labelled kept=9.5m other=27.3m midpoints=13.7m straight=9.5m corners=2/5 portals
+funnel: CORRIDOR BREACH on leg 1/1 -- (51.9,55.3) -> (61.0,58.0) is not walkable
+geom corridor: 180 655 658 23 660 661
+geom portals L|R: (53.0,60.0)|(52.0,52.0) (53.0,60.0)|(55.1,54.5) (53.3,61.7)|(55.1,54.5)
+                  (55.4,67.7)|(55.1,54.5) (55.4,67.7)|(61.6,52.6)
+```
+
+`kept == straight == 9.5m` — the funnel produced the straight line, and working the intersections by
+hand shows that line **does** cross all five portals in order. **The string-pull was correct; the
+corridor was wrong.**
+
+#### Root cause: A* certifies that a crossing EXISTS, not WHERE it is
+
+`NavMesh::EdgePassable` probed a single short straddle at the **edge midpoint**. On this mesh a
+triangle is often an entire corridor and the shared edges run 8-16 m. Where the taut path actually
+crossed each portal, versus the one point that had been tested:
+
+| portal | funnel crosses | probe tested | gap |
+|---|---|---|---|
+| 1 | (52.4, 55.5) | (52.5, 56.0) | 0.5 m |
+| 4 | (55.2, 56.3) | (55.25, 61.1) | **4.8 m** |
+| 5 | (59.5, 57.6) | (58.5, 60.2) | **2.7 m** |
+
+Certified the middle, walked through the end. The obstacle sat in the untested part.
+
+**A PORTAL IS AN OPENING, NOT AN EDGE.** Fixed in `nav_mesh.cpp`:
+
+- `StraddleAt(p, e, neighbor, t, …)` — the probe segment at any parameter along the edge, factored
+  out of the old midpoint-only `EdgePassable`.
+- `EdgePassable` now samples `kEdgeSamples = 7` points and passes if **any** is clear — which is what
+  adjacency should mean, and it stops a doorway whose middle happens to be blocked from being
+  rejected outright. Short-circuits, so the unobstructed case still costs one raycast.
+- **`EdgeClearSpan`** (new) returns the sub-span that is actually walkable. Clips to the **longest
+  run** of clear samples, not to every clear sample: a pillar mid-edge leaves two gaps, and a portal
+  spanning both would let the funnel thread straight through the pillar. Endpoints are the outermost
+  sampled points, never the interpolated boundary — the conservative end of the interval.
+
+`PathSearch::Run` now builds its portals through `EdgeClearSpan`, so **the funnel physically cannot
+pull the path through a blocked part of an edge**. `clipped=` / `blocked=` counters added to the
+`funnel:` log line.
+
+#### And it repairs, because a diagnostic is not a guarantee
+
+Tester's requirement is absolute: *"there should be no instance in which the character is routed
+through terrain they can't walk through."* So `CORRIDOR BREACH` no longer just reports. On a blocked
+leg the path falls back to the polyline through the **portal crossings** — the midpoints of the
+clipped spans, i.e. the exact points `EdgeClearSpan` probed and found walkable — and re-validates.
+Longer and turnier, but every leg tested. If BOTH breach, the taut path is kept and the log says the
+corridor itself is wrong: that is upstream of the string-pull (an obstacle mid-triangle, where no
+portal probe can see it) and it is the next session's lead.
+
+**Status: built clean, deployed, NOT play-confirmed.** Read back: `CORRIDOR BREACH` should be zero;
+`clipped=N` non-zero on maps with obstacles is the fix working, not a fault; `portal-crossing path
+ALSO breaches` means the remaining fault is mid-triangle and needs a different instrument.
+
+### Session 86 (cont.) — battle command menu: WHOSE menu is this
+
+The tester heard only "Attack" when switching characters with left/right. Wired up, **no probe
+needed in the end** — the one open question (id -> name) was answered by the decompile.
+
+**`FUN_002778c0` (RVA `0x1578C0`)** is the controller: sole creator of the command panel
+`FUN_0027ad70`, and the only thing reading the pad directly. Cases `0xa`/`0xb` turn pad RIGHT
+(`0x20`) into `+1` and LEFT (`0x80`) into `-1`, **gated on `FUN_0035d4e0() -> *(int*)&DAT_022c8478 >
+1`** — the game's own "2 or more party members" test, which is exactly how the tester described the
+feature. It stashes the direction at `ctrl+0x2DB6` and sends itself message **`0x23`**, whose handler
+resolves the new character via `FUN_0027c280(currentId, dir)` and writes it to `parent+0x2FE0`
+(`parent` = `ctrl+0xD0`; the controller's own msg `0x2d` hands that field back).
+
+**`parent+0x2FE0` IS A SCENE HANDLE — conf 0.99, from the game's own comparison.** `FUN_0035bc50`
+builds the party record table (`&DAT_022c8080`, stride `0xC0`, count `DAT_022c8064`) and does:
+
+```c
+DAT_022c806c = thunk_FUN_003590d0();              // the LEADER SCENE HANDLE accessor
+if (*(int *)(record + 0x04) == DAT_022c806c)      // -> this slot is the leader
+    DAT_022c8074 = DAT_022c8064;
+```
+
+`FUN_0027c280` returns exactly that `record+0x04`. So the id is the same kind of value as
+`DAT_022c7fe0`, and `BattleState::ActorForHandle` -> `NameForActor` resolves it with pure memory
+reads — no game call, no new name plumbing.
+
+**STRUCK before it was written: "we need a probe to learn the name path."** The probe was authored
+for it, but the answer was in `FUN_0035bc50` the whole time. Resolve identity by finding what the
+game COMPARES a field against, not by watching it at runtime.
+
+Shipped in `ingame_menu_reader.cpp` (which already owns the battle command panel):
+- Hook `FUN_002778c0`. On msg `0x23`, **after** the original (that is when `+0x2FE0` is written),
+  speak the new character's name.
+- On msg `0x01` (construct) arm `g_bcmdNeedName`, so the name is spoken when the menu **becomes
+  active**, before the initial command focus — the tester's explicit ordering.
+- `g_bcmdQueueNext` makes the command announcement that follows use `Speech::SpeakQueued` instead of
+  interrupting, so the two land in order rather than the command cutting off the name.
+
+Both flags are **transition latches, not dedup** (the CLAUDE.md carve-out): neither suppresses an
+event, they only order two announcements. `CurrentBattleCharName` returns empty when the handle will
+not resolve, and the caller then says nothing about the character rather than guessing.
+
+**NOT play-confirmed.**
+
+#### On the story-gated exit
+
+The tester reports the Gizas North Bank exit is not open yet and routing still crosses blocked
+terrain. **The log that showed it predates the portal-clipping fix** — that build had the breach
+DETECTOR only. With clipping, a closed gate blocks all seven samples on the edge beneath it, so
+`EdgePassable` returns false, A\* cannot cross, `reached == kNoPoly`, and `PathSearch::Run` returns
+`Plan::NoPath` (`pass="unreachable"`, no partial route by deliberate design) -> the mod says
+**"No path"**. That is the correct answer for a story gate, and it is what the old single-midpoint
+probe was too coarse to produce reliably: one clear sample at the middle of a 16 m edge was enough to
+declare the whole gate open.
+
+### Session 86 (cont.) — CORRECTION: the breach detector was measuring the floor
+
+**Routing is CONFIRMED WORKING in play** (tester: *"your pathfinder fix did work"*). The sign fix plus
+portal clipping did the job.
+
+**But `CORRIDOR BREACH` was firing on 100% of routes, and every one was a FALSE POSITIVE.** STRIKE
+the earlier claim in this session that "20 breaches" evidenced obstacles in untested parts of the
+portals -- the number was real, the reading of it was not.
+
+`MapQuery::SegmentHit` flattens both endpoints to `from.y`, so handing it raw path points casts the
+ray **along the ground**, where it clips the terrain the path is standing on. The tell was in the log
+and unmistakable once read properly:
+
+```
+CORRIDOR BREACH on leg 1/3 -- (49.1,84.1) -> (50.0,84.0) is not walkable
+```
+
+A **0.9 m** leg starting at the player's own feet, on a route the tester then walked to the end. And
+`portal-crossing path ALSO breaches` on every route -- both paths "failed" because both were tested
+at ground level.
+
+Fixed: `firstBreach` now lifts both endpoints by `kBodyPad = 0.9f`, agreeing with
+`NavMesh::StraddleAt` and `entity_commands.cpp:85`, which have always done this. Behaviour was never
+affected -- the repair only swaps paths when the portal path tests clear, and it never did, so the
+funnel's (correct) output was used throughout. The damage was purely a log that lied.
+
+**LESSON: a diagnostic is code, and it needs its own falsifier.** This one was written to catch
+"routes through walls", was believed on sight because it confirmed the reported symptom, and was used
+to justify a theory about portal geometry. The check that would have caught it was free: a 0.9 m leg
+under the player's feet cannot be unwalkable. When a new instrument fires on everything, suspect the
+instrument before the subject.
+
+### Session 86 (cont.) — battle char switch: probe data received, implementation validated
+
+`notes\probe_battle_char_switch_output.log` (run before the C++ went in; found late because the
+launcher writes to `..\notes` and it was not checked) confirms the decompile derivation **exactly**:
+
+```
+[sw] #1 msg 0x23  dir=1   parent+0x2FE0  BEFORE=0x10000b  AFTER=0x10000c   <== CHANGED
+[ros] roster 0 bcIdx=0x0 actor=0x2ce8a3c0 actorHandle(+0x08)=0x10000b name="Vaan"
+[ros] roster 1 bcIdx=0x5 actor=0x2ce8b310 actorHandle(+0x08)=0x10000c name="Penelo"
+```
+
+`parent+0x2FE0` holds the value that `actor+0x08` holds -- i.e. the ACTOR HANDLE. So
+`BattleState::ActorForHandle` (which scans the pool for `actor+0x08 == handle`) resolves it directly,
+and `NameForActor` names it. Conf 1.00, now measured as well as derived. Also confirmed: msg `0x23`
+fires once per left/right press, `dir` is +1/-1, and `DAT_022c8478` memberCount reads 2 for a
+two-member party.
+
+Note for anyone re-running that probe: `DAT_022c8064` printed as `131074` (`0x20002`) because it is a
+**packed** field -- `FUN_0035bc50` writes it with `CONCAT62`/`CONCAT42`, so only the low 16 bits are
+the record count. The probe read it as a plain u32. Nothing depends on it.

@@ -65,10 +65,32 @@ inline bool SameXZ(const FVec3& a, const FVec3& b) {
 // `out` receives start, the corners, and end. Y rides along on the portal vertices, which are real
 // mesh vertices sitting on their own surfaces -- so a route up stairs still describes correctly
 // without the funnel itself ever reasoning about height.
+//
+// THE SIGN CONVENTION, AND WHY IT LOOKS "WRONG" AGAINST THE REFERENCE (Session 86).
+// The branch structure below is the reference implementation's, but every comparison is NEGATED
+// relative to it -- deliberately. `TriArea2` above is the exact negation of the reference's
+// `dtTriArea2D`; expand both and the terms cancel:
+//     TriArea2(a,b,c)     = (b.x-a.x)(c.z-a.z) - (c.x-a.x)(b.z-a.z)
+//     dtTriArea2D(a,b,c)  = (c.x-a.x)(b.z-a.z) - (b.x-a.x)(c.z-a.z)   ==  -TriArea2(a,b,c)
+// The reference's `<=0 / >0 / >=0 / <0` had been transcribed VERBATIM onto a helper of the opposite
+// sign, which inverted the funnel's entire notion of left and right. That inversion is the thing
+// `FunnelBestPolarity` was built to paper over, and it is why the log showed a corner at nearly
+// every portal (`corners=11/15`) with the polarity reporting FLIPPED on 75 routes out of 75.
+//
+// Do NOT "restore" these to match a reference without also negating TriArea2 -- the two have to
+// agree, and it is TriArea2's doc comment ("> 0 == LEFT") that is correct for this codebase's frame.
 void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
             std::vector<FVec3>& out) {
     out.clear();
     out.push_back(start);
+
+    // A corner is only ever a portal endpoint, and adjacent portals SHARE vertices -- so the raw
+    // funnel emits exact duplicates. Collapsing them is not cosmetic: a duplicate at index 1/2 gives
+    // the passed-waypoint drop below a zero-length segment, which trips its `len2 < 1e-6f` guard on
+    // the first iteration and silently disables the whole Session 78 leg-0 reversal fix.
+    auto pushCorner = [&out](const FVec3& p) {
+        if (out.empty() || !SameXZ(out.back(), p)) out.push_back(p);
+    };
 
     FVec3 apex = start, pLeft = start, pRight = start;
     size_t apexIdx = 0, leftIdx = 0, rightIdx = 0;
@@ -80,12 +102,12 @@ void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& por
         const FVec3 right = (i < portals.size()) ? portals[i].right : end;
 
         // Tighten the RIGHT bound.
-        if (TriArea2(apex, pRight, right) <= 0.0f) {
-            if (SameXZ(apex, pRight) || TriArea2(apex, pLeft, right) > 0.0f) {
+        if (TriArea2(apex, pRight, right) >= 0.0f) {
+            if (SameXZ(apex, pRight) || TriArea2(apex, pLeft, right) < 0.0f) {
                 pRight = right; rightIdx = i;
             } else {
                 // Right crossed left: the left bound is a corner. Emit it and restart from there.
-                out.push_back(pLeft);
+                pushCorner(pLeft);
                 apex = pLeft; apexIdx = leftIdx;
                 pLeft = apex; pRight = apex;
                 leftIdx = rightIdx = apexIdx;
@@ -94,11 +116,11 @@ void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& por
             }
         }
         // Tighten the LEFT bound.
-        if (TriArea2(apex, pLeft, left) >= 0.0f) {
-            if (SameXZ(apex, pLeft) || TriArea2(apex, pRight, left) < 0.0f) {
+        if (TriArea2(apex, pLeft, left) <= 0.0f) {
+            if (SameXZ(apex, pLeft) || TriArea2(apex, pRight, left) > 0.0f) {
                 pLeft = left; leftIdx = i;
             } else {
-                out.push_back(pRight);
+                pushCorner(pRight);
                 apex = pRight; apexIdx = rightIdx;
                 pLeft = apex; pRight = apex;
                 leftIdx = rightIdx = apexIdx;
@@ -346,21 +368,51 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
     // Collect the portals the route crosses, each as a LEFT/RIGHT pair.
     //
-    // Left and right are decided by the sign of the 2D cross product against the direction of travel,
-    // NOT by the triangle's vertex order. The mesh's winding looks consistent (map_query's containment
-    // test implies it), but that is an inference, and getting it backwards would silently invert the
-    // funnel. Two multiplies buys not depending on it.
+    // LEFT IS ALWAYS v[e]; RIGHT IS ALWAYS v[(e+1)%3]. This is not an assumption about the mesh, it
+    // is forced by the engine's own containment test. MapQuery::PolyContainsXZDetail replicates
+    // FUN_002324f0: for each directed edge v[i] -> v[j] it rejects the point when
+    //     crossY = ez*(px-vx[i]) - ex*(pz-vz[i])  is <= -eps
+    // and that crossY is identically -TriArea2(v[i], v[j], p). So an interior point always satisfies
+    // TriArea2 <= 0 on every directed edge -- the interior lies to the RIGHT of v[e] -> v[e+1] under
+    // this file's convention. Travelling parent -> child crosses that edge from its right side to its
+    // left, which puts v[e] on the left of travel and v[e+1] on the right. Every time, no test.
+    //
+    // WHAT THIS REPLACES, AND WHY (Session 86). The previous version decided left/right per portal by
+    // asking which side of the parent-centroid -> child-centroid line v0 fell on. That line separates
+    // v0 from v1 only when the two triangles form a convex-enough quad; on this mesh, where a single
+    // triangle is often an entire corridor, obtuse and sliver pairs put BOTH endpoints on the same
+    // side and the test returned an arbitrary answer. One mislabelled portal is unrecoverable -- a
+    // global mirror cannot fix a per-portal error, and FunnelBestPolarity's shortest-wins tie-break
+    // actively PREFERS the corrupted run, because a funnel that accepts a bound on the wrong side
+    // cuts THROUGH the wall and is therefore shorter. That is the route through impassable terrain:
+    // it was selected precisely because it was invalid.
+    //
+    // AND THE PORTAL IS THE OPENING, NOT THE WHOLE EDGE (Session 86). A* certifies that a crossing
+    // EXISTS on each shared edge; it does not certify where. On this mesh an edge runs 8-16 m, and
+    // the field log caught the taut path threading a portal 4.8 m from the only point that had been
+    // tested -- straight through the obstacle in between. NavMesh::EdgeClearSpan re-samples the edge
+    // and hands back the sub-span that is actually walkable, so the funnel physically cannot pull the
+    // path through a blocked part. Costs a handful of short raycasts per corridor, once per '\'.
     std::vector<Portal> portals;
     portals.reserve(chain.size());
+    int clippedPortals = 0, blockedPortals = 0;
     for (size_t i = 1; i < chain.size(); ++i) {
         auto it = came.find(chain[i]);
         if (it == came.end() || it->second.edge < 0) continue;
-        FVec3 v0{}, v1{};
-        if (!NavMesh::EdgePortal(it->second.parent, it->second.edge, v0, v1)) continue;
-        FVec3 ca{}, cb{};
-        if (!Centroid(it->second.parent, ca) || !Centroid(chain[i], cb)) continue;
-        // TriArea2(ca, cb, v) > 0 == v is counter-clockwise of the travel direction == LEFT.
-        portals.push_back((TriArea2(ca, cb, v0) > 0.0f) ? Portal{ v0, v1 } : Portal{ v1, v0 });
+        FVec3 fullA{}, fullB{};
+        if (!NavMesh::EdgePortal(it->second.parent, it->second.edge, fullA, fullB)) continue;
+        FVec3 v0 = fullA, v1 = fullB;
+        if (NavMesh::EdgeClearSpan(it->second.parent, it->second.edge, chain[i], v0, v1)) {
+            if (!SameXZ(v0, fullA) || !SameXZ(v1, fullB)) ++clippedPortals;
+        } else {
+            // No part of this edge tested clear, yet the search crossed it -- the two disagree.
+            // Keep the full edge rather than dropping the portal: a hole in the sequence would let
+            // the funnel thread an unvalidated chord across the gap, which is worse than a portal we
+            // know to be suspect. The leg validator below is what reports it.
+            ++blockedPortals;
+            v0 = fullA; v1 = fullB;
+        }
+        portals.push_back(Portal{ v0, v1 });
     }
 
     bool  flipped = false;
@@ -427,12 +479,103 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         char fm[256];
         snprintf(fm, sizeof(fm),
                  "funnel: polarity=%s kept=%.1fm other=%.1fm midpoints=%.1fm straight=%.1fm "
-                 "corners=%zu/%zu portals%s",
+                 "corners=%zu/%zu portals clipped=%d blocked=%d%s",
                  flipped ? "FLIPPED" : "as-labelled", lenKept, lenOther, midLen, straight,
-                 rawPoly.size(), portals.size(),
+                 rawPoly.size(), portals.size(), clippedPortals, blockedPortals,
                  (lenKept > midLen + 0.01f) ? "   <== LONGER THAN MIDPOINTS: funnel is broken" : "");
         Log::Write("NAV-ROUTE", fm);
 
+        // THE POLARITY IS NOW A SELF-CHECK, NOT A CRUTCH (Session 86).
+        // With the portals labelled from the mesh winding and the funnel's comparisons matching
+        // TriArea2's own sign, `as-labelled` must win every route that has a real corridor. A FLIPPED
+        // win on >=2 portals means one of those two facts is wrong -- it is a failed fix, not a
+        // curiosity. (<=1 portal is a tie: mirroring a single portal cannot change the path length,
+        // and `flipped = (lb < la)` is false there only because the compare is strict.)
+        if (flipped && portals.size() >= 2) {
+            snprintf(fm, sizeof(fm),
+                     "funnel: POLARITY SELF-CHECK FAILED -- mirrored beat as-labelled on %zu portals "
+                     "(%.1fm vs %.1fm). Portal labelling and the funnel's comparison signs disagree.",
+                     portals.size(), lenKept, lenOther);
+            Log::Write("NAV-ROUTE", fm);
+        }
+    }
+
+    // THE INVARIANT THAT ACTUALLY SEES A ROUTE THROUGH A WALL.
+    //
+    // Both invariants above are LENGTH tests, and a path that leaves the corridor is SHORTER, not
+    // longer -- which is why they sat at zero hits through the whole session that produced the
+    // "routes through impassable terrain" report. Ask the question directly instead: can the party
+    // actually walk each leg? MapQuery::SegmentClear is the game's own walk-class feeler, the same
+    // one the character's own collision uses.
+    //
+    // LOG-ONLY, deliberately. A breach means the geometry is wrong, and the fix belongs upstream in
+    // the labelling or the search; silently rerouting here would hide the next regression. Bounded,
+    // and it runs once per '\' press on the nav-safe drain, never per frame.
+    //
+    // AND IT REPAIRS, because "never route the player through a wall" is an absolute requirement and
+    // a diagnostic alone cannot deliver it. If a taut leg is blocked, fall back to the polyline
+    // through the PORTAL CROSSINGS -- the midpoints of the clipped spans, i.e. the exact points
+    // EdgeClearSpan probed and found walkable. It is longer and it turns more, but every leg of it
+    // has been tested, and a longer walkable route beats a short impossible one every time.
+    {
+        // AT BODY HEIGHT, NOT AT THE FEET. MapQuery::SegmentHit flattens both endpoints to from.y, so
+        // handing it raw path points casts the ray ALONG THE GROUND, where it clips the terrain the
+        // path is standing on. The first version of this check did exactly that and reported a breach
+        // on 100% of routes -- including a 0.9 m leg starting at the player's own feet, on a route the
+        // tester then walked to the end. EdgePassable's probe and entity_commands.cpp:85 both add this
+        // same pad; the check has to agree with them or it is measuring the floor.
+        auto firstBreach = [](const std::vector<FVec3>& path) -> size_t {
+            constexpr size_t kMaxSegChecks = 24;
+            constexpr float  kBodyPad = 0.9f;
+            const size_t n = (path.size() < kMaxSegChecks + 1) ? path.size() : kMaxSegChecks + 1;
+            for (size_t i = 1; i < n; ++i) {
+                const FVec3 a{ path[i - 1].x, path[i - 1].y + kBodyPad, path[i - 1].z };
+                const FVec3 b{ path[i].x,     path[i].y     + kBodyPad, path[i].z     };
+                if (!MapQuery::SegmentClear(a, b)) return i;
+            }
+            return 0;                                            // 0 == no breach
+        };
+
+        size_t bad = firstBreach(rawPoly);
+        if (bad != 0) {
+            char bm[288];
+            snprintf(bm, sizeof(bm),
+                     "funnel: CORRIDOR BREACH on leg %zu/%zu -- (%.1f,%.1f) -> (%.1f,%.1f) is not "
+                     "walkable; falling back to the portal-crossing path",
+                     bad, rawPoly.size() - 1,
+                     rawPoly[bad - 1].x, rawPoly[bad - 1].z, rawPoly[bad].x, rawPoly[bad].z);
+            Log::Write("NAV-ROUTE", bm);
+
+            std::vector<FVec3> viaPortals;
+            viaPortals.reserve(portals.size() + 2);
+            viaPortals.push_back(from);
+            for (const Portal& p : portals)
+                viaPortals.push_back(FVec3{ (p.left.x + p.right.x) * 0.5f,
+                                            (p.left.y + p.right.y) * 0.5f,
+                                            (p.left.z + p.right.z) * 0.5f });
+            viaPortals.push_back(to);
+
+            const size_t stillBad = firstBreach(viaPortals);
+            if (stillBad == 0) {
+                rawPoly.swap(viaPortals);
+                Log::Write("NAV-ROUTE", "funnel: portal-crossing path is clear -- using it");
+            } else {
+                // Both are blocked, so the fault is upstream of the string-pull: the search crossed
+                // an edge whose clear span does not actually connect, or an obstacle sits in the
+                // middle of a triangle where no portal probe can see it. Keep the taut path (the
+                // shorter of two bad answers) and say so -- this line is the next session's lead.
+                snprintf(bm, sizeof(bm),
+                         "funnel: portal-crossing path ALSO breaches at leg %zu/%zu -- the corridor "
+                         "itself is wrong, not the string-pull",
+                         stillBad, viaPortals.size() - 1);
+                Log::Write("NAV-ROUTE", bm);
+            }
+        }
+    }
+
+    {
+        const float straight = NavCommon::Distance2D(from, to);
+        char fm[256];
         // And the corridor's own quality, which the funnel cannot fix: if the taut path through the
         // triangle sequence is far longer than the straight line, A* chose a wandering corridor and
         // the fault is upstream in the search, not in the string-pull.

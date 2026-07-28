@@ -249,32 +249,101 @@ PolyId FindPolyAt(float x, float y, float z) {
     return best;
 }
 
+namespace {
+
+// A PORTAL IS AN OPENING, NOT AN EDGE (Session 86).
+//
+// The mesh's adjacency knows nothing about walls, doors or moving platforms: the floor under a
+// CLOSED GATE is still adjacent to the floor before it. A walk-class segment is what catches that.
+// But a single probe at the edge's MIDPOINT only certifies the middle of the edge, and on this mesh
+// a triangle is often an entire corridor -- the shared edges run 8 to 16 metres. The string-pull
+// then threads the taut path through wherever it likes along that edge, which in the field was up to
+// **4.8 m** from the one point that had been tested. Certified the middle, walked through the end.
+//
+// So the edge is sampled along its length, and callers get the sub-span that is actually clear.
+//
+// The probe STRADDLES the edge rather than running centroid to centroid: two adjacent triangles can
+// be large, and a long diagonal between their centres passes close to whatever else is nearby --
+// which is how the old grid's clearance rays islanded doorway cells and made narrow archways report
+// NoPath. A short span across the crossing point tests the thing we care about and nothing else.
+constexpr int kEdgeSamples = 7;
+
+// The probe segment across the shared edge at parameter `t` along it (0 = v[e], 1 = v[e+1]).
+bool StraddleAt(PolyId p, int e, PolyId neighbor, float t, FVec3& a, FVec3& b) {
+    FVec3 l{}, r{}, ca{}, cb{};
+    if (!EdgePortal(p, e, l, r) || !PolyCentroid(p, ca) || !PolyCentroid(neighbor, cb)) return false;
+    const FVec3 pt{ l.x + (r.x - l.x) * t, l.y + (r.y - l.y) * t, l.z + (r.z - l.z) * t };
+    constexpr float kBodyPad  = 0.9f;                   // test at body height, not at the feet
+    constexpr float kStraddle = 0.25f;                  // fraction of the way toward each centre
+    a = FVec3{ pt.x + (ca.x - pt.x) * kStraddle,
+               pt.y + (ca.y - pt.y) * kStraddle + kBodyPad,
+               pt.z + (ca.z - pt.z) * kStraddle };
+    b = FVec3{ pt.x + (cb.x - pt.x) * kStraddle,
+               pt.y + (cb.y - pt.y) * kStraddle + kBodyPad,
+               pt.z + (cb.z - pt.z) * kStraddle };
+    return true;
+}
+
+inline float SampleT(int i) {
+    // Half-offset so a sample never lands exactly on a vertex, where the straddle degenerates
+    // against whatever wall meets the triangle there.
+    return (static_cast<float>(i) + 0.5f) / static_cast<float>(kEdgeSamples);
+}
+
+} // namespace
+
 bool EdgePassable(PolyId p, int e, PolyId neighbor) {
     if (!ValidPoly(neighbor)) return false;
     if (!Walkable(neighbor)) return false;
 
-    // Volume check. The mesh's adjacency knows nothing about walls, doors or moving platforms, so
-    // the floor under a CLOSED GATE is still adjacent to the floor before it. One walk-class segment
-    // is what catches that -- and it is the only raycast left in routing.
-    //
-    // The segment STRADDLES THE SHARED EDGE rather than running centroid to centroid. Two adjacent
-    // triangles can be large, and a long diagonal between their centres passes close to whatever
-    // else is nearby -- which is how the old grid's clearance rays islanded doorway cells and made
-    // narrow archways report NoPath. A short span across the actual crossing point tests the thing
-    // we care about and nothing else.
-    FVec3 mid{}, ca{}, cb{};
-    if (!EdgeMidpoint(p, e, mid) || !PolyCentroid(p, ca) || !PolyCentroid(neighbor, cb))
-        return true;                                    // unreadable -> do not block
+    // ANY clear sample means the party can get through somewhere along this edge -- which is what
+    // adjacency should mean. Short-circuits on the first hit, so the common (unobstructed) case still
+    // costs one raycast. WHERE it is clear is EdgeClearSpan's job; the search only needs to know the
+    // crossing exists at all, and answering "is the midpoint clear" instead used to reject a doorway
+    // whose middle happened to be blocked.
+    for (int i = 0; i < kEdgeSamples; ++i) {
+        FVec3 a{}, b{};
+        if (!StraddleAt(p, e, neighbor, SampleT(i), a, b)) return true;   // unreadable -> do not block
+        if (MapQuery::SegmentClear(a, b)) return true;
+    }
+    return false;
+}
 
-    constexpr float kBodyPad = 0.9f;                    // test at body height, not at the feet
-    constexpr float kStraddle = 0.25f;                  // fraction of the way toward each centre
-    const FVec3 a{ mid.x + (ca.x - mid.x) * kStraddle,
-                   mid.y + (ca.y - mid.y) * kStraddle + kBodyPad,
-                   mid.z + (ca.z - mid.z) * kStraddle };
-    const FVec3 b{ mid.x + (cb.x - mid.x) * kStraddle,
-                   mid.y + (cb.y - mid.y) * kStraddle + kBodyPad,
-                   mid.z + (cb.z - mid.z) * kStraddle };
-    return MapQuery::SegmentClear(a, b);
+bool EdgeClearSpan(PolyId p, int e, PolyId neighbor, FVec3& outA, FVec3& outB) {
+    // Always leave the caller with a usable portal: the full edge unless we learn better.
+    if (!EdgePortal(p, e, outA, outB)) return false;
+    if (!ValidPoly(neighbor) || !Walkable(neighbor)) return false;
+
+    bool clear[kEdgeSamples] = {};
+    int nClear = 0;
+    for (int i = 0; i < kEdgeSamples; ++i) {
+        FVec3 a{}, b{};
+        if (!StraddleAt(p, e, neighbor, SampleT(i), a, b)) return true;   // unreadable -> unclipped
+        clear[i] = MapQuery::SegmentClear(a, b);
+        if (clear[i]) ++nClear;
+    }
+    if (nClear == 0) return false;                       // nothing gets through here at all
+    if (nClear == kEdgeSamples) return true;             // nothing blocked -> hand back the full edge
+
+    // Clip to the LONGEST RUN of clear samples. A run rather than "every clear sample" because a
+    // pillar mid-edge leaves two separate gaps, and a portal spanning both would let the funnel
+    // thread straight through the pillar -- the very failure this function exists to stop.
+    int bestStart = 0, bestLen = 0, curStart = 0, curLen = 0;
+    for (int i = 0; i < kEdgeSamples; ++i) {
+        if (!clear[i]) { curLen = 0; continue; }
+        if (curLen == 0) curStart = i;
+        ++curLen;
+        if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+    }
+    // Endpoints are the outermost SAMPLED points of that run, never the interpolated boundary: the
+    // obstacle's true edge lies somewhere between the last clear sample and the first blocked one,
+    // and this is the conservative end of that interval.
+    const FVec3 l = outA, r = outB;
+    const float tLo = SampleT(bestStart);
+    const float tHi = SampleT(bestStart + bestLen - 1);
+    outA = FVec3{ l.x + (r.x - l.x) * tLo, l.y + (r.y - l.y) * tLo, l.z + (r.z - l.z) * tLo };
+    outB = FVec3{ l.x + (r.x - l.x) * tHi, l.y + (r.y - l.y) * tHi, l.z + (r.z - l.z) * tHi };
+    return true;
 }
 
 int FloodFrom(PolyId start, std::vector<PolyId>& out) {

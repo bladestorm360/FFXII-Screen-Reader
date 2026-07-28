@@ -117,6 +117,16 @@ bool ClosestPointOnPoly(PolyId p, float x, float z, FVec3& out);
 // walk-class segment per expanded edge catches them.
 bool EdgePassable(PolyId p, int e, PolyId neighbor);
 
+// The sub-span of the shared edge the party can ACTUALLY cross, as a portal for the string-pull.
+// `outA`/`outB` are always filled with something usable -- the full edge when nothing is blocked or
+// nothing could be read. Returns false only when NO part of the edge is passable.
+//
+// This is the difference between "these triangles are adjacent" and "here is the opening". A shared
+// edge on this mesh runs 8-16 m; certifying its midpoint and then letting the funnel thread the path
+// through its end is how routes came out crossing terrain the party cannot walk. GAME THREAD ONLY --
+// it casts walk-class segments.
+bool EdgeClearSpan(PolyId p, int e, PolyId neighbor, FVec3& outA, FVec3& outB);
+
 // Flood the walkable component containing `start`. Diagnostic + reachability; `out` is unordered.
 // Stops at kMaxPolys. Volume blocking is NOT applied (a flood is about the mesh, not about doors).
 int FloodFrom(PolyId start, std::vector<PolyId>& out);

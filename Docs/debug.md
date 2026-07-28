@@ -1626,6 +1626,167 @@ Observations that matter:
 the kind of surface-shape assumption that cost Session 71 a wrong hook (`0x45EDB0` turned out to be
 the save/load pane because a label cluster looked right). Follow the creation chain for each.
 
+## Funnel polarity — a WORKAROUND that hid a sign error for four sessions (Session 86, 2026-07-28)
+
+**KEYWORDS: funnel polarity FLIPPED as-labelled string-pull portal left right TriArea2 dtTriArea2D
+winding routing through walls impassable terrain unwalkable corners portals Recast Mononen**
+
+**DO NOT REINTRODUCE `FunnelBestPolarity`'s "run it both ways and keep the shorter path".** It looked
+like a robustness win and it was a bug amplifier.
+
+What it did: ran the funnel with the portals as labelled and again with every portal mirrored, then
+kept whichever produced the shorter path. The comment justified it honestly — the author had derived
+the sign convention twice, traced both branches against the reference twice, and the log still
+disagreed — so the sign "stopped being an argument to win".
+
+Why it was wrong, three ways:
+
+1. **It was not a measurement.** The log from the Giza Plains session: 75 routes chose FLIPPED, 14
+   chose as-labelled, and *every one of those 14 had ≤1 portal* — where mirroring cannot change the
+   length and the strict `<` comparison decides it. So 75 of 75 real routes flipped. A constant
+   wearing a measurement's clothes.
+2. **It hid the actual fault**, which was one character wide: `TriArea2` is the exact negation of the
+   reference `dtTriArea2D` the funnel's four comparisons were transcribed from. Negated helper +
+   verbatim comparisons = the funnel's whole notion of left and right inverted.
+3. **It made a per-portal error unrecoverable and then PREFERRED it.** A global mirror cannot fix one
+   mislabelled portal, and shortest-wins actively selects the corrupted run — a funnel that accepts a
+   bound on the wrong side cuts *through* the wall, so the invalid path is the shorter one. The route
+   through impassable terrain was chosen *because* it was invalid.
+
+**Why nothing caught it for four sessions:** both shipped invariants (`lenKept > midLen`,
+`lenKept > 1.8 × straight`) are LENGTH tests, and an out-of-corridor path is shorter, not longer.
+They sat at zero hits through the entire session that produced the bug report. The replacement is
+`MapQuery::SegmentClear` walked over consecutive corners — ask whether the party can actually walk the
+leg, rather than whether the number looks plausible.
+
+**General lesson, the fourth time this project has hit it:** when a fix takes the form "try both and
+keep whichever looks better", the thing being avoided is a fact you have not established. Establish
+it. Here the fact was free — the mesh winding pins portal left/right exactly (`GameArchitecture.md`,
+"VERTEX WINDING").
+
+### The sign was only HALF of it — a portal is an OPENING, not an edge
+
+The sign fix was confirmed correct in play (`FLIPPED` 0, `as-labelled` 26) **and routes still crossed
+walls.** `CORRIDOR BREACH` fired 20 times on its first outing, always `leg 1/1` — the funnel had
+produced the plain straight line, and that line genuinely does cross every portal in order. **The
+string-pull was right; the corridor was wrong.**
+
+`EdgePassable` probed **one short straddle at the edge midpoint**. On this mesh a triangle is often an
+entire corridor and shared edges run 8-16 m, so A\* certified that a crossing *exists* and said nothing
+about *where*. Measured on the failing route: the taut path crossed portal 4 **4.8 m** from the only
+point that had been tested, and portal 5 **2.7 m** away. The obstacle was in the untested part.
+
+**Do not "optimise" `EdgeClearSpan` back down to a single probe.** The midpoint probe is exactly the
+version that shipped this bug. Specifically:
+
+- Sample the edge (`kEdgeSamples = 7`) and clip the portal to the clear sub-span; the funnel then
+  cannot thread a blocked part, because that part is no longer inside any portal.
+- Clip to the **longest run** of clear samples, never to "all clear samples" — a pillar mid-edge
+  leaves two gaps, and a portal spanning both re-creates the bug through the pillar.
+- `EdgePassable` passes on **any** clear sample. "Is the midpoint clear" also *falsely rejected*
+  doorways whose middle is blocked, which is the same error in the other direction.
+
+### The breach detector measured the FLOOR — false positive on 100% of routes
+
+**STRUCK: the reading that "20 breaches" evidenced obstacles in the untested parts of portals.** The
+count was real; the interpretation was not. Routing is confirmed working in play after the sign +
+clipping fixes, and `CORRIDOR BREACH` was firing on *every* route regardless.
+
+`MapQuery::SegmentHit` flattens both endpoints to `from.y`, so passing it raw path points casts the
+ray **along the ground**, where it clips the terrain the path stands on. The giveaway was in the log:
+
+```
+CORRIDOR BREACH on leg 1/3 -- (49.1,84.1) -> (50.0,84.0) is not walkable
+```
+
+— a **0.9 m** leg starting at the player's own feet, on a route that was then walked to the end.
+
+**Any new caller of `SegmentClear` must add the `0.9f` body pad**, exactly as `NavMesh::StraddleAt`
+and `entity_commands.cpp:85` do. Without it the test answers "is there floor here", not "can the
+party walk here".
+
+**Lesson: a diagnostic is code and needs its own falsifier.** This one was believed on sight because
+it confirmed the reported symptom, then used to justify a theory. The disproof was free — a 0.9 m leg
+under the player's feet cannot be unwalkable. When a new instrument fires on everything, suspect the
+instrument first.
+
+**And note what this means in general: the navmesh alone cannot answer "is this line walkable".** The
+walkmap triangles are coarse floor polys; the real walls are collision volumes the mesh knows nothing
+about. Only the walk-class segment test sees them. Any future routing change that reasons purely from
+triangle adjacency will reproduce this class of bug.
+
+## Party membership: ask roster list 3, never a kind byte (Session 86, 2026-07-28)
+
+**KEYWORDS: party member enemy NPC classification faction scene kind nibble BtlChr roster list 3
+Penelo Urstrix Hyena handle table actor pool overlap Category::Enemy**
+
+**The scene-kind nibble (`sceneObj+0x0E & 0x0F`) does NOT separate party from enemy on the field.**
+The Giza Plains dump reads `kind=1` for Penelo *and* for all three enemies present. `entity_scan.cpp`
+called it "the game's own faction test" — **STRUCK**; that comment now carries the correction.
+`phyre_types.h:113` had already flagged the constant as unverified.
+
+Two things that DO work, both already in `battle_state.h`:
+
+- **Party membership = presence in roster list 3** (`BtlWork+0x5A7E`, nine u16 BtlChr indices, via
+  `BattleState::BtlChrForSlot`). It is the game's own party list; membership is a lookup, not an
+  inference, and it cannot mistake an enemy for a party member.
+- **Faction = `BattleState::FactionOf(actor)`**, which reads the BtlChr kind byte *before* it ever
+  falls back to the scene nibble.
+
+Related trap, and the reason the fix took the shape it did: **the handle-table walk wins every tie.**
+`BuildLocked` runs before `ScanCombatants`, and `ScanCombatants` skips anything `AlreadyListed` — so
+any widening of the handle-table admission rule silently takes the faction classifier's inputs away.
+Session 84 struck one such route (`present`, KIND+model) and left the older `named` route open, which
+is why that fix held on four enemy-free maps and failed on the first map with enemies. Check the
+ordering against **any** future widening.
+
+## "<Name> joins the party!" banner — SILENT, reported 2026-07-28, NOT diagnosed
+
+**KEYWORDS: joins the party party join banner eyecatch full screen black centered wings winged
+ornament gold name Penelo joins the party new party member recruit silent not vocalized**
+
+Reported by the tester with a screenshot. **Observation only — no RE done, no function identified,
+no read-point. Do not implement from a guess.**
+
+A **full-screen banner**: the screen is entirely black and a single line sits centred, flanked by
+two gold winged ornaments:
+
+```
+        [wing]  Penelo joins the party!  [wing]
+```
+
+Observations that matter:
+
+- **The character name is drawn in a different colour** (gold) from the rest of the sentence
+  (white). So this is one string with an inline colour/parameter escape, or a template with the name
+  substituted — **not** a name the mod should compose itself. Read the composed string; do not
+  rebuild the sentence from a character id and a hardcoded "joins the party!".
+- **No cursor, no panel border, no rows.** It is a transition/eyecatch surface, so the universal
+  focus signal `FUN_00247510` almost certainly never fires here — expect a **draw / content-set**
+  read-point (the shape of `FUN_0035e070` or `FUN_002e16b0`), not a focus one.
+- It is **not** the telop the mod already reads: the telop is `HEADER<0x02>BODY` inside an on-screen
+  overlay box, and `message_reader.cpp`'s `OnTelop` would have spoken this if it were.
+- It is **not** the "obtained \<item\>" toast (`FUN_0035e070`, text at `widget+0xC8`) — that draws in
+  the corner over live gameplay, not on a blacked-out screen.
+- It appears at a **story beat**, i.e. it is script-driven. The `ctrl` symbol dump
+  (`FFXII-Decompile\notes\dbg_symbols_ctrl.csv`) has `addpartymember` (idx 1557) and `refreshparty`
+  (idx 1698); the banner is plausibly raised near an `addpartymember` call. **That is a LEAD at ~0.5,
+  not a conclusion** — resolve the native by behaviour, never by index arithmetic
+  (`script_native_table.txt`'s own self-check says its id join is NOT COHERENT).
+
+**First checks next session** (in this order, per CHECK-GameArchitecture-FIRST):
+1. Grep `GameArchitecture.md` and this file for an existing party-join / eyecatch / banner
+   read-point before anything else.
+2. Reproduce with `probe_notice_board.js` attached — it already logs **every** `FUN_002f9860` string
+   id with decoded text. If the banner's sentence appears there, the string id and its resolver are
+   handed to us for free and the only remaining question is which widget draws it.
+3. Only then chase the widget: find the writer of the composed string, and treat **that** function
+   as the event (see the standing rule — games always fire an event; find the WRITER of the state).
+
+**Do not assume this shares a surface with the Clan/Hunt panels above.** Three silent surfaces
+reported close together is not evidence they are one bug; Session 71 lost a hook to exactly that
+kind of shape assumption.
+
 ---
 
 ## Navigation elevation-blindness — Solved / corrected (Session 73, 2026-07-24)

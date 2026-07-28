@@ -15,11 +15,16 @@
 #include "core/phyre_types.h"
 #include "core/game_text.h"
 #include "core/logger.h"
+// The handle table cannot tell friend from foe; the BtlChr behind an actor can. battle_state's
+// reads are pure memory (no game calls), so they are safe on the scan thread -- see the faction
+// override in BuildLocked.
+#include "battle/battle_state.h"
 
 #include <Windows.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 using namespace MemRead;
@@ -54,17 +59,29 @@ int s_namelessAct = 0;  // KEPT, but nameless while offering an interaction. The
                         // object should go. Each one is dumped in full.
 int s_poolOverlap = 0;  // handle-table objects that are ALSO live actor-pool entries...
 int s_poolOverlapNamed = 0;  // ...and how many of those the handle table names.
-                        // COUNTER ONLY, no behaviour attached. The actor pool is the only thing that
-                        // knows faction (ally vs enemy), and the handle-table walk runs first, so a
-                        // non-zero here on a map with enemies is how "enemies show up as NPCs" would
-                        // come back. Measured before anything is built on it.
+                        // NO LONGER A BARE COUNTER (Session 86). It shipped in Session 84 as
+                        // measurement-only, with the note "a non-zero here on a map with enemies is
+                        // how 'enemies show up as NPCs' would come back" -- and on Giza Plains it read
+                        // 4 (Penelo + a Hyena + two Urstrix) while Enemy read 0. The measurement came
+                        // back, so it now DRIVES the faction override below. The counter stays,
+                        // because the population is still worth sizing.
+int s_poolParty  = 0;   // ...of those, dropped as the player's own party (tester's call).
+int s_poolFoe    = 0;   // ...and re-filed from NPC to Enemy by the actor pool's faction.
 
 // Scene objects this scan deliberately erased. Published so the caller's grace window cannot carry
 // them straight back in -- see the note on NoteFiltered in entity_scan.h.
 std::vector<void*> s_filtered;
 
-// Live actor-pool scene objects, rebuilt at the top of every scan. Only used by the overlap counter.
-std::vector<void*> s_poolObjs;
+// Live actor-pool entries, rebuilt at the top of every scan. The ACTOR is carried alongside its
+// scene object because the actor is what reaches the BtlChr, and the BtlChr is the only thing in the
+// game that knows faction -- the handle table has no such field.
+struct PoolEntry { void* sceneObj; void* actor; };
+std::vector<PoolEntry> s_poolObjs;
+
+// One line per combatant the faction override touched, held until the detail latch decides whether
+// this scan gets dumped. It cannot be logged inline: `detail` is only known after the object loop
+// finishes, and the loop runs several times a second -- writing there would flood the log.
+std::vector<std::string> s_facLines;
 }
 
 void NoteFiltered(void* sceneObj) { if (sceneObj) s_filtered.push_back(sceneObj); }
@@ -95,9 +112,10 @@ bool AlreadyListed(const std::vector<Entity>& out, void* sceneObj) {
 //
 // IsInteractionAvailable still reads the same bit for the question it actually answers.
 
-// Live scene objects in the BtlWork actor pool. Cheap (<=32 slots) and read once per scan, purely to
-// measure the overlap between the two pools -- see s_poolOverlap. NOTHING branches on this.
-void CollectActorPoolObjects(std::vector<void*>& out) {
+// Live entries in the BtlWork actor pool. Cheap (<=32 slots) and read once per scan. Session 84 read
+// this only to SIZE the overlap with the handle table; Session 86 also carries the actor, because
+// that is what the faction override in BuildLocked resolves through.
+void CollectActorPoolObjects(std::vector<PoolEntry>& out) {
     out.clear();
     void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);
     if (!pool) return;
@@ -111,8 +129,24 @@ void CollectActorPoolObjects(std::vector<void*>& out) {
         if (!SafeReadU8(actor, NavRva::ACTOR_ACTIVE_OFF, &active) ||
             (active & NavRva::ACTOR_ACTIVE_BIT) == 0) continue;
         void* so = PtrAt(actor, NavRva::ACTOR_SCENEOBJ);
-        if (so) out.push_back(so);
+        if (so) out.push_back(PoolEntry{ so, actor });
     }
+}
+
+// Is this combatant one of the player's own party?
+//
+// ASK THE GAME'S OWN PARTY LIST, NOT A KIND BYTE. Roster list 3 (BtlWork+0x5A7E, nine u16 BtlChr
+// indices) IS the party; membership is a lookup, not an inference. The alternative -- the scene-kind
+// nibble ScanCombatants uses -- demonstrably cannot do this job on the field: the Giza Plains dump
+// reads kind=1 for Penelo AND for all three enemies, so keying on it would file the player's own
+// party member as an Enemy. phyre_types.h:113 already flags that constant as unverified; this
+// sidesteps it entirely.
+bool IsPartyMemberActor(void* actor) {
+    void* bc = BattleState::BtlChrForActor(actor);
+    if (!bc) return false;
+    for (int slot = 0; slot < BattleState::kRosterSlots; ++slot)
+        if (BattleState::BtlChrForSlot(slot) == bc) return true;
+    return false;
 }
 
 // Append live COMBATANTS (allies + enemies) from the BtlWork pool. Field NPCs/gimmicks come
@@ -145,8 +179,21 @@ void ScanCombatants(std::vector<Entity>& out) {
         void* sceneObj = PtrAt(actor, NavRva::ACTOR_SCENEOBJ);
         if (!sceneObj || AlreadyListed(out, sceneObj)) continue;
 
-        // Enemy vs ally = the scene-kind nibble (the game's own faction test): kind==3 => ally,
-        // kind==5 => dead/removed (drop), else => enemy.
+        // Enemy vs ally = the scene-kind nibble: kind==3 => ally, kind==5 => dead/removed (drop),
+        // else => enemy.
+        //
+        // STRUCK (Session 86) -- "the game's own faction test". IT IS NOT, at least not on the field.
+        // The Giza Plains object dump reads kind=1 for Penelo (a party member) AND for all three
+        // enemies present, so this nibble cannot separate them; anything keyed on it alone would file
+        // the player's own party as Enemy. phyre_types.h:113 already flagged the constant as
+        // unverified. The thing that DOES discriminate is the BtlChr kind byte, which
+        // BattleState::FactionOf reads before it ever falls back to this nibble.
+        //
+        // LEFT AS-IS DELIBERATELY, not endorsed. The field path no longer depends on it -- the
+        // faction override in BuildLocked resolves every handle-table combatant through FactionOf --
+        // so what reaches here is the battle-only population, which has been correct in play. Fixing
+        // it blind would trade a working path for an unmeasured one. If a battle ever mis-files an
+        // ally, this is the line, and FactionOf is the replacement.
         uint8_t kindByte = 0;
         if (!SafeReadU8(sceneObj, NavRva::SCENEOBJ_KIND_OFF, &kindByte)) continue;
         const uint8_t kind = kindByte & NavRva::KIND_MASK;
@@ -200,6 +247,9 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     s_namelessAct = 0;
     s_poolOverlap = 0;
     s_poolOverlapNamed = 0;
+    s_poolParty  = 0;
+    s_poolFoe    = 0;
+    s_facLines.clear();
     s_filtered.clear();
     ResetNameStats();
     if (!PlayerState::IsFieldActive()) return 0;
@@ -333,9 +383,50 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             // which runs over the FINISHED list, so it is always false on a freshly built entity. The
             // word "Sign" -- which the tester authorised specifically -- could never once be spoken,
             // and every unnamed doorway said "Interactables" instead.
-            if (s_poolOverlap < 1024) {
-                for (void* p : s_poolObjs)
-                    if (p == obj) { ++s_poolOverlap; if (e.gameNamed) ++s_poolOverlapNamed; break; }
+            // ---- FACTION OVERRIDE: the ACTOR POOL owns combatants ------------------------------
+            //
+            // THE HANDLE-TABLE WALK WINS EVERY TIE, and that is the whole bug. A field enemy is a
+            // named character with a loaded model, so `named` admits it here; ClassifyByNameKey then
+            // returns NPC for anything `isCharacter`; and ScanCombatants -- the only pass that can
+            // tell friend from foe -- skips it as AlreadyListed. Enemy=0 on a map full of enemies.
+            //
+            // Session 84 struck the `present` (KIND+model) route for exactly this reason but left the
+            // older `named` route open, which is why the fix held on four enemy-free maps and failed
+            // on Giza Plains. Rather than reverse the ordering (which would re-break the things the
+            // handle table is genuinely better at -- the npcdic name, the interaction flags, the
+            // payload ids), keep the entry and let the pool correct the one field it owns.
+            void* poolActor = nullptr;
+            for (const PoolEntry& p : s_poolObjs)
+                if (p.sceneObj == obj) { poolActor = p.actor; break; }
+            if (poolActor) {
+                ++s_poolOverlap;
+                if (e.gameNamed) ++s_poolOverlapNamed;
+
+                const bool party = IsPartyMemberActor(poolActor);
+                const BattleState::Faction fac = BattleState::FactionOf(poolActor);
+
+                if (s_facLines.size() < 16) {
+                    char fl[224];
+                    snprintf(fl, sizeof(fl),
+                             "faction: [%u:%u] \"%s\" party=%d faction=%d -> %s",
+                             e.container, e.slot,
+                             e.gameNamed ? "named" : "(unnamed)", party ? 1 : 0,
+                             static_cast<int>(fac),
+                             party ? "DROPPED (own party)"
+                                   : (fac == BattleState::Faction::Foe ? "Enemy" : "kept as-is"));
+                    s_facLines.emplace_back(fl);
+                }
+
+                // The player's own party is not something to navigate to (tester's call). NoteFiltered
+                // is MANDATORY here: a party member is a live engine object, so its transform keeps
+                // refreshing `lastSeenMs` and the caller's grace window would carry it back forever
+                // while this pass logged the drop on every rescan -- the exact failure Session 83 hit.
+                if (party) { ++s_poolParty; NoteFiltered(obj); continue; }
+
+                // Only a POSITIVE foe verdict re-files anything. Guest/Ally/Neutral/Unknown keep the
+                // category they already have: this pass exists to stop enemies being called NPCs, not
+                // to re-adjudicate every character on the map.
+                if (fac == BattleState::Faction::Foe) { e.category = Category::Enemy; ++s_poolFoe; }
             }
             // KEPT, but the game gives us no words for it, so it will fall through to the category
             // word and speak as a bare "NPC" / "Interactables". The tester's model says this cannot
@@ -391,6 +482,9 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // unlabelled here is an object the game refused to name that is nonetheless offering a prompt.
     ApplyFallbackLabels(out);
     if (detail) LogObjectDump(out);
+    // Held back from the object loop above -- see s_facLines. If a party member ever lands anywhere
+    // other than DROPPED, or a townsperson reads faction=Foe, the answer is on these lines.
+    if (detail) for (const std::string& fl : s_facLines) Log::Write("NAV-DIAG", fl.c_str());
 
     // Combatants (allies + enemies) come from the BtlWork pool, not the handle table — the
     // handle-table filter drops them, so in a battle this is what makes them navigable.
@@ -434,18 +528,22 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     Log::Write("NAV", msg);
     if (s_charByName > 0 || s_poolKind5 > 0 || s_dropKind1 > 0 || s_dropKind5 > 0 ||
         s_dropOther > 0 || s_namelessAct > 0 || s_poolOverlap > 0 || OddSlotWins() > 0) {
-        char im[512];
+        // 768, not 512: the line already measured 507 characters in the field before this session
+        // added two more counters to it. snprintf truncates silently, and the counters at the END are
+        // the falsifiers -- losing them is how a diagnostic starts lying by omission.
+        char im[768];
         snprintf(im, sizeof(im),
                  "inclusion: nameless dropped: kind1=%d kind5=%d other=%d, of which %d carried a "
                  "PAYLOAD ID (must be 0 -- non-zero means a real gimmick was deleted) | "
                  "%d kept while nameless BUT INTERACTIVE (should be 0; each is dumped) | "
                  "%d character(s) admitted by NAME ONLY (no interaction flags) | "
-                 "%d handle-table object(s) also in the ACTOR POOL (%d of them named) | "
+                 "%d handle-table object(s) also in the ACTOR POOL (%d of them named), of which "
+                 "%d DROPPED as own party and %d re-filed NPC->Enemy by faction | "
                  "%d actor-pool entr(ies) skipped as KIND_DEAD(5), which debug.md records as NPC | "
                  "%d spoke the PERSONAL npcdic name, %d of them already introduced (%d newly revealed)",
                  s_dropKind1, s_dropKind5, s_dropOther, s_dropPayload,
                  s_namelessAct, s_charByName,
-                 s_poolOverlap, s_poolOverlapNamed, s_poolKind5,
+                 s_poolOverlap, s_poolOverlapNamed, s_poolParty, s_poolFoe, s_poolKind5,
                  OddSlotWins(), s_knownName, OddSlotWins() - s_knownName);
         Log::Write("NAV", im);
     }

@@ -5,6 +5,9 @@
 #include "core/hooks.h"
 #include "core/item_names.h"
 #include "core/mem_read.h"
+// The battle command menu's character: parent+0x2FE0 is a scene handle, and battle_state already
+// resolves handle -> actor -> name with pure memory reads (no game call).
+#include "battle/battle_state.h"
 #include "speech/speech.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
@@ -157,6 +160,42 @@ std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (c
 // stash the unresolved focus here and let the first successful draw replay it.
 void* g_bcmdPendingPanel = nullptr;
 int   g_bcmdPendingIndex = -1;
+
+// ---- WHOSE command menu is this? (Session 86) --------------------------------------------------
+// With 2+ party members, left/right moves the battle command window between characters, and the mod
+// said nothing -- the player heard "Attack" and had no idea who was about to do it.
+//
+// The controller is FUN_002778c0 (RVA 0x1578C0), the sole creator of the command panel and the only
+// thing that reads the pad directly. Its cases 0xa/0xb turn pad RIGHT (0x20) into +1 and LEFT (0x80)
+// into -1, gated on FUN_0035d4e0() -> *(int*)&DAT_022c8478 > 1 (i.e. "2 or more party members" --
+// the tester's own words, and the game's own test), stash it at ctrl+0x2DB6, then send THEMSELVES
+// message 0x23. Case 0x23 resolves the new character and writes it to parent+0x2FE0, which the
+// controller's own msg 0x2d hands back as "the current battle-menu character".
+//
+// THE ID AT +0x2FE0 IS A SCENE HANDLE -- established from the game's own comparison, not a probe.
+// FUN_0035bc50 builds the party record table and does:
+//     DAT_022c806c = thunk_FUN_003590d0();              // the LEADER SCENE HANDLE accessor
+//     if (*(int*)(record + 0x04) == DAT_022c806c) ...   // -> that slot is the leader
+// It compares record+0x04 against the leader handle directly, and FUN_0027c280 returns exactly that
+// field as the new character. So BattleState::ActorForHandle resolves it, and the name is a pure
+// memory read of actor+0x18 -- no game call, safe from any thread. Conf 0.99.
+constexpr uint32_t RVA_BCMD_CTRL   = 0x1578C0;  // FUN_002778c0(ctrl, msgStruct)
+constexpr uint32_t OFF_CTRL_PARENT = 0xD0;      // ctrl+0xD0   -> parent registry object
+constexpr uint32_t OFF_CUR_CHAR    = 0x2FE0;    // parent+0x2FE0 = current battle-menu char handle
+constexpr int      MSG_CTRL_BUILD  = 0x01;      // controller construct (the menu is coming up)
+constexpr int      MSG_CTRL_SWITCH = 0x23;      // "switch to the adjacent character", arg = +1/-1
+
+typedef uint64_t (*Pfn_BcmdCtrl)(void*, void*);
+Pfn_BcmdCtrl s_origBcmdCtrl = nullptr;
+
+void* g_bcmdCtrl = nullptr;          // the live controller, cached so the focus path can reach +0x2FE0
+// NOT a dedup -- a TRANSITION latch, in the sense CLAUDE.md carves out. `g_bcmdNeedName` is armed by
+// the controller's construct so the name is spoken once when the menu comes up, and `g_bcmdQueueNext`
+// makes the command announcement that follows QUEUE behind the name instead of interrupting it.
+// Neither suppresses an event; both exist so two announcements arrive in the order the tester asked
+// for: who is acting, then what is highlighted.
+bool g_bcmdNeedName  = false;
+bool g_bcmdQueueNext = false;
 
 // Entry-announce stash for the FIELD pane (FUN_00280de0) -- the exact analogue of g_bcmdPending*.
 // FUN_00244830 fires at the START of menu construction, so speaking the entered row there lands it in
@@ -458,14 +497,72 @@ void HookedStatusCursor(int slot) {
 // Resolve and speak the highlighted battle command. Returns FALSE when the name is not resolvable
 // yet -- on menu OPEN that is the normal case, not an error: the 0x8000 arrives before FUN_00276be0
 // has drawn any row, so nothing is cached to look up.
+// The character whose command window is currently up. Empty when it cannot be resolved -- the caller
+// then says nothing about it, which is the correct answer rather than a guess.
+std::wstring CurrentBattleCharName() {
+    void* ctrl = nullptr;
+    { std::lock_guard<std::mutex> lk(g_mutex); ctrl = g_bcmdCtrl; }
+    if (!ctrl) return std::wstring();
+    void* parent = MemRead::PtrAt(ctrl, OFF_CTRL_PARENT);
+    if (!parent) return std::wstring();
+    uint32_t handle = 0;
+    if (!MemRead::SafeReadU32(parent, OFF_CUR_CHAR, &handle) || handle == 0) return std::wstring();
+    return BattleState::NameForActor(
+        BattleState::ActorForHandle(static_cast<int32_t>(handle)));
+}
+
+// Announce who is acting, and make whatever speaks next queue behind it.
+void SpeakBattleCharName(const char* why) {
+    std::wstring nm = CurrentBattleCharName();
+    if (nm.empty()) return;                       // silence beats a guess at who is about to act
+    Log::WriteW("INGAME", why, nm);
+    Speech::Output(nm, /*interrupt=*/true);
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_bcmdQueueNext = true;
+}
+
 bool TrySpeakBattleCommand(void* panel, int index) {
     int cmdId = ReadBcmdCmdId(panel, index);
     if (cmdId < 0) return false;
     std::wstring text = BattleCommandName(panel, index, cmdId);   // resolves by list type; locks internally
     if (text.empty()) return false;
+
+    // THE MENU JUST BECAME ACTIVE -> say whose it is first. The tester asked for this explicitly:
+    // the command highlight is meaningless until you know which character is about to obey it.
+    bool needName;
+    { std::lock_guard<std::mutex> lk(g_mutex); needName = g_bcmdNeedName; g_bcmdNeedName = false; }
+    if (needName) SpeakBattleCharName("battle menu active, character:");
+
+    // Queue rather than interrupt when a name was just spoken, so the two land in order instead of
+    // the command cutting off the name the player needs to hear.
+    bool queue;
+    { std::lock_guard<std::mutex> lk(g_mutex); queue = g_bcmdQueueNext; g_bcmdQueueNext = false; }
+
     Log::WriteW("INGAME", "command:", reinterpret_cast<void*>(static_cast<uintptr_t>(cmdId)), text);
-    Speech::Output(text, /*interrupt=*/true);
+    if (queue) Speech::SpeakQueued(text);
+    else       Speech::Output(text, /*interrupt=*/true);
     return true;
+}
+
+// FUN_002778c0(ctrl, msgStruct): the battle command menu controller.
+// msgStruct: +0x00 u32 message id, +0x08 i64 arg0.
+uint64_t HookedBcmdCtrl(void* ctrl, void* msg) {
+    STALL_SCOPE("IngameMenuReader::HookedBcmdCtrl");
+    int msgId = -1;
+    if (ctrl && msg && MemRead::SafeReadInt(msg, &msgId)) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_bcmdCtrl = ctrl;
+        // Construct: arm the name announce for the first focus, so it is spoken as the menu appears
+        // rather than before it exists.
+        if (msgId == MSG_CTRL_BUILD) { g_bcmdNeedName = true; g_bcmdQueueNext = false; }
+    }
+
+    const uint64_t r = s_origBcmdCtrl ? s_origBcmdCtrl(ctrl, msg) : 0;
+
+    // AFTER the original: case 0x23 is where parent+0x2FE0 is written, so the new character only
+    // exists on the way out.
+    if (msgId == MSG_CTRL_SWITCH) SpeakBattleCharName("battle char switch:");
+    return r;
 }
 
 void SpeakBattleCommand(void* panel, int index) { TrySpeakBattleCommand(panel, index); }
@@ -478,18 +575,24 @@ bool Init() {
     bool ok = Hooks::InstallTyped(RVA_FIELD_PANE_WND, &HookedFieldPaneWnd, &s_origFieldPaneWnd);
     ok     &= Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
     ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
-    Log::Write("INGAME", ok ? "IngameMenuReader: field-pane show + battle command-draw + status-chooser hooks installed"
+    ok     &= Hooks::InstallTyped(RVA_BCMD_CTRL,     &HookedBcmdCtrl,    &s_origBcmdCtrl);
+    Log::Write("INGAME", ok ? "IngameMenuReader: field-pane show + battle command-draw + battle char "
+                              "switch + status-chooser hooks installed"
                             : "IngameMenuReader: a field/battle/status hook FAILED to install");
     return ok;
 }
 
 void Shutdown() {
+    Hooks::Uninstall(RVA_BCMD_CTRL);
     Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);
     Hooks::Uninstall(RVA_FIELD_PANE_WND);
     std::lock_guard<std::mutex> lk(g_mutex);
     g_bcmdPendingPanel = nullptr;
     g_bcmdPendingIndex = -1;
+    g_bcmdCtrl = nullptr;
+    g_bcmdNeedName = false;
+    g_bcmdQueueNext = false;
 }
 
 uint32_t RowChainOff(void* owner) {

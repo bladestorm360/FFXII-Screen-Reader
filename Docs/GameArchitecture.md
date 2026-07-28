@@ -2436,6 +2436,32 @@ adjacency IS the routing graph, and it is what the engine's own character mover 
 There is **no plane D**: the plane passes through vertex 0, and `FUN_00231890` evaluates height as
 `y = v0.y + ((v0.x - px)*A + (v0.z - pz)*C) / B`. Conf 1.00 (read directly).
 
+### VERTEX WINDING — and therefore portal left/right, for free (Session 86)
+
+**The triangle interior always lies to the RIGHT of each directed edge `v[e] -> v[e+1]`.** This is not
+an inference about the data; it is forced by the engine's own containment test, and it settles the
+funnel's portal orientation without any geometric test at all.
+
+`FUN_002324f0` (replicated as `MapQuery::PolyContainsXZDetail`) rejects a point on edge `v[i]->v[j]`
+when `crossY = ez*(px-vx[i]) - ex*(pz-vz[i])` is `<= -eps`. Expand the standard 2D cross product
+`TriArea2(a,b,c) = (b.x-a.x)(c.z-a.z) - (c.x-a.x)(b.z-a.z)` for `a=v[i]`, `b=v[j]`, `c=p` and the two
+are identical up to sign: `crossY == -TriArea2(v[i], v[j], p)`. So an interior point satisfies
+`TriArea2 <= 0` on all three directed edges — interior is on the `TriArea2 <= 0` side, i.e. the RIGHT.
+
+**Consequence for routing.** Crossing from a parent poly into its neighbour across edge `e` takes you
+from the right side of `v[e]->v[e+1]` to its left, so relative to the direction of travel:
+
+> **`left = v[e]`, `right = v[(e+1) % 3]`. Always.**
+
+`path_search.cpp` used to derive this per portal by asking which side of the centroid-to-centroid line
+`v[e]` fell on. That test only separates the two endpoints when the triangle pair forms a convex
+enough quad; on this mesh a single triangle is often an entire corridor, and obtuse/sliver pairs put
+**both** endpoints on the same side, returning an arbitrary answer. Conf 1.00 (arithmetic).
+
+**A global polarity flip cannot repair a per-portal error** — and a shortest-path tie-break actively
+*prefers* the corrupted result, because a funnel that accepts a bound on the wrong side cuts through
+the wall and is therefore shorter. See `debug.md`, "Funnel polarity".
+
 ### The mover — `FUN_002327d0`, conf 0.99
 
 Carries a CURRENT POLY INDEX across frames. When `FUN_002324f0` reports the position left the triangle
