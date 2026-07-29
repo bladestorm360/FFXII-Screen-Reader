@@ -2185,7 +2185,7 @@ clamped at 0. Two independent read paths (this, vs reading back `node+0x18`) **a
 `ACCESSORIES`, `MAGICKS . TECHNICKS`, `TECHNICKS` (stored ALL CAPS). `TextCapture` already hooks
 `FUN_002f9860`, so the cache serves the common path with no game call.
 
-**~~Empty categories do not occur~~ — STRUCK (Session 88, 2026-07-29).** The old claim was that the
+**~~Empty categories do not occur~~ — STRUCK (Session 89, 2026-07-29).** The old claim was that the
 `gateId` at `entry+6` filters them out before they are tabbed (every `[cat]` had n≥1) — that was a
 property of the SAMPLE, not of the game. **SHIELDS with no shield owned is tabbed, reachable, and
 empty**, measured in play on equip container `0x2BCF6400`.
@@ -2201,7 +2201,7 @@ claims that focus and stays silent so the generic painted-cell path cannot speak
 **Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
 `FUN_005655f0` hook is what covers it.
 
-### The SHOP's route into that refresh (Session 87, 2026-07-29) — LOG-CONFIRMED
+### The SHOP's route into that refresh (Session 88, 2026-07-29) — LOG-CONFIRMED
 
 `:2178` says "all three families (6 sites)" but never named the shop's route, which made the shop
 look uncovered and nearly bought a second, duplicate category reader. It is:

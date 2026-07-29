@@ -3585,7 +3585,54 @@ Note for anyone re-running that probe: `DAT_022c8064` printed as `131074` (`0x20
 **packed** field -- `FUN_0035bc50` writes it with `CONCAT62`/`CONCAT42`, so only the low 16 bits are
 the record count. The probe read it as a plain u32. Nothing depends on it.
 
-## Session 87 — 2026-07-29 — [menus] The shop category was never missing — it was being cut off
+## Session 87 — 2026-07-29 — [ui+speech] Phrasebook, notice board, in-dialogue choices, battle menu
+
+KEYWORDS: phrasebook Phrase::Get 12-locale notice board choice_reader in-dialogue choices 0x0E option
+block ControlLength telop battle menu help bar FUN_0028fcb0 gambits ON OFF BtlChr bit 2 enemy ability
+message 0x0E DefName Reloc pop-up prompt ownerChanged recycled window routing interaction cylinder
+
+**RECONSTRUCTED FROM COMMIT `6f619e3` (2026-07-29 05:58).** This session shipped without a log entry;
+the gap was found in Session 88 while checking the numbering. `CLAUDE.md` already referred to "Session
+87" for the phrasebook, which is what fixes the number here. The commit message is the record — this
+entry summarises it and adds nothing not stated there.
+
+**PHRASEBOOK** (new `src/speech/phrasebook.{h,cpp}`). The 12-locale dictionary `CLAUDE.md` always
+described now exists. ~100 mod-authored strings moved out of 21 files behind `Phrase::Get(Id)`:
+directions, combat outcome words and verbs, entity categories, nav status, gauge labels, mod status
+announces, the three baked-art title labels. English only; the other 11 columns are `nullptr` and fall
+back — no invented translations. A `static_assert` keeps table and enum in step. Glue, format
+specifiers, paths and game-supplied text deliberately stay put.
+
+**NOTICE BOARD + IN-DIALOGUE CHOICES** (new `src/ui/choice_reader.{h,cpp}`). Both surfaces were
+silent. Rows live in a `0x0E` option block inside the telop message, AFTER the question and column
+headers — `GameText::ControlLength(0x0E)` is −1, so `Decode` halts there and the mod only ever saw the
+question. Block layout is `FUN_003ffdf0`'s: count/flags header, then length-prefixed entries. A row is
+multi-column and both separators decode to nothing, so columns are split and rejoined. The trailing
+escape is the STATUS, a substitution indexed into an INLINE table at `window+0x1B8` — found via
+`FUN_002b32d0`'s `param_7`, which Ghidra does not render at the call site. **Two detectors, one
+speaker:** the 0x8000 dispatch drives the board's navigation, and a per-frame tick on `FUN_002a9980`
+is the only thing that sees an in-dialogue choice (it polls input directly and sends no message). They
+share a window, so the tick stands down while the dispatch is driving.
+
+**BATTLE MENU.** `o` now reads descriptions on every list including submenus: the battle help bar is
+the same window as the field one through a different wrapper (`FUN_0028fcb0` vs `FUN_00291d80`), and
+only the field wrapper was hooked. Gambits (cmdId `0x0D`) announces ON/OFF on focus and on toggle,
+read from `BtlChr+0x00` bit 2.
+
+**COMBAT.** Enemy abilities are action category 7 → message `0x0E`, which sat in the log-only tier, so
+enemy casts had never been announced. `AbilityName` re-pointed at `BattleState::DefName` instead of
+the `Reloc()`-dependent chain that made every line say "attacks". `Reloc()` now branches on the read
+succeeding rather than on the value, since 0 is a legitimate addend.
+
+**NAVIGATION.** Routing to a wall-mounted or elevated target no longer fails: an object with no polygon
+of its own (the notice board sits at y=2.0) bailed before the search ran. It now routes by the
+interaction cylinder, reusing the existing reachable-but-unstandable fallback.
+
+**POP-UPS.** The body prompt was gated on `ownerChanged`, an identity test — the game recycles pop-up
+window addresses, so a second "return to the title screen?" and the quit prompt after it went silent.
+Now armed by the game's own focus-change event.
+
+## Session 88 — 2026-07-29 — [menus] The shop category was never missing — it was being cut off
 
 KEYWORDS: shop category tab WEAPONS AMMUNITION LOOT interrupt queue Speech::Output g_queueNextItem
 ConsumeCategoryAnnounce FUN_005655f0 FUN_0056e410 FUN_0056ded0 FUN_0056e5d0 inaudible race two speakers
@@ -3640,15 +3687,19 @@ said the feature worked. The user said it did not. Both were right — the utter
 then cancelled. Read the log for the utterance before concluding a feature was never built, and when
 two readers speak on one surface, check who interrupts whom before adding a third.
 
-**Numbering note:** `CLAUDE.md` states the phrasebook was "BUILT in Session 87", but no Session 87
-entry exists in this file and 86 was the highest. This entry takes 87 per the grep-the-file rule; the
-phrasebook build remains unlogged and its reference in `CLAUDE.md` should be corrected to match
-whatever session actually did it.
+**Numbering note (RESOLVED — this entry was renumbered 87 → 88).** It originally took 87 by the
+grep-the-file rule, because 86 was the highest header present. That rule assumes every session gets an
+entry, and one had not: commit `6f619e3` (phrasebook, notice board, in-dialogue choices, battle menu,
+combat, navigation, pop-ups) shipped with no log entry at all. It is the very next commit after
+Session 86's `5bf0976`, and `CLAUDE.md` already called it "Session 87" — so 87 was its number, and
+this entry took it by mistake. `6f619e3` now has a reconstructed Session 87 entry above, this one is
+88, and the empty-category work is 89. **Lesson: grep the COMMITS as well as the log before taking
+the next number — an unlogged session is invisible to a grep of the log.**
 
 **Status: CONFIRMED IN PLAY** (tester, same day) — shop categories now speak on every tab switch,
 followed by the row.
 
-## Session 88 — 2026-07-29 — [menus] An EMPTY category spoke the previous one's row
+## Session 89 — 2026-07-29 — [menus] An EMPTY category spoke the previous one's row
 
 KEYWORDS: empty category SHIELDS no shield owned stale paint previous category Leather Cap helms
 IsEmptyCategory row array null +0xE0 FUN_0057cf20 FUN_005655f0 scroll count clamped generic painted
@@ -3690,7 +3741,7 @@ as S80's 48-id sample: a sample drawn from the range you already understand cann
 about the ones you do not.
 
 **Measured in passing:** `OnCategoryRefresh`'s container and `TryFocus`'s `owner` are the SAME
-pointer on the equip screen (`…2BCF6400` in both lines) — the party-side identity that S87 could not
+pointer on the equip screen (`…2BCF6400` in both lines) — the party-side identity that S88 could not
 confirm from any log then available.
 
 **Status: CONFIRMED IN PLAY** (tester, same day) — SHIELDS speaks its name and nothing else;

@@ -514,6 +514,14 @@ had to be repaired).
   is a single, global, monotonically increasing integer. **Never** a date-only header.
 - **Before appending:** grep the current file for the highest `## Session N` and use `N+1`.
   Never skip, reuse, or drop a number.
+- **ALSO check `git log` for an UNLOGGED session before taking that number.** The grep above
+  assumes every session left an entry, and one did not: `6f619e3` (phrasebook, notice board,
+  in-dialogue choices, battle menu) shipped with no entry at all, so a later session grepped the
+  log, saw 86 as the highest, and took 87 — a number that already belonged to `6f619e3`, as
+  `CLAUDE.md` itself said. **An unlogged session is invisible to a grep of the log.** Compare the
+  last logged entry against the commits after it; if a code commit sits between them with no
+  entry, it owns the next number and gets a reconstructed entry from its commit message (which is
+  the record). Repaired 2026-07-29: `6f619e3` = 87, shop-category = 88, empty-category = 89.
 - **No letter sub-sessions.** If work continues later the same day it still gets the next full
   integer (a repeated date is fine). Letter suffixes (e.g. `47b`) break the 50-count — do not
   use them.

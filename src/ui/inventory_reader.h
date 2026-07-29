@@ -34,7 +34,7 @@
 //
 // EMPTY CATEGORY (e.g. SHIELDS with no shield owned): the name is spoken and then NOTHING. Such a
 // category IS tabbed and IS reachable -- the older "empty categories do not occur" claim is STRUCK
-// (S88). The game frees the row array and stores null at +0xE0 (FUN_0057cf20:253-257), then CLAMPS
+// (S89). The game frees the row array and stores null at +0xE0 (FUN_0057cf20:253-257), then CLAMPS
 // the row count it gives the scroll widget from 0 to 1 (FUN_005655f0:49-52). The widget therefore
 // still reports a row at index 0, so this reader must CLAIM that focus and stay silent; returning
 // false would hand the cell to the generic painted-cell path, which reads whatever the painter last

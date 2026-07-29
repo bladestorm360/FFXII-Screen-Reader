@@ -888,7 +888,7 @@ reuse known-good solutions.
 
 **KEYWORDS: empty category SHIELDS spoke previous category row stale paint Leather Cap helm
 IsEmptyCategory row array null +0xE0 FUN_0057cf20 scroll count clamped 1 generic painted cell
-TryFocus claim silent STRUCK empty categories do not occur S88**
+TryFocus claim silent STRUCK empty categories do not occur S89**
 
 **An EMPTY category announced the PREVIOUS category's row.** SHIELDS (no shield owned) said
 `"SHIELDS"` then `"Leather Cap"` — a helm, not highlighted, not a shield. The log identified the
@@ -907,7 +907,7 @@ it has no way to know the cell is stale. **STRUCK by this:** "empty categories d
 
 **KEYWORDS: shop category tab silent not spoken WEAPONS AMMUNITION LOOT interrupted cut off mid-word
 two speakers race Speech::Output interrupt queue g_queueNextItem ConsumeCategoryAnnounce
-FUN_005655f0 FUN_0056e410 FUN_0056ded0 FUN_0056e5d0 inaudible S87**
+FUN_005655f0 FUN_0056e410 FUN_0056ded0 FUN_0056e5d0 inaudible S88**
 
 **Shop tab switches said nothing about the category — but the category was already being spoken.**
 The mod log showed it resolved, logged AND uttered (`[INV] category: "WEAPONS"` + `[SPEAK-OUT]

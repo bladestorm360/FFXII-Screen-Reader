@@ -107,7 +107,7 @@ bool ReadList(void* w, ListInfo* out) {
 // FUN_005655f0:42 stores null into +0xE0; then FUN_005655f0:49-52 CLAMPS the count it hands the
 // scroll widget from 0 to 1. So the widget still reports "one row at index 0", and the generic
 // painted-cell path happily reads that cell -- getting whatever the painter last drew there, which
-// is the PREVIOUS category's row. Measured: "SHIELDS" then "Leather Cap" (a helm), Session 88.
+// is the PREVIOUS category's row. Measured: "SHIELDS" then "Leather Cap" (a helm), Session 89.
 //
 // Same shape test ReadList uses, minus the row array it is diagnosing the absence of.
 bool IsEmptyCategory(void* w) {
