@@ -1,6 +1,6 @@
 #include "navigation/nav_commands.h"
 #include "navigation/entity_list.h"
-#include "ui/text_capture.h"
+#include "ui/mod_menu.h"
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
 #include "navigation/nav_types.h"
@@ -106,7 +106,10 @@ void OnNavKey(int vk) {
         case VK_OEM_4:      EntityList::CmdPrev();            break;  // [  previous object
         case VK_OEM_6:      EntityList::CmdNext();            break;  // ]  next object
         case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area
-        case VK_F4:         TextCapture::ToggleInterception(); break;  // F4 diagnostic A/B
+        // F4 speaks the new value; F8 opens/closes the menu that holds the same setting. Both route
+        // through ModMenu so there is exactly one place a value changes, persists and is announced.
+        case VK_F4:         ModMenu::CycleSetting(ModMenu::SettingId::CombatVerbosity); break;
+        case VK_F8:         ModMenu::Toggle();                break;  // F8 mod menu
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_F5:         EntityList::CmdToggleAvailability(); break; // F5 all <-> story-gated

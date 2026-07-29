@@ -88,8 +88,10 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * /: describe the selected object — name, direction, distance, and whether anything blocks the way.
 * \\: turn-by-turn directions to the selected object.
 * P: turn-by-turn directions to the target the game currently has selected.
+* F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
 * F6: give the selected object your own name, taken from the clipboard.
+* F8: open or close the mod menu.
 
 #### Naming things yourself (F6)
 
@@ -121,12 +123,26 @@ The Status screen reads as you move through it — no mod key. On the Attributes
 
 #### Combat log
 
-The mod keeps a running log of the last 100 battle events. Important ones are spoken as they happen — a command that failed, someone knocked out or revived, a level up, loot, gil, an attack being nullified, a command category disabled, a back attack. Routine chatter such as every action announcement and every small heal is logged but not spoken.
+The mod keeps a running log of the last 100 battle events. Important ones are spoken as they happen — a command that failed, someone knocked out or revived, a level up, loot, gil, an attack being nullified, a command category disabled, a back attack. Routine chatter such as every small heal is logged but not spoken, and so is the blow-by-blow damage — that is what browsing the log is for.
 
 * ,: Browse backward through the log.
 * .: Browse forward through the log.
 * Home: jump to the oldest event logged.
 * End: jump to the newest event.
+
+How much gets spoken aloud is up to you — see Combat verbosity below.
+
+#### The mod menu (F8)
+
+F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
+
+One setting so far:
+
+* Combat verbosity — Normal or Verbose. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose speaks everything Normal does, and also tells you when an enemy is readying an ability or beginning to cast a spell, which is your window to interrupt or move. Normal is the default.
+
+F4 switches Combat verbosity without opening the menu, so you can change it in the middle of a fight. Your choice is remembered between sessions.
+
+Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it: the game stays quiet when an enemy repeats the same ability on the same target, and when the caster is a long way off. That pacing is the game's own, not something the mod is hiding from you.
 
 #### Reading
 

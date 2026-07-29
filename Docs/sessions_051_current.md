@@ -3747,3 +3747,102 @@ confirm from any log then available.
 **Status: CONFIRMED IN PLAY** (tester, same day) — SHIELDS speaks its name and nothing else;
 populated categories still announce their first row on the switch. Log marker for the empty case:
 `[INV] empty category -- claimed and SILENT`.
+
+## Session 90 — 2026-07-29 — [combat] A charge verb on an execution line, and the mod's first settings menu
+
+KEYWORDS: combat log, DamageLine, readies, uses, action category, row+0x1E, action_data.bin, mod menu,
+F8, F4, combat verbosity, ShouldSpeakNow, 0x0D, 0x0E, FUN_00304850 repeat gate, FUN_00469af0,
+text_capture ToggleInterception removed, mod_settings.txt, phrasebook
+
+### The report
+
+From play: enemy abilities are logged now, but the line is wrong. `"Urstrix A readies Slap."` is right
+— that is the game's own sentence. `"Urstrix A readies Slap on Vaan. 14"` is not. Plus: make the
+enemy charge announce speakable, put it behind a mod-menu toggle, and build the mod menu.
+
+### 1. The verb — the announce vocabulary was mirrored into the execution line
+
+`CombatFormat::DamageLine` runs on the damage **applier** `FUN_003112f0`, after the hit lands. Its
+verb switch had been copied from `FUN_00469af0`, which is a **charge-phase** emitter — one caller,
+`FUN_00304850` at action start, and its three ids (`0x0D` begins casting / `0x0E` readies / `0x0F`
+uses) all describe an action about to happen. Categories 2/7/9 map to `0x0E`, so every landed technick
+and enemy ability was narrated as still winding up. `combat_system.md` §9.1.3a said to mirror the
+vocabulary in as many words; that sentence is now **STRUCK** in place.
+
+Two vocabularies now, kept apart: the game's charge sentence read verbatim, and our execution line
+`attacks` (cat 0 + unidentified) / `casts` (cat 1) / `uses` (cats 2, 3, 5, 6, 7, 9, 10).
+
+**The user's gating question — does the game have execute-time narrative text? NO.** `FUN_00469af0`
+has exactly one caller, fires once at action start, and picks its id purely by category. The only
+target-bearing messages (`0x27`-`0x2C`, `0x35`, `0x44`-`0x49`) are specific boss/technick effect
+lines. There is no general execute message, so synthesizing is correct — as it already was.
+
+### 2. The category table, settled offline at 0.99 — no probe
+
+`action_data.bin` is `32,612` bytes and `0x20 + 543*0x3C = 32612` **exactly**, which validates base,
+stride and count before reading a field. The `row+0x1E` histogram gives **24 technicks, 13 Espers, 18
+Quickenings** — three independent hard FFXII facts landing exactly. Full table in
+`GameArchitecture.md`. Spot-checks: `0x096` Attack → 0, `0x0A9` Steal → 2, `0x1ED` Megaflare → 7.
+
+This is the `feedback_extract_master_data` route: the shipped data answered it, so the archived
+probe's 0.9 became 0.99 with nothing running.
+
+### 3. The mod menu — F8 — and Combat verbosity — F4
+
+First surface in this project that belongs to the mod rather than the game. `src/ui/mod_menu.{h,cpp}`.
+Up/Down between settings, Left/Right to change, `o` for a description that changes with the value,
+`F8` to close. `F4` toggles the setting from anywhere; both routes go through one `CycleSetting` that
+owns the change, the write and the announce — two detectors, one emit point.
+
+Persistence is `%LOCALAPPDATA%\FFXII-Screen-Reader\mod_settings.txt`, the directory
+`entity_labels.cpp` already creates. **NOT `mod_config.ini`** — that belongs to the RVA byte-validator
+and writing settings there would mask validator failures. The stale "should end up in mod_config.ini"
+comment in `combat_format.cpp` is corrected.
+
+Combat verbosity: **Normal (default)** / Verbose. Verbose adds `0x0D`/`0x0E` to `ShouldSpeakNow` and
+**nothing else**. Damage lines stay log-only in both modes — they are appended `speakNow=false` and
+never reach `ShouldSpeakNow`. Wording throughout is the user's own, which is what makes it admissible
+under the phrasebook rule.
+
+⚠ Default Normal reverses S72's decision that `0x0D` is realtime. That was the user's explicit call.
+
+Arbitration rather than replacement: `StatusReader` and `MenuReader` already own the single
+MenuNav/Describe slots, so `input_tracker` gained two first-refusal slots that the mod menu registers
+and that decline while it is closed. Both existing paths are untouched.
+
+### 4. F4's old owner, ripped out
+
+`F4` was `TextCapture::ToggleInterception()` — a dev A/B diagnostic that disabled the painter callback
+swap. Turning it off **stops row text being captured**, so one stray F4 silently killed menu reading
+for a player who cannot see it happen. `InterceptionEnabled()` had zero callers; the flag had one read
+site. Gone, with its two phrasebook strings.
+
+### 5. Measured, then deliberately NOT acted on
+
+`FUN_00304850` calls the announce only when the action **or** target differs from the previous one, so
+an actor repeating one ability on one target announces **once**. Measured: Slap landed twice,
+announced once; 4 Tier-1 messages in a session against 8 damage events; `HookedSprintf calls=1`. This
+is a third suppressor beside the distance cull and the dedup ring, and the largest.
+
+I proposed a new hook on `FUN_0030f760` to announce mod-side and make Verbose fire every time. **The
+user rejected it, correctly:** the requested feature was "speak it as well as logging it", which is
+the existing `speakNow` mechanism that loot, defeat+EXP and low-HP already use — no new hook, no
+reconstruction, no probe. The measurement is recorded in `GameArchitecture.md` and `CLAUDE.md` as a
+property of the game's pacing, and the README says so in plain words rather than the mod pretending
+to a completeness it does not have. **Lesson: a real measurement is not automatically a work item.**
+
+### Files
+
+`combat_format.cpp` (verb switch + verbosity gate), `mod_menu.{h,cpp}` (new), `phrasebook.{h,cpp}`
+(+8 ids, −2), `input_tracker.{h,cpp}` (F8, two first-refusal slots), `nav_commands.cpp` (F4/F8),
+`text_capture.{h,cpp}` (rip-out), `dllmain.cpp`, `battle_state.h`, `CMakeLists.txt`.
+Docs: `GameArchitecture.md` (category table + repeat gate), `combat_system.md` (strike),
+`CLAUDE.md`, `Controls.md`, `README.md`, `debug.md`.
+
+**Status: CONFIRMED IN PLAY** (2026-07-29, same day). Verb, mod menu, `F4`/`F8` and the toggle all
+behave as intended.
+
+**One open item, accepted by the tester and logged in `debug.md`:** with the menu open the arrow keys
+also drive the camera, because the mod never swallows keys. That is the read-only rule working as
+designed, not a broken intercept — the three options and their costs are written up there, and option
+3 (mutating the DirectInput buffer) needs explicit permission before anyone reaches for it.

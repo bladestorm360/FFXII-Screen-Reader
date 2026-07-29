@@ -47,6 +47,10 @@ enum class Id {
     // -- Combat outcome words: sprites, no text in the binary (combat_format.cpp) -------------
     Parried, Blocked, Evaded, NoEffect, Nullified, Reflected, Absorbed, Avoided,
     // -- Combat verbs + line pieces (combat_format.cpp, combat_events.cpp) -------------------
+    // Two vocabularies, deliberately distinct. EXECUTION (DamageLine, off the damage applier):
+    // Attacks / Casts / Uses. CHARGE (the action-start announce): Casts / `Readies`. `Readies` is
+    // NOT an execution verb -- using it as one is what made a landed enemy ability say "Urstrix A
+    // readies Slap on Vaan. 14" (S90). Do not reintroduce it into DamageLine's switch.
     Attacks, Casts, Readies, Uses, OnJoiner, Heals,
     Defeated, DefeatedWithRewards, ExpSuffix, LpSuffix, BelowTwentyPercent,
 
@@ -83,8 +87,16 @@ enum class Id {
     // -- Gambits: battle draws an icon frame, the field screen an alpha dim; no text exists ----
     On, Off,
 
-    // -- The mod talking about itself (speech.cpp, text_capture.cpp, combat_log.cpp) ----------
-    SpeechOn, SpeechOff, MenuCaptureOn, MenuCaptureOff, CombatLogEmpty,
+    // -- The mod talking about itself (speech.cpp, combat_log.cpp) ---------------------------
+    // MenuCaptureOn/Off were removed in S90 with the F4 painter-interception A/B diagnostic they
+    // announced; that toggle disabled row-text capture, so an accidental press silently killed
+    // menu reading. F4 is now the combat-verbosity toggle.
+    SpeechOn, SpeechOff, CombatLogEmpty,
+
+    // -- Mod menu and its settings (mod_menu.cpp). Wording supplied by the user, S90 -----------
+    ModMenu, ModMenuClosed, SettingCombatVerbosity,
+    VerbosityNormal, VerbosityVerbose,
+    VerbosityDesc, VerbosityDescNormal, VerbosityDescVerbose,
 
     Count
 };

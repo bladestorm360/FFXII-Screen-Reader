@@ -123,9 +123,16 @@ void DiagnoseCommitment();
 // is not exclusively an ability id (a whole 0x4000+ AI-opcode band exists).
 std::wstring AbilityName(uint16_t actionId);
 
-// The action's announce category (row+0x1E), the byte FUN_00469af0 switches on to pick between
-// "begins casting" / "readies" / "uses". 0 when the id is not a real ability. Verified against the
-// shipped action_data.bin: 1 for every magick, 2 for every technick.
+// The action's category (row+0x1E) -- the byte FUN_00469af0 switches on to pick its charge announce,
+// and the byte combat_format.cpp switches on to pick the EXECUTION verb (the two are different
+// vocabularies; see DamageLine). 0 when the id is not a real ability, which is also the basic-Attack
+// value, so both land on "attacks" and a failed lookup degrades instead of lying.
+//
+// Resolved 0.99 offline against the shipped action_data.bin, all 543 rows -- full table in
+// GameArchitecture.md "Action category byte row+0x1E":
+//   0 basic Attack (1 row)  1 Magick (81)  2 Technick (24)  3 Item (51)  5 Esper summon (13)
+//   6 Quickening (18)  7 enemy ability (235)  8 enemy internal (16)  9 concurrence (26)
+//   10 Esper attack (16)  13/14/16/17 unidentified (6)  255 Reserve (56)
 uint8_t AbilityCategory(uint16_t actionId);
 
 // Battle status name for a status bit 0..31 (KO, Stone, Poison, Confuse, ...).

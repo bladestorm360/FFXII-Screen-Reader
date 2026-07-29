@@ -1,14 +1,17 @@
 #include "battle/combat_format.h"
 
 #include "speech/phrasebook.h"
+#include "ui/mod_menu.h"
 
 namespace CombatFormat {
 namespace {
 
 // ---------------------------------------------------------------------------------------------
 // Realtime policy, as a DATA TABLE keyed by message id (combat_system.md §9.1.4). Deliberately not
-// a chain of `if`s: this is a tuning knob the player will want to adjust in play, and it should end
-// up in mod_config.ini eventually.
+// a chain of `if`s: this is a tuning knob the player adjusts in play. The first knob is now real --
+// see ModMenu (F8 / F4) for the charge-announce pair. It did NOT go to mod_config.ini: that file
+// belongs to the RVA byte-validator and hand-editing it masks validator failures (CLAUDE.md,
+// CRITICAL PROJECT BLOCKER), so ModMenu keeps the mod's own store instead.
 //
 // The principle: interrupt for things you must ACT on or would otherwise never learn; log the rest.
 // The game's own `dedup` bit and cull-exempt style bit were both considered as importance proxies
@@ -44,21 +47,23 @@ bool ShouldSpeakNow(uint16_t id) {
     //
     // 0x0D is "begins casting", which FUN_00469af0 emits ONLY for action category 1 (magick).
     // 0x0E is "readies", which it emits for categories 2, 7 and 9 -- and ENEMY ABILITIES ARE
-    // CATEGORY 7. S72 enabled 0x0D alone, so enemy abilities have never once been announced; that
-    // single classification is the whole reason the tester never heard an enemy cast. S87 adds 0x0E.
-    // 0x0F "uses" (category 3) stays log-only: that is the routine-item tier.
+    // CATEGORY 7. 0x0F "uses" (category 3) stays log-only: that is the routine-item tier.
     //
-    // The volume is bounded by the GAME, not by us, three times over: the faction gate above, the
-    // ~24-unit distance cull in FUN_00469570, and the 10-slot dedup ring in FUN_0046ab10.
+    // PLAYER-CONTROLLED as of S90: this pair is what the mod menu's Combat verbosity setting turns
+    // on and off, and it defaults to Normal (OFF). Nothing else in this table is affected -- Verbose
+    // adds these two ids and nothing more, and damage lines stay log-only in both modes (they are
+    // appended with speakNow=false in combat_events.cpp and never consult this function).
     //
-    // KNOWN LIMIT, RE-AFFIRMED by the user in S87: both ids carry render style 0x01, which is NOT
-    // cull-exempt (FUN_00469570 short-circuits only when the style byte is >= 0x80), so the bus
-    // drops them beyond ~24 world units and a caster hanging far back announces nothing. That is
-    // CORRECT behaviour, not a defect: an enemy cannot meaningfully act on you from 24 units out
-    // either, and a sighted player would not see the cast. Fixing it would mean hooking the emitter
-    // FUN_00469af0 and synthesizing the sentence ourselves, which throws away the game's own
-    // verbatim wording in all 12 locales. Do NOT "fix" it by adding an emitter hook.
-    if (id == 0x0D || id == 0x0E) return true;
+    // Recorded so it is not re-diagnosed: the GAME emits these less often than the action occurs, so
+    // Verbose means "announce when the game announces", not "announce every cast". Three gates on
+    // the game's side drop them -- the repeat gate in FUN_00304850 (it calls the announce only when
+    // the action or the target differs from the previous one, so an enemy repeating one ability on
+    // one target announces once), the ~24-unit distance cull in FUN_00469570 (style 0x01 is not
+    // cull-exempt), and the 10-slot dedup ring in FUN_0046ab10. All three are the game's own
+    // pacing, and reading its sentence is what keeps the wording verbatim in all 12 locales.
+    // Do NOT "fix" any of them by hooking the emitter FUN_00469af0.
+    if (id == 0x0D || id == 0x0E)
+        return ModMenu::CombatVerbosity() == ModMenu::Verbosity::Verbose;
 
     // Everything else is log-only. Notably 0x0F (uses) is the routine-item tier, and 0x13-0x1B /
     // 0x1E-0x23 are routine restores and cures.
@@ -107,17 +112,28 @@ std::wstring DamageLine(const std::wstring& attacker,
                         uint8_t  outcome) {
     if (attacker.empty() && target.empty()) return std::wstring();
 
-    // Verb from the action record's category byte (row+0x1E), mirroring the game's own vocabulary
-    // in FUN_00469af0: 1 -> begins casting, 2/7/9 -> readies, 3 -> uses. A basic attack has no
-    // announce at all, so "attacks" is ours.
-    const wchar_t* verb = Phrase::Get(Phrase::Id::Attacks);
-    bool namesAction = false;
+    // EXECUTION vocabulary, from the action record's category byte (row+0x1E). Deliberately NOT the
+    // game's ANNOUNCE vocabulary: FUN_00469af0 is a CHARGE-phase emitter ("begins casting" /
+    // "readies" / "uses") called once from FUN_00304850 at action start, whereas DamageLine runs on
+    // the applier FUN_003112f0, AFTER the hit has landed. Mirroring the announce map here is what
+    // made a connected enemy ability say "Urstrix A readies Slap on Vaan. 14" (S90) -- charge-phase
+    // wording on an execution event. "readies" belongs to the charge announce and nowhere else.
+    //
+    // Categories verified 0.99 offline against the shipped action_data.bin (543 rows, stride 0x3C):
+    //   0 basic Attack (1 row)   1 Magick (81)   2 Technick (24)   3 Item (51)   5 Esper summon (13)
+    //   6 Quickening (18)   7 enemy ability (235)   8 enemy internal (16)
+    //   9 Quickening concurrence (26)   10 Esper attack (16)   255 Reserve placeholders (56)
+    // The 24 / 13 / 18 counts are exactly FFXII's technick, Esper and Quickening totals. See
+    // GameArchitecture.md "Action category byte (row+0x1E)".
+    const wchar_t* verb = Phrase::Get(Phrase::Id::Attacks);   // cat 0, and anything unidentified:
+    bool namesAction = false;                                 // no action name, just "X attacks Y"
     switch (actionCategory) {
-        case 1: verb = Phrase::Get(Phrase::Id::Casts);   namesAction = true; break;
-        case 2: case 7: case 9:
-                verb = Phrase::Get(Phrase::Id::Readies); namesAction = true; break;
-        case 3: verb = Phrase::Get(Phrase::Id::Uses);    namesAction = true; break;
-        default: break;
+        case 1:                                   // Magick
+            verb = Phrase::Get(Phrase::Id::Casts); namesAction = true; break;
+        case 2: case 3: case 5: case 6: case 7: case 9: case 10:
+            // Technick / Item / Esper summon / Quickening / enemy ability / concurrence / Esper attack
+            verb = Phrase::Get(Phrase::Id::Uses);  namesAction = true; break;
+        default: break;                           // 8 enemy-internal, 13/14/16/17, 255 Reserve
     }
 
     std::wstring s = attacker;

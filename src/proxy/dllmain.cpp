@@ -7,6 +7,7 @@
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
 #include "ui/message_reader.h"
+#include "ui/mod_menu.h"
 #include "navigation/navigation.h"
 #include "battle/combat_events.h"
 
@@ -65,6 +66,11 @@ static void DeferredInitImpl() {
     // positives). Best-effort; if it fails the reader will still work but
     // will speak on every cursor-field jitter, including animation.
     InputTracker::Init();
+
+    // The mod's own settings menu (F8) and the combat-verbosity toggle (F4). Deliberately OUTSIDE
+    // the Hooks::Init() block below: it installs no hooks, only input callbacks and a settings file,
+    // so it must keep working on a session where MinHook fails and the player needs to hear why.
+    ModMenu::Init();
 
     // Menu-reading pipeline. Order matters: hooks -> text_capture (installs
     // wrapper hooks) -> reader (subscribes to focus events; queries
@@ -129,6 +135,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
         }
         case DLL_PROCESS_DETACH: {
             CombatEvents::Shutdown();
+            ModMenu::Shutdown();
             Navigation::Shutdown();
             MessageReader::Shutdown();
             TitleReader::Shutdown();

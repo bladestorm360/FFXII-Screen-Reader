@@ -269,15 +269,29 @@ never built; do not reintroduce it, and do not "restore" an open key.
   pointers are only reliably readable there (the message buffer dies when its frame returns). The
   input thread only ever touches the finished `wstring`.
 - **Realtime vs log-only** is a **data table keyed by message id** in `combat_format.cpp`
-  (`ShouldSpeakNow`), not a chain of `if`s — it is a tuning knob headed for `mod_config.ini`.
-  Principle: interrupt for what you must ACT on or would otherwise never learn (failed command, KO
-  or revive, level up, loot/gil/steal/poach, nullified damage type, disabled command category, back
-  attack, **an enemy beginning to cast**); log the rest. **`0x0D` "begins casting" is REALTIME**
-  (Session 72) — a charging spell is still interruptible, so it is actionable. Only `0x0E`
-  "readies" / `0x0F` "uses" are the spam tier and log-only. Known limit, accepted deliberately:
-  `0x0D` is render style `0x01`, so the bus culls it beyond ~24 world units and a distant caster
-  announces nothing — do **not** "fix" that by hooking the emitter, which would cost the game's own
-  verbatim wording in all 12 locales.
+  (`ShouldSpeakNow`), not a chain of `if`s. Principle: interrupt for what you must ACT on or would
+  otherwise never learn (failed command, KO or revive, level up, loot/gil/steal/poach, nullified
+  damage type, disabled command category, back attack); log the rest. It is **NOT** headed for
+  `mod_config.ini` — that file belongs to the RVA byte-validator and hand-editing it masks validator
+  failures; the mod keeps its own store (`ModMenu`, `%LOCALAPPDATA%\FFXII-Screen-Reader\
+  mod_settings.txt`).
+- **The charge announces `0x0D`/`0x0E` are PLAYER-CONTROLLED** (Session 90) via the mod menu's
+  **Combat verbosity** setting — `F8` for the menu, `F4` for the toggle. **Normal (default) does not
+  speak them; Verbose does.** `0x0F` "uses" is the routine-item tier and stays log-only in both.
+  Nothing else in the table is affected, and **damage lines are log-only in both modes** — they are
+  appended with `speakNow=false` and never consult `ShouldSpeakNow` at all.
+- **Verbose is "announce when the game announces", not "announce every cast."** Three suppressors on
+  the GAME's side, all recorded in `GameArchitecture.md`: the **repeat gate** in `FUN_00304850` (an
+  actor repeating one action on one target announces ONCE — the largest of the three), the ~24-unit
+  distance cull in `FUN_00469570` (style `0x01` is not cull-exempt), and the 10-slot dedup ring in
+  `FUN_0046ab10`. Do **not** "fix" any of them by hooking the emitter `FUN_00469af0`: it would cost
+  the game's own verbatim wording in all 12 locales, and the emitter is exactly what the repeat gate
+  already declined to call.
+- **Two combat vocabularies, kept apart.** The game's CHARGE announce ("begins casting" / "readies" /
+  "uses") is read verbatim; the mod's EXECUTION line (`DamageLine`, on the applier) is its own —
+  `attacks` / `casts` / `uses`. Session 90 fixed a bug where the announce map was mirrored into the
+  execution line, so a landed enemy ability said "Urstrix A **readies** Slap on Vaan. 14".
+  **`Readies` is not an execution verb.**
 - **Enemy defeated + rewards are ONE line**, emitted from the death event `FUN_00312280`
   (`0x1F2280`), not from the damage applier: `"Dire Rat defeated. 34 EXP, 2 LP."` FFXII has no
   end-of-battle results screen and no text for EXP/LP (sprite digits only), so the sentence is

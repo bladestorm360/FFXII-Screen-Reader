@@ -69,12 +69,12 @@ void SetMenuPaintedCallback(MenuPaintedCallback cb);
 // Diagnostic: dump the framing ring + the per-owner item map to the log.
 void DumpRingToLog(const char* reason);
 
-// DIAGNOSTIC A/B (Shift+`). Turns off ONLY the painter callback swap -- the one place the mod
-// writes into a game structure -- while leaving every hook installed and every other reader
-// working. Row text stops being captured while it is off, which is the point: if the field menu
-// then opens instantly, the swap is what stalls it.
-// Returns the new state. Announces itself, so it is usable without sight.
-bool ToggleInterception();
-bool InterceptionEnabled();
+// (There was a ToggleInterception()/InterceptionEnabled() pair here, an A/B diagnostic on F4 that
+// turned off the painter callback swap to test whether that swap was what stalled menu opening.
+// REMOVED in S90: it had served its purpose, InterceptionEnabled() had no callers at all, and
+// leaving it on a bare function key was a hazard -- turning it off stops row text being captured,
+// so one stray F4 silently killed menu reading for a player who cannot see that it happened. F4 is
+// now the combat-verbosity toggle. Do not reintroduce a runtime switch for the swap; if the stall
+// question ever returns, answer it with a build, not a key the player can hit.)
 
 } // namespace TextCapture

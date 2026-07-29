@@ -51,6 +51,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/battle_target_reader.cpp
     src/ui/title_reader.cpp
     src/ui/message_reader.cpp
+    src/ui/mod_menu.cpp
     src/battle/battle_state.cpp
     src/battle/party_status.cpp
     src/battle/combat_log.cpp

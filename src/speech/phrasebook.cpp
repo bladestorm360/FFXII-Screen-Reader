@@ -71,8 +71,15 @@ const Row kTable[] = {
     EN(L"on"), EN(L"off"),
 
     // -- The mod talking about itself ---------------------------------------------------------
-    EN(L"Speech on"), EN(L"Speech off"),
-    EN(L"Menu text capture on"), EN(L"Menu text capture off"), EN(L"Combat log empty"),
+    EN(L"Speech on"), EN(L"Speech off"), EN(L"Combat log empty"),
+
+    // -- Mod menu and its settings. The three sentences are the TESTER'S OWN WORDS (S90), which is
+    //    what makes them admissible here; do not reword them without asking.
+    EN(L"Mod menu"), EN(L"Mod menu closed"), EN(L"Combat verbosity"),
+    EN(L"Normal"), EN(L"Verbose"),
+    EN(L"Determine what is spoken aloud from the combat log."),
+    EN(L"Normal speaks enemy defeat and EXP, party member low HP and KO, loot drops."),
+    EN(L"Verbose speaks everything from normal, as well as enemies readying abilities or casting spells."),
 };
 
 #undef EN

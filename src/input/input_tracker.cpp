@@ -42,6 +42,10 @@ InputTracker::HotkeyCallback g_lpCb = nullptr;
 InputTracker::HotkeyCallback g_gilCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
 InputTracker::MenuNavCallback g_menuNavCb = nullptr;
+// First refusal on arrows/Home/End and on `o` — see the header. Both decline while the mod menu is
+// closed, which is almost always, so the normal paths are untouched.
+InputTracker::MenuNavCallback g_modMenuNavCb = nullptr;
+InputTracker::DescribeInterceptCallback g_modMenuDescribeCb = nullptr;
 
 // Navigation keys (edge-detected independently so auto-repeat is suppressed).
 constexpr DWORD kNavVks[4] = { VK_OEM_5 /*\*/, VK_OEM_4 /*[*/, VK_OEM_6 /*]*/, VK_OEM_3 /*`*/ };
@@ -81,18 +85,21 @@ constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0x
 // gets them. They only DO anything in the mod while a status buffer is active; elsewhere the mod
 // ignores them. DIK extended-key scan codes (dinput.h): Up 0xC8, Down 0xD0, Left 0xCB, Right 0xCD.
 constexpr int DIK_UP = 0xC8, DIK_DOWN = 0xD0, DIK_LEFT = 0xCB, DIK_RIGHT = 0xCD;
-// F4: diagnostic A/B toggle for the menu-text painter interception. The game binds F1/F2/F3 to game
-// speed and nothing to F4 (Docs/Controls.md), and the struck F4 modal combat-log design was never
-// built, so the key is genuinely free. Plain key, no chord -- see the Shift note above.
-// F5: nav availability filter (All <-> Story-gated). Same reasoning as F4 -- the game binds only
-// F1/F2/F3, so F5 is free.
+// The game binds F1/F2/F3 to Game Speed and NOTHING above that (Docs/Controls.md), so F4 upward are
+// all ours. Plain keys, no chords -- see the Shift note above.
+// F4: combat verbosity, Normal <-> Verbose. REPURPOSED in S90 from the painter-interception A/B
+// diagnostic, which disabled row-text capture and so silently killed menu reading if pressed by
+// accident -- an unacceptable thing to leave on a bare function key for a blind player.
+// F5: nav availability filter (All <-> Story-gated).
 // F6: label the focused entity from the clipboard. Same reasoning as F4/F5 -- the game binds only
 // F1/F2/F3. The handler, the clipboard read, the persistence and the apply-before-numbering pass were
 // all built in Session 65 and BOTH Controls.md and README.md documented the key, but `DIK_F6` was
 // never defined and no edge was ever registered, so `case VK_F6:` has been dead code ever since and
 // pressing F6 did precisely nothing. Confirmed in play by the tester, and again by the label store:
 // 127 records, zero of them named.
-constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40;
+// F7 is deliberately ABSENT: it is reserved for autodetail and must not be bound to anything else.
+// F8: open/close the mod's own settings menu.
+constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F8 = 0x42;
 // The game's Confirm (Docs/Controls.md: Space / Enter / Left Mouse). Observed only -- the mod is
 // read-only on input and never swallows these, so the game's own text box advances exactly as it
 // always did; we just learn that it did. Mouse confirm is not observed (no hook for it), so a
@@ -103,7 +110,7 @@ constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[21]{};   // 0-15 + 20 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[22]{};   // 0-15 + 20-21 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
@@ -203,8 +210,13 @@ DWORD WINAPI InputThread(LPVOID) {
     BOOL r;
     while ((r = GetMessageW(&m, nullptr, 0, 0)) > 0) {
         if (m.message == WM_DESCRIBE) {
-            InputTracker::HotkeyCallback cb = g_describeCb;
-            if (cb) cb();
+            // Mod menu first: while it is open, `o` describes the focused SETTING. It declines when
+            // closed, so the menu reader's item-description handler is reached exactly as before.
+            InputTracker::DescribeInterceptCallback mcb = g_modMenuDescribeCb;
+            if (!(mcb && mcb())) {
+                InputTracker::HotkeyCallback cb = g_describeCb;
+                if (cb) cb();
+            }
         } else if (m.message == WM_REREAD) {
             InputTracker::HotkeyCallback cb = g_rereadCb;
             if (cb) cb();
@@ -219,8 +231,12 @@ DWORD WINAPI InputThread(LPVOID) {
             // Home/End (lParam != 0) fall through to the combat-log nav path when it declines.
             const int vk = static_cast<int>(m.wParam);
             bool consumed = false;
+            // The mod's own menu first: while it is open these keys are its, and it declines
+            // otherwise so the status buffer keeps them the rest of the time.
+            InputTracker::MenuNavCallback mcb = g_modMenuNavCb;
+            if (mcb) consumed = mcb(vk);
             InputTracker::MenuNavCallback cb = g_menuNavCb;
-            if (cb) consumed = cb(vk);
+            if (!consumed && cb) consumed = cb(vk);
             if (!consumed && m.lParam != 0) {
                 InputTracker::NavKeyCallback ncb = g_navKeyCb;
                 if (ncb) ncb(vk);
@@ -296,6 +312,8 @@ void SetConfirmCallback(HotkeyCallback cb) { g_confirmCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
+void SetModMenuNavCallback(MenuNavCallback cb) { g_modMenuNavCb = cb; }
+void SetModMenuDescribeCallback(DescribeInterceptCallback cb) { g_modMenuDescribeCb = cb; }
 
 void FeedDInputKeyboard(const unsigned char* dik) {
     if (!dik || !g_threadId) return;
@@ -335,9 +353,10 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true);  // [  prev object
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true);  // `  rescan
-    DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 text-capture A/B
+    DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 combat verbosity
     DInputEdge(VK_F5,         g_extraDown[15],(dik[DIK_F5]         & 0x80) != 0, true);  // F5 all/story-gated
     DInputEdge(VK_F6,         g_extraDown[20],(dik[DIK_F6]         & 0x80) != 0, true);  // F6 label from clipboard
+    DInputEdge(VK_F8,         g_extraDown[21],(dik[DIK_F8]         & 0x80) != 0, true);  // F8 mod menu
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

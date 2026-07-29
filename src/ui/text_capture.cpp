@@ -3,8 +3,6 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
-#include "speech/speech.h"
-#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <array>
@@ -108,7 +106,6 @@ uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is s
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
 bool g_initialized = false;
-std::atomic<bool> g_interceptEnabled{true};   // Shift+` A/B; see TextCapture::ToggleInterception
 
 std::wstring JoinFields(const std::vector<std::wstring>& fields) {
     std::wstring out;
@@ -321,8 +318,7 @@ void HookedPainter(void* param_1, int64_t param_2, void* subwidget) {
     StallProbe::GapTick("anchor:painter", /*gapWarnMs=*/80.0);
     void* owner = nullptr; void** slot = nullptr; void* realCb = nullptr;
     bool intercept = false;
-    if (g_interceptEnabled.load(std::memory_order_relaxed) &&
-        subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
+    if (subwidget && ReadSubwidget(subwidget, &owner, &slot, &realCb) && realCb) {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_intercepting) {
             g_intercepting = true;
@@ -428,17 +424,6 @@ void ProvideHelpText(const std::wstring& text) {
 }
 
 void SetMenuPaintedCallback(MenuPaintedCallback cb) { g_paintedCb = cb; }
-
-bool InterceptionEnabled() { return g_interceptEnabled.load(std::memory_order_relaxed); }
-
-bool ToggleInterception() {
-    const bool on = !g_interceptEnabled.load(std::memory_order_relaxed);
-    g_interceptEnabled.store(on, std::memory_order_relaxed);
-    Log::Write("TEXT", on ? "painter interception ENABLED (diagnostic toggle)"
-                          : "painter interception DISABLED (diagnostic toggle) -- row text will not be captured");
-    Speech::Output(Phrase::Get(on ? Phrase::Id::MenuCaptureOn : Phrase::Id::MenuCaptureOff), true);
-    return on;
-}
 
 // SNAPSHOT UNDER THE LOCK, LOG OUTSIDE IT. This used to hold g_mutex across ~257 Log::Write calls
 // -- and g_mutex is the lock the game's own menu paint needs on every row (CellWrapper) and every

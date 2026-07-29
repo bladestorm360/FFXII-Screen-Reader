@@ -1265,10 +1265,26 @@ nothing when Vaan acts.
   which shows the same idiom with the argument intact). Probe P-ANN confirms.
 
 ⇒ **The attack LINE is still Tier 2, for a simpler reason than the gate: no "attacks" message exists in
-the table at all, and no announce carries a target.** We synthesize `"<attacker> <verb> <target>"`,
-mirroring the game's own category→verb vocabulary (1 = casts, 2/7/9 = readies, 3 = attacks/uses) so our
-wording matches the game's when both appear. Names still come from the game
-(`FUN_0035d330(0x14, actionId)` for the action, the actor pool for the combatants).
+the table at all, and no announce carries a target.** We synthesize `"<attacker> <verb> <target>"`.
+Names still come from the game (`FUN_0035d330(0x14, actionId)` for the action, the actor pool for the
+combatants).
+
+> ~~mirroring the game's own category→verb vocabulary (1 = casts, 2/7/9 = readies, 3 = attacks/uses) so
+> our wording matches the game's when both appear~~ — **STRUCK, Session 90.** This sentence shipped the
+> bug. `FUN_00469af0` is a **CHARGE-phase** emitter: its single caller is `FUN_00304850` at action
+> start, and its three ids all describe an action that is *about to* happen. `DamageLine` runs on the
+> **applier** `FUN_003112f0`, after the hit has landed. Mirroring the announce vocabulary there put
+> charge-phase wording on an execution event, and a connected enemy ability was narrated
+> `"Urstrix A readies Slap on Vaan. 14"` — reported from play.
+>
+> **The two vocabularies are separate and must stay separate:**
+>
+> | | verb | where |
+> |---|---|---|
+> | **Charge** (the game's own sentence, read verbatim) | begins casting / readies / uses | ids `0x0D`/`0x0E`/`0x0F` |
+> | **Execution** (ours, `combat_format.cpp`) | attacks (cat 0 + unidentified) / casts (cat 1) / **uses** (cats 2, 3, 5, 6, 7, 9, 10) | `DamageLine` |
+>
+> "readies" is not an execution verb. Do not reintroduce it into `DamageLine`'s switch.
 
 **Does the game hand us finished text, or just templates?** Finished text — this is already established
 and does not need a discovery probe. The chain is `FUN_005369c0` (RVA `0x4169C0`, binds the args) →

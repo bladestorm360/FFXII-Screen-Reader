@@ -3162,3 +3162,88 @@ other half.** `NavTrace` no longer latches the seams.
 `EntityScan::CachedSigns` (`exit_scan.cpp`) has the same latch shape against the `+0x70` field-sign
 table. It feeds **door naming only**, not transitions, and there is no evidence it misfires. Recorded
 here so it is greppable if door names ever come back wrong after a transition.
+
+## SOLVED — a CHARGE verb on an EXECUTION line (Session 90, 2026-07-29)
+
+### Symptom
+
+Enemy abilities reached the combat log, and the game's own announce was correct
+(`"Urstrix A readies Slap."`), but the mod's own line read `"Urstrix A readies Slap on Vaan. 14"` —
+an ability that had already connected, narrated as if still winding up. Party side too:
+`"Vaan readies Steal on Urstrix A"`.
+
+### Cause
+
+`CombatFormat::DamageLine` fires off the damage applier `FUN_003112f0`, i.e. after the hit. Its verb
+switch had been copied from `FUN_00469af0`, the **charge-phase** announce emitter — single caller,
+`FUN_00304850` at action start, ids chosen purely by `row+0x1E`. Categories 2/7/9 → `0x0E` "readies",
+so every technick and enemy ability got charge wording at execution time. `combat_system.md` §9.1.3a
+explicitly instructed the mirroring; that sentence is now struck in place.
+
+### Fix
+
+Two separate vocabularies. Charge stays the game's, read verbatim. Execution is ours:
+`attacks` (cat 0 and anything unidentified) / `casts` (cat 1) / `uses` (cats 2, 3, 5, 6, 7, 9, 10).
+`Phrase::Id::Readies` is kept but is no longer an execution verb.
+
+### The general lesson
+
+**A verb encodes WHEN, not just WHAT.** Two functions can switch on the same byte and still need
+different words, because they sit at different points in the action's life. Before reusing a mapping,
+ask what phase the function that owns it runs in.
+
+## Tried & Failed — proposing a new hook for a feature the existing mechanism already covers
+
+Having measured that `FUN_00304850` suppresses the announce on repeat (an actor repeating one ability
+on one target announces once), I proposed hooking the action-start writer `FUN_0030f760` so the mod
+could announce every cast itself — with a Frida probe first, since that function sits at 0.94.
+
+**The user rejected it, and was right.** The ask was "speak it as well as logging it". That is
+`speakNow` in `CombatLog::Append`, the same one-line mechanism loot, defeat+EXP and low-HP already
+use. No new hook, no reconstruction, no probe, no 0.98 promotion needed.
+
+The measurement was real; the work item was invented. **A true finding about the engine is not
+automatically a thing to build.** Check whether the requested behaviour is already reachable through
+a mechanism the codebase has before escalating to a new hook — especially when the escalation drags
+in a probe, a confidence promotion and a phase gate. Recorded because the reasoning looked rigorous
+the whole way down and was still pointed at the wrong question.
+
+## SOLVED — F4 could silently kill menu reading (Session 90, 2026-07-29)
+
+`F4` was bound to `TextCapture::ToggleInterception()`, a developer A/B that disabled the painter
+callback swap. Disabling it **stops list-row text being captured**, so one accidental press left menus
+silent with no announcement and no way for a blind player to know what had happened or undo it.
+Removed entirely (`InterceptionEnabled()` had zero callers; the flag had one read site). `F4` is now
+the combat-verbosity toggle. **Do not put a capability-destroying diagnostic on a bare function key.**
+
+## OPEN — the mod menu's arrow keys also reach the game (Session 90, 2026-07-29)
+
+**Confirmed in play:** with the mod menu (`F8`) open, pressing Up/Down/Left/Right navigates the menu
+**and** moves the camera/character, because the game receives the same keypress. Accepted for now by
+the tester; `F4` is the workaround (it toggles Combat verbosity with no arrow keys involved).
+
+### This is NOT a broken intercept — there is no intercept to fix
+
+Read this before "fixing" it. The mod is **strictly read-only on input** (`CLAUDE.md`): the
+DirectInput buffer arrives as `const`, nothing is ever swallowed, injected or rewritten. The mod
+observes keys; it has never consumed one. `MenuNavCallback`'s `bool` return means only "a mod-side
+consumer handled this", which suppresses the mod's *own* fallback dispatch — it has never had any
+effect on what the game sees, and was never intended to. The status virtual buffer has behaved this
+way since Session 71.
+
+So the options are all real costs, not oversights:
+
+1. **Leave it.** Open the menu while standing still, or use `F4`. Zero risk. Current state.
+2. **Rebind the menu to keys the game does not use.** Cheapest real fix. The game binds F1/F2/F3 and
+   nothing else in the F-row, so `F9`-`F12` (or a second tap of `F8` to step) could drive the menu
+   with no passthrough at all. **`F7` is reserved for autodetail — do not take it.** Costs the
+   familiar arrow-key idiom, and the status buffer would still use arrows, so two surfaces would
+   navigate differently.
+3. **Actually swallow the keys.** Requires hooking `IDirectInputDevice8::GetDeviceState` to *mutate*
+   the buffer before the game reads it. This is a **category change** — the mod would be altering
+   what the game receives — and per `CLAUDE.md` it needs **explicit user permission and a design
+   discussion first**. It also puts a mod-owned write on the game's input hot path, and a stuck flag
+   would mean keys silently dying with no way for a blind player to diagnose it.
+
+**Do not implement option 3 without asking.** If this gets picked up, option 2 is the one to price
+first. Related: `Docs/Controls.md` "Mod menu (F8)", `feedback_check_controls_md_before_input_diag`.

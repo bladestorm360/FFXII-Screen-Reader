@@ -100,9 +100,11 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `o` | Describe / read focused tooltip | free |
 | `t` | Re-read last spoken line | free |
 | `\` | Nav: turn-by-turn route to current selection | free |
-| `F4` | **Diagnostic:** toggle menu-text capture (painter interception) on/off | free — game binds F1/F2/F3 only |
+| `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
+| `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key | reserved |
+| `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
 | `Space` / `Enter` | *(observed only)* advances the spoken dialogue page with the game's own Confirm | the game's Confirm — never swallowed or injected |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
@@ -168,7 +170,35 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > **The arrow keys are safe to claim here:** the game binds no arrow-key function on this screen
 > (user-confirmed), and the mod cannot swallow keys anyway. Character switching is L1/R1, untouched.
 
+### Mod menu (`F8`) — the mod's own settings
+
+> `F8` opens and closes it. `Up`/`Down` move between settings, `Left`/`Right` change the focused
+> setting, and `o` reads its description — the description changes with the value, so it always
+> describes what the setting is doing right now. Closing speaks "Mod menu closed".
+>
+> **Settings it holds:**
+>
+> | Setting | Values | What it does |
+> |---|---|---|
+> | Combat verbosity | **Normal** (default) / Verbose | What the combat log speaks aloud on top of what it always logs. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose adds enemies readying abilities and beginning to cast. **Damage lines are log-only in both modes** — they have always been read back with `,` / `.` rather than spoken as they happen. |
+>
+> `F4` toggles Combat verbosity from anywhere without opening the menu, so it is usable mid-fight.
+> Both routes change the same stored value and speak the same confirmation.
+>
+> Settings persist to `%LOCALAPPDATA%\FFXII-Screen-Reader\mod_settings.txt`. The game folder is never
+> written to. If `%LOCALAPPDATA%` is unavailable the menu still works; the choice just resets on
+> restart.
+>
+> ⚠ **The menu does not swallow keys.** The mod is read-only on input, so while the menu is open the
+> arrow keys still reach the game and will move your character. Same constraint the status buffer has
+> always had. Open it while standing still, or use `F4`, which needs no arrow keys at all.
+>
+> Verbose means "announce when the game announces". The game itself stays quiet when an enemy repeats
+> the same ability on the same target, and when the caster is more than roughly 24 units away — that
+> pacing is the game's, not the mod's.
+
 > **The combat log is NOT modal (decided Session 48).** ~~`F4` to open / `Esc` to close~~ is **STRUCK**
+> (and `F4` now means combat verbosity — see the mod menu above; that struck design was never built)
 > — there is no overlay to open, no `WH_KEYBOARD_LL` modal intercept, and the game is never paused.
 > The four keys above read a 100-entry continuous FIFO on demand. See `Docs/combat_system.md` §9.
 >

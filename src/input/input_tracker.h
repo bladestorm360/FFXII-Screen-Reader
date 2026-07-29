@@ -61,6 +61,17 @@ void SetNavKeyCallback(NavKeyCallback cb);
 typedef bool (*MenuNavCallback)(int vk);
 void SetMenuNavCallback(MenuNavCallback cb);
 
+// The mod's own menu (F8) gets FIRST REFUSAL on the keys above and on `o`, because while it is open
+// it owns them; every other consumer is offered the key only after the mod menu declines. Two
+// separate slots rather than chaining through StatusReader/MenuReader: those two already own the
+// single MenuNav/Describe slots, and arbitrating here keeps both paths intact instead of one
+// displacing the other (CLAUDE.md: keep both and arbitrate, never collapse). ModMenu is the only
+// registrant; both callbacks return true only while the menu is open, so with it closed every key
+// behaves exactly as it did before.
+void SetModMenuNavCallback(MenuNavCallback cb);
+typedef bool (*DescribeInterceptCallback)();
+void SetModMenuDescribeCallback(DescribeInterceptCallback cb);
+
 // Fed by the dinput8 proxy each frame with the game's own 256-byte DirectInput
 // keyboard state (DIK scan-code buffer, bit 0x80 = down). This is the primary key
 // path — the game acquires the keyboard exclusively, starving OS-level hooks, so we

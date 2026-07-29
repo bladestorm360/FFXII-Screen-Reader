@@ -3095,3 +3095,63 @@ field the dump lacked, and its absence is why nineteen bare `NPC n` entries on R
 told apart from real story NPCs without a `'` dump that had not been taken. `flags` is mode state and
 `avail` folds four tests together; `en` is the engine's own single "has the script switched this object
 on" bit, set by the dedicated setter `FUN_0026ba60` from map script.
+
+## Action category byte `row+0x1E` — the full table (Session 90, 0.99)
+
+Master data: `action_data.bin`, runtime header `DAT_02ebf138` (RVA `0x2D9F138`). Row layout:
+`row = FUN_0020e600(*(u32*)(hdr+0x0C)) + actionId * *(u16*)(hdr+0x08)`; `row+0x34` u16 = name index,
+`row+0x1E` u8 = **action category**. Read by `BattleState::AbilityCategory`.
+
+Resolved OFFLINE against the shipped asset — no probe. The file is `32,612` bytes and
+`0x20 + 543*0x3C = 32612` **exactly**, which validates base, stride and count before any field is
+read. Histogram of `row+0x1E` across all 543 rows:
+
+| cat | rows | meaning | cross-check |
+|-----|------|---------|-------------|
+| 0 | 1 | basic Attack | exactly one Attack row exists |
+| 1 | 81 | Magick | |
+| 2 | 24 | Technick | **FFXII has exactly 24 technicks** |
+| 3 | 51 | Item | |
+| 5 | 13 | Esper summon | **FFXII has exactly 13 Espers** |
+| 6 | 18 | Quickening | **6 characters x 3 each** |
+| 7 | 235 | Enemy ability | |
+| 8 | 16 | enemy internal | |
+| 9 | 26 | Quickening concurrence | |
+| 10 | 16 | Esper attack | |
+| 13, 14, 16, 17 | 6 total | unidentified — left at default by the mod | |
+| 255 | 56 | Reserve placeholder rows | matches the `row+0x00 = 4000` Reserve family |
+
+Spot-checks: `0x000` Cure → 1, `0x00B` Curaja → 1, `0x096` Attack → **0**, `0x0A9` Steal → **2**,
+`0x1ED` Megaflare → **7**. `nameIdx` equals the action id on every row sampled.
+
+The 24 / 13 / 18 counts are three independent hard facts about FFXII landing exactly, which is what
+carries this from the archived probe's 0.9 to 0.99. Supersedes the partial note in `battle_state.h`
+("1 for every magick, 2 for every technick").
+
+## The announce is SUPPRESSED ON REPEAT — `FUN_00304850` (Session 90, 0.97)
+
+`FUN_00469af0` (the `0x0D`/`0x0E`/`0x0F` charge announce) has **exactly one caller**, and that caller
+guards it:
+
+```c
+if ( param_1[0xed] == 0                                  // no repeat latch
+  || *(short*)(actor+0x714) != *(short*)(actor+0x744)    // OR action differs from the previous one
+  || param_1[0xe2] != param_1[0xe8] )                    // OR target differs
+    FUN_00469af0(actionId, actor+0x698 /*BtlChr*/, ...);
+```
+
+`+0x714` is the ACTIVE action id, `+0x744` the PREVIOUS one. **An actor repeating the same action on
+the same target announces once and then never again.** Measured in play: an Urstrix's Slap landed
+twice and announced once; a whole session produced 4 Tier-1 messages against 8 damage events, with
+`HookedSprintf calls=1` in the PERF block.
+
+This is a **third** suppressor, alongside the two already recorded — the `~24`-unit distance cull in
+`FUN_00469570` (ids `0x0D`/`0x0E` carry render style `0x01`, which is not cull-exempt) and the
+10-slot dedup ring in `FUN_0046ab10`. It is also the largest. Corroborated independently by
+`combat_re_2026_07_20_battle_state.md:300`, which already said the emitter "self-dedupes, so it is
+*not* a complete log".
+
+**Consequence for the mod:** reading the game's sentence is correct and keeps the wording verbatim in
+all 12 locales, but "the mod speaks every enemy cast" is not achievable through the message bus. The
+announce fires when the game decides to announce. Do not attempt to compensate by hooking
+`FUN_00469af0` — the emitter is precisely what the gate above declined to call.
