@@ -1,5 +1,9 @@
 # Machine-specific files (each contributor keeps their own)
-CLAUDE.md
+# NOTE: CLAUDE.md is deliberately NOT here. It is the project's house rules, not a
+# machine-specific file -- it contains no local paths -- and it is tracked so the rules
+# live in version history and update with the commit that changes them. It was ignored
+# until 2026-07-29, which is why an earlier commit added a hand-copied snapshot; that
+# snapshot is gone, because a copy silently drifts from the file it is meant to mirror.
 build_and_deploy.bat
 .claude/
 

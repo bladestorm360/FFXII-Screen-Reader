@@ -1,13 +1,3 @@
-> **THIS IS A COMMITTED SNAPSHOT OF `CLAUDE.md`.** The live file is gitignored
-> (`.gitignore:2`), so this copy exists purely to keep the rules in version history.
->
-> **`CLAUDE.md` is the authority — read and edit THAT one.** This copy does not update
-> itself and will drift the moment the live file changes. If the two disagree, the live
-> file wins. Refresh it with `cp CLAUDE.md CLAUDE.reference.md` (re-adding this header)
-> whenever the rules change and you want the change recorded.
->
-> Snapshot taken 2026-07-29, at commit `6f619e3`.
-
 # FFXII-Screen-Reader — Accessibility Mod for Final Fantasy XII: The Zodiac Age
 
 ## CRITICAL RULES — MANDATORY, NO EXCEPTIONS
