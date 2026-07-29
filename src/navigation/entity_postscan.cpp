@@ -1,6 +1,7 @@
 #include "navigation/entity_scan.h"
 #include "navigation/entity_classify.h"
 #include "navigation/entity_list_internal.h"
+#include "speech/phrasebook.h"
 #include "navigation/nav_rva.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/nav_reach.h"
@@ -170,7 +171,7 @@ void ApplyFallbackLabels(std::vector<Entity>& out) {
         // An unnamed object carrying a `+0x70` field-sign record IS a sign: the map script bound it
         // with `setfieldsignlocationjumpinfo`, which is what `doorway` records. Shop doorways carry
         // the same record but resolve a real name, so they never reach here.
-        e.label = e.doorway ? std::wstring(L"Sign") : std::wstring(CategoryWord(e.category));
+        e.label = e.doorway ? std::wstring(Phrase::Get(Phrase::Id::CatSign)) : std::wstring(CategoryWord(e.category));
     }
 }
 

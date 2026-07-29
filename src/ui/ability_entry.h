@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/game_text.h"
+#include "speech/phrasebook.h"
 
 #include <cstdint>
 #include <string>
@@ -49,8 +50,9 @@ constexpr int      MAGK_COUNT   = 81;
 constexpr uint32_t MAGK_INDEX   = 0xAE8;
 
 // What an unlearned slot is spoken as. The game draws "?" there; a literal "?" is commonly dropped
-// by screen readers at default punctuation verbosity, which would re-silence the row.
-constexpr wchar_t kEmptySlot[] = L"empty";
+// by screen readers at default punctuation verbosity, which would re-silence the row. Mod-emitted,
+// so it lives in the phrasebook.
+inline const wchar_t* EmptySlotWord() { return Phrase::Get(Phrase::Id::EmptySlot); }
 
 // Decode a codec string (GameText guards internally). `skip` strips the shared-pool 00 00 prefix;
 // harmless when absent, since a valid string never starts with a 0x00 terminator.
@@ -74,7 +76,7 @@ inline std::wstring DecodeName(const uint8_t* codec, bool* outEmptySlot) {
     if (s.find(L'?') != std::wstring::npos &&
         s.find_first_not_of(L" ?") == std::wstring::npos) {   // only '?' (and spaces)
         *outEmptySlot = true;
-        return kEmptySlot;
+        return EmptySlotWord();
     }
     return GameText::IsMostlyPrintable(s) ? s : std::wstring();
 }

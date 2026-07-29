@@ -30,7 +30,10 @@ std::wstring FocusedItemText(void* owner, int index);
 std::wstring StringById(int id);
 
 // The help/description text currently shown for the focused item, captured from
-// the game's description-bar setter (FUN_00291d80 @ RVA 0x171D80). Bound to the
+// the game's description-bar setters — FUN_00291d80 (RVA 0x171D80) for field
+// menus, FUN_0028fcb0 (RVA 0x16FCB0) for the battle menu. Both write the same
+// window; only the wrapper differs, which is why the battle menu was silent
+// until S87 added the second one. Bound to the
 // latest focus by a generation counter: returns empty if no description was set
 // for the current focus, so a stale description from a previous item is never
 // returned. Read on demand by the `i` hotkey.

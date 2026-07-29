@@ -1,5 +1,7 @@
 #include "navigation/nav_common.h"
 
+#include "speech/phrasebook.h"
+
 #include <cmath>
 
 namespace NavCommon {
@@ -15,10 +17,11 @@ float g_unitsPerStep = 0.75f;
 
 // Cardinal labels, index 0 = North, clockwise. FFXII world north = -Z, so 0deg = -Z ("north"),
 // +90deg = +X ("east").
-const wchar_t* kCardinal[8] = {
-    L"North", L"Northeast", L"East", L"Southeast",
-    L"South", L"Southwest", L"West", L"Northwest",
+const Phrase::Id kCardinalId[8] = {
+    Phrase::Id::North, Phrase::Id::Northeast, Phrase::Id::East,  Phrase::Id::Southeast,
+    Phrase::Id::South, Phrase::Id::Southwest, Phrase::Id::West,  Phrase::Id::Northwest,
 };
+const wchar_t* Cardinal(int octant) { return Phrase::Get(kCardinalId[octant]); }
 
 // EGOCENTRIC labels — the ALTERNATE vocabulary, RETAINED but NOT SHIPPED. Same octant indexing as
 // kCardinal; only the words differ.
@@ -31,10 +34,11 @@ const wchar_t* kCardinal[8] = {
 // real cause was the route smoother inventing diagonals -- see path_directions.cpp), and it was
 // reverted. Kept here for anyone who does want a literal ego frame, with "forward"/"backward" rather
 // than "ahead"/"behind" per the same instruction.
-const wchar_t* kEgocentric[8] = {
-    L"forward", L"forward-right", L"right", L"backward-right",
-    L"backward", L"backward-left", L"left", L"forward-left",
+const Phrase::Id kEgocentricId[8] = {
+    Phrase::Id::Forward,  Phrase::Id::ForwardRight,  Phrase::Id::Right, Phrase::Id::BackwardRight,
+    Phrase::Id::Backward, Phrase::Id::BackwardLeft,  Phrase::Id::Left,  Phrase::Id::ForwardLeft,
 };
+const wchar_t* Ego(int octant) { return Phrase::Get(kEgocentricId[octant]); }
 
 // Bearing in degrees [0,360): 0 = -Z (game north), increasing toward +X (east).
 float BearingDeg(const FVec3& from, const FVec3& to) {
@@ -77,34 +81,34 @@ float Distance3D(const FVec3& a, const FVec3& b) {
 }
 
 const wchar_t* CardinalBearing(const FVec3& from, const FVec3& to) {
-    return kCardinal[OctantOf(BearingDeg(from, to))];
+    return Cardinal(OctantOf(BearingDeg(from, to)));
 }
 
 const wchar_t* CardinalOfHeading(float headingRad) {
     float deg = headingRad * kRadToDeg;
     deg = std::fmod(deg, 360.0f);
     if (deg < 0.0f) deg += 360.0f;
-    return kCardinal[OctantOf(deg)];
+    return Cardinal(OctantOf(deg));
 }
 
 const wchar_t* CardinalBearingRelative(const FVec3& from, const FVec3& to, float facingRad) {
     const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
-    return kCardinal[OctantOf(ego)];
+    return Cardinal(OctantOf(ego));
 }
 
 const wchar_t* CardinalOfHeadingRelative(float headingRad, float facingRad) {
     const float ego = Norm360(headingRad * kRadToDeg - CompassFaceDeg(facingRad));
-    return kCardinal[OctantOf(ego)];
+    return Cardinal(OctantOf(ego));
 }
 
 const wchar_t* EgoBearing(const FVec3& from, const FVec3& to, float facingRad) {
     const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
-    return kEgocentric[OctantOf(ego)];
+    return Ego(OctantOf(ego));
 }
 
 const wchar_t* EgoOfHeading(float headingRad, float facingRad) {
     const float ego = Norm360(headingRad * kRadToDeg - CompassFaceDeg(facingRad));
-    return kEgocentric[OctantOf(ego)];
+    return Ego(OctantOf(ego));
 }
 
 int RelativeOctant(const FVec3& from, const FVec3& to, float facingRad) {
@@ -113,16 +117,16 @@ int RelativeOctant(const FVec3& from, const FVec3& to, float facingRad) {
 
 // SHIPPED vocabulary: compass words on the relative frame (North == forward).
 const wchar_t* RelativeWord(int octant) {
-    return kCardinal[((octant % 8) + 8) % 8];
+    return Cardinal(((octant % 8) + 8) % 8);
 }
 
 // Alternate vocabulary, retained and unused.
 const wchar_t* EgoWordOfOctant(int octant) {
-    return kEgocentric[((octant % 8) + 8) % 8];
+    return Ego(((octant % 8) + 8) % 8);
 }
 
 const wchar_t* CardinalOfFacing(float facingRad) {
-    return kCardinal[OctantOf(CompassFaceDeg(facingRad))];
+    return Cardinal(OctantOf(CompassFaceDeg(facingRad)));
 }
 
 int DistanceToSteps(float dist) {
@@ -134,8 +138,8 @@ int DistanceToSteps(float dist) {
 std::wstring ElevationSuffix(const FVec3& from, const FVec3& to) {
     float dy = to.y - from.y;
     float thresh = g_unitsPerStep * 0.5f;   // ~half a step so tiny slope noise doesn't chatter
-    if (dy > thresh)  return L" (above)";
-    if (dy < -thresh) return L" (below)";
+    if (dy > thresh)  return Phrase::Get(Phrase::Id::AboveSuffix);
+    if (dy < -thresh) return Phrase::Get(Phrase::Id::BelowSuffix);
     return L"";
 }
 
@@ -158,7 +162,7 @@ bool IsWithinReach(float dist2D) {
 //
 // On level ground ElevationSuffix returns L"", so this is byte-identical to the old behaviour.
 std::wstring ReachPhrase(const FVec3& from, const FVec3& to) {
-    return std::wstring(L"right next to you") + ElevationSuffix(from, to);
+    return std::wstring(Phrase::Get(Phrase::Id::RightNextToYou)) + ElevationSuffix(from, to);
 }
 
 std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
@@ -169,7 +173,7 @@ std::wstring DescribeDirection(const FVec3& from, const FVec3& to) {
     std::wstring s = CardinalBearing(from, to);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
-    s += L" steps";
+    s += Phrase::Get(Phrase::Id::StepsSuffix);
     s += ElevationSuffix(from, to);
     return s;
 }
@@ -184,7 +188,7 @@ std::wstring DescribeDirectionRelative(const FVec3& from, const FVec3& to, float
     std::wstring s = CardinalBearingRelative(from, to, facingRad);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
-    s += L" steps";
+    s += Phrase::Get(Phrase::Id::StepsSuffix);
     s += ElevationSuffix(from, to);
     return s;
 }
@@ -195,7 +199,7 @@ std::wstring DescribeDirectionEgo(const FVec3& from, const FVec3& to, float faci
     std::wstring s = EgoBearing(from, to, facingRad);
     s += L", ";
     s += std::to_wstring(DistanceToSteps(d2));
-    s += L" steps";
+    s += Phrase::Get(Phrase::Id::StepsSuffix);
     s += ElevationSuffix(from, to);
     return s;
 }

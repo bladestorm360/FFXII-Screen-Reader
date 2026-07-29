@@ -2,6 +2,7 @@
 
 #include "core/logger.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <mutex>
@@ -42,7 +43,7 @@ void Move(int delta, bool toEnd, bool toStart) {
     {
         std::lock_guard<std::mutex> lk(g_mx);
         if (g_ring.empty()) {
-            say = L"Combat log empty";   // the one case that gets a spoken explanation:
+            say = Phrase::Get(Phrase::Id::CombatLogEmpty);   // the one case that gets a spoken explanation:
         } else {                          // a silent key is indistinguishable from a broken one
             const int last = static_cast<int>(g_ring.size()) - 1;
             int idx;

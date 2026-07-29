@@ -2,6 +2,7 @@
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 #include "input/input_tracker.h"
 
@@ -22,7 +23,7 @@ void OnGilKey() {
     if (!ctx) return;                               // no party context -> say nothing (never filler)
     uint32_t gil = 0;
     if (!MemRead::SafeReadU32(ctx, OFF_GIL, &gil)) return;
-    std::wstring line = std::to_wstring(gil) + L" gil";   // game draws the unit as "GIL"
+    std::wstring line = std::to_wstring(gil) + Phrase::Get(Phrase::Id::GilSuffix);   // game draws the unit as "GIL"
     Log::WriteW("SHOP", "gil:", line);
     Speech::Output(line, /*interrupt=*/true);
 }

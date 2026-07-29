@@ -32,11 +32,13 @@ add_library(${PROJECT_NAME} SHARED
     src/core/game_text.cpp
     src/core/item_names.cpp
     src/speech/speech.cpp
+    src/speech/phrasebook.cpp
     src/input/input_tracker.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
     src/ui/config_reader.cpp
     src/ui/menu_reader.cpp
+    src/ui/choice_reader.cpp
     src/ui/ingame_menu_reader.cpp
     src/ui/license_reader.cpp
     src/ui/ability_summary_reader.cpp

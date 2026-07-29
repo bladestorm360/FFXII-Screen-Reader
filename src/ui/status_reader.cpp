@@ -3,6 +3,7 @@
 #include "ui/virtual_buffer.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "speech/phrasebook.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
 #include "core/logger.h"
@@ -167,18 +168,20 @@ void BuildBuffer(void* ctx) {
                                                      static_cast<uint32_t>(charId)), /*skip=*/true));
     }
     uint8_t level = 0;
-    if (SafeReadU8(blk, B_LEVEL, &level)) add(L"Level " + std::to_wstring(level));
+    if (SafeReadU8(blk, B_LEVEL, &level)) add(Phrase::Get(Phrase::Id::LevelPrefix) + std::to_wstring(level));
     int curHP = 0, maxHP = 0, curMP = 0, maxMP = 0;
     if (SafeReadInt(reinterpret_cast<char*>(blk) + B_CURHP, &curHP) &&
         SafeReadInt(reinterpret_cast<char*>(blk) + B_MAXHP, &maxHP))
-        add(L"HP " + std::to_wstring(curHP) + L" of " + std::to_wstring(maxHP));
+        add(Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP)
+            + Phrase::Get(Phrase::Id::OfJoiner) + std::to_wstring(maxHP));
     if (SafeReadInt(reinterpret_cast<char*>(blk) + B_CURMP, &curMP) &&
         SafeReadInt(reinterpret_cast<char*>(blk) + B_MAXMP, &maxMP))
-        add(L"MP " + std::to_wstring(curMP) + L" of " + std::to_wstring(maxMP));
+        add(Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(curMP)
+            + Phrase::Get(Phrase::Id::OfJoiner) + std::to_wstring(maxMP));
     uint32_t v = 0;
-    if (SafeReadU32(blk, B_LP,   &v)) add(L"LP " + std::to_wstring(v));
-    if (SafeReadU32(blk, B_EXP,  &v)) add(L"EXP " + std::to_wstring(v));
-    if (SafeReadU32(blk, B_NEXT, &v)) add(L"Next " + std::to_wstring(v));
+    if (SafeReadU32(blk, B_LP,   &v)) add(Phrase::Get(Phrase::Id::LPPrefix) + std::to_wstring(v));
+    if (SafeReadU32(blk, B_EXP,  &v)) add(Phrase::Get(Phrase::Id::EXPPrefix) + std::to_wstring(v));
+    if (SafeReadU32(blk, B_NEXT, &v)) add(Phrase::Get(Phrase::Id::NextPrefix) + std::to_wstring(v));
 
     // ---- Attributes: nine rows, every label the game's own.
     if (panel) {

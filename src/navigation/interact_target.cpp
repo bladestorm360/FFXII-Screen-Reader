@@ -7,6 +7,7 @@
 #include "core/logger.h"
 #include "core/phyre_types.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <cmath>
 #include <cstdio>
@@ -158,7 +159,8 @@ void SpeakCurrent() {
     }
 
     // The verb is the engine's own mode word, not a guess about what the object is.
-    std::wstring say = (c.mode == NavRva::INTERACT_MODE_TALK) ? L"Talk: " : L"Action: ";
+    std::wstring say = std::wstring(Phrase::Get((c.mode == NavRva::INTERACT_MODE_TALK)
+                                                    ? Phrase::Id::Talk : Phrase::Id::Action)) + L": ";
     say += c.label;
     Speech::Output(say, /*interrupt=*/true);
 }

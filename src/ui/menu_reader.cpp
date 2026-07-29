@@ -4,6 +4,7 @@
 #include "ui/config_reader.h"
 #include "ui/ingame_menu_reader.h"
 #include "ui/license_reader.h"
+#include "ui/choice_reader.h"
 #include "ui/ability_summary_reader.h"
 #include "ui/shop_reader.h"
 #include "ui/inventory_reader.h"
@@ -93,6 +94,14 @@ uint32_t g_stashRowOff = 0;
 // (There is deliberately no deferred/armed menu-entry announce here any more. Holding the row back
 // for a "menu is ready" signal was tried four ways and every one was refuted by measurement -- see
 // the note on HookedFocusSet below for what the game's own window messages actually show.)
+
+// Armed when a pop-up pane GAINS the cursor (FUN_00244830), consumed when its body is spoken.
+// This exists because the previous trigger was `ownerChanged`, which is an IDENTITY test: the game
+// RECYCLES pop-up window addresses, so the second "return to the title screen?" -- and the quit
+// prompt after it -- reused the same address, `ownerChanged` was false, and the prompt never spoke
+// again. Re-entering a surface must always announce (CLAUDE.md, NO DEDUPLICATION OF SPEECH); this
+// is an entry latch keyed on the game's own focus-change event, not a suppression filter.
+bool g_popupEntryArmed = false;
 
 void* g_diagOwner = nullptr;       // active-pane diagnostic dedup (owner, focus) pair
 void* g_diagFocus = nullptr;
@@ -194,7 +203,13 @@ void OnFocus(void* owner, int index, bool fromPaint) {
 
     // Pop-up body prompt: announce once on entry, before the button.
     bool preambleSpoken = false;
-    if (ownerChanged && isPopup) {
+    bool popupEntry = false;
+    if (isPopup) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        popupEntry = g_popupEntryArmed;
+        g_popupEntryArmed = false;
+    }
+    if (isPopup && (ownerChanged || popupEntry)) {
         std::wstring body = PopupReader::BodyText(owner);
         if (!body.empty()) {
             Log::WriteW("READER", "  body: ", body);
@@ -286,6 +301,24 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         if (LicenseReader::OnDispatchFocus(owner, val))
             return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
 
+        // Field dialogue / choice window (FUN_002a6190): the Hunt notice board and mid-dialogue
+        // option prompts. It does NOT paint through FUN_002d28e0, so the generic content path has
+        // no rows for it -- the options live in a 0x0E block inside the window's own codec string.
+        // Not pane-gated: like the battle command menu this is its own surface, and the probe run
+        // showed focusedPane == owner for it anyway.
+        // Only claims the focus when it actually SPOKE. Returning unconditionally here was a
+        // regression: it cut the generic painted-row path (TextCapture) out of the loop for this
+        // window even when ChoiceReader had nothing to say, so a surface the painter might already
+        // cover went silent because of a reader that failed.
+        // The notice board's navigation. ChoiceReader also runs a per-frame tick for in-dialogue
+        // choices, which send no message at all; whichever detector fires for the current
+        // message/page claims it and the other stands down, and both speak through one choke point.
+        // Claimed either way, so the generic painted-row path never also speaks this window.
+        if (ChoiceReader::IsChoiceWindow(owner)) {
+            ChoiceReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val)));
+            return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
+        }
+
         const int index = static_cast<int>(static_cast<intptr_t>(val));
         const uint32_t rowOff = IngameMenuReader::RowChainOff(owner);
 
@@ -338,6 +371,16 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             // pane's list is never announced.
             OnFocus(owner, index, /*fromPaint=*/false);   // gates the content path internally
         }
+    } else if (ChoiceReader::IsChoiceWindow(owner)) {
+        // Every NON-0x8000 message this window class receives, deduped. This is the open question
+        // for the paginated-dialogue bug: the page advance must be driven by a GAME event rather
+        // than by us watching for a keypress (which is why a controller player hears only page 1).
+        // FUN_002a6190 handles 0x8001 confirm / 0x8002 cancel from its cursor child -- but a plain
+        // dialogue box may have no cursor child at all, in which case none of these ever fire and
+        // the page signal is somewhere else entirely. That is exactly what this line settles, and
+        // it is why the mechanism has NOT been swapped yet: switching to an unproven event would
+        // break page turns for keyboard players, who work today.
+        ChoiceReader::OnOtherMessage(owner, static_cast<uint64_t>(msg), static_cast<uint64_t>(val));
     } else if (msg == MSG_YES || msg == MSG_NO || msg == MSG_CANCEL) {
         // No-list 2-choice pop-up result path (owner = parent). Logged for now;
         // the tested quit pop-up is the list variant handled via 0x8000 above.
@@ -355,6 +398,13 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 // makes the first item on entering a submenu speak.
 void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
+    // A pop-up just took the cursor: arm its body announce. This is the game's own entry event, so
+    // it fires even when the window ADDRESS is recycled from the previous pop-up -- which is the
+    // case `ownerChanged` could not see (see g_popupEntryArmed).
+    if (IsConfirmWindow(newWin) || MenuState::IsChoicePopup(newWin)) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_popupEntryArmed = true;
+    }
     // Brackets each menu-open window: everything since the previous pane entry.
     // 3ms was always exceeded (TextCapture::Capture alone is ~3.7ms per window), so this wrote ~13
     // log lines on the game thread at EVERY pane change -- on the exact path being measured. Only
@@ -480,6 +530,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
+    ok     &= ChoiceReader::Init();       // mid-dialogue choice widget (polls input, sends no message)
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
@@ -499,6 +550,7 @@ void Shutdown() {
     if (!g_initialized) return;
     TextCapture::SetMenuPaintedCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
+    ChoiceReader::Shutdown();
     IngameMenuReader::Shutdown();
     BattleTargetReader::Shutdown();
     LicenseReader::Shutdown();

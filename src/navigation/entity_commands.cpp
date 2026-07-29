@@ -7,6 +7,7 @@
 #include "navigation/nav_common.h"
 #include "navigation/player_state.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 
 #include <Windows.h>
@@ -47,7 +48,7 @@ void CmdNext() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();   // fresh — pick up objects that appeared since the last command
     FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
     CycleLocked(+1, p);
 }
 
@@ -55,7 +56,7 @@ void CmdPrev() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
     FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
     CycleLocked(-1, p);
 }
 
@@ -63,7 +64,7 @@ void CmdDescribeCurrent() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
     FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
     RefreshPositionsLocked(p);
     std::vector<size_t> view = FilteredSortedLocked();
     if (view.empty()) { SpeakNoTargets(); return; }
@@ -83,7 +84,7 @@ void CmdDescribeCurrent() {
         const float bodyPad = 0.9f;                  // test at body height, not at the feet
         const FVec3 from{ p.x, p.y + bodyPad, p.z };
         if (MapQuery::SegmentClear(from, FVec3{ tgt.x, p.y + bodyPad, tgt.z })) {
-            Speech::SpeakQueued(L"Path clear");
+            Speech::SpeakQueued(Phrase::Get(Phrase::Id::PathClear));
         } else {
             // Heading convention matches nav_common::BearingDeg: north = -Z, so a
             // heading `a` maps to world offset (sin a, -cos a) in (x, z).
@@ -96,14 +97,14 @@ void CmdDescribeCurrent() {
                 const float a = base + o;
                 const FVec3 pt{ p.x + std::sin(a) * probe, p.y + bodyPad, p.z - std::cos(a) * probe };
                 if (MapQuery::SegmentClear(from, pt)) {
-                    std::wstring s = L"Blocked, bear ";   // same frame as the bearing just spoken
+                    std::wstring s = Phrase::Get(Phrase::Id::BlockedBearPrefix);   // same frame as the bearing just spoken
                     s += NavCommon::CardinalOfHeadingRelative(a, hintFacing);
                     Speech::SpeakQueued(s);
                     found = true;
                     break;
                 }
             }
-            if (!found) Speech::SpeakQueued(L"Blocked");
+            if (!found) Speech::SpeakQueued(Phrase::Get(Phrase::Id::BlockedWord));
         }
     }
 }
@@ -143,7 +144,8 @@ void CmdToggleAvailability() {
         if (PassesFiltersLocked(e)) ++matches;
     wchar_t buf[96];
     _snwprintf_s(buf, _TRUNCATE, L"%s, %zu",
-                 (g_availability == Availability::Gated) ? L"Story-gated" : L"All", matches);
+                 (g_availability == Availability::Gated) ? Phrase::Get(Phrase::Id::StoryGated)
+                                                        : Phrase::Get(Phrase::Id::CatAll), matches);
     Speech::Output(buf);
     ClearFocusLocked();   // re-anchor to nearest in the new view
 }
@@ -161,7 +163,7 @@ void CmdLabelFromClipboard() {
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
     FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(L"Position unavailable"); return; }
+    if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
     RefreshPositionsLocked(p);
 
     std::vector<size_t> view = FilteredSortedLocked();
@@ -203,9 +205,9 @@ void CmdLabelFromClipboard() {
     RescanLocked();   // re-label the live list so the confirmation and the cursor agree immediately
 
     if (text.empty()) {
-        Speech::Output(L"Label cleared");
+        Speech::Output(Phrase::Get(Phrase::Id::LabelCleared));
     } else {
-        Speech::Output(L"Labelled " + text);
+        Speech::Output(Phrase::Get(Phrase::Id::LabelledPrefix) + text);
     }
 }
 

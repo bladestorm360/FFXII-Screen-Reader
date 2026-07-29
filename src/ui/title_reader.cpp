@@ -3,6 +3,7 @@
 #include "core/mem_read.h"
 #include "core/logger.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -53,12 +54,12 @@ constexpr int      ATLAS_ROW_PITCH    = 70;    // px per atlas row in title_logo
 // and hardcoded here as the documented last-resort for baked UI text.
 const wchar_t* AtlasRowLabel(int row) {
     switch (row) {
-        case 0: return L"New Game";
-        case 1: return L"Load Game";
-        case 2: return L"Trial Mode";
-        case 3: return L"Credits";
+        case 0: return Phrase::Get(Phrase::Id::TitleNewGame);
+        case 1: return Phrase::Get(Phrase::Id::TitleLoadGame);
+        case 2: return Phrase::Get(Phrase::Id::TitleTrialMode);
+        case 3: return Phrase::Get(Phrase::Id::TitleCredits);
         case 4: return nullptr;          // prompt cell (y≈280) — never a selectable focus row
-        case 5: return L"Exit";
+        case 5: return Phrase::Get(Phrase::Id::TitleExit);
         default: return nullptr;
     }
 }

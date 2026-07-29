@@ -48,6 +48,32 @@ SlotDiag DiagnoseSlot(int slot);
 void* LeaderBtlChr();
 void* LeaderActor();
 
+// ---- master-data names -------------------------------------------------------------------------
+// Localized name out of the game's own DEF-record table: FUN_0035d330(category, id) -> record+0x18,
+// past the shared-pool 00 00 variant prefix. Categories seen so far: 0x02 character, 0x14 ability
+// (magick / technick / action), 0x15 battle command + magick schools, 0x18 technick schools,
+// 0x0B gambit condition.
+//
+// GAME CALL -- game thread ONLY. Empty when unresolvable, never a guess.
+std::wstring DefName(uint32_t category, uint32_t id);
+
+// ---- gambits ---------------------------------------------------------------------------------
+// Is the GAMBIT master toggle on for the character whose SCENE HANDLE this is? That is the state
+// the battle menu's Gambits row (cmdId 0x0D) flips, and the same one the pause-menu gambit screen
+// shows. `*outResolved` distinguishes "off" from "could not read" -- the caller must stay SILENT on
+// the latter rather than claim a state.
+//
+// Reimplements FUN_00309b40 + FUN_00272ee0 as pure memory reads (the mod is read-only, and Ghidra
+// dropped the register-passed argument on both, so calling them was never an option):
+//   rec  = scan i in 0..3, i < *(i32*)DAT_022c8064 : &DAT_022c8080 + i*0xC0 until *(i32*)(rec+4) == handle
+//   idx  = *(i16*)(rec + 0x60)                       // BtlChr index, < 0x28
+//   on   = *(u32*)(BtlWork + 8 + idx*0x1C8) & 0x04   // bit 2
+// Four sites agree this is the flag: the getter FUN_00309b40 reads `>> 2 & 1`, the setter
+// FUN_00311af0 writes `| 4`, the battle row draw FUN_00276be0 renders its mirror (FUN_00329220
+// copies bit 2 -> party-record bit 7, `<< 5`), and the field gambit screen FUN_00567b60 stores the
+// same getter's result as its master on/off.
+bool GambitsEnabled(uint32_t sceneHandle, bool* outResolved);
+
 // ---- actor pool ------------------------------------------------------------------------------
 void* ActorForBtlChr(void* bc);          // scan actor+0x698 == bc
 void* BtlChrForActor(void* actor);       // *(void**)(actor + 0x698)

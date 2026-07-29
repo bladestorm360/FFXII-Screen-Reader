@@ -5,6 +5,7 @@
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "navigation/player_state.h"   // ReadSceneObjectPos (target world pos)
@@ -177,10 +178,11 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
     std::wstring text = name;
     if (maxHP > 0) {
         if (ally) {
-            text += L", HP " + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
+            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
         } else {
             int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
-            text += L", HP " + std::to_wstring(pct) + L" percent";
+            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(pct)
+                  + Phrase::Get(Phrase::Id::PercentSuffix);
         }
     }
 
@@ -441,16 +443,17 @@ bool SpeakTargetStatus() {
         if (t.ally) {
             // Allies show real numbers; enemies show a percentage, mirroring the gauge the game
             // draws (there is no pre-Libra HP-visible flag to read).
-            text += L", HP " + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
+            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
         } else {
             const int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
-            text += L", HP " + std::to_wstring(pct) + L" percent";
+            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(pct)
+                  + Phrase::Get(Phrase::Id::PercentSuffix);
         }
     }
     // Mod-emitted qualifier, and ONLY for a real commitment that has not started executing. A
     // browsed target reaches here now, and it is neither acting nor queued -- calling it "queued"
     // would be a fabricated state. It gets no suffix, matching what this key said when it worked.
-    if (!t.browsing && !t.acting) text += L", queued";
+    if (!t.browsing && !t.acting) text += std::wstring(L", ") + Phrase::Get(Phrase::Id::Queued);
 
     Speech::Output(text, /*interrupt=*/true);
     return true;

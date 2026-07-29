@@ -195,10 +195,35 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     stats.goalPoly  = goal;
 
     if (start == kNoPoly) { stats.pass = "no-start-poly"; return Plan::NoPath; }
-    if (goal  == kNoPoly) { stats.pass = "no-goal-poly";  return Plan::NoPath; }
+
+    // ---- A target with NO POLYGON OF ITS OWN is still reachable ------------------------------------
+    // A notice board bolted to a wall at y=2.0, a chest on a ledge, an NPC behind a counter: the
+    // object's own point is off the mesh, so FindPolyAt legitimately returns nothing. That is NOT
+    // "no route" -- the game shows an interact prompt, so a place to stand exists.
+    //
+    // Bailing here is what made the Hunt notice board a hard progress block: the log read
+    // `plan=NoPath pass=no-goal-poly goalPoly=-1 expands=0`, and `expands=0` is the tell -- the
+    // search never ran at all. The grid era snapped the goal to the nearest cell and so kept working.
+    //
+    // Route by the INTERACTION CYLINDER instead (S73: interaction distance is a cylinder, not a
+    // point). NoteFallback below already implements exactly that test for the
+    // goal-reachable-but-unstandable case; here it becomes the acceptance test itself.
+    //
+    // With no reach radius there is no defensible acceptance test, so that case still fails -- but
+    // it now says WHY, instead of looking like an unreachable objective.
+    const bool goalOffMesh = (goal == kNoPoly);
+    if (goalOffMesh && reachRadius <= 0.01f) {
+        stats.pass = "no-goal-poly-no-reach";
+        return Plan::NoPath;
+    }
 
     FVec3 goalC{};
-    if (!NavMesh::PolyCentroid(goal, goalC)) { stats.pass = "goal-unreadable"; return Plan::NoPath; }
+    if (goalOffMesh) {
+        goalC = to;   // heuristic reference: the target's own point, which is a real world position
+    } else if (!NavMesh::PolyCentroid(goal, goalC)) {
+        stats.pass = "goal-unreadable";
+        return Plan::NoPath;
+    }
 
     // Centroids are read once per poly and reused by the heuristic, the edge cost and the goal test.
     std::unordered_map<PolyId, FVec3> centroid;
@@ -230,7 +255,9 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // Standing where you can interact is handled by the caller's second pass (see path_search.h),
     // which only runs when the target's own poly is genuinely unreachable, and which arrives at the
     // exact point it tested rather than at a centroid.
-    auto IsGoal = [&](PolyId p) -> bool { return p == goal; };
+    // Off-mesh targets have no goal polygon, so this can never fire for them -- the reach test in
+    // NoteFallback is their acceptance test instead.
+    auto IsGoal = [&](PolyId p) -> bool { return !goalOffMesh && p == goal; };
 
     // ---- The fallback, for a target the player cannot stand on -------------------------------------
     // Montblanc's dais, an NPC behind a counter, a chest on a ledge: the game shows an interact
@@ -280,6 +307,9 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
         if (IsGoal(p)) { reached = p; break; }
         NoteFallback(p);
+        // For an off-mesh target the reach test IS the goal test, so stop as soon as it is
+        // satisfied rather than expanding the rest of the map for a goal poly that cannot exist.
+        if (goalOffMesh && fallbackPoly != kNoPoly) break;
 
         FVec3 pc{};
         if (!Centroid(p, pc)) continue;
@@ -335,16 +365,20 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     if (reached == kNoPoly && fallbackPoly != kNoPoly) {
         reached      = fallbackPoly;
         usedFallback = true;
-        char fm[176];
+        char fm[208];
         snprintf(fm, sizeof(fm),
-                 "mesh: goal poly %d unreachable; standing at poly %d (%.2f,%.2f,%.2f), %.2fm from it",
-                 stats.goalPoly, fallbackPoly, fallbackPoint.x, fallbackPoint.y, fallbackPoint.z,
+                 "mesh: goal %s; standing at poly %d (%.2f,%.2f,%.2f), %.2fm from it",
+                 goalOffMesh ? "point is OFF-MESH (no polygon of its own -- wall-mounted or elevated)"
+                             : "poly unreachable",
+                 fallbackPoly, fallbackPoint.x, fallbackPoint.y, fallbackPoint.z,
                  NavCommon::Distance2D(fallbackPoint, to));
         Log::Write("NAV-ROUTE", fm);
     }
 
     if (reached == kNoPoly) {
-        stats.pass     = (stats.expands >= kMaxExpand) ? "budget" : "unreachable";
+        stats.pass     = (stats.expands >= kMaxExpand) ? "budget"
+                       : goalOffMesh                   ? "off-mesh-nothing-in-reach"
+                                                       : "unreachable";
         stats.endPoly  = bestNear;
         stats.nearDist = bestNearD;
         // NO partial route. The old grid search emitted a near-goal fallback here and spoke it as a

@@ -4,6 +4,7 @@
 #include "core/mem_read.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 
 #include <cstdint>
@@ -114,8 +115,8 @@ void OnShopHighlight(void* container) {
     uint32_t price = 0; SafeReadU32(row, OFF_R_PRICE, &price); price &= 0x7FFFFFFF;
     uint16_t inv   = 0; SafeReadU16(row, OFF_R_INV, &inv);
 
-    std::wstring line = name + L", " + std::to_wstring(price) + L" gil, "
-                      + std::to_wstring(inv) + L" in inventory";
+    std::wstring line = name + L", " + std::to_wstring(price) + Phrase::Get(Phrase::Id::GilSuffix) + L", "
+                      + std::to_wstring(inv) + Phrase::Get(Phrase::Id::InInventorySuffix);
     Log::WriteW("SHOP", "item:", container, line);
     Speech::Output(line, /*interrupt=*/true);
 }
@@ -128,7 +129,7 @@ void HookedHilite(void* container, uint32_t mode) {
 }
 
 void SpeakQty(uint16_t qty, uint32_t total) {
-    std::wstring line = std::to_wstring(qty) + L", " + std::to_wstring(total) + L" gil";
+    std::wstring line = std::to_wstring(qty) + L", " + std::to_wstring(total) + Phrase::Get(Phrase::Id::GilSuffix);
     Log::WriteW("SHOP", "qty:", line);
     Speech::Output(line, /*interrupt=*/true);
 }
@@ -164,7 +165,7 @@ void OnPanelQuantity(void* panel) {
     }
     if (step != g_lastStep) {                      // pure step toggle (Left arrow) -> "1x" / "10x"
         g_lastStep = step;
-        std::wstring line = std::to_wstring(step) + L"x";
+        std::wstring line = std::to_wstring(step) + Phrase::Get(Phrase::Id::TimesSuffix);
         Log::WriteW("SHOP", "step:", panel, line);
         Speech::Output(line, /*interrupt=*/true);
         return;

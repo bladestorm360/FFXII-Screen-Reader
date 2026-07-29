@@ -4,6 +4,7 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <array>
@@ -23,6 +24,19 @@ constexpr uint32_t RVA_TEXT_OBJ2 = 0x18BF20;  // FUN_002abf20(obj)      object/s
 constexpr uint32_t RVA_PAINTER   = 0x1B28E0;  // FUN_002d28e0(p1,p2,subwidget) list painter
 constexpr uint32_t RVA_RESOLVE   = 0x1D9860;  // FUN_002f9860(id) -> codec byte* (localized string)
 constexpr uint32_t RVA_DESC_SET  = 0x171D80;  // FUN_00291d80(codecText, flag) description-bar setter
+// THE BATTLE MENU'S description bar is the SAME window through a DIFFERENT wrapper, which is why
+// `o` was silent in combat on every list, top-level and submenu alike (S87). Both end at
+// FUN_002be110(DAT_0209be80+0x8fa0, codec, ...) and differ only in a style constant:
+//     field:  FUN_00291d80 -> FUN_0028fd00(codec, p2, DAT_01e0c484)
+//     battle: FUN_0028fcb0 -> FUN_002be110(...,            DAT_01e0c460)
+// The battle dispatcher FUN_0027b880(panel+0x4C0, row) resolves every list's help text -- top-level
+// commands and the Magicks/Technicks chooser via FUN_0035d330(0x15|0x18, id)+0x08, the spell list
+// via (0x14, id)+0x08, items via FUN_0035d380(1, id)+0x08 -- plus the "why this command is greyed
+// out" string (FUN_0027c150 -> ids 0xC8A..0xC99), and publishes ALL of them through this one call.
+// So a single hook covers the whole battle menu. The kinds that DON'T come here (0x0C, 0x10,
+// 0x12-0x15, 0x1B, 0x1C ...) go to FUN_0028fe40 -> ... -> FUN_00263c20, the scene-object faction
+// accessor: those are TARGET lists, already read by battle_target_reader. Not a gap.
+constexpr uint32_t RVA_DESC_SET_BATTLE = 0x16FCB0;  // FUN_0028fcb0(codecText, param) battle help bar
 // Item/ability/equipment/battle-command DESCRIPTIONS use a different sink than FUN_00291d80: the
 // display notifier FUN_00293170 formats the focused entry's description via FUN_00292b70, which
 // writes the finished codec to (outBuf+8) and returns 1. We hook the formatter and capture that
@@ -45,6 +59,7 @@ typedef void        (*Pfn_Painter)(void*, int64_t, void*);
 typedef void        (*Pfn_TextDraw)(void*);
 typedef const uint8_t* (*Pfn_Resolve)(int);
 typedef void        (*Pfn_DescSet)(void*, uintptr_t);
+typedef uint64_t    (*Pfn_DescSetBattle)(void*, uintptr_t);   // FUN_0028fcb0 returns a status
 typedef void        (*Pfn_ItemDescDisplay)(int, uint32_t, int, int);  // FUN_00293170
 typedef uint64_t    (*Pfn_ItemDescFmt)(void*, void*);                 // FUN_00292b70(outBuf, params)
 
@@ -54,6 +69,7 @@ Pfn_TextDraw s_origObj2 = nullptr;
 Pfn_Painter  s_origPainter = nullptr;
 Pfn_Resolve  s_origResolve = nullptr;
 Pfn_DescSet  s_origDescSet = nullptr;
+Pfn_DescSetBattle s_origDescSetBattle = nullptr;
 Pfn_ItemDescDisplay s_origItemDescDisplay = nullptr;
 Pfn_ItemDescFmt     s_origItemDescFmt     = nullptr;
 thread_local bool s_inItemDesc = false;   // true only while inside FUN_00293170 (the display path)
@@ -193,6 +209,29 @@ void HookedDesc(void* codecText, uintptr_t flag) {
     if (s_origDescSet) s_origDescSet(codecText, flag);
 }
 
+// FUN_0028fcb0(codecText, param): the BATTLE menu's description-bar setter — the same window as
+// HookedDesc above, reached through the battle wrapper (see RVA_DESC_SET_BATTLE). Identical
+// treatment, and the generation gate needs no new plumbing: battle command focus arrives on the
+// same FUN_00247510 msg 0x8000 that MenuReader::HookedDispatch already hooks, and that calls
+// NotifyFocusChanged() BEFORE running the original — which is what drives FUN_0027b880 and
+// therefore this call. So the description lands stamped with the focus it belongs to.
+//
+// A null codecText means the game is CLEARING the bar (FUN_0028fcb0 forwards that to FUN_002be020).
+// Leave g_helpText alone in that case: the clear arrives on teardown, and wiping here would just
+// race the generation gate that already handles staleness.
+uint64_t HookedDescBattle(void* codecText, uintptr_t param) {
+    STALL_SCOPE("TextCapture::HookedDescBattle");
+    if (codecText) {
+        std::wstring s = GameText::Decode(reinterpret_cast<const uint8_t*>(codecText));  // SEH-guarded inside
+        if (GameText::IsMostlyPrintable(s)) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            g_helpText = std::move(s);
+            g_helpTextGen = g_helpGen;
+        }
+    }
+    return s_origDescSetBattle ? s_origDescSetBattle(codecText, param) : 0;
+}
+
 // FUN_00293170: the on-highlight item/ability/equipment/command description DISPLAY call. It formats
 // the focused entry's description via FUN_00292b70. We flag "inside display" around it so only that
 // formatter call (not the off-screen width-measurement callers) captures into g_helpText.
@@ -327,11 +366,13 @@ bool Init() {
     ok &= Hooks::InstallTyped(RVA_PAINTER,   &HookedPainter, &s_origPainter);
     ok &= Hooks::InstallTyped(RVA_RESOLVE,   &HookResolve,   &s_origResolve);
     ok &= Hooks::InstallTyped(RVA_DESC_SET,  &HookedDesc,    &s_origDescSet);
+    ok &= Hooks::InstallTyped(RVA_DESC_SET_BATTLE, &HookedDescBattle, &s_origDescSetBattle);
     ok &= Hooks::InstallTyped(RVA_ITEMDESC_DISPLAY, &HookedItemDescDisplay, &s_origItemDescDisplay);
     ok &= Hooks::InstallTyped(RVA_ITEMDESC_FMT,     &HookedItemDescFmt,     &s_origItemDescFmt);
     g_initialized = true;
     Log::Write("TEXT", ok
-        ? "TextCapture initialized (codec draws + FUN_002d28e0 per-item index map + id-string cache)."
+        ? "TextCapture initialized (codec draws + FUN_002d28e0 per-item index map + id-string cache "
+          "+ field FUN_00291d80 / battle FUN_0028fcb0 description bars)."
         : "TextCapture: one or more hooks failed to install — see Hooks log.");
     return ok;
 }
@@ -340,6 +381,7 @@ void Shutdown() {
     if (!g_initialized) return;
     Hooks::Uninstall(RVA_ITEMDESC_FMT);
     Hooks::Uninstall(RVA_ITEMDESC_DISPLAY);
+    Hooks::Uninstall(RVA_DESC_SET_BATTLE);
     Hooks::Uninstall(RVA_DESC_SET);
     Hooks::Uninstall(RVA_RESOLVE);
     Hooks::Uninstall(RVA_PAINTER);
@@ -394,7 +436,7 @@ bool ToggleInterception() {
     g_interceptEnabled.store(on, std::memory_order_relaxed);
     Log::Write("TEXT", on ? "painter interception ENABLED (diagnostic toggle)"
                           : "painter interception DISABLED (diagnostic toggle) -- row text will not be captured");
-    Speech::Output(on ? L"Menu text capture on" : L"Menu text capture off", true);
+    Speech::Output(Phrase::Get(on ? Phrase::Id::MenuCaptureOn : Phrase::Id::MenuCaptureOff), true);
     return on;
 }
 

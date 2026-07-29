@@ -7,6 +7,7 @@
 #include "core/logger.h"
 #include "core/mem_read.h"
 #include "core/stall_probe.h"
+#include "speech/phrasebook.h"
 
 #include <atomic>
 #include <cstdio>
@@ -105,7 +106,7 @@ std::wstring RenderLabel(uint32_t slot) {
         }
     }
     if (first.empty()) return std::wstring();    // caller falls back to the numbered category word
-    if (extra > 0) return first + L", +" + std::to_wstring(extra) + L" more";
+    if (extra > 0) return first + L", +" + std::to_wstring(extra) + Phrase::Get(Phrase::Id::MoreSuffix);
     return first;
 }
 

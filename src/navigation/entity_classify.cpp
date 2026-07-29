@@ -5,6 +5,7 @@
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
 #include "core/game_text.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 
@@ -15,17 +16,18 @@ namespace EntityScan {
 using EntityList::Category;
 
 const wchar_t* CategoryWord(Category c) {
+    using Phrase::Id;
     switch (c) {
-        case Category::All:         return L"All";
-        case Category::Exit:        return L"Exit";
-        case Category::SaveCrystal:  return L"Save Crystal";
-        case Category::GateCrystal:  return L"Gate Crystal";
-        case Category::Treasure:    return L"Treasure";
-        case Category::NPC:         return L"NPC";
-        case Category::Object:      return L"Interactables";
-        case Category::Enemy:       return L"Enemy";
-        case Category::Items:       return L"Items";
-        default:                    return L"Interactables";
+        case Category::All:          return Phrase::Get(Id::CatAll);
+        case Category::Exit:         return Phrase::Get(Id::CatExit);
+        case Category::SaveCrystal:  return Phrase::Get(Id::CatSaveCrystal);
+        case Category::GateCrystal:  return Phrase::Get(Id::CatGateCrystal);
+        case Category::Treasure:     return Phrase::Get(Id::CatTreasure);
+        case Category::NPC:          return Phrase::Get(Id::CatNPC);
+        case Category::Object:       return Phrase::Get(Id::CatInteractables);
+        case Category::Enemy:        return Phrase::Get(Id::CatEnemy);
+        case Category::Items:        return Phrase::Get(Id::CatItems);
+        default:                     return Phrase::Get(Id::CatInteractables);
     }
 }
 

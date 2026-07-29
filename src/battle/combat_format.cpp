@@ -1,5 +1,7 @@
 #include "battle/combat_format.h"
 
+#include "speech/phrasebook.h"
+
 namespace CombatFormat {
 namespace {
 
@@ -36,20 +38,30 @@ bool ShouldSpeakNow(uint16_t id) {
     if (InRange(id, 0x4F, 0x5C)) return true;
     // "Back attack!" -- you are being flanked.
     if (id == 0x61)              return true;
-    // An enemy or guest BEGINS CASTING -- a spell is charging and you still have time to interrupt
-    // it, guard, or move out of the way. Only 0x0D: FUN_00469af0 maps action category 1 (magick) to
-    // this id, and it is faction-gated to guest|foe (`& 0x0A`), so a party member can never reach it.
-    // Its siblings 0x0E "readies" / 0x0F "uses" stay log-only -- those are the spam tier.
+    // An enemy or guest is COMMITTING TO AN ACTION -- it is charging now and you still have time to
+    // interrupt, guard, or move. FUN_00469af0 is faction-gated `& 0x0A` (guest|foe), so a party
+    // member can never reach either of these ids.
     //
-    // KNOWN LIMIT, accepted by the user: 0x0D carries render style 0x01, which is NOT cull-exempt,
-    // so the message bus drops it beyond ~24 world units. A caster hanging far back announces
-    // nothing. Fixing that means hooking the emitter instead of reading the message; that was
-    // considered and deliberately NOT taken, to keep the game's own verbatim wording in all 12
-    // locales. Do not "fix" it by adding an emitter hook.
-    if (id == 0x0D)              return true;
+    // 0x0D is "begins casting", which FUN_00469af0 emits ONLY for action category 1 (magick).
+    // 0x0E is "readies", which it emits for categories 2, 7 and 9 -- and ENEMY ABILITIES ARE
+    // CATEGORY 7. S72 enabled 0x0D alone, so enemy abilities have never once been announced; that
+    // single classification is the whole reason the tester never heard an enemy cast. S87 adds 0x0E.
+    // 0x0F "uses" (category 3) stays log-only: that is the routine-item tier.
+    //
+    // The volume is bounded by the GAME, not by us, three times over: the faction gate above, the
+    // ~24-unit distance cull in FUN_00469570, and the 10-slot dedup ring in FUN_0046ab10.
+    //
+    // KNOWN LIMIT, RE-AFFIRMED by the user in S87: both ids carry render style 0x01, which is NOT
+    // cull-exempt (FUN_00469570 short-circuits only when the style byte is >= 0x80), so the bus
+    // drops them beyond ~24 world units and a caster hanging far back announces nothing. That is
+    // CORRECT behaviour, not a defect: an enemy cannot meaningfully act on you from 24 units out
+    // either, and a sighted player would not see the cast. Fixing it would mean hooking the emitter
+    // FUN_00469af0 and synthesizing the sentence ourselves, which throws away the game's own
+    // verbatim wording in all 12 locales. Do NOT "fix" it by adding an emitter hook.
+    if (id == 0x0D || id == 0x0E) return true;
 
-    // Everything else is log-only. Notably 0x0E-0x0F (readies / uses) fire constantly and are the
-    // spam tier, and 0x13-0x1B / 0x1E-0x23 are routine restores and cures.
+    // Everything else is log-only. Notably 0x0F (uses) is the routine-item tier, and 0x13-0x1B /
+    // 0x1E-0x23 are routine restores and cures.
     return false;
 }
 
@@ -59,28 +71,32 @@ std::wstring OutcomeWord(uint8_t outcome) {
     // DAT_02aedff4 the MAIN-HAND slot (weapon -> parry), DAT_02aedfec an animation set (evade).
     // There is no text for any of these in the binary -- they are sprites -- so these words are
     // mod-emitted by necessity, describing the mechanic we identified rather than a word we read.
+    // They live in speech/phrasebook.cpp with that reason recorded; this is the canonical example
+    // of what the phrasebook is for.
+    using Phrase::Id;
     switch (outcome) {
-        case 1: case 2:  return L"parried";
-        case 3: case 4:  return L"blocked";
-        case 5:          return L"evaded";
-        case 6:          return L"no effect";
-        case 7:          return L"nullified";
-        case 8:          return L"reflected";
-        case 10:         return L"absorbed";
-        case 11:         return L"avoided";
+        case 1: case 2:  return Phrase::Get(Id::Parried);
+        case 3: case 4:  return Phrase::Get(Id::Blocked);
+        case 5:          return Phrase::Get(Id::Evaded);
+        case 6:          return Phrase::Get(Id::NoEffect);
+        case 7:          return Phrase::Get(Id::Nullified);
+        case 8:          return Phrase::Get(Id::Reflected);
+        case 10:         return Phrase::Get(Id::Absorbed);
+        case 11:         return Phrase::Get(Id::Avoided);
         default:         return std::wstring();   // 0 = ordinary hit, 9 = default seed
     }
 }
 
 std::wstring DefeatedLine(const std::wstring& who) {
-    return who + L" defeated";
+    return who + Phrase::Get(Phrase::Id::Defeated);
 }
 
 std::wstring DefeatedLine(const std::wstring& who, uint32_t expGain, uint32_t lpGain) {
     // Silence beats filler: a kill the party got no credit for reports the kill and nothing else.
     if (expGain == 0 && lpGain == 0) return DefeatedLine(who);
-    return who + L" defeated. " + std::to_wstring(expGain) + L" EXP, "
-               + std::to_wstring(lpGain) + L" LP";
+    return who + Phrase::Get(Phrase::Id::DefeatedWithRewards)
+               + std::to_wstring(expGain) + Phrase::Get(Phrase::Id::ExpSuffix)
+               + std::to_wstring(lpGain)  + Phrase::Get(Phrase::Id::LpSuffix);
 }
 
 std::wstring DamageLine(const std::wstring& attacker,
@@ -94,13 +110,13 @@ std::wstring DamageLine(const std::wstring& attacker,
     // Verb from the action record's category byte (row+0x1E), mirroring the game's own vocabulary
     // in FUN_00469af0: 1 -> begins casting, 2/7/9 -> readies, 3 -> uses. A basic attack has no
     // announce at all, so "attacks" is ours.
-    const wchar_t* verb = L"attacks";
+    const wchar_t* verb = Phrase::Get(Phrase::Id::Attacks);
     bool namesAction = false;
     switch (actionCategory) {
-        case 1: verb = L"casts";   namesAction = true; break;
+        case 1: verb = Phrase::Get(Phrase::Id::Casts);   namesAction = true; break;
         case 2: case 7: case 9:
-                verb = L"readies"; namesAction = true; break;
-        case 3: verb = L"uses";    namesAction = true; break;
+                verb = Phrase::Get(Phrase::Id::Readies); namesAction = true; break;
+        case 3: verb = Phrase::Get(Phrase::Id::Uses);    namesAction = true; break;
         default: break;
     }
 
@@ -110,7 +126,7 @@ std::wstring DamageLine(const std::wstring& attacker,
     if (namesAction && !action.empty()) {
         s += L' ';
         s += action;
-        if (!target.empty()) { s += L" on "; s += target; }
+        if (!target.empty()) { s += Phrase::Get(Phrase::Id::OnJoiner); s += target; }
     } else if (!target.empty()) {
         s += L' ';
         s += target;
@@ -129,7 +145,7 @@ std::wstring DamageLine(const std::wstring& attacker,
         // the only unambiguous damage-vs-heal test.
         const int32_t mag = hpDelta < 0 ? -hpDelta : hpDelta;
         s += L". ";
-        if (hpDelta > 0) s += L"heals ";
+        if (hpDelta > 0) s += Phrase::Get(Phrase::Id::Heals);
         s += std::to_wstring(mag);
     }
     return s;

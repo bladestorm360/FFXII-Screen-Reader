@@ -17,6 +17,7 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -252,7 +253,7 @@ void SpeakEntityLocked(const Entity& e, const FVec3& playerPos) {
     Speech::Output(phrase);
 }
 
-void SpeakNoTargets() { Speech::Output(L"No targets"); }
+void SpeakNoTargets() { Speech::Output(Phrase::Get(Phrase::Id::NoTargets)); }
 } // namespace Internal
 
 using namespace Internal;
@@ -344,7 +345,7 @@ void OnFieldFrame() {
         std::wstring area = CurrentAreaName();
         if (!area.empty() && area != s_lastArea) {
             s_lastArea = area;
-            std::wstring phrase = L"Entering ";
+            std::wstring phrase = Phrase::Get(Phrase::Id::EnteringPrefix);
             phrase += area;
             // The spoken text itself is logged by Speech (SPEAK-OUT). Log the map id + each half here,
             // since those are what the speech log can't show — and they are exactly what distinguishes a
@@ -385,9 +386,9 @@ void CmdRescan() {
     std::wstring area = CurrentAreaName();   // lock-free; does not touch g_entities
     wchar_t buf[160];
     if (!area.empty())
-        _snwprintf_s(buf, _TRUNCATE, L"%s. %d objects", area.c_str(), n);
+        _snwprintf_s(buf, _TRUNCATE, Phrase::Get(Phrase::Id::FmtAreaObjects), area.c_str(), n);
     else
-        _snwprintf_s(buf, _TRUNCATE, L"%d objects", n);
+        _snwprintf_s(buf, _TRUNCATE, Phrase::Get(Phrase::Id::FmtObjects), n);
     Speech::Output(buf);
 }
 

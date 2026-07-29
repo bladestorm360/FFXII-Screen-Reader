@@ -5,6 +5,7 @@
 #include "../core/mem_read.h"
 #include "../core/phyre_types.h"
 #include "../speech/speech.h"
+#include "../speech/phrasebook.h"
 
 #include <cstdio>
 
@@ -89,9 +90,9 @@ void SpeakSlot(int slot) {
         text += v.statusNames;
     }
     if (!text.empty()) text += L", ";
-    text += L"HP " + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
+    text += Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
     if (v.haveMP)
-        text += L", MP " + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
+        text += std::wstring(L", ") + Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
 
     char utf8[256];
     Log::ToUtf8(text, utf8, sizeof(utf8));

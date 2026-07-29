@@ -1,4 +1,5 @@
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include <Windows.h>
@@ -173,7 +174,7 @@ void ToggleEnabled() {
     bool newVal = !g_speechEnabled.load();
     g_speechEnabled.store(newVal);
     Log::Write("SPEECH", newVal ? "Speech unmuted (F1)" : "Speech muted (F1)");
-    Raw(newVal ? L"Speech on" : L"Speech off", true);
+    Raw(Phrase::Get(newVal ? Phrase::Id::SpeechOn : Phrase::Id::SpeechOff), true);
 }
 
 void Raw(const std::wstring& text, bool interrupt) {

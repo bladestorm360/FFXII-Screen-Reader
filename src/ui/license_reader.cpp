@@ -5,6 +5,7 @@
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 #include "input/input_tracker.h"
 
@@ -220,10 +221,10 @@ std::wstring JobDesc(int job) {
 // Unknown/-1 -> nullptr (append nothing, never guess).
 const wchar_t* StatusWord(int status) {
     switch (status) {
-        case 1:                          return L"learned";
-        case 0: case 9:                  return L"can learn";
-        case 2:                          return L"not enough LP";
-        case 3: case 4: case 5: case 8:  return L"locked";
+        case 1:                          return Phrase::Get(Phrase::Id::Learned);
+        case 0: case 9:                  return Phrase::Get(Phrase::Id::CanLearn);
+        case 2:                          return Phrase::Get(Phrase::Id::NotEnoughLP);
+        case 3: case 4: case 5: case 8:  return Phrase::Get(Phrase::Id::LockedLower);
         default:                         return nullptr;
     }
 }
@@ -255,7 +256,7 @@ void AnnounceCharSel(void* ctrl) {
     // jobless: omit — the job-select screen (which vocalizes) makes it obvious.
 
     long lp = CurrentLP(charId);
-    if (lp >= 0) line += L", " + std::to_wstring(lp) + L" LP";
+    if (lp >= 0) line += L", " + std::to_wstring(lp) + Phrase::Get(Phrase::Id::LpSuffix);
 
     Log::WriteW("LICENSE", "charsel:", ctrl, line);
     Speech::Output(line, /*interrupt=*/true);
@@ -276,9 +277,9 @@ void AnnounceBoardEntry(void* board) {
         if (charId >= 0) lp = CurrentLP(charId);
     }
 
-    std::wstring line = jobName.empty() ? std::wstring(L"License board")
-                                        : (jobName + L" license board");
-    if (lp >= 0) line += L", " + std::to_wstring(lp) + L" LP";
+    std::wstring line = jobName.empty() ? std::wstring(Phrase::Get(Phrase::Id::LicenseBoard))
+                                        : (jobName + Phrase::Get(Phrase::Id::LicenseBoardSuffix));
+    if (lp >= 0) line += L", " + std::to_wstring(lp) + Phrase::Get(Phrase::Id::LpSuffix);
     Log::WriteW("LICENSE", "board:", board, line);
     Speech::Output(line, /*interrupt=*/true);
 }
@@ -332,8 +333,8 @@ void OnBoardNode(void* board, void* cell) {
         // neither icon nor info panel for it -- so say a license is there without leaking what it
         // is. Spoken rather than silent so scanning the board has no dead air, and NOT deduped:
         // each 0x8000 is one real cursor move. Mod-emitted word, requested by the user.
-        Log::WriteW("LICENSE", "node:", board, std::wstring(L"Locked"));
-        Speech::Output(L"Locked", /*interrupt=*/true);
+        Log::WriteW("LICENSE", "node:", board, std::wstring(Phrase::Get(Phrase::Id::LockedUpper)));
+        Speech::Output(Phrase::Get(Phrase::Id::LockedUpper), /*interrupt=*/true);
         return;
     }
 
@@ -356,7 +357,7 @@ void OnBoardNode(void* board, void* cell) {
 
     std::wstring line = name;
     if (const wchar_t* sw = StatusWord(status)) { line += L", "; line += sw; }
-    line += L", " + std::to_wstring(cost) + L" LP";
+    line += L", " + std::to_wstring(cost) + Phrase::Get(Phrase::Id::LpSuffix);
 
     // The board CLEARS the game's description bar (FUN_00291d80(0,0) in FUN_00561390), so the
     // capture hooks give `o` nothing here -- build the panel's own content and register it.
@@ -438,7 +439,7 @@ void OnLicensePointsKey() {
     if (charId < 0) return;
     long lp = CurrentLP(charId);
     if (lp < 0) return;
-    std::wstring line = std::to_wstring(lp) + L" License Points";
+    std::wstring line = std::to_wstring(lp) + Phrase::Get(Phrase::Id::LicensePointsSuffix);
     Log::WriteW("LICENSE", "lp:", board, line);
     Speech::Output(line, /*interrupt=*/true);
 }

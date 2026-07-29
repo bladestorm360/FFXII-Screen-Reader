@@ -9,6 +9,7 @@
 #include "core/stall_probe.h"
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <cstdio>
@@ -124,7 +125,7 @@ void CheckVitals(void* tgtBc, int32_t hpDelta) {
                 const std::wstring who =
                     BattleState::DisplayNameForActor(BattleState::ActorForBtlChr(tgtBc));
                 if (!who.empty())
-                    CombatLog::Append(CombatLog::Kind::System, who + L" below 20 percent",
+                    CombatLog::Append(CombatLog::Kind::System, who + Phrase::Get(Phrase::Id::BelowTwentyPercent),
                                       /*speakNow=*/true);
             }
         } else {

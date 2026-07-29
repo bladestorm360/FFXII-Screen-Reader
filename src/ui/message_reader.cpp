@@ -1,4 +1,5 @@
 #include "ui/message_reader.h"
+#include "ui/choice_reader.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -194,6 +195,12 @@ void OnTelop(void* text, int slot) {
     //
     // 4096, not 512: the 4-page hunt-tutorial message was being cut off mid-sentence
     // ("...Then you hunt it, ") because the cap was sized for one screen, not the whole message.
+    // Hand the RAW bytes to ChoiceReader before decoding. A cursored surface (the Hunt notice board)
+    // carries its rows in a 0x0E option block inside THIS string, past the question and the column
+    // headers -- and Decode stops at that marker, so the decoded text below can never contain them.
+    // The window itself has no copy (window+0x1A8 is null there), so this is the only route to them.
+    ChoiceReader::NoteMessageText(reinterpret_cast<const uint8_t*>(text));
+
     std::vector<std::wstring> pages;
     GameText::DecodePages(reinterpret_cast<const uint8_t*>(text), 4096, pages);
     if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
@@ -207,14 +214,49 @@ void OnTelop(void* text, int slot) {
     // bytes so the separator can be READ off the boundary -- the run between "...the bounty." and
     // "You gotta talk..." is whatever sits at that offset. Capped at 3 dumps per session and
     // 256 bytes each, so it cannot become log spam on the game thread.
-    if (pages.size() == 1 && pages.front().size() > 200) {
+    // ALSO dump when the decode STOPPED EARLY. GameText::ControlLength treats 0x00/0x0B/0x0C/0x0D as
+    // terminators and 0x0E as "length unknown -- stop, never guess", so a message whose real content
+    // continues past one of those decodes to a short, innocent-looking string and the rest is simply
+    // lost. That is what the Hunt notice board looks like: it yields
+    // "Which bill would you like to read?\nMarkRankStatus" -- the question and the three COLUMN
+    // HEADERS -- while the bill rows the player is arrowing through never appear. Whether they sit
+    // past that stop byte is exactly what these bytes answer, and guessing a structure without them
+    // is how the 0x0E option-block model got mis-applied to this surface in the first place.
+    const bool longSinglePage = (pages.size() == 1 && pages.front().size() > 200);
+    bool stoppedEarly = false;
+    {
+        uint8_t probe[256] = {};
+        if (MemRead::SafeReadBytes(text, probe, sizeof(probe))) {
+            size_t stop = 0;
+            while (stop < sizeof(probe)) {
+                const uint8_t c = probe[stop];
+                if (c == 0x00 || c == 0x0B || c == 0x0C || c == 0x0D || c == 0x0E) break;
+                ++stop;
+            }
+            // Real text after the stop byte means we are dropping content, not ending cleanly.
+            for (size_t i = stop + 1; i < sizeof(probe); ++i)
+                if (probe[i] >= 0x10) { stoppedEarly = true; break; }
+        }
+    }
+
+    if (longSinglePage || stoppedEarly) {
         static int s_dumps = 0;
         if (s_dumps < 3) {
             ++s_dumps;
-            uint8_t raw[256] = {};
+            // 768, not 256: the notice board's option block alone ran past 256 and the dump cut off
+            // mid-list, so whatever follows the marks -- and the STATUS column is not in the row
+            // bytes, its 0x0F 0x2E escape resolves through a render-context table -- was never
+            // visible. File-only, capped at 3 dumps a session, so the console budget is untouched.
+            uint8_t raw[768] = {};
             if (MemRead::SafeReadBytes(text, raw, sizeof(raw))) {
+                char why[96];
+                snprintf(why, sizeof(why), "telop RAW (%s, decoded %zu chars):",
+                         stoppedEarly ? "DECODE STOPPED EARLY -- content follows a control byte"
+                                      : "long single page",
+                         pages.front().size());
+                Log::Write("MSGTEXT", why);
                 char hex[3 * 64 + 1];
-                for (int off = 0; off < 256; off += 64) {
+                for (int off = 0; off < static_cast<int>(sizeof(raw)); off += 64) {
                     int p = 0;
                     for (int k = 0; k < 64; ++k)
                         p += snprintf(hex + p, sizeof(hex) - p, "%02x ", raw[off + k]);
@@ -292,6 +334,7 @@ void NextPage() {
         idx   = g_pageIdx;
         total = g_pages.size();
     }
+    ChoiceReader::NotePage(idx);   // a later page can carry its own option block (the Yes/No)
     char hdr[64];
     snprintf(hdr, sizeof(hdr), "telop page %zu/%zu: ", idx + 1, total);
     SpeakAndStash(page, hdr);

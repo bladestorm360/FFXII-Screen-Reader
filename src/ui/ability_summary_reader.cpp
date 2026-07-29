@@ -5,6 +5,7 @@
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 
 #include <Windows.h>
@@ -102,7 +103,7 @@ void AnnounceEntry(void* obj, uint32_t entriesOff, uint32_t indexOff, bool hasSe
     // become curable — so mark them. An empty slot is already fully described by "empty".
     uint32_t flags = 0;
     SafeReadU32(entry, OFF_ENT_FLAGS, &flags);
-    if (!(flags & ENT_FLAG_LEARNED) && !emptySlot) line += L", unavailable";
+    if (!(flags & ENT_FLAG_LEARNED) && !emptySlot) line += std::wstring(L", ") + Phrase::Get(Phrase::Id::Unavailable);
 
     // Publish even when empty: nothing else bumps the help generation on this screen, so leaving a
     // previous entry's description in place would make `o` read a stale one.

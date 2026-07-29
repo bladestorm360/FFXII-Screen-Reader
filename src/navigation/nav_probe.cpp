@@ -10,6 +10,7 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <atomic>
 #include <cmath>
@@ -279,14 +280,14 @@ void OnGameFrame() {
         snprintf(m, sizeof(m), "probe abandoned: field never became nav-safe (failMask=0x%02X[%s])",
                  fm, names);
         Log::Write(kTag, m);
-        Speech::Output(L"Diagnostic unavailable", true);
+        Speech::Output(Phrase::Get(Phrase::Id::DiagnosticUnavailable), true);
         return;
     }
 
     g_pending.store(false, std::memory_order_release);
     g_framesLeft = 0;
     RunProbe();
-    Speech::Output(L"Diagnostic logged", true);
+    Speech::Output(Phrase::Get(Phrase::Id::DiagnosticLogged), true);
 }
 
 } // namespace NavProbe

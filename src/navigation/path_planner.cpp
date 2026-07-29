@@ -9,6 +9,7 @@
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 
 #include <atomic>
@@ -215,7 +216,7 @@ void OnGameFrame() {
             char m[208];
             snprintf(m, sizeof(m), "drain: gave up (never nav-safe within window) for \"%s\" -> Route unavailable", lm);
             Log::Write("NAV-ROUTE", m);
-            Speech::Output(L"Route unavailable", true);
+            Speech::Output(Phrase::Get(Phrase::Id::RouteUnavailable), true);
         }
         return;
     }
@@ -234,7 +235,7 @@ void OnGameFrame() {
     if (isTransition && exitDist <= kAtExitDist && exitDy <= kAtExitDy) {
         float facing = 0.0f;
         PlayerState::ReadCameraForwardStable(facing);
-        std::wstring say = L"At the exit.";
+        std::wstring say = Phrase::Get(Phrase::Id::AtTheExit);
         // Beyond arm's reach, still say where it is: standing BESIDE the seam rather than on it is a
         // real difference the player can act on.
         if (exitDist > kOnExitDist) {
@@ -332,7 +333,7 @@ void OnGameFrame() {
     // line the route never takes -- then any drift off that imaginary diagonal comes back as a
     // completely different direction. `poly` stays the validated geometry and the diagnostic below.
     std::wstring say = (r == PathSearch::Plan::Route) ? PathDirections::Describe(rawPoly, facingRad)
-                                                      : std::wstring(L"No path");
+                                                      : std::wstring(Phrase::Get(Phrase::Id::NoPath));
 
     // Log the spoken directions (ASCII cardinals/digits) so the exact leg text is diagnosable.
     {

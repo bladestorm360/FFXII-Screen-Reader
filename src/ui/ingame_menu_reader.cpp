@@ -9,6 +9,7 @@
 // resolves handle -> actor -> name with pure memory reads (no game call).
 #include "battle/battle_state.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
 
@@ -95,22 +96,50 @@ Pfn_BcmdDraw s_origBcmdDraw = nullptr;
 //   FUN_0027ce70 (spell/technick list)  — FUN_0035d330(0x14,id). +0x1578 overwritten by MP -> re-resolve.
 constexpr uint32_t OFF_LISTWIDGET  = 0x1510;   // panel+0x1510 = the list widget
 constexpr uint32_t OFF_DRAW_CB     = 0x120;    // listWidget+0x120 = per-row draw callback
-constexpr uint32_t OFF_DEF_CODEC   = 0x18;     // FUN_0035d330 record +0x18 = codec source
 constexpr uint32_t OFF_BCMD_FLAG   = 0x513;    // panel+0x513 + row*8 = per-row flag byte (bit2 in chooser)
+
+// ---- GAMBITS: the one battle command that is a TOGGLE, not a submenu --------------------------
+// cmdId 0x0D. Two independent sites single it out: the row draw FUN_00276be0 special-cases exactly
+// this id to draw a SECOND, two-state graphic beside the name (FUN_00242600 with a frame index),
+// and the confirm handler FUN_0027c3d0 `case 0xd` is the only branch that flips a flag in place and
+// returns to the same menu instead of opening a list or entering targeting.
+//
+// The row's list struct lives at panel+0x4C0; the confirm handler receives exactly that pointer, so
+// its field offsets are the panel offsets minus 0x4C0 (count 0x500->0x40, ids 0x510->0x50,
+// flags 0x513->0x53). panel+0x4C8 is the acting character's scene handle -- read it from the SAME
+// place the game's own toggle reads it rather than going through the controller, so the two cannot
+// disagree.
+//
+// FORWARD RISK (tester raised it): if a later game state turns Gambits into a submenu rather than a
+// toggle, the row stops taking the `case 0xd` path. The gate below -- top-level draw callback AND
+// cmdId 0x0D AND the row not disabled -- is exactly the condition the game itself uses to draw the
+// two-state icon, so the state suffix disappears on its own rather than reporting a stale toggle.
+constexpr int      BCMD_ID_GAMBIT      = 0x0D;
+constexpr uint8_t  BCMD_FLAG_DISABLED  = 0x02;  // row greyed out: game draws alpha 0x40, confirm rejects
+constexpr uint32_t OFF_BCMD_CHAR       = 0x4C8; // panel+0x4C8 = acting character's scene handle
+constexpr uint32_t RVA_BCMD_CONFIRM    = 0x15C3D0;  // FUN_0027c3d0(outSel, list, row) confirm handler
+constexpr uint32_t OFF_LIST_KIND       = 0x00;  // list+0x00 = list type; 6 and 9 are the top-level list
+constexpr uint32_t OFF_LIST_CHAR       = 0x08;  // list+0x08 = scene handle (== panel+0x4C8)
+constexpr uint32_t OFF_LIST_IDS        = 0x50;  // list+0x50 + row*8 = u16 command id
+constexpr uint32_t OFF_LIST_CNT        = 0x40;  // list+0x40 = command count (int)
+
+typedef uint32_t (*Pfn_BcmdConfirm)(int16_t*, void*, int);
+Pfn_BcmdConfirm s_origBcmdConfirm = nullptr;
 constexpr uint32_t RVA_DRAW_TOPCMD = 0x156BE0; // FUN_00276be0 -- SAME function as RVA_BCMD_DRAW
                                               // above; two names on purpose, one is the hook target,
                                               // the other the draw-callback identity we compare against.
 constexpr uint32_t RVA_DRAW_CHOOSER= 0x15D240; // FUN_0027d240 (Magicks/Technicks category chooser)
 constexpr uint32_t RVA_DRAW_MAGICK = 0x15CE70; // FUN_0027ce70 (spell/technick list, cat 0x14)
 constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 (items) — CONFIRMED working
-constexpr uint32_t RVA_RESOLVE_DEF = 0x23D330; // FUN_0035d330(cat, id) -> &record
-                                              // (FUN_00272cb0, the item name codec, moved to
-                                              // core/item_names.cpp — shared with the loot scanner)
+                                              // (FUN_0035d330's record walk moved to
+                                              // battle/battle_state.cpp as DefName -- shared with
+                                              // the combat log; FUN_00272cb0, the item name codec,
+                                              // moved to core/item_names.cpp -- shared with the
+                                              // loot scanner)
 constexpr uint32_t CAT_MAGICK      = 0x14;     // FUN_0035d330 category for the spell/technick list
 constexpr uint32_t CAT_CHOOSER_TECH= 0x18;     // chooser category when flag bit2 set (Technicks)
 constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // chooser category otherwise (Magick schools)
 
-typedef const uint8_t* (*Pfn_ResolveDef)(uint32_t, uint32_t);  // FUN_0035d330(cat, id)
 
 // Battle target-selection readout lives in battle_target_reader.cpp now (hooks the vitals builder
 // FUN_00329220 + the current-target index ctx+0xde0). The old reticle hook (FUN_005528c0) was
@@ -367,16 +396,6 @@ uint64_t HookedFieldPaneWnd(void* window, void* packet) {
     return ret;
 }
 
-// Replicate FUN_002b58b0(src, 0): a 2-byte-marker-prefixed codec block; index 0 -> src+2 if it
-// starts with the 0x0000 marker, else src. Memory-only, SEH.
-const uint8_t* Resolve58b0(const uint8_t* src) {
-    if (!src) return nullptr;
-    __try {
-        if (src[0] == 0 && src[1] == 0) return src + 2;
-        return src;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
-}
-
 // The panel's per-row draw callback (*( *(panel+0x1510) + 0x120 )) — identifies the list type.
 void* BattleDrawCallback(void* panel) {
     if (!panel) return nullptr;
@@ -389,14 +408,11 @@ void* BattleDrawCallback(void* panel) {
 
 // Def-table name codec (commands / magicks / technicks): FUN_0035d330(cat,id) -> record;
 // record+0x18 -> Resolve58b0 -> name codec. The game call runs on our (game) thread. SEH-guarded.
-const uint8_t* ResolveDefName(uint32_t cat, uint32_t cmdId) {
-    auto fn = reinterpret_cast<Pfn_ResolveDef>(Hooks::ResolveRva(RVA_RESOLVE_DEF));
-    if (!fn) return nullptr;
-    __try {
-        const uint8_t* rec = fn(cat, cmdId);
-        if (!rec) return nullptr;
-        return Resolve58b0(*reinterpret_cast<const uint8_t* const*>(rec + OFF_DEF_CODEC));
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+// Delegates to BattleState::DefName -- the SAME chain, hoisted there in S87 so the combat log can
+// use it too (AbilityName was walking a different, broken one). Returns the decoded string rather
+// than a codec pointer; callers below adapt.
+std::wstring ResolveDefNameText(uint32_t cat, uint32_t cmdId) {
+    return BattleState::DefName(cat, cmdId);
 }
 
 // Item name codec: FUN_00272cb0(id) returns it directly (CONFIRMED working). Centralized in
@@ -412,20 +428,20 @@ std::wstring BattleCommandName(void* panel, int index, int cmdId) {
         std::lock_guard<std::mutex> lk(g_mutex);
         return g_bcmdName[cmdId];
     }
-    const uint8_t* codec = nullptr;
-    if (cb == Hooks::ResolveRva(RVA_DRAW_ITEM)) {            // item sublist (CONFIRMED)
-        codec = ResolveItemName(cmdId);
-    } else if (cb == Hooks::ResolveRva(RVA_DRAW_CHOOSER)) {  // Magicks/Technicks category chooser
+    if (cb == Hooks::ResolveRva(RVA_DRAW_CHOOSER)) {         // Magicks/Technicks category chooser
         uint32_t cat = (ReadBcmdRowFlag(panel, index) & 4) ? CAT_CHOOSER_TECH : CAT_CHOOSER_MAG;
-        codec = ResolveDefName(cat, cmdId);
-    } else if (cb == Hooks::ResolveRva(RVA_DRAW_MAGICK)) {   // spell / technick list
-        codec = ResolveDefName(CAT_MAGICK, cmdId);
-    } else {
-        return std::wstring();                              // unmapped list type — stay silent
+        return ResolveDefNameText(cat, static_cast<uint32_t>(cmdId));
     }
-    if (!codec) return std::wstring();
-    std::wstring text = GameText::Decode(codec, 256);
-    return GameText::IsMostlyPrintable(text) ? text : std::wstring();
+    if (cb == Hooks::ResolveRva(RVA_DRAW_MAGICK)) {          // spell / technick list
+        return ResolveDefNameText(CAT_MAGICK, static_cast<uint32_t>(cmdId));
+    }
+    if (cb == Hooks::ResolveRva(RVA_DRAW_ITEM)) {            // item sublist (CONFIRMED)
+        const uint8_t* codec = ResolveItemName(cmdId);
+        if (!codec) return std::wstring();
+        std::wstring text = GameText::Decode(codec, 256);
+        return GameText::IsMostlyPrintable(text) ? text : std::wstring();
+    }
+    return std::wstring();                                   // unmapped list type — stay silent
 }
 
 // Read the highlighted Status-chooser slot's vitals + the active controller (log tag only). Returns
@@ -481,15 +497,13 @@ void HookedStatusCursor(int slot) {
     void* ctrl = nullptr;                                          // used for the log tag only
     if (!ReadStatusSlot(slot, &v, &ctrl)) return;
 
-    const uint8_t* codec = ResolveDefName(CAT_CHARNAME, static_cast<uint32_t>(v.charId));
-    if (!codec) return;
-    std::wstring name = GameText::Decode(codec, 256);
-    if (!GameText::IsMostlyPrintable(name)) return;
+    std::wstring name = ResolveDefNameText(CAT_CHARNAME, static_cast<uint32_t>(v.charId));
+    if (name.empty()) return;
 
     std::wstring line = name;
-    line += L", Level " + std::to_wstring(v.level);
-    line += L", HP " + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
-    line += L", MP " + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
+    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::LevelPrefix) + std::to_wstring(v.level);
+    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
+    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
     Log::WriteW("INGAME", "status:", ctrl, line);
     Speech::Output(line, /*interrupt=*/true);
 }
@@ -521,11 +535,36 @@ void SpeakBattleCharName(const char* why) {
     g_bcmdQueueNext = true;
 }
 
+// The acting character's scene handle, straight off the panel (panel+0x4C8 == list+0x08, the field
+// the game's own confirm handler uses). 0 when unreadable.
+uint32_t ReadBcmdCharHandle(void* panel) {
+    uint32_t h = 0;
+    if (!panel || !MemRead::SafeReadU32(panel, OFF_BCMD_CHAR, &h)) return 0;
+    return h;
+}
+
+// ": on" / ": off" for the Gambits row, empty for everything else. Empty is also the answer when the
+// state cannot be read or the row is greyed out -- a blind player is better served by the bare name
+// than by a state that might be wrong. The words are mod-emitted (the game draws an icon frame, not
+// text); see speech/phrasebook.h.
+std::wstring GambitStateSuffix(void* panel, int index, int cmdId) {
+    if (cmdId != BCMD_ID_GAMBIT) return std::wstring();
+    // Top-level list only: the same draw-callback identity BattleCommandName gates on.
+    if (BattleDrawCallback(panel) != Hooks::ResolveRva(RVA_DRAW_TOPCMD)) return std::wstring();
+    if (ReadBcmdRowFlag(panel, index) & BCMD_FLAG_DISABLED) return std::wstring();
+
+    bool resolved = false;
+    const bool on = BattleState::GambitsEnabled(ReadBcmdCharHandle(panel), &resolved);
+    if (!resolved) return std::wstring();
+    return std::wstring(L": ") + Phrase::Get(on ? Phrase::Id::On : Phrase::Id::Off);
+}
+
 bool TrySpeakBattleCommand(void* panel, int index) {
     int cmdId = ReadBcmdCmdId(panel, index);
     if (cmdId < 0) return false;
     std::wstring text = BattleCommandName(panel, index, cmdId);   // resolves by list type; locks internally
     if (text.empty()) return false;
+    text += GambitStateSuffix(panel, index, cmdId);   // "Gambits: on" -- the NAME is still the game's
 
     // THE MENU JUST BECAME ACTIVE -> say whose it is first. The tester asked for this explicitly:
     // the command highlight is meaningless until you know which character is about to obey it.
@@ -542,6 +581,41 @@ bool TrySpeakBattleCommand(void* panel, int index) {
     if (queue) Speech::SpeakQueued(text);
     else       Speech::Output(text, /*interrupt=*/true);
     return true;
+}
+
+// FUN_0027c3d0(outSel, list, row): the battle menu's CONFIRM handler. Hooked for exactly one case --
+// `case 0xd`, the Gambits toggle -- so the player hears the new state the moment they flip it. The
+// tester asked for just the word here ("on" / "off"), not the whole row again.
+//
+// Runs AFTER the original and RE-READS the flag rather than decoding the return code (0x17 = now on,
+// 0x19 = now off). Both would work under the same gate, but reading the value the game just wrote is
+// the measurement; the return code is an inference about it. Gate first, so this costs two compares
+// on every other confirm in the game.
+uint32_t HookedBcmdConfirm(int16_t* outSel, void* list, int row) {
+    const uint32_t ret = s_origBcmdConfirm ? s_origBcmdConfirm(outSel, list, row) : 0;
+    STALL_SCOPE("IngameMenuReader::HookedBcmdConfirm");
+    if (!list || row < 0) return ret;
+
+    uint32_t kind = 0;
+    if (!MemRead::SafeReadU32(list, OFF_LIST_KIND, &kind)) return ret;
+    if (kind != 6 && kind != 9) return ret;              // not the top-level command list
+    int count = 0;
+    if (!MemRead::SafeReadInt(reinterpret_cast<char*>(list) + OFF_LIST_CNT, &count)) return ret;
+    if (count <= 0 || count > 64 || row >= count) return ret;
+    uint16_t cmdId = 0;
+    if (!MemRead::SafeReadU16(list, OFF_LIST_IDS + static_cast<uint32_t>(row) * BCMD_STRIDE, &cmdId)) return ret;
+    if (cmdId != BCMD_ID_GAMBIT) return ret;
+
+    uint32_t handle = 0;
+    if (!MemRead::SafeReadU32(list, OFF_LIST_CHAR, &handle)) return ret;
+    bool resolved = false;
+    const bool on = BattleState::GambitsEnabled(handle, &resolved);
+    if (!resolved) return ret;                            // silence beats guessing at the new state
+
+    const wchar_t* word = Phrase::Get(on ? Phrase::Id::On : Phrase::Id::Off);
+    Log::WriteW("INGAME", "gambits toggled:", word);
+    Speech::Output(word, /*interrupt=*/true);
+    return ret;
 }
 
 // FUN_002778c0(ctrl, msgStruct): the battle command menu controller.
@@ -576,6 +650,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
     ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
     ok     &= Hooks::InstallTyped(RVA_BCMD_CTRL,     &HookedBcmdCtrl,    &s_origBcmdCtrl);
+    ok     &= Hooks::InstallTyped(RVA_BCMD_CONFIRM,  &HookedBcmdConfirm, &s_origBcmdConfirm);
     Log::Write("INGAME", ok ? "IngameMenuReader: field-pane show + battle command-draw + battle char "
                               "switch + status-chooser hooks installed"
                             : "IngameMenuReader: a field/battle/status hook FAILED to install");
@@ -583,6 +658,7 @@ bool Init() {
 }
 
 void Shutdown() {
+    Hooks::Uninstall(RVA_BCMD_CONFIRM);
     Hooks::Uninstall(RVA_BCMD_CTRL);
     Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);

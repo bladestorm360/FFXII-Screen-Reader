@@ -1,6 +1,7 @@
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
 #include "core/logger.h"
+#include "speech/phrasebook.h"
 
 
 #include <cmath>
@@ -273,13 +274,13 @@ std::wstring Describe(const std::vector<FVec3>& poly, float facingRad) {
         spoken += legs[i].steps;
     }
     if (legs.size() > kMaxSpokenLegs) {
-        out += L", then ";
+        out += Phrase::Get(Phrase::Id::ThenJoiner);
         out += std::to_wstring(total - spoken);
-        out += L" more";
+        out += Phrase::Get(Phrase::Id::MoreSuffix);
     }
     out += L". ";
     out += std::to_wstring(total);
-    out += L" steps";
+    out += Phrase::Get(Phrase::Id::StepsSuffix);
     return out;
 }
 
@@ -290,7 +291,7 @@ std::wstring NextInstruction(const std::vector<FVec3>& poly, float facingRad) {
     std::wstring s = legs.front().word;
     s += L" ";
     s += std::to_wstring(legs.front().steps);
-    s += L" steps";
+    s += Phrase::Get(Phrase::Id::StepsSuffix);
     return s;
 }
 

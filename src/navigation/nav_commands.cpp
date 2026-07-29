@@ -10,6 +10,7 @@
 #include "battle/combat_log.h"
 #include "core/logger.h"
 #include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <cstdio>
@@ -30,7 +31,7 @@ void RouteToCurrent() {
         // Front-of-pipeline diagnostic: distinguishes "\\ produced no target" from
         // "\\ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
         Log::Write("NAV-ROUTE", "'\\' (route) pressed: GetCurrentTarget returned no target -> \"No target\"");
-        Speech::Output(L"No target");
+        Speech::Output(Phrase::Get(Phrase::Id::NoTarget));
         return;
     }
     Log::Write("NAV-ROUTE", "'\\' (route) pressed: target acquired -> PathPlanner::Request");
@@ -65,7 +66,7 @@ void RouteToLockedTarget() {
     // routing on every press, and re-resolves a fresh position for a moving target.
     if (!BattleTargetReader::GetLockedTarget(tgt, label)) {
         Log::Write("NAV-ROUTE", "'p' (route to locked target) pressed: no live locked target -> \"No target\"");
-        Speech::Output(L"No target");
+        Speech::Output(Phrase::Get(Phrase::Id::NoTarget));
         return;
     }
     char m[160];

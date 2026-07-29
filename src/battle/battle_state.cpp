@@ -7,6 +7,7 @@
 #include "core/logger.h"
 #include "navigation/nav_rva.h"
 
+#include <Windows.h>
 #include <cstdio>
 
 namespace BattleState {
@@ -22,6 +23,30 @@ using MemRead::SafeReadU32;
 constexpr uint32_t RVA_POOL      = 0x2D9F170;  // DAT_02ebf170 -- shared codec string pool (word.bin)
 constexpr uint32_t RVA_ACTIONTBL = 0x2D9F138;  // DAT_02ebf138 -- ability/action table
 constexpr uint32_t RVA_STATUSTBL = 0x2D9F118;  // DAT_02ebf118 -- battle status-name table
+
+// The DEF-record resolver: FUN_0035d330(category, id) fills a static record and returns it; the
+// localized name is the codec pointer at record+0x18. This is the game's own name path -- the one
+// ingame_menu_reader has been using for spell/technick names since S31 -- and it does NOT depend on
+// Reloc()/MasterRecord()/PoolString(). Hoisted here so there is one copy, per the centralize rule.
+constexpr uint32_t RVA_RESOLVE_DEF = 0x23D330;  // FUN_0035d330(cat, id) -> &record
+constexpr uint32_t OFF_DEF_CODEC   = 0x18;      // record+0x18 = name codec source
+constexpr uint32_t CAT_ABILITY     = 0x14;      // magicks / technicks / actions
+typedef const uint8_t* (*Pfn_ResolveDef)(uint32_t, uint32_t);
+
+// Party-member runtime records: &DAT_022c8080, stride 0xC0, live count at DAT_022c8064 (int).
+// FUN_0035bb20 is the game's accessor; FUN_00272ee0 walks at most FOUR of them (3 party + guest).
+// NOTE map_rva.h calls this same array a "field-sign site record table" (SITE_TABLE_*). Those
+// constants are declared and never used; the derivation here -- +0x04 matched against a scene
+// handle, +0x60 used as a BtlChr index by the gambit getter -- is the one backed by call sites.
+constexpr uint32_t RVA_PARTY_RECS  = 0x21A8080;  // DAT_022c8080
+constexpr uint32_t RVA_PARTY_COUNT = 0x21A8064;  // DAT_022c8064 (int)
+constexpr uint32_t PARTY_STRIDE    = 0xC0;
+constexpr uint32_t PARTY_HANDLE    = 0x04;       // i32 scene handle
+constexpr uint32_t PARTY_BCIDX     = 0x60;       // i16 BtlChr index
+constexpr uint32_t PARTY_SLOT_MAX  = 4;          // FUN_00272ee0 gives up after slot 3
+
+constexpr uint32_t BC_FLAGS        = 0x00;       // u32 flag word (NOT previously named)
+constexpr uint32_t BC_FLAG_GAMBIT  = 0x04;       // bit 2 -- gambit master toggle
 
 constexpr uint32_t OFF_ROSTER_L3 = 0x5A7E;     // list 3: 9 x u16 BtlChr indices (unmasked party)
 constexpr uint32_t OFF_LEADER    = 0x5AA4;     // u8 leader BtlChr index
@@ -44,12 +69,22 @@ constexpr uint32_t SO_INST = 0x100, SO_NAMEKEY = 0x102;
 // st2e master-data header: +0x04 count, +0x08 stride, +0x0C -> records.
 constexpr uint32_t HDR_COUNT = 0x04, HDR_STRIDE = 0x08, HDR_RECORDS = 0x0C;
 
-// Every "pointer" in master data is a u32 offset needing this relocation (FUN_0020e600).
+// Every "pointer" in master data is a u32 offset needing this relocation (FUN_0020e600, which is
+// literally `return off + _DAT_01f83530`).
+//
+// S87 FIX: this used to bail when the base READ BACK AS ZERO, conflating "the read failed" with
+// "the addend is 0" -- and 0 is a legitimate addend. Branch on the read succeeding instead. The
+// width is right: FUN_0020e600 is 10 bytes (`mov eax,ecx` + `add rax, qword [rip+d]` + `ret`), a
+// genuine 64-bit load. Its inverse FUN_0020e620 is 9 bytes doing a 32-bit `sub eax, dword [rip+d]`,
+// and for that to invert the 64-bit add the high dword must be zero -- so the base is below 4 GB.
+// Whether it is exactly zero is a runtime fact; DiagnoseSlot prints it (see the actionTbl block).
+//
+// A wrong resulting pointer is safe: every consumer reads through MemRead's SEH-guarded helpers.
 void* Reloc(uint32_t off) {
     if (off == 0) return nullptr;
-    void* base = PtrAt(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0);
-    if (!base) return nullptr;
-    return static_cast<char*>(base) + off;
+    uint64_t base = 0;
+    if (!MemRead::SafeReadU64(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0, &base)) return nullptr;
+    return reinterpret_cast<char*>(static_cast<uintptr_t>(base)) + off;
 }
 
 // Shared-pool lookup: chunk = pool[1 + (idx >> 11)], string = chunk[idx & 0x7FF].
@@ -133,6 +168,37 @@ void* LeaderBtlChr() {
 void* LeaderActor() { return ActorForBtlChr(LeaderBtlChr()); }
 
 void* BtlChrForActor(void* actor) { return PtrAt(actor, NavRva::ACTOR_DEF_PTR); }
+
+bool GambitsEnabled(uint32_t sceneHandle, bool* outResolved) {
+    if (outResolved) *outResolved = false;
+    if (sceneHandle == 0) return false;
+
+    // The record array is a STATIC array, so ResolveRva gives its address directly -- no deref.
+    void* recs  = Hooks::ResolveRva(RVA_PARTY_RECS);
+    void* countp = Hooks::ResolveRva(RVA_PARTY_COUNT);
+    if (!recs || !countp) return false;
+    uint32_t count = 0;
+    if (!SafeReadU32(countp, 0, &count)) return false;
+    if (count > PARTY_SLOT_MAX) count = PARTY_SLOT_MAX;   // same bound the game's own walk uses
+
+    for (uint32_t i = 0; i < count; ++i) {
+        char* rec = static_cast<char*>(recs) + static_cast<size_t>(i) * PARTY_STRIDE;
+        uint32_t h = 0;
+        if (!SafeReadU32(rec, PARTY_HANDLE, &h) || h != sceneHandle) continue;
+
+        uint16_t idx = 0;
+        if (!SafeReadU16(rec, PARTY_BCIDX, &idx) || idx >= BC_COUNT) return false;
+        void* w = Work();
+        if (!w) return false;
+        void* bc = static_cast<char*>(w) + OFF_BC_ARRAY + static_cast<size_t>(idx) * BC_STRIDE;
+
+        uint32_t flags = 0;
+        if (!SafeReadU32(bc, BC_FLAGS, &flags)) return false;
+        if (outResolved) *outResolved = true;
+        return (flags & BC_FLAG_GAMBIT) != 0;
+    }
+    return false;   // handle not in the party table -- unresolved, and the caller stays silent
+}
 
 void* ActorForBtlChr(void* bc) {
     if (!bc) return nullptr;
@@ -325,21 +391,47 @@ void DiagnoseCommitment() {
             sOk = SafeReadU16(hdr, HDR_STRIDE,  &stride);
             rOk = SafeReadU32(hdr, HDR_RECORDS, &recOff);
         }
-        void* relocBase = PtrAt(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0);
-        void* records   = (recOff && relocBase) ? static_cast<char*>(relocBase) + recOff : nullptr;
+        // The reloc base is printed as its RAW 8 BYTES plus a read-ok flag, because 0 is a
+        // legitimate value here and the old code could not tell it from a failed read (that
+        // conflation is the S87 Reloc() bug). This line is what answers "is the addend actually
+        // zero on this build" WITHOUT a Frida probe -- one battle and the log says so.
+        uint64_t relocRaw = 0;
+        const bool relocOk = MemRead::SafeReadU64(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0, &relocRaw);
+        void* records = (recOff && relocOk)
+                        ? reinterpret_cast<char*>(static_cast<uintptr_t>(relocRaw)) + recOff : nullptr;
         snprintf(m, sizeof(m),
                  "commit-diag: actionTbl hdr=%p count=%u(%d) stride=%u(%d) recOff=0x%X(%d) "
-                 "relocBase=%p records=%p | id=0x%X %s",
+                 "relocRaw=0x%016llX(read=%d) records=%p | id=0x%X %s",
                  hdr, count, cOk ? 1 : 0, stride, sOk ? 1 : 0, recOff, rOk ? 1 : 0,
-                 relocBase, records, aAct,
+                 (unsigned long long)relocRaw, relocOk ? 1 : 0, records, aAct,
                  !hdr        ? "<-- TABLE PTR NULL"
                : !cOk        ? "<-- COUNT UNREADABLE"
                : (aAct >= count) ? "<-- ID >= COUNT (out of table)"
                : (stride == 0)   ? "<-- STRIDE 0"
-               : !relocBase  ? "<-- RELOC BASE NULL"
+               : !relocOk    ? "<-- RELOC BASE UNREADABLE"
                : !records    ? "<-- RECORDS NULL"
                              : "(id is in range -- row should resolve)");
         Log::Write("TARGET", m);
+
+        // Both name chains side by side. The DEF chain (FUN_0035d330) is what AbilityName uses as
+        // of S87 and is confirmed in play; the OLD action-table chain is printed only to show
+        // whether Reloc()/PoolString() work at all, which is what governs AbilityCategory -- the
+        // verb (casts/readies/uses). If the old chain is empty the verb degrades to "attacks" while
+        // the name stays correct, which is exactly the pre-S87 behaviour and not a regression.
+        if (aAct != 0xFFFF) {
+            char defBuf[128] = {}, oldBuf[128] = {};
+            Log::ToUtf8(DefName(CAT_ABILITY, aAct), defBuf, sizeof(defBuf));
+            void* row = MasterRecord(RVA_ACTIONTBL, aAct);
+            uint16_t nameIdx = 0; uint8_t catByte = 0;
+            if (row) { SafeReadU16(row, 0x34, &nameIdx); SafeReadU8(row, 0x1E, &catByte); }
+            Log::ToUtf8(row ? PoolString(nameIdx) : std::wstring(), oldBuf, sizeof(oldBuf));
+            snprintf(m, sizeof(m),
+                     "commit-diag: id=0x%X | DEF chain (shipped) = \"%s\" | action-table chain = "
+                     "\"%s\" (row=%p nameIdx=%u cat=%u) %s",
+                     aAct, defBuf, oldBuf, row, nameIdx, catByte,
+                     row ? "" : "<-- action row unresolved: AbilityCategory will read 0 (verb -> \"attacks\")");
+            Log::Write("TARGET", m);
+        }
     }
 
     // Name the failing condition explicitly rather than leaving it to be inferred from the numbers.
@@ -366,13 +458,40 @@ void DiagnoseCommitment() {
     }
 }
 
+// POD-only half: makes the game call and returns the codec pointer. Split out because __try cannot
+// live in a function that needs object unwinding, and Decode below builds a std::wstring.
+const uint8_t* DefCodec(uint32_t category, uint32_t id) {
+    auto fn = reinterpret_cast<Pfn_ResolveDef>(Hooks::ResolveRva(RVA_RESOLVE_DEF));
+    if (!fn) return nullptr;
+    __try {
+        const uint8_t* rec = fn(category, id);
+        if (!rec) return nullptr;
+        const uint8_t* src = *reinterpret_cast<const uint8_t* const*>(rec + OFF_DEF_CODEC);
+        // Shared-pool strings carry a 2-byte 00 00 variant prefix; without skipping it every one of
+        // them decodes empty (S49). Harmless when absent -- a valid string never starts with 0x00.
+        return (src && src[0] == 0 && src[1] == 0) ? src + 2 : src;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+std::wstring DefName(uint32_t category, uint32_t id) {
+    const uint8_t* codec = DefCodec(category, id);
+    if (!codec) return std::wstring();
+    std::wstring s = GameText::Decode(codec, 256);
+    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
 std::wstring AbilityName(uint16_t actionId) {
     if (actionId == 0xFFFF) return std::wstring();
-    void* row = MasterRecord(RVA_ACTIONTBL, actionId);
-    if (!row) return std::wstring();                 // out of table: an AI opcode, not an ability
-    uint16_t nameIdx = 0;
-    if (!SafeReadU16(row, 0x34, &nameIdx)) return std::wstring();   // 0x34 = NAME (not 0x00)
-    return PoolString(nameIdx);
+    // Use the chain the mod ALREADY proves works: this is byte-for-byte the resolver that speaks
+    // spell and technick names in the battle menu (confirmed in play, S31). The previous
+    // implementation walked a DIFFERENT chain -- MasterRecord(action table) -> row+0x34 -> the
+    // shared pool -- and every step of that one goes through Reloc(), which is why the combat log
+    // said "attacks" for everything. Do not "restore" the old chain; it was never the working one.
+    //
+    // This is a GAME CALL, so it is game-thread only. That is already true of every caller:
+    // combat_log renders its line text at append time on the game thread, the same discipline
+    // item_names.cpp documents for FUN_00272cb0.
+    return DefName(CAT_ABILITY, actionId);
 }
 
 uint8_t AbilityCategory(uint16_t actionId) {
