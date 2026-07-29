@@ -31,8 +31,6 @@ Pfn_ChoiceTick s_origChoiceTick = nullptr;
 
 constexpr uint32_t OFF_LIST_BLOCK = 0x0D0;     // window+0x0D0 = the embedded list widget
 constexpr uint32_t OFF_HIDE_MASK  = 0x084;     // listBlock+0x84 = per-slot hidden bitmask (u32)
-constexpr uint32_t OFF_VIS_INDEX  = 0x3C6;     // window+0x3C6 = visible row index (game's own copy)
-constexpr uint32_t OFF_OPT_COUNT  = 0x3C7;     // window+0x3C7 = the block's count byte (capacity)
 
 constexpr uint8_t  CTRL_OPTIONS   = 0x0E;      // the option-block marker
 constexpr uint8_t  CTRL_PAGE      = 0x03;      // page break (GameText::DecodePages splits on it)
@@ -41,12 +39,13 @@ constexpr uint8_t  CTRL_COL_B     = 0x05;      // column separator inside a row
 constexpr size_t   TEXT_SCAN_MAX  = 4096;      // same cap message_reader uses for a whole message
 constexpr int      MAX_OPTIONS    = 32;        // FUN_002b2ce0 bounds its walk at 0x20 slots
 
-// The message the telop setter last put up. Written by NoteMessageText and read by OnFocus, both on
-// the game thread, but under the lock so a mid-transition focus cannot see a half-copied buffer.
+// The message currently on screen. Written by NotePage and read by OnFocus, both on the game
+// thread, but under the lock so a mid-transition focus cannot see a half-copied buffer.
 std::mutex           g_textMutex;
 std::vector<uint8_t> g_text;
+const uint8_t*       g_base = nullptr;     // the widget's text base this copy was taken from
 bool                 g_queueNext = false;   // the first focus after a new message queues behind it
-size_t               g_page = 0;           // which 0x03-delimited page is on screen
+size_t               g_pageOff = 0;        // BYTE OFFSET of the page on screen (the widget's own cursor)
 // Which DETECTOR owns the surface currently on screen. Two exist because neither covers both
 // cases: the 0x8000 dispatch drives the notice board's navigation, and the per-frame tick is the
 // only thing that sees an in-dialogue choice (it sends no message at all). They share a window --
@@ -145,18 +144,17 @@ std::wstring DecodeRow(const uint8_t* p, size_t len) {
 
 // Locate the 0x0E option block and return the codec bytes of option `slot`, or an empty span.
 // Mirrors FUN_003ffdf0's header walk exactly -- see choice_reader.h for the layout.
-bool OptionCodec(const std::vector<uint8_t>& buf, int slot, size_t page,
+bool OptionCodec(const std::vector<uint8_t>& buf, int slot, size_t pageOff,
                  const uint8_t** outPtr, size_t* outLen) {
     *outPtr = nullptr; *outLen = 0;
     if (slot < 0) return false;
 
-    // Seek to the START of the current page: skip `page` 0x03 breaks. Without this the search always
-    // returns the FIRST block in the message -- the notice board's mark list -- even when the player
-    // is three pages further on, looking at a Yes/No.
-    size_t m = 0;
-    for (size_t seen = 0; seen < page && m < buf.size(); ++m) {
-        if (buf[m] == CTRL_PAGE) ++seen;
-    }
+    // Start at the page the game says is on screen. Without this the search always returns the FIRST
+    // block in the message -- the notice board's mark list -- even when the player is three pages
+    // further on, looking at a Yes/No. `pageOff` is the widget's own byte cursor (widget+0x8A), so
+    // this is the same position FUN_002a8c50 walks from and cannot drift out of step with the box.
+    size_t m = pageOff;
+    if (m >= buf.size()) return false;
 
     // The question text and any column headers precede the marker, so it is never the first byte.
     // Stop at the NEXT page break: a page without a block has no options, and borrowing the next
@@ -253,15 +251,19 @@ void LogFail(void* window, const char* why, int a, int b) {
 
 } // namespace
 
-void NoteMessageText(const uint8_t* codec) {
-    std::vector<uint8_t> copy(TEXT_SCAN_MAX, 0);
-    const size_t n = codec ? CopyCodec(codec, copy.data(), TEXT_SCAN_MAX) : 0;
-    copy.resize(n);
+void NotePage(const uint8_t* base, size_t byteOffset) {
     std::lock_guard<std::mutex> lk(g_textMutex);
-    g_text = std::move(copy);
-    g_page = 0;
-    g_dispatchCovers = false;
-    g_queueNext = true;    // the entry focus lands right after this and must not cut the question off
+    if (base != g_base) {                       // a different message: re-snapshot it
+        g_base = base;
+        g_text.assign(TEXT_SCAN_MAX, 0);
+        const size_t n = base ? CopyCodec(base, g_text.data(), TEXT_SCAN_MAX) : 0;
+        g_text.resize(n);
+    }
+    g_pageOff = byteOffset;
+    g_dispatchCovers = false;   // a new page may be driven by the other detector
+    // The first option focus lands right after this and must not cut the page off -- the notice
+    // board's question and the petitioner Yes/No both arrive as page text, spoken a moment earlier.
+    g_queueNext = true;
 }
 
 bool OnFocus(void* window, int visibleIndex) {
@@ -269,20 +271,20 @@ bool OnFocus(void* window, int visibleIndex) {
     STALL_SCOPE("ChoiceReader::OnFocus");
 
     std::vector<uint8_t> buf;
-    size_t page = 0;
+    size_t pageOff = 0;
     {
         std::lock_guard<std::mutex> lk(g_textMutex);
         if (g_text.empty()) { LogFail(window, "no message text cached", 0, visibleIndex); return false; }
-        buf  = g_text;
-        page = g_page;
+        buf     = g_text;
+        pageOff = g_pageOff;
     }
 
     const int slot = AbsoluteIndex(window, visibleIndex, MAX_OPTIONS);
     const uint8_t* codec = nullptr;
     size_t len = 0;
-    if (!OptionCodec(buf, slot, page, &codec, &len)) {
+    if (!OptionCodec(buf, slot, pageOff, &codec, &len)) {
         LogFail(window, "no 0x0E block on this page / slot past the list terminator",
-                slot, static_cast<int>(page));
+                slot, static_cast<int>(pageOff));
         return false;
     }
     const std::wstring text = BuildOptionLine(window, codec, len);
@@ -292,15 +294,6 @@ bool OnFocus(void* window, int visibleIndex) {
     { std::lock_guard<std::mutex> lk(g_textMutex); g_dispatchCovers = true; }
     EmitOption(window, "choice", visibleIndex, static_cast<int>(MAX_OPTIONS), text);
     return true;
-}
-
-void NotePage(size_t pageIndex) {
-    std::lock_guard<std::mutex> lk(g_textMutex);
-    g_page = pageIndex;
-    g_dispatchCovers = false;   // a new page may be driven by the other detector
-    // Re-arm: the petitioner Yes/No arrives as a later PAGE of the message, spoken by NextPage
-    // rather than the setter, so without this its first option would interrupt the question.
-    g_queueNext = true;
 }
 
 bool IsChoiceWindow(void* owner) {
@@ -343,7 +336,7 @@ uint64_t HookedChoiceTick(void* widget) {
     buf.resize(n);
 
     const uint8_t* codec = nullptr; size_t len = 0;
-    if (!OptionCodec(buf, cursor, /*page=*/0, &codec, &len)) {
+    if (!OptionCodec(buf, cursor, /*pageOff=*/0, &codec, &len)) {   // buf already starts at the page
         LogFail(widget, "choice widget: no 0x0E block at the widget's own offset", cursor, count);
         return ret;
     }
@@ -364,24 +357,5 @@ bool Init() {
 }
 
 void Shutdown() { Hooks::Uninstall(RVA_CHOICE_TICK); }
-
-void OnOtherMessage(void* window, uint64_t msg, uint64_t val) {
-    // ONE line per (message, window) pair -- these arrive at UI rates and the console-budget rule
-    // makes O(unique) mandatory. Answers a single open question: which message, if any, this class
-    // receives when the player turns a DIALOGUE page. See message_reader.cpp's page-advance note.
-    static uint64_t s_lastMsg = ~0ull;
-    static void*    s_lastWnd = nullptr;
-    if (msg == s_lastMsg && window == s_lastWnd) return;   // transition detector, not a speech dedup
-    s_lastMsg = msg; s_lastWnd = window;
-
-    uint8_t count = 0, visIdx = 0;
-    MemRead::SafeReadU8(window, OFF_OPT_COUNT, &count);
-    MemRead::SafeReadU8(window, OFF_VIS_INDEX, &visIdx);
-    char m[160];
-    snprintf(m, sizeof(m),
-             "choice-wnd msg=0x%llX val=%lld wnd=%p optCount=%u visIdx=%u  <-- page-turn candidate?",
-             (unsigned long long)msg, (long long)val, window, (unsigned)count, (unsigned)visIdx);
-    Log::Write("READER", m);
-}
 
 } // namespace ChoiceReader

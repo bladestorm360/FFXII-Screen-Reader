@@ -105,7 +105,6 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
 | `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key | reserved |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
-| `Space` / `Enter` | *(observed only)* advances the spoken dialogue page with the game's own Confirm | the game's Confirm — never swallowed or injected |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |

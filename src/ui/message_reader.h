@@ -2,31 +2,29 @@
 
 #include <string>
 
-// Reads the game's message text — NPC dialogue + in-engine cutscene captions (the
-// e5f0 message window) and informational panels (item acquired, treasure, battle
-// system lines — the FUN_0057c480 system-message surface). Speaks each new line as
-// it appears, with the speaker name, and repeats the last line on the `t` hotkey.
+// Reads the game's NON-PAGINATED message surfaces: the "obtained <item>" treasure/loot toast and the
+// menu system-message panel ("cannot equip", "sold"). Speaks each as it appears and repeats the last
+// line on the `t` hotkey.
 //
-// By design contains NO hard-coded UI strings: everything spoken is decoded from the
-// game's own codec bytes. Yes/no confirm dialogs on the panel surface are a distinct
-// mechanism from the already-handled title/new-game confirms and are deliberately
-// NOT spoken (kept classified + logged behind a mute flag), so nothing double-speaks
-// or regresses.
+// FIELD DIALOGUE IS NOT HERE — it lives in `ui/dialogue_reader`, which drives it off the game's own
+// page cursor. This module used to own it through the whole-message content setter FUN_002e16b0 and
+// split the string into pages itself, advancing on an observed Space/Enter; that made dialogue
+// keyboard-only. Both the setter hook and the page list are gone. The `t` store stays here because
+// all three surfaces share it — `DialogueReader` feeds it through NoteSpoken().
+//
+// By design contains NO hard-coded UI strings: everything spoken is decoded from the game's own
+// codec bytes. Yes/no confirm dialogs on the panel surface are a distinct mechanism from the
+// already-handled title/new-game confirms and are deliberately NOT spoken (kept classified + logged
+// behind a mute flag), so nothing double-speaks or regresses.
 namespace MessageReader {
 
 bool Init();
 void Shutdown();
 
-// Advance to the next page of the message currently on screen and speak it. Called on the input
-// thread when the player presses the game's own Confirm key -- the same press that advances the
-// game's text box -- so our page pointer tracks the box instead of running ahead of it.
-//
-// A multi-page message arrives from the content setter as ONE string containing every page, which
-// is why it used to be read out in a single breath. Pages are split on the codec's 0x03 break.
-//
-// Silent when no page remains (the box is closing) and when no message is active: announcing
-// anything there would be filler.
-void NextPage();
+// Record `text` as the most recent spoken line, so `t` repeats it. Called by every reader that owns
+// a message surface — this module's own toast/panel paths and DialogueReader's pages — so the
+// re-read key has ONE store behind it rather than one per surface. Game thread.
+void NoteSpoken(const std::wstring& text);
 
 // Body text of the most recent yes/no confirm surface ("Obtain Accessories 1?", "Choose this
 // license board?"), captured at its case-1 BIRTH — the only moment the composed string, with its

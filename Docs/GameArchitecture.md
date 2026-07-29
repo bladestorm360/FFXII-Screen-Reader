@@ -164,7 +164,37 @@ message-window class (0x179E0 B), 3 singletons: field-talk `DAT_02b47760`/handle
 (`0x19A700`). Fields: body id `+0x179D0`, flags `+0x179D2` (0x2000=open, 0x80=page-done),
 type `+0x179D8`, decoded-text buffer `+0x1B0 + ((flags>>2)&1)*0xBC10`. Open=handler case 1,
 advance=case 0x20, draw=case 0x12. **Speaker/caption field: none found (UNCERTAIN**; candidate
-attribute `FUN_00254380` `0x134380`).
+attribute `FUN_00254380` `0x134380`). **NOT USED BY THE MOD, and no longer a lead — see the
+page-cursor block below.**
+
+**PAGINATION — the message widget's own page cursor (SETTLED Session 91, 0.98, decompile only).**
+Every message the game paginates is walked by **`FUN_002a8c50` (RVA `0x188C50`)**, which is **slot 0
+of BOTH live entries** in the text-draw dispatch table **`PTR_FUN_009164c8` (RVA `0x7F64C8`)**
+(stride 3 pointers = 0x18 B, type byte = `widget+0xA3`; dumped to
+`FFXII-Decompile\output\text_dispatch_table.txt`):
+
+| type | slot 0 | slot 1 | slot 2 |
+|---|---|---|---|
+| 0 (choice-capable) | **`FUN_002a8c50`** | `FUN_002a9f00` (`0x189F00`) | `FUN_002a9980` (`0x189980`) |
+| 1 (plain) | **`FUN_002a8c50`** | `FUN_002aa800` (`0x18A800`) | **null** |
+
+Widget fields (same object `FUN_002a9980` receives — both use the `+0xB0` state word):
+`+0x28` text base · **`+0x8A` u16 BYTE OFFSET of the page on screen** · `+0xA3` type ·
+`+0xB0` state (low byte = mode; 5 = parked at a break) · `+0x54` park reason (`3` = page break,
+`0x23` = the `0F 23` wait escape) · `+0xC0` = 1 when the message ended (codec `0x00`) — **the next
+call CONSUMES it** (`002a8c50:535-536` clears it), so read `+0xC0` PRE-call.
+
+`002a8c50:77` starts its walk at `textBase + *(u16*)(widget+0x8A)`, and **`:199-200` is the write
+that advances `+0x8A` past a `0x03` page break** (guarded by `+0x54 == 3 && mode == 0`) — so this
+function is the cursor's WRITER, i.e. the event. It is device-agnostic by construction: on a type-0
+widget the release is `002a9980:45-64`, which masks the engine's unified button globals
+`DAT_02f9736a` / `_DAT_02f97362` with `DAT_01e0c2a0`. **Do not read those** — read the cursor.
+
+Live-widget gate: `FUN_002e16b0` stores the window it builds in **`DAT_0215f200` (RVA `0x203F200`)**
+— 8 slots, stride `0x68`, window pointer at `+0x00` — and the text widget is `window+0xD0`.
+Membership there is what separates a paginated message from every other text block the same dispatch
+slot lays out (the field menu shares the `FUN_002a6190` window class, so class identity alone is not
+enough). Shipped in `src/ui/dialogue_reader.cpp`.
 
 **Battle text:** `battle_message.bin` is an st2e section (via `FUN_002f9860`); names via
 `FUN_002b58b0` (`0x1958B0`). **Flying damage numbers are a per-digit sprite HUD, NOT codec
@@ -1703,10 +1733,14 @@ surfaces; two readable, two are baked assets (not readable via codec).
 > against THAT widget once it is found.
 >
 > The RE is preserved (correctly labelled) under **"World MAP screen (`page+0x138` = map id)"** —
-> use it for map-screen / map-transition speech. **The real field dialogue window is STILL UNKNOWN**;
-> the only dialogue path that works is the telop `FUN_002e16b0` (a whole-message setter, which is why
-> multi-page screens read all at once). Unverified lead: `FUN_003cb650` (RVA `0x2AB650`) case 1 vs
-> case `0x20`, `DAT_02b47760`, `+0x179D0` msg id, `+0x179D2` bit `0x2000` open / bit `0x80` page-done.
+> use it for map-screen / map-transition speech. ~~The real field dialogue window is STILL UNKNOWN …
+> Unverified lead: `FUN_003cb650` (RVA `0x2AB650`) case 1 vs case `0x20` …~~
+>
+> **SUPERSEDED (Session 91).** The dialogue path was never unknown — it is the telop
+> `FUN_002e16b0`, and the piece that was missing was the PAGE, not the window. It is
+> `widget+0x8A` on the widget that setter fills, written by `FUN_002a8c50`; the `FUN_003cb650`
+> lead is struck (see the top-of-file pagination block). Speaker/caption is still open, and when
+> it is hunted, hunt it against **that** widget.
 
 **B. ~~Item / treasure~~ / battle-system / yes-no confirm — one memory-only buffer.**
 > **PARTLY STRUCK (Session 45): `FUN_0057c480` is the MENU system-message window — NOT the field /
@@ -1938,11 +1972,16 @@ trusting anything below it.**
   .dbg symbol list interleaves variables/source-markers with actions. Resolve natives **by behaviour**,
   never by index arithmetic.
 
-**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination. The working dialogue path
-is the **telop** (`FUN_002e16b0`), which is a whole-message setter — it hands over speaker + every page
-in one string, which is exactly why multi-page screens read all at once. Best unverified lead:
-`FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20, with `DAT_02b47760` / `+0x179D0` msg id /
-`+0x179D2` bit `0x2000` open, bit `0x80` page-done. **Unverified — do not ship.**
+~~**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination … Best unverified lead:
+`FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20 … **Unverified — do not ship.**~~
+> **STRUCK (Session 91) — the lead was never needed, and pagination is SOLVED without it.**
+> `FUN_003cb650`'s window is a *different* singleton (`DAT_02b47760`, 0x179E0 B) whose text is a
+> pre-compiled glyph resource we cannot decode (sessions_001_050.md, Session 13), so even a correct
+> advance event there would carry no readable page. **The page is a CURSOR, not an event to catch:**
+> `widget+0x8A` on the message widget the telop already fills, written by `FUN_002a8c50` — see
+> "PAGINATION — the message widget's own page cursor" at the top of this file. Do not re-derive
+> `FUN_003cb650`; three documents carried it as "the best lead" for six sessions while the answer sat
+> on an offset `choice_reader.cpp` was already reading in play.
 
 ---
 

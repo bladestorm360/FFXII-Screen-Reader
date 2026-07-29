@@ -3846,3 +3846,114 @@ behave as intended.
 also drive the camera, because the mod never swallows keys. That is the read-only rule working as
 designed, not a broken intercept — the three options and their costs are written up there, and option
 3 (mutating the DirectInput buffer) needs explicit permission before anyone reaches for it.
+
+## Session 91 — 2026-07-29 — [dialogue] The page is a CURSOR, not a keypress
+
+KEYWORDS: dialogue pagination, controller, gamepad, page 2 silent, SetConfirmCallback removed,
+WM_CONFIRM, DIK_SPACE, DIK_RETURN, XInput, FUN_002a8c50, 0x188C50, widget+0x8A page cursor,
+PTR_FUN_009164c8, 0x7F64C8, text dispatch table, slot 0, slot 2 null, FUN_002a9980, DAT_0215f200,
+0x203F200, message window registry, FUN_003cb650 struck, telop FUN_002e16b0, NextPage removed,
+dialogue_reader, choice_reader NotePage byte offset
+
+### The report
+
+*"Paginated dialogue only reads if Enter or Space is pressed on the keyboard. If the controller is
+used to advance the dialogue, no subsequent lines are spoken at all. We do not rely on keyhooks, we
+should be reading game events."* And, on the first plan: *"this is a complete restructuring of how
+dialogue will be hooked and vocalized"* — one hook for both devices, not a second path beside the
+first.
+
+### The defect was one line, and it was the wrong KIND of fact
+
+`message_reader.cpp` registered `InputTracker::SetConfirmCallback(&NextPage)`, and that edge came
+from `dik[DIK_SPACE]` / `dik[DIK_RETURN]` in the DirectInput **keyboard** buffer. The proxy only
+records `GUID_SysKeyboard` devices, and the game reads pads through **XInput** (one import,
+`XINPUT9_1_0!XInputGetState`), which the mod does not touch at all. So the mod was never observing
+*the box advanced* — only *a key that usually advances the box went down*.
+
+A second bug rode along, invisible on a keyboard: the model counted **one page per Confirm**. The
+first press on a page skips the typewriter reveal without turning it, so the count drifts.
+
+### The dispatch table settled which function to hook — in one file already on disk
+
+`FFXII-Decompile\output\text_dispatch_table.txt` dumps `PTR_FUN_009164c8` (RVA `0x7F64C8`), the
+text-draw dispatch: stride 3 pointers, type byte `widget+0xA3`.
+
+| type | slot 0 | slot 1 | slot 2 |
+|---|---|---|---|
+| 0 (choice-capable) | **`FUN_002a8c50`** | `FUN_002a9f00` | `FUN_002a9980` |
+| 1 (plain) | **`FUN_002a8c50`** | `FUN_002aa800` | **null** |
+
+That is the whole shape of the bug. `choice_reader`'s per-frame tick hooks `FUN_002a9980` — **slot
+2, which is null on a plain dialogue box** — so the one dialogue hook the mod already had was
+structurally incapable of paging a conversation without a cursor in it. **Slot 0 serves both.**
+
+### The fix: read the cursor, do not catch the event
+
+`FUN_002a8c50` (RVA **`0x188C50`**) starts its walk at `textBase + *(u16*)(widget+0x8A)` (`:77`) and
+**`:199-200` is the instruction that advances `+0x8A` past a `0x03` page break** (guarded by
+`+0x54 == 3 && mode == 0`). It is the cursor's writer, so hooking it is the event. It is
+device-agnostic by construction: the release on a type-0 widget masks the engine's own unified button
+globals, and we never have to read those.
+
+`widget+0x8A` was **already in the mod, already play-confirmed** — `choice_reader.cpp`'s
+`OFF_W_OFFSET`, used live since Session 87 to find option blocks. Meanwhile `FUN_003cb650` sat in
+three documents as "the best unverified lead" for six sessions. It is **STRUCK**: a different window
+singleton whose text is a pre-compiled glyph resource, so even a correct advance event there carries
+no readable page.
+
+### Built
+
+**New `src/ui/dialogue_reader.{h,cpp}`** — one hook, and the single speech point for dialogue. Page 1
+and page N take the identical route (page 1 is just the cursor's first value), so there is no second
+speaker to race. Guarded by a change-check on `(base, cursor)`: the sanctioned per-frame exception,
+naming `FUN_002a8c50` as the rule requires, and a transition detector rather than a dedup — the key
+is dropped when `+0xC0` latches end-of-message, so re-entering a conversation speaks again. `+0xC0`
+is read **PRE-call** because the next call consumes it (`:535-536` clears it).
+
+Live-widget gate: `FUN_002e16b0` stores its window in `DAT_0215f200` (RVA `0x203F200`, 8 slots,
+stride `0x68`) and the text widget is `window+0xD0`. Class identity alone would not do — the field
+menu shares the `FUN_002a6190` window class. Rejects log once per widget and are hard-capped, so a
+wrong gate is visible instead of silent without flooding a per-frame path.
+
+**The page key is PER SLOT, and that is not cosmetic.** The first cut kept one global
+`(widget, base, off)` triple. The game lays out several text widgets in a frame, so that single key
+would flip between them every frame and re-emit the open dialogue page on each pass — a per-frame
+repeat, exactly the failure the no-dedup rule warns is a redundant-call-path bug rather than
+something to filter. Slot identity comes free from the registry walk, which now runs **before** the
+change-check so a foreign widget can never disturb a live message's key.
+
+**Deleted, not deprecated:**
+- the whole keypress route — `SetConfirmCallback`, `WM_CONFIRM`, `g_confirmCb`, `g_confirmDown[2]`,
+  `DIK_SPACE`/`DIK_RETURN`, both `DInputEdge` calls, the dispatch arm, the `Controls.md` row;
+- `message_reader`'s telop hook, `OnTelop`, `g_pages`/`g_pageIdx`, `NextPage`, and the spent RAW BYTE
+  DUMP diagnostic (its question — where the `0x0E` option block lives — was answered in S87).
+  `message_reader` keeps the two surfaces that genuinely are its own and never paginate: the
+  obtained-item toast and the menu system-message panel. It exposes `NoteSpoken()` so the `t`
+  re-read has ONE store behind it rather than one per surface;
+- `ChoiceReader::OnOtherMessage` and its `menu_reader.cpp` call site — the diagnostic that existed to
+  ask this very question.
+
+**Converged:** `ChoiceReader::NoteMessageText` + `NotePage(index)` became one
+`NotePage(base, byteOffset)`, and `OptionCodec` seeks to the offset instead of counting `0x03`
+bytes. The tick already used the byte offset — that representation was right all along, and now both
+paths share it.
+
+### Files
+
+`src/ui/dialogue_reader.{h,cpp}` (new), `src/ui/message_reader.{h,cpp}`,
+`src/ui/choice_reader.{h,cpp}`, `src/ui/menu_reader.cpp`, `src/input/input_tracker.{h,cpp}`,
+`src/proxy/dllmain.cpp`, `CMakeLists.txt`. Docs: `GameArchitecture.md` (pagination block + two
+strikes), `debug.md`, `Controls.md`, `plan.md`.
+
+### Status — IN TESTING
+
+Build clean, deployed. **Multi-page dialogue pagination CONFIRMED IN PLAY** by the tester the same
+day, on the new mechanism.
+
+**Still unexercised, and where a regression would land first:** the mid-dialogue Yes/No and the Hunt
+notice board (`choice_reader` was rewired onto the byte offset — same speech, new feeder), and
+tutorial/telop banners (the content-setter hook that used to speak them is deleted; they now arrive
+through the page cursor). If dialogue ever goes silent, grep the log for `DIALOGUE text widget
+outside the message-window registry`: that is the live-widget gate rejecting a page it should have
+spoken, and it is a one-line fix.

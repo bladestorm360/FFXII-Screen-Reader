@@ -7,6 +7,59 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### Session 91 — STRUCK: pagination driven by an observed KEYPRESS; and the `FUN_003cb650` dialogue lead
+
+**STATUS: IN TESTING (2026-07-29).** Multi-page dialogue pagination is **CONFIRMED IN PLAY** by the
+tester on the new mechanism. The rest of the restructure has NOT been exercised yet and is what a
+regression would show up in first:
+
+- **`choice_reader` was rewired**, not left alone — same detectors and same speech, but it now learns
+  the page from `NotePage(base, byteOffset)` fed by `dialogue_reader`, and `OptionCodec` seeks to the
+  byte offset instead of counting `0x03` breaks. **Exercise a mid-dialogue Yes/No (the hunt
+  petitioner) and the Hunt notice board.**
+- **Tutorial / telop banners** used to be spoken by the content setter `FUN_002e16b0` directly; that
+  hook is deleted and they now arrive through the page cursor like everything else. Same widget, so
+  they should read normally — unconfirmed.
+- If dialogue ever goes silent, grep the log for `DIALOGUE text widget outside the message-window
+  registry` — that is the live-widget gate (`DAT_0215f200`) rejecting a page it should have spoken,
+  and it is a one-line fix.
+
+**KEYWORDS: dialogue pagination controller gamepad silent page 2 Space Enter SetConfirmCallback
+WM_CONFIRM DIK_SPACE DIK_RETURN keyboard only XInput FUN_002a8c50 0x188C50 widget+0x8A page cursor
+text dispatch table PTR_FUN_009164c8 0x7F64C8 slot 0 slot 2 FUN_002a9980 type 0 type 1 null
+DAT_0215f200 0x203F200 message window registry FUN_003cb650 0x2AB650 struck telop FUN_002e16b0
+NextPage g_pageIdx dialogue_reader**
+
+**Struck: advancing the spoken dialogue page when the mod sees Space or Enter go down.** Shipped in
+Session 52, and it made multi-page dialogue **keyboard-only**: `InputTracker` reads the DirectInput
+*keyboard* buffer (`dinput8_proxy.cpp` only records `GUID_SysKeyboard` devices) while the game reads
+pads through **XInput**, which the mod does not touch. A controller player heard page 1 and silence
+after it. The mod was never observing "the box advanced" — only "a key that usually advances it".
+
+**Also struck: the page INDEX model.** Counting one page per Confirm is wrong even on a keyboard —
+the *first* press on a page skips the typewriter reveal without turning it, so the count drifts.
+
+**The replacement is a CURSOR, not an event to catch.** `widget+0x8A` is the byte offset of the page
+on screen, and **`FUN_002a8c50` (RVA `0x188C50`) is its writer** (`:199-200` advances it past a
+`0x03` break; `:77` starts the walk from it). Whatever moved it — pad, keyboard, mouse — moved it.
+
+**What settled which function to hook** was the text-draw dispatch table `PTR_FUN_009164c8`
+(RVA `0x7F64C8`), already dumped to `FFXII-Decompile\output\text_dispatch_table.txt`:
+`FUN_002a8c50` is **slot 0 of BOTH** widget types, while `FUN_002a9980` — the tick `choice_reader`
+hooks — is **slot 2, which is NULL on type 1 (plain)**. That is the whole shape of the bug: the
+existing per-frame dialogue hook structurally could not see a choice-less dialogue box.
+
+**Struck: `FUN_003cb650` (RVA `0x2AB650`) case 1 / case 0x20 as "the best unverified lead".** Carried
+as the way forward in `GameArchitecture.md` (twice) and `sessions_001_050.md` for six sessions. It is
+a *different* window singleton (`DAT_02b47760`) whose text is a pre-compiled glyph resource we cannot
+decode, so a correct advance event there would still carry no readable page. **The answer was on an
+offset `choice_reader.cpp` was already reading in play** (`OFF_W_OFFSET = 0x8A`, used live since
+Session 87) — the lead was chased instead of the code being re-read.
+
+**Lesson.** When a feature "needs an event", check whether the game already keeps the *state* that
+event would announce. A cursor you can read beats an event you have to catch: it needs no
+subscription, cannot fire twice, and cannot desync from what is on screen.
+
 ### Session 84 — STRUCK: include-by-KIND+model (`present`). ONE route, THREE symptoms
 
 **KEYWORDS: present route include by kind model HasModel shadow NPC bare NPC n phantom stacked bodies

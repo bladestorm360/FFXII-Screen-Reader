@@ -12,7 +12,9 @@ namespace {
 // message loop, so speech never runs inside the low-level hook callback.
 constexpr UINT WM_DESCRIBE  = WM_APP + 1;
 constexpr UINT WM_REREAD    = WM_APP + 2;
-constexpr UINT WM_CONFIRM   = WM_APP + 6;   // game's Confirm (Space/Enter) -- observed, never sent
+// WM_APP + 6 was WM_CONFIRM (the game's Space/Enter, observed to page dialogue). Retired with the
+// keypress pagination path -- see the note in input_tracker.h. Left unused rather than recycled so
+// a stale PostThreadMessage from an old build can't land on a live handler.
 constexpr UINT WM_NAVKEY    = WM_APP + 3;   // wParam = vk, lParam = shift (0/1)
 constexpr UINT WM_DIAG      = WM_APP + 4;   // wParam = vk, lParam = foreground(0/1) — input diagnostic
 constexpr UINT WM_UNHOOK_LL = WM_APP + 5;   // retire the WH_KEYBOARD_LL hook once DInput owns input
@@ -37,7 +39,6 @@ std::atomic<bool> g_uDown{false};      // edge-detect for the 'U' key (License P
 std::atomic<bool> g_gDown{false};      // edge-detect for the 'g' key (gil total)
 InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
-InputTracker::HotkeyCallback g_confirmCb = nullptr;
 InputTracker::HotkeyCallback g_lpCb = nullptr;
 InputTracker::HotkeyCallback g_gilCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
@@ -100,18 +101,15 @@ constexpr int DIK_UP = 0xC8, DIK_DOWN = 0xD0, DIK_LEFT = 0xCB, DIK_RIGHT = 0xCD;
 // F7 is deliberately ABSENT: it is reserved for autodetail and must not be bound to anything else.
 // F8: open/close the mod's own settings menu.
 constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F8 = 0x42;
-// The game's Confirm (Docs/Controls.md: Space / Enter / Left Mouse). Observed only -- the mod is
-// read-only on input and never swallows these, so the game's own text box advances exactly as it
-// always did; we just learn that it did. Mouse confirm is not observed (no hook for it), so a
-// mouse-only player simply gets no page advance rather than a wrong one.
-constexpr int DIK_SPACE = 0x39, DIK_RETURN = 0x1C;
+// DIK_SPACE / DIK_RETURN are gone with the Confirm observation. The mod has no reason to watch the
+// game's own Confirm: the only consumer was dialogue pagination, and a keyboard scan code cannot
+// answer "did the box advance" for a player on a pad.
 
 // Extra hotkeys beyond the 4 original nav keys: - = ; ' / p 4 5 6 7 , . Home End F4 (no Shift).
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
 std::atomic<bool> g_extraDown[22]{};   // 0-15 + 20-21 the keys below; 16-19 the arrow keys (status buffer)
-std::atomic<bool> g_confirmDown[2]{};   // Space / Enter edge flags (observed Confirm)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -127,8 +125,6 @@ void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
             else if (vk == 'T')     PostThreadMessageW(g_threadId, WM_REREAD, 0, 0);
             else if (vk == 'U')     PostThreadMessageW(g_threadId, WM_LICENSEPTS, 0, 0);
             else if (vk == 'G')     PostThreadMessageW(g_threadId, WM_GIL, 0, 0);
-            else if (vk == VK_SPACE || vk == VK_RETURN)
-                                    PostThreadMessageW(g_threadId, WM_CONFIRM, 0, 0);
         }
     } else {
         downFlag.store(false);
@@ -241,9 +237,6 @@ DWORD WINAPI InputThread(LPVOID) {
                 InputTracker::NavKeyCallback ncb = g_navKeyCb;
                 if (ncb) ncb(vk);
             }
-        } else if (m.message == WM_CONFIRM) {
-            InputTracker::HotkeyCallback cb = g_confirmCb;
-            if (cb) cb();
         } else if (m.message == WM_NAVKEY) {
             InputTracker::NavKeyCallback cb = g_navKeyCb;
             if (cb) cb(static_cast<int>(m.wParam));
@@ -308,7 +301,6 @@ void Shutdown() {
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 void SetLicensePointsCallback(HotkeyCallback cb) { g_lpCb = cb; }
 void SetGilCallback(HotkeyCallback cb) { g_gilCb = cb; }
-void SetConfirmCallback(HotkeyCallback cb) { g_confirmCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
@@ -347,8 +339,6 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
     DInputEdge('U',           g_uDown,       (dik[DIK_U]          & 0x80) != 0, false);  // U  License Points
     DInputEdge('G',           g_gDown,       (dik[DIK_G]          & 0x80) != 0, false);  // g  party gil total
-    DInputEdge(VK_SPACE,      g_confirmDown[0],(dik[DIK_SPACE]    & 0x80) != 0, false);  // Confirm (observed)
-    DInputEdge(VK_RETURN,     g_confirmDown[1],(dik[DIK_RETURN]   & 0x80) != 0, false);  // Confirm (observed)
     DInputEdge(VK_OEM_5,      g_navDown[0],  (dik[DIK_BACKSLASH]  & 0x80) != 0, true);  // \  route
     DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true);  // [  prev object
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object

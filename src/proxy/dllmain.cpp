@@ -7,6 +7,7 @@
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
 #include "ui/message_reader.h"
+#include "ui/dialogue_reader.h"
 #include "ui/mod_menu.h"
 #include "navigation/navigation.h"
 #include "battle/combat_events.h"
@@ -80,9 +81,13 @@ static void DeferredInitImpl() {
         MenuReader::Init();
         // Title command menu (baked-sprite menu, separate from the in-game system).
         TitleReader::Init();
-        // Dialogue + message-panel text reader (NPC dialogue, cutscene captions, item/
-        // treasure/battle-system panels). Independent of the menu hooks above.
+        // Message-panel text reader (obtained-item toast, menu system messages). Independent of
+        // the menu hooks above.
         MessageReader::Init();
+        // Field dialogue: NPC conversations, cutscene captions and tutorial banners, paginated off
+        // the game's own page cursor so every input device turns the page. Must follow
+        // MessageReader::Init — it feeds that module's shared `t` re-read store.
+        DialogueReader::Init();
         // Field navigation (Phase 4). M0: read-only leader/physics chain self-
         // diagnostic on the `\` key. Installs the map-load ctx-capture hook only —
         // no interpreter/action hooks (announce-only, non-interfering).
@@ -137,6 +142,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             CombatEvents::Shutdown();
             ModMenu::Shutdown();
             Navigation::Shutdown();
+            DialogueReader::Shutdown();
             MessageReader::Shutdown();
             TitleReader::Shutdown();
             MenuReader::Shutdown();

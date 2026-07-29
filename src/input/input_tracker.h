@@ -36,10 +36,12 @@ void SetGilCallback(HotkeyCallback cb);
 // handler that repeats the last spoken dialogue/panel line.
 void SetRereadCallback(HotkeyCallback cb);
 
-// Fired when the player presses the game's own CONFIRM key (Space / Enter). PURELY OBSERVED: the
-// mod never swallows or injects it, the game still receives it exactly as before. It exists so the
-// dialogue reader can advance its page pointer on the same press that advances the game's text box.
-void SetConfirmCallback(HotkeyCallback cb);
+// REMOVED: SetConfirmCallback (Space / Enter, "the game's own Confirm"). The dialogue reader used it
+// to advance its page pointer, which made multi-page dialogue KEYBOARD-ONLY — this tracker sees the
+// DirectInput keyboard buffer and nothing else, while the game reads pads through XInput, so a
+// controller player heard page 1 and then silence. Pagination now comes off the game's own page
+// cursor in `ui/dialogue_reader` and is blind to the input device. Do not add an input-side page
+// signal back: observing a key that usually advances the box is not observing the box advancing.
 
 // Navigation hotkeys. Fired (on the input thread) when the user presses a nav key
 // while the game window is foregrounded: `\` (VK_OEM_5), `[` (VK_OEM_4),

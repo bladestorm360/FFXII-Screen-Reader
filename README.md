@@ -8,8 +8,6 @@ Adds NVDA output, pathfinding, menu reading and other accessibility aides to Fin
 
 This is an early test build. The following are known — please report anything else you run into.
 
-Multi-page dialogue is read all at once instead of a page at a time. Longer story and tutorial screens (for example Basch explaining the save crystal) arrive as one block of text.
-
 Button prompts inside tutorial text are still skipped. A line like "press \[button] to save" reads as "press to save" — the button icon has no name the mod can read, so it is left out. The text around it should now be intact: this build fixes a decoding bug that also swallowed the punctuation after an icon and could leave a stray letter behind. If you still hear a sentence lose its ending, or a stray letter appear mid-word, that is worth reporting.
 
 Pathfinding directions can change abruptly if the game moves the camera. Directions are given relative to the camera — "north" means the way an Up push sends you — because that is the only frame the stick can actually act in. The game moves the camera on its own: stepping onto a ledge or stairs, hugging a wall, and constantly in battle as it tracks your target. When it does, the same route is described from the new angle, so a route that was "northeast" can become "southwest" without you having gone wrong — the way you push the stick has changed with it. If directions reverse or swing suddenly, the camera moved: press the directions key again and follow the new reading. There is no way for the mod to prevent this without breaking battle targeting, which uses the same camera to lock onto enemies.

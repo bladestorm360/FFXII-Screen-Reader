@@ -1,5 +1,4 @@
 #include "ui/message_reader.h"
-#include "ui/choice_reader.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -13,10 +12,10 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
-#include <vector>
 
 
-// Message-text reader. Surfaces, all decoded from the game's own codec bytes:
+// Message-text reader. Two surfaces, both decoded from the game's own codec bytes and neither
+// paginated — a page-turn concept would be meaningless for either:
 //
 //  A. "Obtained <item>" — the treasure/loot popup (FUN_0035e070, the 0x6e8-byte widget created by
 //     FUN_0035df40 with its handle in _DAT_022ca430). On its case-1 (build) the FULLY COMPOSED text
@@ -27,32 +26,24 @@
 //     It is a timed toast — case 2 self-destructs when the animation ends — so it never paginates
 //     and fires exactly once per popup.
 //
-//  B. Telop / on-screen tutorial overlay — FUN_002e16b0. WORKS, and is now PAGINATED. It is a
-//     whole-message content setter: it hands over speaker + EVERY page in one string. Decoding that
-//     flat concatenated the pages with nothing between them ("...miss out on the bounty.You gotta
-//     talk to...") and read an entire multi-screen conversation in one breath while the game was
-//     still showing page 1.
-//
-//     RESOLVED without the consumer-side page state that was previously thought necessary: the
-//     PAGE BREAK IS IN THE TEXT. Codec control 0x03 is it — in the game's own codec handler
-//     FUN_002ac5f0 it is the only control case that RETURNS 0 (ending the draw pass) after storing
-//     the resume position in *param_2 and calling FUN_0017fae0(0). 0x02 does line-advance maths and
-//     continues (newline, not page); 0x09 only skips itself; 0x0A does layout and continues. So we
-//     split on 0x03 (GameText::DecodePages), speak page 1, and advance on the player's Confirm —
-//     the same press that advances the game's box — via InputTracker's observed Confirm callback.
-//
-//     The byte cap also went 512 -> 4096: 512 was sized for one screen and cut the 4-page hunt
-//     tutorial off mid-sentence ("...Then you hunt it, ").
-//
-//  C. Menu system messages — the FUN_0057c480 surface ("cannot equip", "sold"). Kept, but it is
+//  B. Menu system messages — the FUN_0057c480 surface ("cannot equip", "sold"). Kept, but it is
 //     MENU-ONLY: its case 1 does *(longlong*)(DAT_0209ac30 + 0x328) = surface, i.e. it registers
 //     into the menu manager. It can never fire for field text, and in a 17-minute play log it never
 //     fired at all. It is NOT the item/treasure path — that claim (spec'd at 0.90, below this
 //     project's 0.98 bar) was wrong; surface A above is the real one.
 //
-// REMOVED — the e5f0 "dialogue" pair (FUN_003c02b0 resolver + FUN_002baf80 page proc). They are the
-// WORLD MAP screen, not dialogue: page+0x138 is a MAP id and the resolver's out+8 is a MAP NAME
-// (DAT_02b457e0+0xe8 is the map DB — FUN_003be680(id,&w,&h) returns width/height and callers
+// MOVED OUT — the telop/dialogue content setter FUN_002e16b0. It is a WHOLE-MESSAGE setter: it hands
+// over every page of a conversation in one string, so this module split it on the codec's 0x03 page
+// break and advanced through the pages on an observed Space/Enter press. That made multi-page
+// dialogue keyboard-only — a controller player heard page 1 and nothing after it — because the mod
+// was watching for a key rather than for the box advancing. Dialogue now lives in
+// `ui/dialogue_reader`, which reads the game's own page cursor (widget+0x8A, written by
+// FUN_002a8c50) and is therefore blind to which device turned the page. Do not reintroduce a
+// content-setter page split here.
+//
+// REMOVED EARLIER — the e5f0 "dialogue" pair (FUN_003c02b0 resolver + FUN_002baf80 page proc). They
+// are the WORLD MAP screen, not dialogue: page+0x138 is a MAP id and the resolver's out+8 is a MAP
+// NAME (DAT_02b457e0+0xe8 is the map DB — FUN_003be680(id,&w,&h) returns width/height and callers
 // zoom-to-fit; assets live under ArtData/menu/localmap/; the sibling proc FUN_002b7b80 tracks the
 // player's world position). The spec's "decisive" evidence — that the widget owns the mini_face_c
 // speaker portrait — was a misread: that symbol is a TEXTURE-BUNDLE name passed to FUN_0024a5a0
@@ -67,7 +58,6 @@ namespace {
 // ---- offline-derived RVAs / globals (abs = RVA + 0x120000) -------------------
 constexpr uint32_t RVA_ITEMPOPUP = 0x23E070;  // FUN_0035e070(widget, msg)    "obtained <item>" toast proc
 constexpr uint32_t RVA_PANEL     = 0x45C480;  // FUN_0057c480(surface, msg)   MENU system-message surface
-constexpr uint32_t RVA_TELOP     = 0x1C16B0;  // FUN_002e16b0(ctx,slot,text,_) telop/tutorial overlay content setter
 
 constexpr uint32_t OFF_POPUP_TEXT  = 0xC8;   // item popup -> composed codec text (FUN_002b4090 dest)
 constexpr uint32_t POPUP_TEXT_CAP  = 0x4A0;  // ...its sprintf capacity
@@ -77,8 +67,8 @@ constexpr uint32_t OFF_SURF_FLAGS  = 0x630;  // surface -> producer flags; bit3 
 
 // (The speaker-nameplate reader — DAT_02b62d78 + the (flags & 0x405) == 5 draw gate — went with the
 //  e5f0 pair above: it existed only to prefix those "dialogue" lines, which were map names. When a
-//  real dialogue window is located, re-derive the speaker source against THAT widget rather than
-//  assuming this global belongs to it.)
+//  real dialogue speaker source is located, re-derive it against the message WIDGET that
+//  dialogue_reader hooks rather than assuming this global belongs to it.)
 
 // Directive 3: the FUN_0057c480 yes/no confirms are a distinct class from the already-working
 // title/new-game confirms (FUN_00241d40); keep the read-point wired + logged but SILENT unless
@@ -88,13 +78,12 @@ constexpr bool kSpeakSurfaceConfirms = false;
 // ---- hook trampolines --------------------------------------------------------
 typedef uintptr_t (*Pfn_ItemPopup)(void* widget, void* msg);
 typedef uintptr_t (*Pfn_Panel)(void* surface, void* msg);
-typedef int       (*Pfn_Telop)(void* ctx, int slot, void* text, void* p4);
 Pfn_ItemPopup s_origItemPopup = nullptr;
 Pfn_Panel     s_origPanel     = nullptr;
-Pfn_Telop     s_origTelop     = nullptr;
 
 // ---- state (game thread, unless noted) ---------------------------------------
-// Last spoken line, for the `t` re-read key. Written on the game thread, read on the input thread.
+// Last spoken line, for the `t` re-read key. Written on the game thread by this module's surfaces
+// AND by DialogueReader (through NoteSpoken), read on the input thread.
 std::mutex   g_lastMutex;
 std::wstring g_lastLine;
 
@@ -104,20 +93,10 @@ std::wstring g_lastLine;
 std::mutex   g_confirmMutex;
 std::wstring g_confirmPrompt;
 
-// Pages of the message currently on screen, and which one we have spoken. Written on the game
-// thread (the content setter), read+advanced on the input thread (Confirm), so it needs its own
-// lock -- g_lastMutex guards the `t` re-read line and nothing else.
-std::mutex                g_pageMutex;
-std::vector<std::wstring> g_pages;
-size_t                    g_pageIdx = 0;
-
 bool g_initialized = false;
 
 void SpeakAndStash(const std::wstring& text, const char* logPrefix) {
-    {
-        std::lock_guard<std::mutex> lk(g_lastMutex);
-        g_lastLine = text;
-    }
+    MessageReader::NoteSpoken(text);
     Log::WriteW("MSGTEXT", logPrefix, text);
     Speech::Output(text, /*interrupt=*/true);
 }
@@ -175,110 +154,6 @@ void OnPanelSurface(void* surface, void* msg) {
     if (kSpeakSurfaceConfirms) SpeakAndStash(text, "panel(confirm): ");
 }
 
-// A telop / on-screen tutorial overlay slot had its content set (FUN_002e16b0 param_3 = codec
-// text; null = clear). The string is HEADER<0x02>BODY, e.g. "TUTORIAL\nTry using ... to adjust
-// the viewing angle" (0x02 -> newline). Distinct from dialogue/panel/help surfaces. NOTE:
-// button-icon inserts (0x0f escapes) currently decode to nothing, so key/button glyphs are
-// dropped for now — a follow-up will map them to names.
-void OnTelop(void* text, int slot) {
-    if (!text) {                                   // null = clear: the box closed
-        std::lock_guard<std::mutex> lk(g_pageMutex);
-        g_pages.clear();
-        g_pageIdx = 0;
-        return;
-    }
-
-    // PAGINATED. This setter hands over the WHOLE message -- every page in one string -- so
-    // decoding it flat and speaking it read an entire multi-screen conversation in a single breath
-    // while the game was still showing page 1. Split on the codec's 0x03 page break and speak only
-    // what is on screen; NextPage() advances with the player's Confirm.
-    //
-    // 4096, not 512: the 4-page hunt-tutorial message was being cut off mid-sentence
-    // ("...Then you hunt it, ") because the cap was sized for one screen, not the whole message.
-    // Hand the RAW bytes to ChoiceReader before decoding. A cursored surface (the Hunt notice board)
-    // carries its rows in a 0x0E option block inside THIS string, past the question and the column
-    // headers -- and Decode stops at that marker, so the decoded text below can never contain them.
-    // The window itself has no copy (window+0x1A8 is null there), so this is the only route to them.
-    ChoiceReader::NoteMessageText(reinterpret_cast<const uint8_t*>(text));
-
-    std::vector<std::wstring> pages;
-    GameText::DecodePages(reinterpret_cast<const uint8_t*>(text), 4096, pages);
-    if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
-
-    // RAW BYTE DUMP for a message that decoded to a SINGLE long page -- i.e. one that visibly
-    // contains several screens' worth of text but no separator we recognise.
-    //
-    // 0x03 was identified from FUN_002ac5f0 as the page break (it is the only control case that
-    // returns 0 and stores a resume pointer) and that turned out NOT to be what these messages use:
-    // every one still reports page 1/1. Rather than guess a third byte, this prints the actual
-    // bytes so the separator can be READ off the boundary -- the run between "...the bounty." and
-    // "You gotta talk..." is whatever sits at that offset. Capped at 3 dumps per session and
-    // 256 bytes each, so it cannot become log spam on the game thread.
-    // ALSO dump when the decode STOPPED EARLY. GameText::ControlLength treats 0x00/0x0B/0x0C/0x0D as
-    // terminators and 0x0E as "length unknown -- stop, never guess", so a message whose real content
-    // continues past one of those decodes to a short, innocent-looking string and the rest is simply
-    // lost. That is what the Hunt notice board looks like: it yields
-    // "Which bill would you like to read?\nMarkRankStatus" -- the question and the three COLUMN
-    // HEADERS -- while the bill rows the player is arrowing through never appear. Whether they sit
-    // past that stop byte is exactly what these bytes answer, and guessing a structure without them
-    // is how the 0x0E option-block model got mis-applied to this surface in the first place.
-    const bool longSinglePage = (pages.size() == 1 && pages.front().size() > 200);
-    bool stoppedEarly = false;
-    {
-        uint8_t probe[256] = {};
-        if (MemRead::SafeReadBytes(text, probe, sizeof(probe))) {
-            size_t stop = 0;
-            while (stop < sizeof(probe)) {
-                const uint8_t c = probe[stop];
-                if (c == 0x00 || c == 0x0B || c == 0x0C || c == 0x0D || c == 0x0E) break;
-                ++stop;
-            }
-            // Real text after the stop byte means we are dropping content, not ending cleanly.
-            for (size_t i = stop + 1; i < sizeof(probe); ++i)
-                if (probe[i] >= 0x10) { stoppedEarly = true; break; }
-        }
-    }
-
-    if (longSinglePage || stoppedEarly) {
-        static int s_dumps = 0;
-        if (s_dumps < 3) {
-            ++s_dumps;
-            // 768, not 256: the notice board's option block alone ran past 256 and the dump cut off
-            // mid-list, so whatever follows the marks -- and the STATUS column is not in the row
-            // bytes, its 0x0F 0x2E escape resolves through a render-context table -- was never
-            // visible. File-only, capped at 3 dumps a session, so the console budget is untouched.
-            uint8_t raw[768] = {};
-            if (MemRead::SafeReadBytes(text, raw, sizeof(raw))) {
-                char why[96];
-                snprintf(why, sizeof(why), "telop RAW (%s, decoded %zu chars):",
-                         stoppedEarly ? "DECODE STOPPED EARLY -- content follows a control byte"
-                                      : "long single page",
-                         pages.front().size());
-                Log::Write("MSGTEXT", why);
-                char hex[3 * 64 + 1];
-                for (int off = 0; off < static_cast<int>(sizeof(raw)); off += 64) {
-                    int p = 0;
-                    for (int k = 0; k < 64; ++k)
-                        p += snprintf(hex + p, sizeof(hex) - p, "%02x ", raw[off + k]);
-                    char line[256];
-                    snprintf(line, sizeof(line), "telop RAW +%03d: %s", off, hex);
-                    Log::Write("MSGTEXT", line);
-                }
-            }
-        }
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(g_pageMutex);
-        g_pages = std::move(pages);
-        g_pageIdx = 0;
-    }
-
-    char hdr[64];
-    snprintf(hdr, sizeof(hdr), "telop[slot=%d] page 1/%zu: ", slot, g_pages.size());
-    SpeakAndStash(g_pages.front(), hdr);
-}
-
 // ---- detours (all: run the original first, then read the now-populated state) ----
 uintptr_t HookedItemPopup(void* widget, void* msg) {
     uintptr_t ret = s_origItemPopup ? s_origItemPopup(widget, msg) : 0;
@@ -300,15 +175,6 @@ uintptr_t HookedPanel(void* surface, void* msg) {
     return ret;
 }
 
-int HookedTelop(void* ctx, int slot, void* text, void* p4) {
-    int ret = s_origTelop ? s_origTelop(ctx, slot, text, p4) : 0;
-    STALL_SCOPE("MessageReader::Telop");
-    static bool s_firstFire = true;
-    if (s_firstFire) { s_firstFire = false; Log::Write("MSGTEXT", "diag: telop setter FUN_002e16b0 fired"); }
-    OnTelop(text, slot);
-    return ret;
-}
-
 // Re-read key (`t`) — runs on the input thread. Repeats the last spoken line.
 void OnRereadKey() {
     std::wstring line;
@@ -323,21 +189,9 @@ void OnRereadKey() {
 
 namespace MessageReader {
 
-void NextPage() {
-    std::wstring page;
-    size_t idx = 0, total = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_pageMutex);
-        if (g_pageIdx + 1 >= g_pages.size()) return;   // last page (or none): the box is closing
-        ++g_pageIdx;
-        page  = g_pages[g_pageIdx];
-        idx   = g_pageIdx;
-        total = g_pages.size();
-    }
-    ChoiceReader::NotePage(idx);   // a later page can carry its own option block (the Yes/No)
-    char hdr[64];
-    snprintf(hdr, sizeof(hdr), "telop page %zu/%zu: ", idx + 1, total);
-    SpeakAndStash(page, hdr);
+void NoteSpoken(const std::wstring& text) {
+    std::lock_guard<std::mutex> lk(g_lastMutex);
+    g_lastLine = text;
 }
 
 bool Init() {
@@ -346,14 +200,12 @@ bool Init() {
         return true;
     }
     InputTracker::SetRereadCallback(&OnRereadKey);
-    InputTracker::SetConfirmCallback(&NextPage);   // page the telop with the game's own Confirm
     bool ok = Hooks::InstallTyped(RVA_ITEMPOPUP, &HookedItemPopup, &s_origItemPopup);
     ok     &= Hooks::InstallTyped(RVA_PANEL,     &HookedPanel,     &s_origPanel);
-    ok     &= Hooks::InstallTyped(RVA_TELOP,     &HookedTelop,     &s_origTelop);
     g_initialized = true;
     Log::Write("MSGTEXT", ok
-        ? "MessageReader initialized (obtained-item toast via FUN_0035e070+0xC8; telop/tutorial "
-          "overlay; menu system messages; 't' re-reads last line; menu confirms muted)."
+        ? "MessageReader initialized (obtained-item toast via FUN_0035e070+0xC8; menu system "
+          "messages; 't' re-reads last line; menu confirms muted). Dialogue: dialogue_reader."
         : "MessageReader: a hook failed to install — see Hooks log.");
     return ok;
 }
@@ -361,8 +213,6 @@ bool Init() {
 void Shutdown() {
     if (!g_initialized) return;
     InputTracker::SetRereadCallback(nullptr);
-    InputTracker::SetConfirmCallback(nullptr);
-    Hooks::Uninstall(RVA_TELOP);
     Hooks::Uninstall(RVA_PANEL);
     Hooks::Uninstall(RVA_ITEMPOPUP);
     g_initialized = false;

@@ -148,8 +148,11 @@ NPC-trigger path needs Phase 4 first.
 - [ ] G5.3: PTextObject CPU staging confirmed (shared with G3.2)
 
 **Phase 5 features:**
-- [ ] Text display function hook (cutscenes + NPC dialogue)
-- [ ] Multi-page advance detection
+- [x] Text display function hook (cutscenes + NPC dialogue) — `FUN_002e16b0` content setter (S19),
+      now read through the widget it fills (`ui/dialogue_reader`, S91)
+- [x] Multi-page advance detection — the game's own page cursor `widget+0x8A`, written by
+      `FUN_002a8c50` (S91). Device-agnostic: it replaced a Space/Enter keypress watch that left
+      controller players hearing only page 1
 - [ ] Speaker name detection
 - [ ] Subtitle / battle-quote detection
 - [ ] Verify across all 12 locales (templates from phrasebook are mod-emitted; game text is read from RAM)

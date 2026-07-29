@@ -54,20 +54,23 @@
 // model is what the game's own parser does. Both can be true; do not re-strike this one.
 namespace ChoiceReader {
 
-// The message text that just went up (FUN_002e16b0's TEXT parameter). The option block lives in
-// this string; the Status column's values do NOT -- they are substitution arguments read from an
-// inline table on the window itself (see choice_reader.cpp ResolveArg).
+// The message on screen and WHICH BYTE OFFSET into it is the page being shown -- both read straight
+// off the widget the game is laying out (`base` = widget+0x28, `byteOffset` = widget+0x8A). Called
+// by DialogueReader, which is the only feeder.
+//
+// A message can carry SEVERAL option blocks -- the notice board's mark list is at the top, and the
+// bill detail's "Will you go and speak to the petitioner?" Yes/No is a later page of the very same
+// string -- so the block search has to be scoped to the current page. It is scoped by the game's own
+// cursor: this replaced a NoteMessageText + NotePage(pageIndex) pair where the index was counted
+// from observed keypresses and could drift out of step with the box. The offset cannot drift.
+//
+// The option block lives in this string; the Status column's values do NOT -- they are substitution
+// arguments read from an inline table on the window itself (see choice_reader.cpp ResolveArg).
 //
 // STRUCK: "the setter's 4th argument is the argument block". It is null on this path, and so is the
 // window+0x1A8 copy FUN_002a35b0 makes of it -- both were measured. The real table is param_7 of
 // FUN_002b32d0, which Ghidra does not render at the call site.
-void NoteMessageText(const uint8_t* codec);
-
-// Which PAGE of that message is on screen (0-based). A message can carry SEVERAL option blocks --
-// the notice board's mark list is page 0, and the bill detail's "Will you go and speak to the
-// petitioner?" Yes/No is a later page of the very same string. Scanning from offset 0 would always
-// find the mark list, so the block search is scoped to the current page.
-void NotePage(size_t pageIndex);
+void NotePage(const uint8_t* base, size_t byteOffset);
 
 // Is this the field dialogue / choice window class (obj[0] == FUN_002a6190)?
 bool IsChoiceWindow(void* owner);
@@ -97,12 +100,12 @@ bool OnFocus(void* window, int visibleIndex);
 //     widget+0xA2  u8              option count (written by FUN_002a8c50 from the 0x0E header)
 //
 // Install() hooks FUN_002a9980 and speaks on cursor CHANGE. Returns false if the hook fails.
+//
+// NOTE that FUN_002a9980 is slot 2 of the text dispatch table and exists ONLY on choice-capable
+// widgets (type 0); a plain dialogue box has null there. That is why this tick can drive an option
+// cursor but could never page dialogue -- pagination hangs off slot 0, FUN_002a8c50, in
+// `ui/dialogue_reader`.
 bool Init();
 void Shutdown();
-
-// Diagnostic for the paginated-dialogue bug: log every non-0x8000 notify this window class
-// receives, with the page state, so the next tester log settles which message (if any) marks a
-// page turn. Observation only -- speaks nothing, changes nothing.
-void OnOtherMessage(void* window, uint64_t msg, uint64_t val);
 
 } // namespace ChoiceReader

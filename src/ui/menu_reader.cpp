@@ -371,16 +371,6 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             // pane's list is never announced.
             OnFocus(owner, index, /*fromPaint=*/false);   // gates the content path internally
         }
-    } else if (ChoiceReader::IsChoiceWindow(owner)) {
-        // Every NON-0x8000 message this window class receives, deduped. This is the open question
-        // for the paginated-dialogue bug: the page advance must be driven by a GAME event rather
-        // than by us watching for a keypress (which is why a controller player hears only page 1).
-        // FUN_002a6190 handles 0x8001 confirm / 0x8002 cancel from its cursor child -- but a plain
-        // dialogue box may have no cursor child at all, in which case none of these ever fire and
-        // the page signal is somewhere else entirely. That is exactly what this line settles, and
-        // it is why the mechanism has NOT been swapped yet: switching to an unproven event would
-        // break page turns for keyboard players, who work today.
-        ChoiceReader::OnOtherMessage(owner, static_cast<uint64_t>(msg), static_cast<uint64_t>(val));
     } else if (msg == MSG_YES || msg == MSG_NO || msg == MSG_CANCEL) {
         // No-list 2-choice pop-up result path (owner = parent). Logged for now;
         // the tested quit pop-up is the list variant handled via 0x8000 above.
