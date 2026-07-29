@@ -14,6 +14,13 @@
 // FUN_0056d370): quantity (panel+0xDC) and running total on each change, and the Left-arrow +1/+10 step
 // (panel+0xE4 bit 0x400000) as "1x" / "10x". Quantity mode = panel+0xE4 bit1.
 //
+// CATEGORY TABS are NOT read here. The shop is one of the three families served by FUN_005655f0, so
+// InventoryReader::OnCategoryRefresh already resolves and speaks the tab name (WEAPONS, AMMUNITION,
+// LOOT, ...) for this container too. This reader only has to stand down for it: it asks
+// InventoryReader::ConsumeCategoryAnnounce(container) and, when a category was just announced, speaks
+// its row QUEUED behind that name rather than interrupting it. Reading the tabs a second time here
+// would duplicate that chain and re-create the very race it fixes.
+//
 // CONTRACT (same as the other readers): read-only, SEH-guarded memory reads, no game calls. Text is the
 // game's own, decoded via GameText. Empty/invalid rows -> silent. The ONE change-check (speak only when
 // the highlighted item changes) is the sanctioned no-dedup exception: FUN_0056e5d0 is a redraw handler

@@ -3584,3 +3584,115 @@ two-member party.
 Note for anyone re-running that probe: `DAT_022c8064` printed as `131074` (`0x20002`) because it is a
 **packed** field -- `FUN_0035bc50` writes it with `CONCAT62`/`CONCAT42`, so only the low 16 bits are
 the record count. The probe read it as a plain u32. Nothing depends on it.
+
+## Session 87 — 2026-07-29 — [menus] The shop category was never missing — it was being cut off
+
+KEYWORDS: shop category tab WEAPONS AMMUNITION LOOT interrupt queue Speech::Output g_queueNextItem
+ConsumeCategoryAnnounce FUN_005655f0 FUN_0056e410 FUN_0056ded0 FUN_0056e5d0 inaudible race two speakers
+
+**Symptom:** switching tabs in a shop said nothing about the category. A Frida probe
+(`probe_shop_category.js`) was written and run to find where the tab label lives.
+
+**The probe answered a question the mod had already solved.** Before reading a byte of it, the mod
+log settled the matter — the category was already being resolved, logged AND spoken:
+
+```
+[19:26:39.421 +66078ms] [INV] category: owner=…2BED9000 "WEAPONS"
+[19:26:39.421 +66078ms] [SPEAK-OUT] WEAPONS
+[19:26:39.421 +66078ms] [SHOP] item: owner=…2BED9000 "Dagger, 195 gil, 1 in inventory"
+[19:26:39.421 +66078ms] [SPEAK-OUT] Dagger, 195 gil, 1 in inventory
+```
+
+Six correct names captured (`WEAPONS ARMOR ACCESSORIES ITEMS LOOT AMMUNITION`), `Speech::Output
+calls=2` in the same PERF window, same millisecond. The shop's row line ran `interrupt=true` ~0.2 ms
+after the category and cancelled it before a syllable reached the user.
+
+**Root cause — two speakers, two interrupt policies**, the exact failure CLAUDE.md warns about under
+"one choke point per surface". The shop's tab change routes through the SAME shared refresh the party
+item lists use — `FUN_0056ded0:82 -> FUN_0056e410:50 -> FUN_005655f0` (category), then
+`FUN_0056ded0:83 -> FUN_0056e5d0` (row). `InventoryReader` had fixed this at birth with
+`g_queueNextItem`, and `inventory_reader.h:32-33` even documents it verbatim — *"without it the
+item's interrupt would cut the category off mid-word"* — but the flag was file-static, so
+`shop_reader`, the other consumer of that same refresh, could not see it.
+
+**Fix (2 files, strictly additive).** `OnCategoryRefresh` now also records WHICH surface it announced
+for (`g_categoryOwner`), and exposes `InventoryReader::ConsumeCategoryAnnounce(owner)`.
+`ShopReader::OnShopHighlight` consults it and, on a match, speaks its row QUEUED behind the category
+and clears `g_lastItemId` so the new tab's row always speaks. **The party-menu path was not edited**
+— `TryFocus` untouched, `g_queueNextItem` unchanged — because it is confirmed working and was
+explicitly out of scope. Owner-scoping is what stops one surface consuming another's announcement;
+the shop's two log lines carry the identical owner pointer, so the match is measured, not assumed.
+
+**No second category reader was written.** Duplicating the `+0x180`/`+0xE8`/`+0xF0` chain inside
+`shop_reader.cpp` would have re-created the very race it was meant to fix, one layer down.
+
+**Also recorded in `GameArchitecture.md`:** the shop's previously-unnamed route into `FUN_005655f0`;
+the trap that the per-tab record holds TWO source indices (`+6` label, `+7` category code) which
+coincide only in a shop stocking every category — precisely how a probe "confirms" the wrong one; and
+that `container + (pos+0x1E)*8` is not a pointer but the per-tab record's own address.
+
+**Verified this session:** log rotation works exactly as designed — `x64\logs\` held exactly 20
+archives with the cap holding, `…-Latest.log` beside `dinput8.dll`. An earlier "only one log exists"
+claim was a bad search (globbed `x64\` only; archives are one level down), not a bug.
+
+**LESSON: a feature can be fully implemented, logging correctly, and still be inaudible.** The log
+said the feature worked. The user said it did not. Both were right — the utterance was emitted and
+then cancelled. Read the log for the utterance before concluding a feature was never built, and when
+two readers speak on one surface, check who interrupts whom before adding a third.
+
+**Numbering note:** `CLAUDE.md` states the phrasebook was "BUILT in Session 87", but no Session 87
+entry exists in this file and 86 was the highest. This entry takes 87 per the grep-the-file rule; the
+phrasebook build remains unlogged and its reference in `CLAUDE.md` should be corrected to match
+whatever session actually did it.
+
+**Status: CONFIRMED IN PLAY** (tester, same day) — shop categories now speak on every tab switch,
+followed by the row.
+
+## Session 88 — 2026-07-29 — [menus] An EMPTY category spoke the previous one's row
+
+KEYWORDS: empty category SHIELDS no shield owned stale paint previous category Leather Cap helms
+IsEmptyCategory row array null +0xE0 FUN_0057cf20 FUN_005655f0 scroll count clamped generic painted
+cell path TryFocus claim silent never speak filler STRUCK empty categories do not occur
+
+**Symptom (tester):** in the equip list, SHIELDS — a category with nothing in it — announced
+`"SHIELDS"` and then `"Leather Cap"`, a helm that was not highlighted and is not a shield. Every
+populated category (HELMS, ARMOR, CHEST PIECES) behaved correctly.
+
+**The log named the culprit reader immediately.** A populated category speaks through
+`InventoryReader`; the empty one did not:
+
+```
+[INV] category: owner=…2BCF6400 "HELMS"          [INV] category: owner=…2BCF6400 "SHIELDS"
+[INV] item:     owner=…2BCF6400 "Leather Cap"    [READER] focus owner=…2BCF6400 index=0
+                                                 [READER]   item: "Leather Cap"
+```
+
+`[INV] item:` is `TryFocus`. `[READER] item:` is the **generic painted-cell path**. So `TryFocus`
+declined the empty list and `menu_reader.cpp:365` fell through to the generic reader, which read the
+cell's last-drawn text — the previous category's row.
+
+**Why the cell looks populated.** `FUN_0057cf20:253-257` frees its row buffer and returns NULL when
+it builds zero rows, so `FUN_005655f0:42` stores **null into `+0xE0`**. `FUN_005655f0:49-52` then
+**clamps the count handed to the scroll widget from 0 to 1**, so `scroll+0xE8` reads 1 and the widget
+reports a row at index 0 that does not exist. A null `+0xE0` with the scroll widget and tab table
+still present is therefore the ONLY signal that a category is empty.
+
+**Fix.** New `IsEmptyCategory(w)` — the same shape test `ReadList` uses, minus the row array whose
+absence it is detecting. `TryFocus` now returns **true** (claimed) and speaks **nothing** for that
+case, so the generic path never sees the cell. Populated categories are untouched: `ReadList`
+succeeds and the first row is announced on the switch exactly as before. The pending category
+handshake is consumed on the empty path too, so it cannot go stale into a later row.
+
+**STRUCK: "Empty categories do not occur"** (`GameArchitecture.md`, S70). It was justified by "every
+`[cat]` had n≥1" — a property of the SAMPLE, not the game. SHIELDS with no shield owned is built,
+tabbed and reachable. **A negative claim founded on 'we never saw one' is not a finding.** Same shape
+as S80's 48-id sample: a sample drawn from the range you already understand cannot falsify a claim
+about the ones you do not.
+
+**Measured in passing:** `OnCategoryRefresh`'s container and `TryFocus`'s `owner` are the SAME
+pointer on the equip screen (`…2BCF6400` in both lines) — the party-side identity that S87 could not
+confirm from any log then available.
+
+**Status: CONFIRMED IN PLAY** (tester, same day) — SHIELDS speaks its name and nothing else;
+populated categories still announce their first row on the switch. Log marker for the empty case:
+`[INV] empty category -- claimed and SILENT`.

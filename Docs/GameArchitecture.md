@@ -2185,11 +2185,47 @@ clamped at 0. Two independent read paths (this, vs reading back `node+0x18`) **a
 `ACCESSORIES`, `MAGICKS . TECHNICKS`, `TECHNICKS` (stored ALL CAPS). `TextCapture` already hooks
 `FUN_002f9860`, so the cache serves the common path with no game call.
 
-**Empty categories do not occur** — the `gateId` at `entry+6` filters them out before they are tabbed
-(every `[cat]` had n≥1; tab counts vary per screen state). Tester-confirmed.
+**~~Empty categories do not occur~~ — STRUCK (Session 88, 2026-07-29).** The old claim was that the
+`gateId` at `entry+6` filters them out before they are tabbed (every `[cat]` had n≥1) — that was a
+property of the SAMPLE, not of the game. **SHIELDS with no shield owned is tabbed, reachable, and
+empty**, measured in play on equip container `0x2BCF6400`.
+
+An empty category is built, not filtered: `FUN_0057cf20:253-257` frees its buffer and returns NULL
+when the built count is 0, so `FUN_005655f0:42` stores **null into `+0xE0`**. `FUN_005655f0:49-52`
+then **clamps the count handed to the scroll widget from 0 to 1**, so `scroll+0xE8` still reads **1**
+and the widget reports a row at index 0 that does not exist. Anything reading that cell gets the
+PREVIOUS category's paint. Reader consequence: a null `+0xE0` (with the scroll widget and tab table
+still present) is the ONLY signal that a category is empty — `inventory_reader.cpp` `IsEmptyCategory`
+claims that focus and stays silent so the generic painted-cell path cannot speak the stale row.
 
 **Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
 `FUN_005655f0` hook is what covers it.
+
+### The SHOP's route into that refresh (Session 87, 2026-07-29) — LOG-CONFIRMED
+
+`:2178` says "all three families (6 sites)" but never named the shop's route, which made the shop
+look uncovered and nearly bought a second, duplicate category reader. It is:
+
+```
+FUN_0056ded0:82 (shop L/R handler)  ->  FUN_0056e410:50  ->  FUN_005655f0   <- category announced here
+FUN_0056ded0:83                     ->  FUN_0056e5d0                        <- shop row announced here
+```
+
+So a shop tab change announces the category and then, **~0.2 ms later on the same call stack**, the
+highlighted row. Both are ours; see the interrupt note in `debug.md`. Confirmed live for six
+categories on shop container `0x2BED9000`: `WEAPONS`, `ARMOR`, `ACCESSORIES`, `ITEMS`, `LOOT`,
+`AMMUNITION`, plus `ARMOR`/`ACCESSORIES`/`AMMUNITION` from `probe_shop_category.js` on the Buy side
+(`+0x194 & 1` = sell; help string = `FUN_002f9860(0xC6B + sell*2)`, `FUN_0056e5d0:20`).
+
+**TRAP — the per-tab record at `+0xF0 + tab*8` holds TWO different source indices** (`:2155`):
+`s8 @ +6` = **label** index into the `+0xE8` tab table (`FUN_005655f0:19`), `s8 @ +7` = **category
+code**, which the shop pushes through `FUN_0056dc30` into `container+0x191` (`FUN_0056ded0:78-80`).
+They are not interchangeable. In a shop stocking every category they happen to equal `tabIdx` and
+each other, which is exactly how a probe can "confirm" the wrong one. Use `+6` for the name.
+
+**Not a pointer:** `container + (pos + 0x1E)*8` *is* `container + 0xF0 + pos*8` — the address of the
+per-tab record itself, handed to `FUN_005674b0` (`FUN_0056ded0:76-77`) to restore that tab's saved
+cursor. Dereferencing it yields the record's own bytes and looks like a garbage pointer.
 
 ## Status screen — `FUN_002c2320` (0x1A2320) (Session 71, 2026-07-24) — SHIPPED, PLAY-CONFIRMED
 

@@ -1,4 +1,5 @@
 #include "ui/shop_reader.h"
+#include "ui/inventory_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -105,6 +106,15 @@ void OnShopHighlight(void* container) {
     std::wstring name = DecodeName(codec);
     if (name.empty()) return;                            // no readable name -> silent (never fabricate)
 
+    // The shop's tabs route through the SAME FUN_005655f0 refresh the party-menu item lists use, so
+    // InventoryReader has already spoken the category name by the time we get here: FUN_0056ded0:82
+    // -> FUN_0056e410:50 -> FUN_005655f0 (its hook), then FUN_0056ded0:83 -> FUN_0056e5d0 -> us,
+    // ~0.2 ms later. Queue behind that name instead of interrupting it -- the fix those lists got at
+    // birth and this reader never did -- and drop the item guard so the new tab's row always speaks,
+    // even in the rare case it repeats the previous tab's item id.
+    const bool afterCategory = InventoryReader::ConsumeCategoryAnnounce(container);
+    if (afterCategory) g_lastItemId = -1;
+
     // The one sanctioned change-check: FUN_0056e5d0 is a redraw handler (~2x per focus). Speak only when
     // the highlighted item actually changes; the guard resets when the container (surface) changes, so
     // re-entering the shop always re-announces. NOT a dedup of distinct focuses.
@@ -117,8 +127,8 @@ void OnShopHighlight(void* container) {
 
     std::wstring line = name + L", " + std::to_wstring(price) + Phrase::Get(Phrase::Id::GilSuffix) + L", "
                       + std::to_wstring(inv) + Phrase::Get(Phrase::Id::InInventorySuffix);
-    Log::WriteW("SHOP", "item:", container, line);
-    Speech::Output(line, /*interrupt=*/true);
+    Log::WriteW("SHOP", afterCategory ? "item (queued):" : "item:", container, line);
+    Speech::Output(line, /*interrupt=*/!afterCategory);
 }
 
 // FUN_0056e5d0(container, mode): run the game's refresh first (so the highlight/rows are current), then

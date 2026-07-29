@@ -886,6 +886,49 @@ so don't look for a lock flag.)
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
 
+**KEYWORDS: empty category SHIELDS spoke previous category row stale paint Leather Cap helm
+IsEmptyCategory row array null +0xE0 FUN_0057cf20 scroll count clamped 1 generic painted cell
+TryFocus claim silent STRUCK empty categories do not occur S88**
+
+**An EMPTY category announced the PREVIOUS category's row.** SHIELDS (no shield owned) said
+`"SHIELDS"` then `"Leather Cap"` — a helm, not highlighted, not a shield. The log identified the
+speaker: populated categories emit `[INV] item:` (`InventoryReader::TryFocus`), but the empty one
+emitted `[READER] item:` — the **generic painted-cell path**. `TryFocus` had declined the empty list,
+so `menu_reader.cpp:365` fell through to the generic reader, which reads the cell's last-drawn text.
+SOLUTION: the game *builds* empty categories rather than filtering them — `FUN_0057cf20:253-257`
+frees the row buffer and returns NULL at zero rows (`+0xE0` = null), then `FUN_005655f0:49-52`
+**clamps the scroll widget's row count from 0 to 1**, so the widget reports a phantom row at index 0.
+A null `+0xE0` with the scroll widget and tab table still present is the ONLY empty signal. New
+`IsEmptyCategory()` detects it; `TryFocus` returns **true** (claims the focus) and speaks **nothing**,
+so the generic path never sees the cell. Populated categories are untouched — `ReadList` succeeds and
+the first row still announces on the switch. **Do NOT "fix" this by making the generic path smarter**;
+it has no way to know the cell is stale. **STRUCK by this:** "empty categories do not occur"
+(`GameArchitecture.md`, S70) — that rested on "every `[cat]` had n≥1", a property of the sample.
+
+**KEYWORDS: shop category tab silent not spoken WEAPONS AMMUNITION LOOT interrupted cut off mid-word
+two speakers race Speech::Output interrupt queue g_queueNextItem ConsumeCategoryAnnounce
+FUN_005655f0 FUN_0056e410 FUN_0056ded0 FUN_0056e5d0 inaudible S87**
+
+**Shop tab switches said nothing about the category — but the category was already being spoken.**
+The mod log showed it resolved, logged AND uttered (`[INV] category: "WEAPONS"` + `[SPEAK-OUT]
+WEAPONS`), immediately followed in the SAME millisecond by `[SHOP] item:` + its `[SPEAK-OUT]`, with
+`Speech::Output calls=2`. The row line ran `interrupt=true` ~0.2 ms later and cancelled the category
+before a syllable was heard. SOLUTION: the shop's tabs route through the same shared refresh the
+party item lists use (`FUN_0056ded0:82 -> FUN_0056e410:50 -> FUN_005655f0`, then `FUN_0056ded0:83 ->
+FUN_0056e5d0`), and `InventoryReader` had already solved this with `g_queueNextItem` — but the flag
+was file-static so `shop_reader` could not see it. `OnCategoryRefresh` now also records the owning
+surface and exposes `InventoryReader::ConsumeCategoryAnnounce(owner)`; `ShopReader::OnShopHighlight`
+consults it and speaks its row QUEUED behind the category, clearing `g_lastItemId` so the new tab's
+row always speaks. Owner-scoped, so one surface can never consume another's announcement. The party
+path (`TryFocus`, `g_queueNextItem`) was deliberately NOT edited. **Diagnostic marker:** a
+`[SHOP] item (queued):` line is the handshake firing; a bare `item:` straight after a `category:`
+means it did not. **Do NOT "fix" this by reading the tabs again inside `shop_reader.cpp`** — that
+duplicates the chain and re-creates the same race one layer down.
+
+**LESSON: a feature can be fully implemented, logging correctly, and still be inaudible.** Read the
+log for the *utterance* before concluding a feature was never built; when two readers speak on one
+surface, find out who interrupts whom before adding a third.
+
 **KEYWORDS: o key describe stale field no menu active help generation bump pause menu teardown
 FUN_00280de0 cat 0x12 NotifyFocusChanged CurrentHelpText g_helpGen IsAnyMenuOpen unusable S67**
 

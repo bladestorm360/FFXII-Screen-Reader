@@ -32,6 +32,15 @@
 // category change the category is spoken first and the item is QUEUED behind it (not a dedup -- it
 // suppresses nothing; without it the item's interrupt would cut the category off mid-word).
 //
+// EMPTY CATEGORY (e.g. SHIELDS with no shield owned): the name is spoken and then NOTHING. Such a
+// category IS tabbed and IS reachable -- the older "empty categories do not occur" claim is STRUCK
+// (S88). The game frees the row array and stores null at +0xE0 (FUN_0057cf20:253-257), then CLAMPS
+// the row count it gives the scroll widget from 0 to 1 (FUN_005655f0:49-52). The widget therefore
+// still reports a row at index 0, so this reader must CLAIM that focus and stay silent; returning
+// false would hand the cell to the generic painted-cell path, which reads whatever the painter last
+// drew there -- the PREVIOUS category's row ("SHIELDS" then "Leather Cap", measured in play).
+// A populated category is untouched by this and still announces its first row on the switch.
+//
 // Left/Right on a single-category screen is SILENT, matching the game: FUN_00564e10:22-23 returns
 // early when the tab count is below 2, so no refresh fires and there is nothing to announce.
 //
@@ -47,5 +56,14 @@ void Shutdown();
 // actually spoke, so the caller can fall through to the generic painted-cell path otherwise.
 // Called from MenuReader's 0x8000 dispatch and from its pane-entry replay.
 bool TryFocus(void* owner, int index);
+
+// True exactly once, and ONLY for the surface whose category was just announced -- then false again.
+// The row the game delivers microseconds later QUEUES behind that name instead of cutting it off.
+// FUN_005655f0 is shared: it serves these lists, the equipment list AND the shop, so a reader that
+// speaks a row of the family without consulting this silences the category. shop_reader did exactly
+// that -- the name was resolved, logged and spoken, then cancelled 0.2 ms later by the item line.
+// NOT a dedup: nothing is suppressed, both utterances are spoken, in order. The owner argument is
+// what keeps one surface from consuming another's announcement.
+bool ConsumeCategoryAnnounce(void* owner);
 
 } // namespace InventoryReader

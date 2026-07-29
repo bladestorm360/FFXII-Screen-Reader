@@ -51,6 +51,13 @@ typedef const uint8_t* (*Pfn_ResolveMsg)(int);   // FUN_002f9860(id)
 // unconditionally, so it can never leak into an unrelated announcement. Game thread only.
 bool g_queueNextItem = false;
 
+// Set alongside g_queueNextItem by OnCategoryRefresh -- the SAME event, but carrying WHICH surface
+// the category was announced for. FUN_005655f0 serves the party-menu lists, the equipment list AND
+// the shop, so a consumer outside this file (shop_reader) must be able to prove a pending category
+// is its own before queueing behind it. The party-menu handshake above is deliberately left exactly
+// as it is. Game thread only.
+void* g_categoryOwner = nullptr;
+
 // Decode an item/category name codec. Same two-step as shop_reader: these names come from the
 // shared string pool (FUN_002b58b0), which decodes directly; fall back to the variant-prefix skip
 // if the direct read is not printable. Empty on garbage/stale pointers -> the caller stays silent.
@@ -82,7 +89,7 @@ struct ListInfo {
 bool ReadList(void* w, ListInfo* out) {
     if (!w) return false;
     void* rows = PtrAt(w, OFF_C_ROWS);
-    if (!rows) return false;                       // null => empty list (does not occur in play)
+    if (!rows) return false;                       // null => EMPTY category; see IsEmptyCategory
     void* scroll = PtrAt(w, OFF_C_SCROLL);
     if (!scroll) return false;
     if (!PtrAt(w, OFF_C_TABLE)) return false;
@@ -91,6 +98,23 @@ bool ReadList(void* w, ListInfo* out) {
     if (n == 0 || n > MAX_ROWS) return false;
     out->rows  = rows;
     out->count = static_cast<int>(n);
+    return true;
+}
+
+// An EMPTY category -- SHIELDS with no shield owned -- is still OUR surface, and the ONLY thing that
+// separates it from a populated one is a null row array. The game does this deliberately:
+// FUN_0057cf20:253-257 frees its buffer and returns NULL when it builds zero rows, so
+// FUN_005655f0:42 stores null into +0xE0; then FUN_005655f0:49-52 CLAMPS the count it hands the
+// scroll widget from 0 to 1. So the widget still reports "one row at index 0", and the generic
+// painted-cell path happily reads that cell -- getting whatever the painter last drew there, which
+// is the PREVIOUS category's row. Measured: "SHIELDS" then "Leather Cap" (a helm), Session 88.
+//
+// Same shape test ReadList uses, minus the row array it is diagnosing the absence of.
+bool IsEmptyCategory(void* w) {
+    if (!w) return false;
+    if (PtrAt(w, OFF_C_ROWS)) return false;        // has rows -> populated, not this case
+    if (!PtrAt(w, OFF_C_SCROLL)) return false;
+    if (!PtrAt(w, OFF_C_TABLE)) return false;
     return true;
 }
 
@@ -128,6 +152,7 @@ void OnCategoryRefresh(void* w) {
     Log::WriteW("INV", "category:", w, name);
     Speech::Output(name, /*interrupt=*/true);
     g_queueNextItem = true;                        // let the item that follows queue behind this
+    g_categoryOwner = w;                           // ...and let shop_reader prove that item is ITS row
 }
 
 void HookedRefresh(void* container, void* tabState, int filter) {
@@ -139,6 +164,13 @@ void HookedRefresh(void* container, void* tabState, int filter) {
 
 namespace InventoryReader {
 
+bool ConsumeCategoryAnnounce(void* owner) {
+    if (!owner || owner != g_categoryOwner) return false;
+    g_categoryOwner = nullptr;
+    g_queueNextItem = false;      // this announcement was `owner`'s, so it is not a party list's
+    return true;
+}
+
 bool TryFocus(void* owner, int index) {
     STALL_SCOPE("InventoryReader::TryFocus");
     if (!owner || index < 0) return false;
@@ -148,7 +180,17 @@ bool TryFocus(void* owner, int index) {
     if (ShopReader::OwnsSurface(owner)) return false;
 
     ListInfo li{};
-    if (!ReadList(owner, &li)) return false;
+    if (!ReadList(owner, &li)) {
+        // Not one of ours, or a shape we cannot read -> let the generic path try, as before.
+        if (!IsEmptyCategory(owner)) return false;
+        // An empty category IS ours. CLAIM it and say NOTHING: returning false here would hand the
+        // cell to the generic painted-cell path, which reads the previous category's stale paint.
+        // Nothing to announce is not a reason to invent "empty" -- be silent (never-speak-filler).
+        // The name itself was already spoken by OnCategoryRefresh, so the switch is still audible.
+        ConsumeCategoryAnnounce(owner);            // nothing follows it; do not leave the flag pending
+        Log::Write("INV", "empty category -- claimed and SILENT (row array null, scroll count clamped to 1)");
+        return true;
+    }
     if (index >= li.count) return false;
 
     void* row = reinterpret_cast<char*>(li.rows) + static_cast<size_t>(index) * ROW_STRIDE;
@@ -187,6 +229,7 @@ void Shutdown() {
     Hooks::Uninstall(RVA_REFRESH);
     s_origRefresh   = nullptr;
     g_queueNextItem = false;
+    g_categoryOwner = nullptr;
 }
 
 } // namespace InventoryReader
