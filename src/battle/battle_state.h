@@ -29,18 +29,6 @@ void* Work();
 void* BtlChrForSlot(int slot);
 constexpr int kRosterSlots = 9;
 
-// Why did BtlChrForSlot return null? Empty slots are SILENT by design, so a genuine failure and an
-// empty slot sound identical -- this puts the distinguishing detail in the log instead of leaving
-// the next debugging round to guesswork.
-struct SlotDiag {
-    void*    globalValue = nullptr;  // the pointer stored AT the global (the correct W)
-    uint32_t magic       = 0;        // *(u32*)W -- must be 0x5071901
-    bool     magicOk     = false;
-    uint16_t rosterEntry = 0xFFFF;   // list-3 entry for this slot (>= 0x28 means empty)
-    bool     rosterRead  = false;
-};
-SlotDiag DiagnoseSlot(int slot);
-
 // ---- the party leader ------------------------------------------------------------------------
 // FUN_00327150 reimplemented. `*(u8*)(W + 0x5AA4)` is the leader's BtlChr index.
 // This REPLACES the `*(u8*)(bc + 5) == 0` test, which matches every roster character, not the
@@ -99,17 +87,29 @@ Faction FactionOf(void* actor);          // read-only reimplementation of FUN_00
 bool    IsPartySide(void* bc);           // BtlChr kind byte == 0
 
 // ---- "am I in battle?" -------------------------------------------------------------------------
-// FFXII is seamless-battle: no encounter transition, no victory screen, and NO GLOBAL to read
-// (combat_system.md section 7.1). True when some LIVING party-side actor is currently targeted by a
-// Faction::Foe, read from the per-actor aggro mask at +0xEA4.
+// FFXII is seamless-battle: no encounter transition and NO GLOBAL to read (combat_system.md 7.1), so
+// combat is inferred -- and it starts TWO ways: a foe commits against the party, or THE PLAYER SWINGS
+// FIRST. Engagement is the OR. This replaces `bool PartyEngaged()`, which read only the aggro mask at
+// `+0xEA4` and was therefore a being-ATTACKED test and nothing else.
 //
-// The faction filter is the whole point. S49 struck the unfiltered version of this test because the
-// bit is set without any hostility gate, so an ally healing you out of combat set it too. Do NOT
-// reach for `*(u32*)(actor+4) & 0x100000` instead — that is the 0.90-confidence replacement the doc
-// suggests, and it is documented as possibly lagging the engage edge.
+// Returning the resolved target alongside the verdict is the other half of the point: the old boolean
+// forced its one caller to re-derive "we are attacking" AFTER the gate had answered, one line too late
+// to matter. Both faction filters, the commitment lifetime, and why no probe was needed are recorded at
+// the DEFINITION -- do not restate them here.
 //
-// Pure memory reads over the actor pool; cheap enough to poll per frame. Game thread preferred.
-bool PartyEngaged();
+// Pure memory reads over the actor pool; cheap enough to ask once per field frame. Game thread.
+struct Engagement {
+    bool     engaged   = false;   // targeted || committed -- the answer callers want
+    bool     targeted  = false;   // a foe has committed against us (+0xEA4). Being ATTACKED.
+    bool     committed = false;   // we have committed against a living foe. ATTACKING.
+    void*    targetActor  = nullptr;  // the committed foe, already resolved; null unless `committed`
+    uint32_t targetHandle = 0;
+    uint16_t actionId     = 0;
+};
+
+// Scan the actor pool once and answer both directions. See the definition for why engagement has to be
+// the OR, how long a commitment lingers, and why the commitment side filters to a LIVING Faction::Foe.
+Engagement PartyEngagement();
 
 // ---- the committed target (what the character is actually acting on) ---------------------------
 // NOT the browse cursor at P+0x9FD8, which only follows the highlight -- confirmed live: the
@@ -122,13 +122,6 @@ struct Committed {
 };
 Committed CommittedTargetOf(void* actor);
 void*     ActorForHandle(int32_t handle);
-
-// Why did the commitment lookup fail? `;` resolves BtlWork -> leader index -> leader BtlChr ->
-// actor-pool scan -> the active/queued fields, and today ANY broken link collapses to one silent
-// boolean, so a user pressing the key after confirming an attack just gets nothing. This logs every
-// link with its raw value, so a single press names the one that failed instead of leaving the whole
-// chain suspect. Log-only; speaks nothing and changes no state.
-void DiagnoseCommitment();
 
 // ---- master-data names (read-only reimplementations) ------------------------------------------
 // Ability/action name for an action id. Reads row+0x34 (the NAME index) -- NOT row+0x00, which is

@@ -100,12 +100,16 @@ float PerpDist(const FVec3& p, const FVec3& a, const FVec3& b) {
 // This is the COMMITTED target -- what `;` speaks and what Controls.md calls the active combat
 // target -- deliberately not the browse cursor at P+0x9FD8, which Session 49 caught sitting on one
 // enemy while the commitment was on a third.
-bool ActiveTargetPos(FVec3& out) {
-    void* leader = BattleState::LeaderActor();
-    if (!leader) return false;
-    BattleState::Committed c = BattleState::CommittedTargetOf(leader);
-    if (!c.valid || c.targetHandle == 0) return false;
-    void* actor = BattleState::ActorForHandle(c.targetHandle);
+// The live world position of an actor the engagement scan already resolved.
+//
+// The actor arrives ALREADY RESOLVED, from the same scan that decided we are in combat -- so the beacon
+// structurally cannot ping at a unit other than the one that put it in combat mode. It used to walk
+// LeaderActor -> CommittedTargetOf -> ActorForHandle itself, a second derivation of a value the gate had
+// already computed, and that split was the whole shape of the S92 bug.
+//
+// Deliberately NOT the browse cursor at P+0x9FD8, which Session 49 caught sitting on one enemy while the
+// commitment was on a third.
+bool TargetPos(void* actor, FVec3& out) {
     if (!actor) return false;
     void* sceneObj = MemRead::PtrAt(actor, PhyreTypes::ACTOR_SCENEOBJ);
     if (!sceneObj) return false;
@@ -186,17 +190,29 @@ void OnGameFrame() {
     // FFXII is seamless-battle, so this is a state the player walks into and out of rather than a
     // screen transition. The route is NOT discarded: legs and index survive untouched, and the
     // objective beacon resumes on the same leg the moment the party is clear.
-    const bool engaged = BattleState::PartyEngaged();
+    const BattleState::Engagement eng = BattleState::PartyEngagement();
+    const bool engaged = eng.engaged;
     if (engaged != g_wasEngaged) {
         g_wasEngaged = engaged;
-        Log::Write("BEACON", engaged ? "party engaged -> tracking active target"
-                                     : "party clear -> resuming objective");
+        // BOTH HALVES ARE LOGGED, because the fix is exactly about which one fired. One play session now
+        // proves the player-attacks-first case flips the beacon (`committed=1 targeted=0`), proves an
+        // out-of-combat ally heal does NOT (the S49 filter, never exercised until now), and makes any
+        // flapping visible as repeated engaged/clear pairs rather than as a vague report.
+        char m[176];
+        snprintf(m, sizeof(m), "%s (targeted=%d committed=%d action=0x%04X)",
+                 engaged ? "party engaged -> tracking active target"
+                         : "party clear -> resuming objective",
+                 eng.targeted ? 1 : 0, eng.committed ? 1 : 0, eng.actionId);
+        Log::Write("BEACON", m);
         ResetPhase();
     }
 
     if (engaged) {
         FVec3 tgt;
-        if (!ActiveTargetPos(tgt)) {
+        // Only a COMMITTED target is ever pinged. When the party is merely being attacked with nothing
+        // committed the beacon stays silent -- the tester's decision this session, and the reason
+        // `eng.targetActor` is null in that state rather than filled with the attacker.
+        if (!TargetPos(eng.targetActor, tgt)) {
             // Engaged but nothing committed: say nothing at all. A beacon still leading you to a
             // shop while something is chewing on you is worse than silence.
             AudioEngine::SilenceAll();
@@ -231,7 +247,20 @@ void OnGameFrame() {
             return;
         }
         ++g_current;
-        g_legStart = me;
+        // THE LEG'S START IS THE PREVIOUS CORNER, NOT WHERE THE PLAYER HAPPENED TO BE (Session 93).
+        //
+        // This used to be `g_legStart = me`, and that is what made `off route -> silent re-plan
+        // requested` fire every 3-7 seconds during ordinary walking. The stray test measures the
+        // player's perpendicular distance from `g_legStart -> goal`, so seeding it with the player's own
+        // position defines the reference line as "wherever I was standing when the leg advanced" rather
+        // than as the route's leg. Advance a leg while standing a few metres to one side -- which is
+        // normal, since a leg completes on a radius -- and the reference line is skewed by that offset;
+        // walking the ACTUAL route then reads as deviation, trips the re-plan, and the re-plan re-seeds
+        // the same skew. A self-sustaining loop that cost a game-thread search every few seconds and
+        // reset the ping phase each time.
+        //
+        // The route's own corners are right here in g_legs, so the leg is corner[N-1] -> corner[N].
+        g_legStart = g_legs[g_current - 1];
         ResetPhase();
         char m[128];
         snprintf(m, sizeof(m), "leg reached -> advancing to leg %zu of %zu (silent)",
@@ -243,12 +272,22 @@ void OnGameFrame() {
     // Off-route: re-plan silently. Measured perpendicular to the leg the player is supposed to be
     // walking, not as raw distance to the corner -- walking the leg correctly increases the latter
     // for the whole first half of a dog-leg.
-    if (PerpDist(me, g_legStart, goal) > kStrayDist) {
+    const float perp = PerpDist(me, g_legStart, goal);
+    if (perp > kStrayDist) {
         if (++g_strayCount >= kStrayFrames && (now - g_lastReplanMs) >= kReplanCooldownMs) {
             g_strayCount   = 0;
             g_lastReplanMs = now;
             if (PathPlanner::RequestReplan()) {
-                Log::Write("BEACON", "off route -> silent re-plan requested");
+                // Print the MEASUREMENT, not just the event. A re-plan storm and a genuine detour look
+                // identical in a bare line, which is why the previous one sat in the log for a whole
+                // session without anyone reading it as a defect.
+                char m[176];
+                snprintf(m, sizeof(m),
+                         "off route -> silent re-plan requested: %.1fm perpendicular to leg %zu/%zu "
+                         "(%.1f,%.1f)->(%.1f,%.1f), threshold %.1fm",
+                         perp, g_current + 1, g_legs.size(),
+                         g_legStart.x, g_legStart.z, goal.x, goal.z, kStrayDist);
+                Log::Write("BEACON", m);
             }
         }
     } else {

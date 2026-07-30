@@ -4,6 +4,7 @@
 #include "navigation/map_names.h"
 #include "navigation/map_script.h"
 #include "navigation/map_query.h"
+#include "navigation/map_seams.h"
 #include "navigation/nav_common.h"
 #include "navigation/player_state.h"
 #include "core/logger.h"

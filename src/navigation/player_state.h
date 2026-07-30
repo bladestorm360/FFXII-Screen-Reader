@@ -22,20 +22,21 @@ namespace PlayerState {
 // maps — every read below returns false/null when this is false.
 bool IsFieldActive();
 
-// The HARD gate for game-thread pathfinding: true ONLY when the field map is fully
-// loaded and stable — field sim live AND area collision loaded AND a valid area id
-// AND the actor pool + leader resolve AND the Bullet world is built. Stricter than
-// IsFieldActive() because the 0x10 bit is set early on load / cleared late on
-// teardown; this pairs it with the area-collision + live-world pointers so the
-// planner never touches a half-loaded or half-freed map. Call on the game thread
-// before any raycast. SEH-guarded throughout.
+// The HARD gate for game-thread pathfinding: true ONLY when the field map is loaded and stable — field
+// sim live AND started, the actor pool + leader resolve, AND the walkmap is up. Stricter than
+// IsFieldActive(), whose 0x10 bit is set early on load and cleared late on teardown.
+//
+// It no longer waits on the per-AREA resource manifest (Session 93): that pair is a TERMINAL state on
+// maps which have no such resource, not a readiness signal, and waiting on it killed all routing on
+// Ridorana/Pharos. Full mechanism at the definition. Game thread; SEH-guarded throughout.
 bool IsFieldNavSafe();
 
-// Diagnostic companion to IsFieldNavSafe(): evaluates ALL 8 gate conditions (no
-// short-circuit) and returns a bitmask of the ones that FAILED (0 == fully nav-safe).
-// Bits: 0 field, 1 field2, 2 areaId, 3 areaColl, 4 actorPool, 5 leaderPtr, 6 world,
-// 7 leaderObj. Both this and IsFieldNavSafe() evaluate the same single-source
-// condition helpers, so they can never drift apart. Log-only; not a gate.
+// Diagnostic companion: evaluates ALL 8 conditions (no short-circuit) and returns a bitmask of those
+// that FAILED. Bits: 0 field, 1 field2, 2 areaId, 3 areaManifest, 4 actorPool, 5 leaderPtr, 6 world,
+// 7 leaderObj. Log-only.
+//
+// **A ZERO MASK IS NOT THE SAME THING AS NAV-SAFE.** Bits 2/3 are reported but are not in the gate, so
+// `mask == 0` implies nav-safe while nav-safe does NOT imply `mask == 0`.
 uint8_t NavSafeFailMask();
 // Short name for gate-condition bit 0..7 (e.g. "world"); "?" out of range.
 const char* NavSafeCondName(int bit);

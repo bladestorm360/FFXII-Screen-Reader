@@ -89,6 +89,39 @@ constexpr uint32_t MAP_SEG_FLAGS     = 0;       // nearest-blocker (movement)
 constexpr uint16_t MAP_MASK_CAM      = 0xFFFF;  // camera/occlusion (diagnostic contrast only)
 constexpr uint32_t MAP_SEG_FLAGS_CAM = 1;
 
+// TWO DIFFERENT THINGS ARE CALLED "CLASS 4", AND CONFLATING THEM COST A WHOLE RESEARCH PASS
+// (Session 93). Keep them named apart:
+//   * MAP_CLASS_PARTY_SEG (this one, == MAP_MASK_WALK) is the SEGMENT/ray-vs-prim class. It is stored
+//     at the query struct's +0x46 and compared `== 4` in FUN_0022cc50. It is what the two actor movers
+//     pass as arg5 of FUN_00230c00 -> FUN_00230c10. CONFIRMED at the call sites.
+//   * The FLOOR class -- the third argument of FUN_00230a40, which decides whether a poly is walkable
+//     -- is a DIFFERENT field on a different object: `*(u16*)(walkCtrl + 0x50)`, read at
+//     FUN_002327d0:267 and indexed by FUN_00380d30:20. Nothing in the movers writes it, and
+//     FUN_00380b80:12 initialises it to 0xffff.
+// The paragraph above used to describe the first and be relied on as though it described the second,
+// which is what licensed `(effectiveFlags & 7) == 0` as "the" walkability rule and sent an entire
+// investigation looking for a per-class terrain bit that does not exist. The CONCLUSION survives --
+// 0xffff and 4 both fall through FUN_00230a40's 0/1/2/3/5 branches identically -- but its stated
+// REASON was wrong, and the hard refusal is not in the flags word at all (see nav_footprint.h).
+constexpr uint16_t MAP_CLASS_PARTY_SEG = 4;
+
+// FUN_00230c10: `int bodySweep(void* ctx0, float outPos[4], const float from[4], const float to[4],
+// u16 queryClass, float bodyRadius)`. The character controller's OWN "may I move here" test: a DDA
+// segment walk, then an ellipsoid depenetration over CSR layers 0|1|2 with a sphere of `bodyRadius`,
+// then two +/-30 degree probes keeping the shortest reach, then a pull-back along the travel axis by
+// the penetration depth. Returns 0 = the whole displacement is legal; non-zero = blocked, and outPos
+// is where the character actually ends up.
+//
+// Its complete 29-function call tree writes NOTHING to game memory, which is why the mod may call it
+// (verified by transitive closure + assignment-target scan + an out-param pass). Confidence 0.98 on
+// the purity, 0.99 on the signature and the two constants below -- both read off all three engine call
+// sites (FUN_0032bcc0:52-55, FUN_0032beb0:36-38/:66-68, FUN_0032ca70:68-70).
+constexpr uint32_t MAP_BODY_SWEEP   = 0x110C10;
+// 0x3e8a3d71. The engine's own literal at every call site -- the character's collision body radius.
+// NOT the interaction ellipse at XFORM_PLAYER_SHAPE: that one is a reach envelope for the `;` target
+// test and is a different quantity. Do not substitute one for the other.
+constexpr float    MAP_BODY_RADIUS  = 0.27f;
+
 // ---- SQEX walkmap GRID structure (DIRECT read; the "map overlay" source) -----
 // The walkmap is a uniform staggered ("brick") grid over a floor-triangle + wall-
 // segment collision mesh — the same structure the engine's own full-grid enumerator

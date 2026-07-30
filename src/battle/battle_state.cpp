@@ -1,4 +1,5 @@
 #include "battle/battle_state.h"
+#include "battle/battle_state_internal.h"
 
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -14,6 +15,10 @@ namespace BattleState {
 namespace {
 
 using MemRead::PtrAt;
+using Internal::Reloc;
+using Internal::PoolString;
+using Internal::MasterRecord;
+using Internal::RVA_ACTIONTBL;
 using MemRead::SafeReadU8;
 using MemRead::SafeReadU16;
 using MemRead::SafeReadU32;
@@ -21,7 +26,6 @@ using MemRead::SafeReadU32;
 // ---- RVAs (abs = RVA + 0x120000) --------------------------------------------------------------
 // BTLWORK_PTR / BTLWORK_MAGIC / MASTERDATA_RELOC_BASE: core/phyre_types.h (each had 2-3 names)
 constexpr uint32_t RVA_POOL      = 0x2D9F170;  // DAT_02ebf170 -- shared codec string pool (word.bin)
-constexpr uint32_t RVA_ACTIONTBL = 0x2D9F138;  // DAT_02ebf138 -- ability/action table
 constexpr uint32_t RVA_STATUSTBL = 0x2D9F118;  // DAT_02ebf118 -- battle status-name table
 
 // The DEF-record resolver: FUN_0035d330(category, id) fills a static record and returns it; the
@@ -84,6 +88,10 @@ constexpr uint32_t HDR_COUNT = 0x04, HDR_STRIDE = 0x08, HDR_RECORDS = 0x0C;
 // and for that to invert the 64-bit add the high dword must be zero -- so the base is below 4 GB.
 // Whether it is exactly zero is a runtime fact; DiagnoseSlot prints it (see the actionTbl block).
 //
+} // namespace
+
+namespace Internal {
+
 // A wrong resulting pointer is safe: every consumer reads through MemRead's SEH-guarded helpers.
 void* Reloc(uint32_t off) {
     if (off == 0) return nullptr;
@@ -126,6 +134,10 @@ void* MasterRecord(uint32_t tableRva, uint32_t index) {
     return static_cast<char*>(records) + static_cast<size_t>(index) * stride;
 }
 
+} // namespace Internal
+
+namespace {
+
 } // namespace
 
 // ================================================================================================
@@ -150,17 +162,6 @@ void* BtlChrForSlot(int slot) {
     return static_cast<char*>(w) + OFF_BC_ARRAY + static_cast<size_t>(idx) * BC_STRIDE;
 }
 
-SlotDiag DiagnoseSlot(int slot) {
-    SlotDiag d;
-    d.globalValue = PtrAt(Hooks::ResolveRva(BTLWORK_PTR), 0);
-    if (!d.globalValue) return d;
-    d.magicOk = SafeReadU32(d.globalValue, 0x00, &d.magic) && d.magic == BTLWORK_MAGIC;
-    if (!d.magicOk || slot < 0 || slot >= kRosterSlots) return d;
-    uint16_t e = 0xFFFF;
-    d.rosterRead = SafeReadU16(d.globalValue, OFF_ROSTER_L3 + static_cast<uint32_t>(slot) * 2, &e);
-    d.rosterEntry = e;
-    return d;
-}
 
 void* LeaderBtlChr() {
     void* w = Work();
@@ -297,6 +298,44 @@ Faction FactionOf(void* actor) {
     return Faction::Neutral;
 }
 
+// ---- Liveness, NAMED ------------------------------------------------------------------------------
+// These two were four unnamed inline lines inside the old PartyEngaged's second pass. Extracting them
+// is not tidying: Session 92's own root-cause finding was that a value two places must agree on needs a
+// NAME, because an unnamed expression inlined six times is what invited a seventh, negated copy and
+// mirrored the beacon's pan. The engagement test now needs the same liveness rule on BOTH sides, so it
+// gets one definition rather than two spellings.
+//
+// HP is the only test used. Deliberately NOT battle_target_reader's `KIND_DEAD == 5` half: phyre_types.h
+// records that constant as misnamed, and debug.md has the actor-pool KIND_DEAD entry as an NPC class
+// rather than a death flag. One witness that is understood beats two that disagree.
+namespace {
+
+bool ActorAliveByHp(void* actor) {
+    if (!actor) return false;
+    void* bc = BtlChrForActor(actor);
+    if (!bc) return true;                 // no BtlChr to ask -> do not invent a death
+    int32_t hp = 0;
+    if (!SafeReadU32(bc, BC_CURHP, reinterpret_cast<uint32_t*>(&hp))) return true;
+    return hp > 0;
+}
+
+bool IsLivingPartyActor(void* actor) {
+    if (!actor) return false;
+    const Faction f = FactionOf(actor);
+    if (f != Faction::Party && f != Faction::Guest) return false;
+    return ActorAliveByHp(actor);
+}
+
+// The filter that closes the one staleness channel the decompile leaves open (the 0x95/0x113 queue
+// preservation): a commitment whose target is dead or gone is not combat, whatever the flag says.
+bool IsLivingFoeActor(void* actor) {
+    if (!actor) return false;
+    if (FactionOf(actor) != Faction::Foe) return false;
+    return ActorAliveByHp(actor);
+}
+
+} // namespace
+
 // "Is the party actually under attack right now" — FFXII has no in-battle global to read.
 //
 // WHY THIS SHAPE. combat_system.md section 7.1 records `+0xEA4` at 0.97 as "who has committed an
@@ -309,41 +348,85 @@ Faction FactionOf(void* actor) {
 // `*(u32*)(actor+4) & 0x100000` sits at 0.90 with a "may lag the engage edge" caveat and is
 // deliberately NOT used here.
 //
-// Two passes over a <=40-entry pool, no allocation, no game calls. Cheap enough for the audio
-// beacon to ask once per field frame.
-bool PartyEngaged() {
+// ENGAGEMENT IS BIDIRECTIONAL, and the old version tested only one direction (Session 93).
+//
+// `+0xEA4` means literally "who is targeting me", so the shipped predicate was a being-ATTACKED test
+// and nothing else. FFXII is seamless-battle with no encounter transition, so combat starts two ways:
+// a foe aggros and commits against the party (covered), or THE PLAYER SWINGS FIRST (not covered). The
+// tester reported the consequence exactly -- the objective beacon kept pinging its way to a shop while
+// they were mid-fight. The definition came from their own accurate description of one direction and was
+// implemented as though it covered both.
+//
+// The other half was already being computed and thrown away: audio_beacon.cpp resolved
+// CommittedTargetOf(LeaderActor()) but only AFTER this returned true. So this now returns the OR **and
+// the target it resolved**, and the caller consumes one answer instead of re-deriving half of it.
+//
+// HOW LONG A COMMITMENT LINGERS -- the open question this fix needed answered, from the decompile:
+// the ACTIVE pair `+0x710`/`+0x714` lives exactly one action (written at dispatch by FUN_0030f760,
+// cleared by FUN_003105d0 on action end, on the next dispatch, on KO and on actor detach), and the
+// QUEUED pair is flag-gated with the flag cleared unconditionally at pickup by FUN_00305ab0. One
+// staleness channel exists and is explicit in the code: several abort paths deliberately PRESERVE the
+// queue flag when the queued action id is 0x95 or 0x113. Requiring the commitment's target to be a
+// LIVING Faction::Foe closes that channel by construction, which is why no probe was needed.
+//
+// Two passes over a <=40-entry pool, no allocation, no game calls.
+Engagement PartyEngagement() {
+    Engagement out;
     void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);
-    if (!pool) return false;
+    if (!pool) return out;
     uint32_t count = 0;
     SafeReadU32(Hooks::ResolveRva(NavRva::ACTOR_POOL_COUNT), 0, &count);
-    if (count == 0 || count > 128) return false;
+    if (count == 0 || count > 128) return out;
+
+    auto ActorAt = [&](uint32_t i) -> void* {
+        return static_cast<char*>(pool) + static_cast<size_t>(i) * NavRva::ACTOR_STRIDE;
+    };
 
     // Pass 1: which pool-index bits belong to a FOE. Anything above bit 31 cannot be represented in
     // the mask the engine itself uses, so it cannot be an attacker either.
     uint32_t foeMask = 0;
     for (uint32_t i = 0; i < count; ++i) {
-        void* actor = static_cast<char*>(pool) + static_cast<size_t>(i) * NavRva::ACTOR_STRIDE;
+        void* actor = ActorAt(i);
         if (FactionOf(actor) != Faction::Foe) continue;
         uint8_t idx = 0xFF;
         if (!SafeReadU8(actor, A_POOL_INDEX, &idx) || idx >= 32) continue;
         foeMask |= (1u << idx);
     }
-    if (foeMask == 0) return false;
 
-    // Pass 2: is any LIVING party-side actor targeted by one of them? Dead members are skipped —
-    // a KO'd character still carries whatever mask it had when it went down.
+    // Pass 2: both directions, over the same scan.
     for (uint32_t i = 0; i < count; ++i) {
-        void* actor = static_cast<char*>(pool) + static_cast<size_t>(i) * NavRva::ACTOR_STRIDE;
-        const Faction f = FactionOf(actor);
-        if (f != Faction::Party && f != Faction::Guest) continue;
-        void* bc = BtlChrForActor(actor);
-        int32_t hp = 0;
-        if (bc && SafeReadU32(bc, BC_CURHP, reinterpret_cast<uint32_t*>(&hp)) && hp <= 0) continue;
-        uint32_t engagedBy = 0;
-        if (!SafeReadU32(actor, A_ENGAGED_BY, &engagedBy)) continue;
-        if (engagedBy & foeMask) return true;
+        void* actor = ActorAt(i);
+        if (!IsLivingPartyActor(actor)) continue;
+
+        // (a) BEING ATTACKED. Dead members are skipped by the predicate above -- a KO'd character still
+        //     carries whatever mask it had when it went down.
+        if (foeMask != 0) {
+            uint32_t engagedBy = 0;
+            if (SafeReadU32(actor, A_ENGAGED_BY, &engagedBy) && (engagedBy & foeMask))
+                out.targeted = true;
+        }
+
+        // (b) ATTACKING. PARTY-WIDE, not leader-only: gambits make non-leader members commit on their
+        //     own and that is genuine combat. The target must be a LIVING FOE -- committing a heal on an
+        //     ally is a commitment and is not combat, which is the same false positive S49 struck on the
+        //     +0xEA4 side, mirrored. Without this filter the beacon would flip to combat mode on an
+        //     out-of-battle Cure.
+        if (!out.committed) {
+            const Committed c = CommittedTargetOf(actor);
+            if (c.valid && c.targetHandle != 0) {
+                void* tgt = ActorForHandle(c.targetHandle);
+                if (IsLivingFoeActor(tgt)) {
+                    out.committed    = true;
+                    out.targetActor  = tgt;
+                    out.targetHandle = c.targetHandle;
+                    out.actionId     = c.actionId;
+                }
+            }
+        }
     }
-    return false;
+
+    out.engaged = out.targeted || out.committed;
+    return out;
 }
 
 Committed CommittedTargetOf(void* actor) {
@@ -381,204 +464,5 @@ Committed CommittedTargetOf(void* actor) {
     return out;
 }
 
-void DiagnoseCommitment() {
-    char m[320];
-
-    void* w = Work();
-    if (!w) {
-        void* raw = PtrAt(Hooks::ResolveRva(BTLWORK_PTR), 0);
-        uint32_t magic = 0;
-        if (raw) MemRead::SafeReadU32(raw, 0, &magic);
-        snprintf(m, sizeof(m), "commit-diag: BtlWork REJECTED raw=%p magic=0x%X (want 0x%X)",
-                 raw, magic, BTLWORK_MAGIC);
-        Log::Write("TARGET", m);
-        return;
-    }
-
-    uint8_t leaderIdx = 0xFF;
-    const bool idxOk = MemRead::SafeReadU8(w, OFF_LEADER, &leaderIdx);
-    void* lbc = LeaderBtlChr();
-    void* lact = LeaderActor();
-
-    void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);
-    uint32_t poolCount = 0;
-    MemRead::SafeReadU32(Hooks::ResolveRva(NavRva::ACTOR_POOL_COUNT), 0, &poolCount);
-
-    snprintf(m, sizeof(m),
-             "commit-diag: W=%p leaderIdx=%u(read=%d,max=%u) leaderBc=%p leaderActor=%p pool=%p count=%u",
-             w, leaderIdx, idxOk ? 1 : 0, BC_COUNT, lbc, lact, pool, poolCount);
-    Log::Write("TARGET", m);
-
-    if (!lact) {
-        Log::Write("TARGET", "commit-diag: NO LEADER ACTOR -- the pool scan for actor+0x698 == leaderBc "
-                             "found nothing, so no commitment can ever resolve.");
-        return;
-    }
-
-    uint64_t flags = 0; uint8_t phase = 0;
-    uint16_t aAct = 0xFFFF, qAct = 0xFFFF;
-    uint32_t aTgt = 0, qTgt = 0;
-    MemRead::SafeReadU64(lact, A_FLAGS, &flags);
-    MemRead::SafeReadU8 (lact, A_PHASE, &phase);
-    SafeReadU16(lact, A_ACTIVE_ACT, &aAct);
-    SafeReadU32(lact, A_ACTIVE_TGT, &aTgt);
-    SafeReadU16(lact, A_QUEUED_ACT, &qAct);
-    SafeReadU32(lact, A_QUEUED_TGT, &qTgt);
-    const bool activeRow = (aAct != 0xFFFF) && (MasterRecord(RVA_ACTIONTBL, aAct) != nullptr);
-
-    snprintf(m, sizeof(m),
-             "commit-diag: flags=0x%llX queuedBit=%d phase=%u | active act=0x%X tgt=0x%X row=%d "
-             "| queued act=0x%X tgt=0x%X",
-             (unsigned long long)flags, (flags & A_FLAG_QUEUED) ? 1 : 0, phase,
-             aAct, aTgt, activeRow ? 1 : 0, qAct, qTgt);
-    Log::Write("TARGET", m);
-
-    // The ACTIVE branch's `row != nullptr` test is what rejects a live Attack (id 0x96), so dump the
-    // table internals it depends on. AbilityName uses the SAME MasterRecord, so whatever this shows
-    // also governs whether the combat log can name an ability. Report the numbers; do not guess.
-    {
-        void* hdr = PtrAt(Hooks::ResolveRva(RVA_ACTIONTBL), 0);
-        uint32_t count = 0, recOff = 0; uint16_t stride = 0;
-        bool cOk = false, sOk = false, rOk = false;
-        if (hdr) {
-            cOk = SafeReadU32(hdr, HDR_COUNT,   &count);
-            sOk = SafeReadU16(hdr, HDR_STRIDE,  &stride);
-            rOk = SafeReadU32(hdr, HDR_RECORDS, &recOff);
-        }
-        // The reloc base is printed as its RAW 8 BYTES plus a read-ok flag, because 0 is a
-        // legitimate value here and the old code could not tell it from a failed read (that
-        // conflation is the S87 Reloc() bug). This line is what answers "is the addend actually
-        // zero on this build" WITHOUT a Frida probe -- one battle and the log says so.
-        uint64_t relocRaw = 0;
-        const bool relocOk = MemRead::SafeReadU64(Hooks::ResolveRva(MASTERDATA_RELOC_BASE), 0, &relocRaw);
-        void* records = (recOff && relocOk)
-                        ? reinterpret_cast<char*>(static_cast<uintptr_t>(relocRaw)) + recOff : nullptr;
-        snprintf(m, sizeof(m),
-                 "commit-diag: actionTbl hdr=%p count=%u(%d) stride=%u(%d) recOff=0x%X(%d) "
-                 "relocRaw=0x%016llX(read=%d) records=%p | id=0x%X %s",
-                 hdr, count, cOk ? 1 : 0, stride, sOk ? 1 : 0, recOff, rOk ? 1 : 0,
-                 (unsigned long long)relocRaw, relocOk ? 1 : 0, records, aAct,
-                 !hdr        ? "<-- TABLE PTR NULL"
-               : !cOk        ? "<-- COUNT UNREADABLE"
-               : (aAct >= count) ? "<-- ID >= COUNT (out of table)"
-               : (stride == 0)   ? "<-- STRIDE 0"
-               : !relocOk    ? "<-- RELOC BASE UNREADABLE"
-               : !records    ? "<-- RECORDS NULL"
-                             : "(id is in range -- row should resolve)");
-        Log::Write("TARGET", m);
-
-        // Both name chains side by side. The DEF chain (FUN_0035d330) is what AbilityName uses as
-        // of S87 and is confirmed in play; the OLD action-table chain is printed only to show
-        // whether Reloc()/PoolString() work at all, which is what governs AbilityCategory -- the
-        // verb (casts/readies/uses). If the old chain is empty the verb degrades to "attacks" while
-        // the name stays correct, which is exactly the pre-S87 behaviour and not a regression.
-        if (aAct != 0xFFFF) {
-            char defBuf[128] = {}, oldBuf[128] = {};
-            Log::ToUtf8(DefName(CAT_ABILITY, aAct), defBuf, sizeof(defBuf));
-            void* row = MasterRecord(RVA_ACTIONTBL, aAct);
-            uint16_t nameIdx = 0; uint8_t catByte = 0;
-            if (row) { SafeReadU16(row, 0x34, &nameIdx); SafeReadU8(row, 0x1E, &catByte); }
-            Log::ToUtf8(row ? PoolString(nameIdx) : std::wstring(), oldBuf, sizeof(oldBuf));
-            snprintf(m, sizeof(m),
-                     "commit-diag: id=0x%X | DEF chain (shipped) = \"%s\" | action-table chain = "
-                     "\"%s\" (row=%p nameIdx=%u cat=%u) %s",
-                     aAct, defBuf, oldBuf, row, nameIdx, catByte,
-                     row ? "" : "<-- action row unresolved: AbilityCategory will read 0 (verb -> \"attacks\")");
-            Log::Write("TARGET", m);
-        }
-    }
-
-    // Name the failing condition explicitly rather than leaving it to be inferred from the numbers.
-    // When a path DOES match, the commitment is fine and the failure is downstream -- in
-    // ActorForHandle -- so resolve the handle here too and say so. Reporting "should have matched"
-    // without checking that was the gap that made a working commitment look like no commitment.
-    if (activeRow && aTgt != 0) {
-        void* ta = ActorForHandle(static_cast<int32_t>(aTgt));
-        snprintf(m, sizeof(m), "commit-diag: ACTIVE path MATCHED -> ActorForHandle(0x%X)=%p%s",
-                 aTgt, ta, ta ? "" : "  <-- HANDLE LOOKUP IS THE BUG");
-        Log::Write("TARGET", m);
-    } else if ((flags & A_FLAG_QUEUED) && qTgt != 0) {
-        void* tq = ActorForHandle(static_cast<int32_t>(qTgt));
-        snprintf(m, sizeof(m), "commit-diag: QUEUED path MATCHED -> ActorForHandle(0x%X)=%p%s",
-                 qTgt, tq, tq ? "" : "  <-- HANDLE LOOKUP IS THE BUG");
-        Log::Write("TARGET", m);
-    } else {
-        const char* why = (aTgt == 0 && qTgt == 0) ? "both target fields are 0"
-                        : (!activeRow && !(flags & A_FLAG_QUEUED)) ? "active id not in the action table AND queued bit clear"
-                        : (!activeRow) ? "active id not in the action table (AI opcode?), queued bit set but target 0"
-                                       : "queued bit clear";
-        snprintf(m, sizeof(m), "commit-diag: NO COMMITMENT -- %s", why);
-        Log::Write("TARGET", m);
-    }
-}
-
-// POD-only half: makes the game call and returns the codec pointer. Split out because __try cannot
-// live in a function that needs object unwinding, and Decode below builds a std::wstring.
-const uint8_t* DefCodec(uint32_t category, uint32_t id) {
-    auto fn = reinterpret_cast<Pfn_ResolveDef>(Hooks::ResolveRva(RVA_RESOLVE_DEF));
-    if (!fn) return nullptr;
-    __try {
-        const uint8_t* rec = fn(category, id);
-        if (!rec) return nullptr;
-        const uint8_t* src = *reinterpret_cast<const uint8_t* const*>(rec + OFF_DEF_CODEC);
-        // Shared-pool strings carry a 2-byte 00 00 variant prefix; without skipping it every one of
-        // them decodes empty (S49). Harmless when absent -- a valid string never starts with 0x00.
-        return (src && src[0] == 0 && src[1] == 0) ? src + 2 : src;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
-}
-
-std::wstring DefName(uint32_t category, uint32_t id) {
-    const uint8_t* codec = DefCodec(category, id);
-    if (!codec) return std::wstring();
-    std::wstring s = GameText::Decode(codec, 256);
-    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
-}
-
-std::wstring AbilityName(uint16_t actionId) {
-    if (actionId == 0xFFFF) return std::wstring();
-    // Use the chain the mod ALREADY proves works: this is byte-for-byte the resolver that speaks
-    // spell and technick names in the battle menu (confirmed in play, S31). The previous
-    // implementation walked a DIFFERENT chain -- MasterRecord(action table) -> row+0x34 -> the
-    // shared pool -- and every step of that one goes through Reloc(), which is why the combat log
-    // said "attacks" for everything. Do not "restore" the old chain; it was never the working one.
-    //
-    // This is a GAME CALL, so it is game-thread only. That is already true of every caller:
-    // combat_log renders its line text at append time on the game thread, the same discipline
-    // item_names.cpp documents for FUN_00272cb0.
-    return DefName(CAT_ABILITY, actionId);
-}
-
-uint8_t AbilityCategory(uint16_t actionId) {
-    if (actionId == 0xFFFF) return 0;
-    void* row = MasterRecord(RVA_ACTIONTBL, actionId);
-    if (!row) return 0;
-    uint8_t cat = 0;
-    if (!SafeReadU8(row, 0x1E, &cat)) return 0;
-    return cat;
-}
-
-std::wstring StatusName(int bitIndex) {
-    if (bitIndex < 0 || bitIndex > 31) return std::wstring();
-    void* rec = MasterRecord(RVA_STATUSTBL, static_cast<uint32_t>(bitIndex));
-    if (!rec) return std::wstring();
-    // rec+0x02 == 0xFF marks a status the game suppresses (KO, Invisible, HP Critical, X-Zone).
-    uint8_t suppress = 0;
-    if (SafeReadU8(rec, 0x02, &suppress) && suppress == 0xFF) return std::wstring();
-    uint16_t nameIdx = 0;
-    if (!SafeReadU16(rec, 0x00, &nameIdx)) return std::wstring();
-    return PoolString(nameIdx);
-}
-
-std::wstring StatusNames(uint32_t statusWord) {
-    std::wstring out;
-    for (int bit = 0; bit < 32; ++bit) {
-        if ((statusWord & (1u << bit)) == 0) continue;
-        std::wstring nm = StatusName(bit);
-        if (nm.empty()) continue;                    // suppressed or unresolvable
-        if (!out.empty()) out += L", ";
-        out += nm;
-    }
-    return out;
-}
 
 } // namespace BattleState

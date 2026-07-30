@@ -84,6 +84,8 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/dialogue_reader.cpp
     src/ui/mod_menu.cpp
     src/battle/battle_state.cpp
+    src/battle/battle_state_diag.cpp
+    src/battle/battle_state_names.cpp
     src/battle/party_status.cpp
     src/battle/combat_log.cpp
     src/battle/combat_events.cpp
@@ -92,6 +94,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/player_state.cpp
     src/navigation/bullet_query.cpp
     src/navigation/map_query.cpp
+    src/navigation/map_seams.cpp
     src/navigation/map_names.cpp
     src/navigation/map_exits.cpp
     src/navigation/map_script.cpp
@@ -112,10 +115,13 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/nav_commands.cpp
     src/navigation/path_directions.cpp
     src/navigation/nav_mesh.cpp
+    src/navigation/nav_footprint.cpp
     src/navigation/nav_probe.cpp
     src/navigation/nav_reach.cpp
     src/navigation/nav_trace.cpp
     src/navigation/path_search.cpp
+    src/navigation/path_funnel.cpp
+    src/navigation/path_validate.cpp
     src/navigation/path_planner.cpp
     src/navigation/audio_beacon.cpp
 )

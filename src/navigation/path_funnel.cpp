@@ -1,0 +1,179 @@
+#include "navigation/path_funnel.h"
+#include "navigation/nav_footprint.h"
+#include "navigation/nav_mesh.h"
+
+#include <cmath>
+
+namespace PathFunnel {
+
+namespace {
+
+// 2D cross product in the ground plane: > 0 means `c` is counter-clockwise of a->b, i.e. to its LEFT.
+inline float TriArea2(const FVec3& a, const FVec3& b, const FVec3& c) {
+    return (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+}
+
+// `out` receives start, the corners, and end. Y rides along on the portal vertices, which are real
+// mesh vertices sitting on their own surfaces -- so a route up stairs still describes correctly without
+// the funnel itself ever reasoning about height.
+//
+// THE SIGN CONVENTION, AND WHY IT LOOKS "WRONG" AGAINST THE REFERENCE (Session 86).
+// The branch structure below is the reference implementation's, but every comparison is NEGATED
+// relative to it -- deliberately. `TriArea2` above is the exact negation of the reference's
+// `dtTriArea2D`; expand both and the terms cancel:
+//     TriArea2(a,b,c)     = (b.x-a.x)(c.z-a.z) - (c.x-a.x)(b.z-a.z)
+//     dtTriArea2D(a,b,c)  = (c.x-a.x)(b.z-a.z) - (b.x-a.x)(c.z-a.z)   ==  -TriArea2(a,b,c)
+// The reference's `<=0 / >0 / >=0 / <0` had been transcribed VERBATIM onto a helper of the opposite
+// sign, which inverted the funnel's entire notion of left and right. That inversion is the thing
+// BestPolarity was built to paper over, and it is why the log showed a corner at nearly every portal
+// (`corners=11/15`) with the polarity reporting FLIPPED on 75 routes out of 75.
+//
+// Do NOT "restore" these to match a reference without also negating TriArea2 -- the two have to agree,
+// and it is TriArea2's doc comment ("> 0 == LEFT") that is correct for this codebase's frame.
+void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
+            std::vector<FVec3>& out) {
+    out.clear();
+    out.push_back(start);
+
+    // A corner is only ever a portal endpoint, and adjacent portals SHARE vertices -- so the raw funnel
+    // emits exact duplicates. Collapsing them is not cosmetic: a duplicate at index 1/2 gives the
+    // passed-waypoint drop a zero-length segment, which trips its `len2 < 1e-6f` guard on the first
+    // iteration and silently disables the whole Session 78 leg-0 reversal fix.
+    auto pushCorner = [&out](const FVec3& p) {
+        if (out.empty() || !SameXZ(out.back(), p)) out.push_back(p);
+    };
+
+    FVec3 apex = start, pLeft = start, pRight = start;
+    size_t apexIdx = 0, leftIdx = 0, rightIdx = 0;
+
+    for (size_t i = 0; i <= portals.size(); ++i) {
+        // The terminal "portal" is the destination collapsed to a point, so the last leg is pulled taut
+        // against the real end rather than against the final edge.
+        const FVec3 left  = (i < portals.size()) ? portals[i].left  : end;
+        const FVec3 right = (i < portals.size()) ? portals[i].right : end;
+
+        // Tighten the RIGHT bound.
+        if (TriArea2(apex, pRight, right) >= 0.0f) {
+            if (SameXZ(apex, pRight) || TriArea2(apex, pLeft, right) < 0.0f) {
+                pRight = right; rightIdx = i;
+            } else {
+                // Right crossed left: the left bound is a corner. Emit it and restart from there.
+                pushCorner(pLeft);
+                apex = pLeft; apexIdx = leftIdx;
+                pLeft = apex; pRight = apex;
+                leftIdx = rightIdx = apexIdx;
+                i = apexIdx;                 // ++i makes this apexIdx+1
+                continue;
+            }
+        }
+        // Tighten the LEFT bound.
+        if (TriArea2(apex, pLeft, left) <= 0.0f) {
+            if (SameXZ(apex, pLeft) || TriArea2(apex, pRight, left) > 0.0f) {
+                pLeft = left; leftIdx = i;
+            } else {
+                pushCorner(pRight);
+                apex = pRight; apexIdx = rightIdx;
+                pLeft = apex; pRight = apex;
+                leftIdx = rightIdx = apexIdx;
+                i = apexIdx;
+                continue;
+            }
+        }
+    }
+
+    // ALWAYS finish on the target itself. `to` is the exact same FVec3 the `/` describe key measures to,
+    // so the two keys can never name different destinations (Session 76).
+    if (out.empty() || !SameXZ(out.back(), end)) out.push_back(end);
+}
+
+} // namespace
+
+bool SameXZ(const FVec3& a, const FVec3& b) {
+    return std::fabs(a.x - b.x) < 1e-4f && std::fabs(a.z - b.z) < 1e-4f;
+}
+
+float PathLenXZ(const std::vector<FVec3>& pts) {
+    float len = 0.0f;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const float dx = pts[i].x - pts[i - 1].x, dz = pts[i].z - pts[i - 1].z;
+        len += std::sqrt(dx * dx + dz * dz);
+    }
+    return len;
+}
+
+void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
+                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther) {
+    std::vector<Portal> mirrored;
+    mirrored.reserve(portals.size());
+    for (const Portal& p : portals) mirrored.push_back(Portal{ p.right, p.left });
+
+    std::vector<FVec3> a, b;
+    Funnel(start, end, portals,  a);
+    Funnel(start, end, mirrored, b);
+    const float la = PathLenXZ(a), lb = PathLenXZ(b);
+
+    flipped  = (lb < la);
+    out      = flipped ? b : a;
+    lenKept  = flipped ? lb : la;
+    lenOther = flipped ? la : lb;
+}
+
+int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly) {
+    int dropped = 0;
+    while (poly.size() >= 3) {
+        const FVec3 c1 = poly[1], c2 = poly[2];
+        const float ex = c2.x - c1.x, ez = c2.z - c1.z;
+        const float len2 = ex * ex + ez * ez;
+        if (len2 < 1e-6f) break;
+        const float t = ((from.x - c1.x) * ex + (from.z - c1.z) * ez) / len2;
+        if (t <= 0.0f) break;                       // still ahead of the player -- a real waypoint
+        poly.erase(poly.begin() + 1);
+        ++dropped;
+    }
+    return dropped;
+}
+
+int InsetCorners(std::vector<FVec3>& poly) {
+    if (poly.size() < 3) return 0;
+    const float r = NavFootprint::BodyRadius();
+    int moved = 0;
+
+    for (size_t i = 1; i + 1 < poly.size(); ++i) {
+        const FVec3 prev = poly[i - 1], cur = poly[i], next = poly[i + 1];
+
+        // Unit vectors along the two legs, away from the corner. Their sum bisects the interior angle,
+        // so stepping along it moves INTO the corridor rather than across either leg.
+        float ax = prev.x - cur.x, az = prev.z - cur.z;
+        float bx = next.x - cur.x, bz = next.z - cur.z;
+        const float la = std::sqrt(ax * ax + az * az), lb = std::sqrt(bx * bx + bz * bz);
+        if (la < 1e-4f || lb < 1e-4f) continue;            // degenerate leg; nothing to bisect
+        ax /= la; az /= la; bx /= lb; bz /= lb;
+        float sx = ax + bx, sz = az + bz;
+        const float ls = std::sqrt(sx * sx + sz * sz);
+        // A straight-through corner has no interior to move into (the legs are antiparallel and cancel).
+        // It is also not a corner in any meaningful sense, so leave it exactly where it is.
+        if (ls < 1e-3f) continue;
+        sx /= ls; sz /= ls;
+
+        const PolyId home = NavMesh::FindPolyAt(cur.x, cur.y, cur.z);
+        if (home == NavMesh::kNoPoly) continue;            // off-mesh corner: not ours to move
+
+        float before = 0.0f, after = 0.0f;
+        NavFootprint::Clears(cur, home, &before);
+        const FVec3 cand{ cur.x + sx * r, cur.y, cur.z + sz * r };
+        const PolyId candPoly = NavMesh::FindPolyAt(cand.x, cand.y, cand.z);
+        if (candPoly == NavMesh::kNoPoly) continue;        // inset walked off the mesh -- worse, not better
+        NavFootprint::Clears(cand, candPoly, &after);
+
+        // ONLY IF IT HELPS. An unconditional nudge would be a heuristic; this is a measurement. A corner
+        // already clear of every boundary keeps its exact position, which matters because the spoken
+        // legs are computed from these points and moving them for nothing would change the words.
+        if (after > before) {
+            poly[i] = cand;
+            ++moved;
+        }
+    }
+    return moved;
+}
+
+} // namespace PathFunnel

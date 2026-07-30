@@ -21,6 +21,11 @@ typedef uint8_t(__fastcall* Pfn_GroundAt)(float x, float z, float* outY);
 // FUN_00230b60(ctx0, outHit16, from[4], to[4], mask, flags) -> int (>=0 blocked, <0 clear).
 typedef int(__fastcall* Pfn_SegTest)(void* ctx, void* out, const float* from,
                                      const float* to, uint16_t mask, uint32_t flags);
+// FUN_00230c10(ctx0, outPos[4], from[4], to[4], queryClass, bodyRadius) -> int (0 clear, else blocked).
+// Args 5 and 6 land on the stack under MS x64 regardless of type, which is exactly how the engine's
+// own call sites lay them out (`local_a8 = class` then `local_a0 = 0x3e8a3d71` at FUN_0032bcc0:52-53).
+typedef int(__fastcall* Pfn_BodySweep)(void* ctx, float* outPos, const float* from,
+                                       const float* to, uint16_t cls, float radius);
 
 // ctx0 = the field-collision world pointer at DAT_0209a678, valid only when the manager
 // gate DAT_0209a670 is set. Memory-only; both reads SEH-guarded via MemRead.
@@ -39,6 +44,11 @@ static int CallSegTest(Pfn_SegTest fn, void* ctx, void* out, const float* from,
                        const float* to, uint16_t mask, uint32_t flags) {
     __try { return fn(ctx, out, from, to, mask, flags); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }   // fault -> treat as clear
+}
+static int CallBodySweep(Pfn_BodySweep fn, void* ctx, float* outPos, const float* from,
+                         const float* to, uint16_t cls, float radius) {
+    __try { return fn(ctx, outPos, from, to, cls, radius); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }    // fault -> treat as clear (never invent a block)
 }
 
 
@@ -67,10 +77,23 @@ int SegmentHit(const FVec3& from, const FVec3& to, uint16_t mask, uint32_t flags
     if (!ctx) return -1;   // no world -> clear
     Pfn_SegTest fn = reinterpret_cast<Pfn_SegTest>(Hooks::ResolveRva(NavRva::MAP_SEG_TEST));
     if (!fn) return -1;
-    // Equal-Y endpoints (both at from.y): for a vertical wall the query Y is irrelevant,
-    // and holding Y flat stops a slope-climbing segment from clipping a rising floor poly.
+    // HONOUR to.y. This used to force `t[1] = from.y`, on the theory that a vertical wall does not
+    // care about the query Y and that flattening stopped a slope-climbing segment from clipping a
+    // rising floor. Both halves were wrong in the same direction, and it was costing real edges.
+    //
+    // `FUN_0022cc50` -- the per-prim callback this cast drives -- tests type-0 FLOOR triangles
+    // unconditionally, so the floor is a blocker like any other. Flattening a segment that should rise
+    // therefore runs it UNDER the destination floor, and the cast reports the floor as a wall. That is
+    // a false BLOCK on exactly the geometry the mod most needs to cross: NavMesh::StraddleAt computes
+    // a proper b.y from the neighbour's centroid plus the body pad, and this line threw it away.
+    // (GameArchitecture.md:1651-1656 asserted at 0.98 that class 4 "skips floors (poly records)",
+    // which is what licensed the flatten. STRUCK -- it does not.)
+    //
+    // The engine never flattens either: FUN_0032bcc0:20-23 LIFTS the endpoints instead. So the fix is
+    // to pass the Y the caller computed, and the failure mode moves in the PERMISSIVE direction --
+    // edges that were wrongly refused become passable, which is the opposite of the islanding risk.
     const float f[4] = { from.x, from.y, from.z, 1.0f };
-    const float t[4] = { to.x,   from.y, to.z,   1.0f };
+    const float t[4] = { to.x,   to.y,   to.z,   1.0f };
     float out[4] = {};
     return CallSegTest(fn, ctx, out, f, t, mask, flags);   // >=0 blocked, <0 clear
 }
@@ -317,183 +340,63 @@ bool GroundInfoAt(float x, float z, float& outY, float& outCosSlope) {
     return ScanTopFloorAt(g, col, row, x, z, outY, &outCosSlope);
 }
 
-bool SegmentTraversable(const FVec3& a, const FVec3& b,
-                        float step, float bodyPad, float maxStep, float margin, int& rays, int rayCap) {
-    if (!HasWorld()) return true;                              // no world -> treat as clear
-    const float dx = b.x - a.x, dz = b.z - a.z;
-    const float len = std::sqrt(dx * dx + dz * dz);
-    const float s = (step > 0.01f) ? step : 1.0f;
-    int n = static_cast<int>(std::ceil(len / s));
-    if (n < 1) n = 1;
-    // Perpendicular unit * margin (for the lateral clearance rays).
-    float pmx = 0.0f, pmz = 0.0f;
-    const bool useMargin = margin > 0.0f && len > 1e-4f;
-    if (useMargin) { pmx = -dz / len * margin; pmz = dx / len * margin; }
+// ---- The engine's OWN body sweep -----------------------------------------------------------------
+//
+// `FUN_00230c10` (RVA 0x110C10) is the routine the character controller itself uses to answer "may I
+// move from here to there", and it is the hard passability check the tester described: push into a
+// wall and you make no progress, push obliquely and you slide. Three phases, read line by line:
+//   1. a clipped DDA segment walk from -> to (FUN_0022f430 + FUN_0022cc50) with the query class;
+//   2. an ellipsoid DEPENETRATION at the resolved point over CSR layers 0|1|2, body = a sphere of
+//      radius `arg6`, which records the deepest penetration;
+//   3. two probes rotated +/-30 degrees about the travel axis, keeping the SHORTEST reach -- a
+//      conservative capsule approximation -- then a pull-back out of the surface along the travel
+//      axis by the measured penetration depth.
+// Return 0 means the requested displacement is fully legal and `to` may be taken verbatim; non-zero
+// means obstructed and `outPos` is where the character actually ends up. All three of the engine's own
+// call sites (FUN_0032bcc0:55, FUN_0032beb0:38/:68, FUN_0032ca70:70) pass class 4 and radius
+// 0x3e8a3d71 = 0.27f, and use the return exactly that way. Confidence 0.99 on the signature and the
+// two constants; they are read off the call sites, not inferred.
+//
+// WHY THE MOD MAY CALL IT: its complete 29-function call tree writes NOTHING to game memory -- every
+// write is to a caller-supplied out buffer or the function's own stack, and every DAT_ reference in the
+// tree is an rvalue. That makes it a pure getter in the strict sense the read-only rule requires, on
+// the same footing as the MAP_SEG_TEST call SegmentClear already makes. The footprint-aware border test
+// (FUN_0022f9b0) is NOT callable -- the footprint only reaches it through globals FUN_0022ef20 writes
+// -- so that half is REPLICATED in nav_footprint.cpp instead. Do not "simplify" by calling it.
+bool BodySweep(const FVec3& from, const FVec3& to, BodyMove& out) {
+    out = BodyMove{};
+    out.requested = std::sqrt((to.x - from.x) * (to.x - from.x) + (to.z - from.z) * (to.z - from.z));
+    out.reached   = to;
+    void* ctx = Ctx0();
+    if (!ctx) { out.valid = false; out.achieved = out.requested; out.fraction = 1.0f; return true; }
+    Pfn_BodySweep fn = reinterpret_cast<Pfn_BodySweep>(Hooks::ResolveRva(NavRva::MAP_BODY_SWEEP));
+    if (!fn) { out.valid = false; out.achieved = out.requested; out.fraction = 1.0f; return true; }
 
-    float prevY = 0.0f, px = a.x, pz = a.z;
-    bool havePrev = false;
-    for (int i = 0; i <= n; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(n);
-        const float sx = a.x + dx * t, sz = a.z + dz * t;
-        if (rays >= rayCap) return false;                     // budget exhausted -> conservative
-        ++rays;
-        float sy = 0.0f;
-        if (!GroundAt(sx, sz, sy)) return false;              // gap / no floor
-        if (havePrev && std::fabs(sy - prevY) > maxStep) return false;  // cliff / ledge
-        if (havePrev) {
-            if (rays >= rayCap) return false;
-            ++rays;
-            // Wall test on the ~step sub-segment at local floor+bodyPad (short span keeps the
-            // SegmentHit Y-flatten harmless); plus +/-margin offset rays for body width.
-            const FVec3 f{ px, prevY + bodyPad, pz };
-            const FVec3 t2{ sx, sy + bodyPad, sz };
-            if (!SegmentClear(f, t2)) return false;
-            if (useMargin) {
-                if (!SegmentClear(FVec3{ f.x + pmx, f.y, f.z + pmz }, FVec3{ t2.x + pmx, t2.y, t2.z + pmz })) return false;
-                if (!SegmentClear(FVec3{ f.x - pmx, f.y, f.z - pmz }, FVec3{ t2.x - pmx, t2.y, t2.z - pmz })) return false;
-            }
-        }
-        prevY = sy; px = sx; pz = sz; havePrev = true;
+    const float f[4] = { from.x, from.y, from.z, 1.0f };
+    const float t[4] = { to.x,   to.y,   to.z,   1.0f };
+    float res[4] = {};
+    const int blocked = CallBodySweep(fn, ctx, res, f, t, NavRva::MAP_CLASS_PARTY_SEG,
+                                      NavRva::MAP_BODY_RADIUS);
+    out.valid   = true;
+    out.blocked = (blocked != 0);
+    if (!out.blocked) {
+        out.achieved = out.requested;
+        out.fraction = 1.0f;
+        return true;
     }
-    return true;
-}
-
-// ---- Map-jump surfaces (Session 64) --------------------------------------------------------------
-// Sweep the walkmap once and group every floor poly by its `setmapidmj` tag. Same CSR -> prim -> poly
-// traversal ReadCellFloor uses, with the same 256-prims-per-cell guard; a poly contributes its BASE
-// VERTEX position, which is a real point on the surface rather than a grid-cell approximation (East
-// End's cells are 8 m, far too coarse to aim at a doorway with).
-bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out) {
-    out.clear();
-    WalkGridInfo g;
-    if (!GetGridInfo(g) || !g.valid) return false;
-
-    // Polys are shared between cells, so the same one is reached many times; count each once.
-    std::vector<uint16_t> seen;
-    seen.reserve(256);
-
-    for (int row = 0; row < g.nRows; ++row) {
-        for (int col = 0; col < g.nCols; ++col) {
-            const int cell = g.nCols * row + col;
-            uint16_t start = 0, end = 0;
-            if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell) * 2u, &start)) continue;
-            if (!MemRead::SafeReadU16(g.csrTable, static_cast<uint32_t>(cell + 1) * 2u, &end)) continue;
-            if (end < start) continue;
-
-            for (uint32_t k = start; k < end && (k - start) < 256u; ++k) {
-                uint16_t prim = 0;
-                if (!MemRead::SafeReadU16(g.primList, k * 2u, &prim)) break;
-                if (prim >= NavRva::WALK_PRIM_FLOOR_MAX) continue;      // wall / empty
-                const uint32_t pbase = static_cast<uint32_t>(prim) * NavRva::WALK_POLY_STRIDE;
-
-                uint32_t flags = 0;
-                if (!MemRead::SafeReadU32(g.polyArr, pbase + NavRva::WALK_POLY_FLAGS, &flags)) continue;
-                if ((flags & NavRva::WALK_POLY_TYPE_MASK) != 0) continue;   // not a walkable floor
-                const int group =
-                    static_cast<int>((flags >> NavRva::WALK_POLY_MJ_SHIFT) & NavRva::WALK_POLY_MJ_MASK);
-                if (group == 0) continue;                                   // ordinary floor
-
-                bool dup = false;
-                for (uint16_t sp : seen) if (sp == prim) { dup = true; break; }
-                if (dup) continue;
-                seen.push_back(prim);
-
-                // ALL THREE vertices, not just vert0. Reading only the base vertex gave every seam a
-                // third of its real geometry: Upper Apartments' Highhall came back as 2 polys
-                // spanning a 0.3 m depth with a 1.9 m rise, which is not a surface anyone can stand
-                // on. Both the spoken distance and the route goal were aimed at that fragment.
-                FVec3 v[3];
-                bool haveAll = true;
-                for (int k = 0; k < 3 && haveAll; ++k) {
-                    int16_t vi = -1;
-                    const uint32_t voff = NavRva::WALK_POLY_VERT0 + static_cast<uint32_t>(k) * 2u;
-                    if (!MemRead::SafeReadS16(g.polyArr, pbase + voff, &vi) || vi < 0) { haveAll = false; break; }
-                    const uint32_t vbase = static_cast<uint32_t>(vi) * NavRva::WALK_VERT_STRIDE;
-                    haveAll = MemRead::SafeReadF32(g.vertArr, vbase + 0x00, &v[k].x)
-                           && MemRead::SafeReadF32(g.vertArr, vbase + 0x04, &v[k].y)
-                           && MemRead::SafeReadF32(g.vertArr, vbase + 0x08, &v[k].z);
-                }
-                if (!haveAll) continue;
-
-                MapJumpSurface* surf = nullptr;
-                for (auto& e : out) if (e.group == group) { surf = &e; break; }
-                if (!surf) {
-                    out.push_back(MapJumpSurface{});
-                    surf = &out.back();
-                    surf->group = group;
-                    surf->min = surf->max = v[0];
-                }
-                surf->polys.push_back(static_cast<int>(prim));
-                for (int k = 0; k < 3; ++k) {
-                    if (surf->verts.size() < kMaxSurfaceVerts) surf->verts.push_back(v[k]);
-                    surf->centroid.x += v[k].x; surf->centroid.y += v[k].y; surf->centroid.z += v[k].z;
-                    if (v[k].x < surf->min.x) surf->min.x = v[k].x;  if (v[k].x > surf->max.x) surf->max.x = v[k].x;
-                    if (v[k].y < surf->min.y) surf->min.y = v[k].y;  if (v[k].y > surf->max.y) surf->max.y = v[k].y;
-                    if (v[k].z < surf->min.z) surf->min.z = v[k].z;  if (v[k].z > surf->max.z) surf->max.z = v[k].z;
-                }
-                ++surf->polyCount;
-            }
-        }
-    }
-
-    for (auto& e : out) {
-        if (e.polyCount <= 0) continue;
-        const float n = static_cast<float>(e.polyCount) * 3.0f;   // three vertices per triangle
-        e.centroid.x /= n; e.centroid.y /= n; e.centroid.z /= n;
-    }
-    return !out.empty();
-}
-
-// The one cache, and the three entry points that reach it. See the block comment in map_query.h for
-// why the sweep is gated on the caller's frame rather than on HasWorld().
-namespace {
-std::mutex                   g_seamMutex;
-std::vector<MapJumpSurface>  g_seams;
-int                          g_seamMap = -1;   // the map these seams were swept FOR; -1 = nothing cached
-} // namespace
-
-void PrimeMapJumpSurfaces(int mapId) {
-    if (mapId <= 0) return;                       // 0 = mid-transition, no map to attribute a sweep to
-    std::lock_guard<std::mutex> lk(g_seamMutex);
-    if (g_seamMap == mapId) return;               // already swept for this map
-    g_seams.clear();
-    g_seamMap = -1;
-    if (!HasWorld()) return;                      // caller's gate should preclude this; cost nothing if not
-    ReadMapJumpSurfaces(g_seams);
-    // Tagged with the map it was swept FOR. Every reader matches on this, so the only two answers a
-    // reader can get are "this map's seams" and "nothing yet".
-    g_seamMap = mapId;
-}
-
-bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out) {
-    std::lock_guard<std::mutex> lk(g_seamMutex);
-    if (g_seamMap != mapId) { out.clear(); return false; }
-    out = g_seams;
-    // SWEPT-ness, not emptiness. "We have not looked yet" and "we looked and this map has no seams"
-    // are different answers and only the second one means a controller with no surface is a genuinely
-    // MISSING EXIT worth logging as one.
-    return true;
-}
-
-void InvalidateMapJumpSurfaces() {
-    std::lock_guard<std::mutex> lk(g_seamMutex);
-    g_seams.clear();
-    g_seamMap = -1;
+    out.reached = FVec3{ res[0], res[1], res[2] };
+    // XZ ONLY, which is the ENGINE's own formula: FUN_0032beb0:46-55 divides |out-from| by |to-from|
+    // with the Y term excluded and stores the result at ctrl+0x120 as the fraction of the requested
+    // move the character actually got. Including Y here would make a legal step up a ramp read as a
+    // partial block.
+    const float dx = out.reached.x - from.x, dz = out.reached.z - from.z;
+    out.achieved = std::sqrt(dx * dx + dz * dz);
+    out.fraction = (out.requested > 1e-4f) ? (out.achieved / out.requested) : 1.0f;
+    return false;
 }
 
 bool PolyContainsXZ(const WalkGridInfo& g, uint32_t polyBase, float px, float pz) {
     return PolyContainsXZDetail(g, polyBase, px, pz);
-}
-
-bool NearestPointOnSurface(const MapJumpSurface& s, const FVec3& from, FVec3& out) {
-    if (s.verts.empty()) return false;
-    float bestD2 = -1.0f;
-    for (const FVec3& v : s.verts) {
-        const float dx = v.x - from.x, dz = v.z - from.z;   // XZ only: a seam's Y is its own floor
-        const float d2 = dx * dx + dz * dz;
-        if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; out = v; }
-    }
-    return bestD2 >= 0.0f;
 }
 
 } // namespace MapQuery

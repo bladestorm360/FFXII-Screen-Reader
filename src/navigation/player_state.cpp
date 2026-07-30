@@ -72,11 +72,33 @@ bool CondLeaderObj() {     // bit 7 — leader resolves through the handle table
 }
 } // namespace
 
+// THE AREA-MANIFEST PAIR IS NO LONGER A GATE (Session 93). It stays in the fail mask as a log-only
+// diagnostic; it must not decide whether navigation may run.
+//
+// Ridorana / Pharos (map 1101) reported `failMask=0x0C[areaId,areaColl]` on every one of ~3,530 field
+// frames for a whole 2m36s visit while the other six conditions passed, the entity scan worked and the
+// player's live position tracked. Every route request retried for its 90 frames and then gave up out
+// loud: `\`/`p`, the audio beacon, the seam sweep (hence the entire Exit list), the NavReach flood and
+// the NavTrace trail were all dead on that map, and only direction/distance announces survived.
+//
+// The cause is that the pair is not a readiness signal at all. The game's own area loader
+// `FUN_003ea820` (RVA 0x2CA820) looks the area's streamed resource up and, when the lookup returns
+// `< 1`, frees the previous blob and writes exactly `DAT_02b5e0b8 = -1; DAT_02b5e0c0 = 0` -- then
+// NOTHING retries for the rest of the visit. So `0x0C` is the engine's TERMINAL "this area has no such
+// resource" state, not "not loaded yet", and no retry window can ever clear it.
+//
+// Navigation never needed the resource. The pair was adopted as a cheap heuristic for "the field is
+// gone", and the identity property it was credited with (that being nav-safe proves the resident
+// walkmap matches the map id in hand) is separately FALSIFIED by the same log -- see the epoch fix in
+// map_seams.cpp. What actually protects these reads is the remaining six conditions plus the teardown
+// epoch, and `CondWorld()` in particular is the direct liveness test for the thing routing dereferences.
+//
+// Kept in NavSafeFailMask so a map that fails them is still visible in the log; only the GATE changed.
 bool IsFieldNavSafe() {
     // Short-circuit && chain — identical order/semantics to the per-condition helpers,
     // so the cheapest checks gate the expensive world-deref + handle-walk as before.
-    return CondFieldActive() && CondFieldStarted() && CondAreaId() &&
-           CondAreaCollision() && CondActorPool() && CondLeaderPtr() &&
+    return CondFieldActive() && CondFieldStarted() &&
+           CondActorPool() && CondLeaderPtr() &&
            CondWorld() && CondLeaderObj();
 }
 
@@ -97,8 +119,10 @@ const char* NavSafeCondName(int bit) {
     switch (bit) {
         case 0: return "field";
         case 1: return "field2";
-        case 2: return "areaId";
-        case 3: return "areaColl";
+        // NOT a gate any more, and NOT "collision" -- see IsFieldNavSafe. These two name the per-AREA
+        // streamed resource manifest, which navigation does not read and some maps do not have.
+        case 2: return "areaId(log)";
+        case 3: return "areaManifest(log)";
         case 4: return "actorPool";
         case 5: return "leaderPtr";
         case 6: return "world";

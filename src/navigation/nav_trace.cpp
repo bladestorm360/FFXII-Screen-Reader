@@ -1,12 +1,14 @@
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
 #include "navigation/map_query.h"
+#include "navigation/map_seams.h"
 #include "navigation/nav_common.h"
 #include "navigation/exit_scan.h"   // ClaimedDestForGroup -- the crossing oracle's other half
 #include "core/logger.h"
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -161,12 +163,32 @@ void CrossingOracle(int leftMap, int arrivedMap) {
             arrived[k] = (n[k] < 128) ? static_cast<char>(n[k]) : '?';
     }
 
+    // BOUND THE ORACLE BY DISTANCE, or it accuses a correct binding (Session 93).
+    //
+    // `last.seamGroup` is whichever seam was NEAREST the final crumb, with no ceiling on how near that
+    // had to be. A GATE-CRYSTAL TELEPORT does not cross a seam at all, so the last crumb before it sits
+    // wherever the player happened to be standing -- and the oracle then attributed the departure to a
+    // seam 48-49 m away and printed "MISMATCH -- the group->destination binding is WRONG" about a
+    // binding that was fine. Both MISMATCH lines in the tester's Ridorana log are that artifact; the
+    // dialogue two lines earlier ("You touch the gate crystal." / "Save" / "Teleport") proves it.
+    //
+    // A real walked crossing puts the crumb ON the surface: the one genuine 176->179 crossing in the
+    // archive measured 2.4 m. So beyond a few metres the honest answer is the one the no-seam branch
+    // already gives -- we cannot say which seam this was -- rather than a confident accusation.
+    constexpr float kMaxCrossingDist = 8.0f;
+    const bool tooFar = (last.seamGroup != 0 && last.dNear > kMaxCrossingDist);
+
     char m[352];
-    if (last.seamGroup == 0) {
+    if (last.seamGroup == 0 || tooFar) {
+        char why[112] = {};
+        if (tooFar)
+            snprintf(why, sizeof(why), " within %.0fm (nearest was g%d at %.1fm)",
+                     kMaxCrossingDist, last.seamGroup, last.dNear);
         snprintf(m, sizeof(m),
                  "CROSSING ORACLE: left map %d -> arrived %d (\"%s\"), but the last crumb matched NO "
-                 "seam group -- this map published no map-jump surface near where the player crossed",
-                 leftMap, arrivedMap, arrived);
+                 "seam group%s -- no walked crossing is attributable here (a gate-crystal teleport or a "
+                 "script jump looks exactly like this)",
+                 leftMap, arrivedMap, arrived, why);
         Log::Write("NAV-TRACE", m);
         return;
     }

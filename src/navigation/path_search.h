@@ -26,19 +26,31 @@
 // GAME THREAD ONLY -- the volume check on each expanded edge is a walk-class segment cast.
 namespace PathSearch {
 
-enum class Plan { Route, NoPath };
+// `Frontier` is a route to the reachable point CLOSEST to the goal, for when the goal itself cannot be
+// reached. It exists because "no route" is not an acceptable answer to a blind player: they cannot see
+// which way to walk to get around whatever is in the way, so refusing to route strands them.
+//
+// IT IS A DISTINCT ENUM VALUE, NOT A FLAG ON `Route`, deliberately -- the compiler then forces every
+// consumer's switch to decide what to say about it. The failure this guards against is recorded at the
+// very line this replaced: the old grid search emitted a near-goal fallback and SPOKE IT AS A NORMAL
+// ROUTE, which walked the tester confidently to a spot 3 m from an exit 7.8 m overhead. A frontier route
+// MUST announce its shortfall.
+enum class Plan { Route, Frontier, NoPath };
 
 // Diagnostic counters. On a failure `nearDist` is the single most useful number: it separates "the
 // goal poly is one edge away behind a closed door" from "the goal is in a different component".
 struct Stats {
     int  expands = 0;             // polys popped
     int  touched = 0;             // polys seen
-    int  rays    = 0;             // volume checks performed (the only raycasts left in routing)
+    int  rays    = 0;             // body sweeps + footprint tests performed
     int  startPoly = -1;          // -1 = the player is not standing on any readable floor poly
     int  goalPoly  = -1;
     int  endPoly   = -1;          // the poly the search actually finished on
     float nearDist = -1.0f;       // metres from the goal centroid to the closest poly reached
     const char* pass = "mesh";
+    int  attempts  = 1;           // A* passes run; > 1 means a breach was found and re-searched around
+    int  bannedEdges = 0;         // portals banned across all attempts
+    float shortfall = 0.0f;       // Frontier only: metres from the frontier point to the goal
 };
 
 // Plan a route from `from` to `to` on the map identified by `epoch`.

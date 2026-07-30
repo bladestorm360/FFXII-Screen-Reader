@@ -1,5 +1,6 @@
 #include "ui/battle_target_reader.h"
 #include "battle/battle_state.h"
+#include "battle/battle_state_diag.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"

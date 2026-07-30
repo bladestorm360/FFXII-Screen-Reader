@@ -118,80 +118,29 @@ size_t AllFloorsAt(const WalkGridInfo& g, int col, int row, float evalX, float e
 // grid each call, so it is for log-only diagnostics, not the hot A* path. Handles its own GetGridInfo.
 bool GroundInfoAt(float x, float z, float& outY, float& outCosSlope);
 
-// ---- Map-jump surfaces: WHERE a transition physically is -----------------------------------------
-// The floor polygons the player walks onto to fire a map transition, tagged by the script's
-// `setmapidmj` (see NavRva::WALK_POLY_MJ_*). `group` is the map-jump group id, which is also the
-// argument the owning `__MJ_CTRL` routine passes to `setmapjumpgroup` -- so this is the half of a
-// transition that says WHERE, and the routine is the half that says WHERE TO.
+// ---- The engine's own body sweep: "if I ask to move A -> B, where do I actually end up?" ----------
 //
-// This is the thing five earlier models tried and failed to infer from the map-control blob. It was
-// never in the blob: transitions live in the WALKMAP, and interactable doors (shops, stairs) live in
-// the scene-object table. Two separate systems; do not use either as evidence about the other.
-constexpr size_t kMaxSurfaceVerts = 256;   // torn-read bound; a real seam is 2-28 polys
-
-struct MapJumpSurface {
-    int   group     = 0;
-    FVec3 centroid{};        // mean of the tagged polys' base vertices -- the middle of the seam
-    FVec3 min{}, max{};      // bounding box, so a recorded crossing can be checked against it
-    int   polyCount = 0;
-    // All three vertices of every tagged triangle, so a caller can aim at the seam's NEAR EDGE
-    // rather than its middle. Southern Plaza's seam is 28 polys spanning z[132.0..140.0], so its
-    // centroid overstates the walk by several steps and the route drives through the transition
-    // instead of to it.
-    std::vector<FVec3> verts;
-    // The tagged polys themselves -- navmesh node ids. A route to this exit is a search whose goal
-    // set is exactly these, and a reachability answer is whether any of them is in the player's
-    // component. Both questions are meaningless against a grid and exact against the mesh.
-    std::vector<int>   polys;
+// This is the mod's HARD passability test, and it is the engine's own — `FUN_00230c10`, the routine the
+// character controller runs on every step. It answers with a DISPLACEMENT, not a flag, which is what
+// makes it the right instrument: the tester's description of the game's refusal ("you can still walk
+// against a cliff, you just make no progress") is a statement about achieved distance.
+//
+// Prefer this over SegmentClear for anything that decides whether a route leg is walkable.
+// SegmentClear is one hairline ray with no body radius, no depenetration and no answer to "how far";
+// it cannot see an obstacle the character's 0.27 m body hits but a zero-width line misses.
+//
+// PURE: the whole call tree writes no game memory. See the block comment on the definition.
+struct BodyMove {
+    bool  valid    = false;   // false = no world / unresolvable RVA; treated as clear, never as blocked
+    bool  blocked  = false;   // the engine refused some part of the requested displacement
+    float requested = 0.0f;   // |to - from| on the XZ plane
+    float achieved  = 0.0f;   // |reached - from| on the XZ plane
+    float fraction  = 1.0f;   // achieved / requested, the engine's own ctrl+0x120 quantity
+    FVec3 reached{};          // where the character actually ends up (== `to` when not blocked)
 };
 
-// One full sweep of the walkmap grid (~15k guarded reads). Prefer the cache below. Empty when there
-// is no walkmap.
-bool ReadMapJumpSurfaces(std::vector<MapJumpSurface>& out);
-
-// ---- The per-map seam cache: ONE gated writer, many pure readers ---------------------------------
-//
-// HasWorld() IS A LIVENESS SIGNAL, NOT AN IDENTITY SIGNAL. It says a walkmap is resident; it does
-// NOT say the walkmap belongs to the map id you are holding. The map id flips BEFORE the engine
-// swaps the walkmap, so a sweep taken the moment the id changed reads the PREVIOUS map's polygons --
-// and the old cache then latched that answer for the whole visit. Garamsythe Waterway served map
-// 311's three seams to map 315 and 315's two seams back to 311, which mislabelled every exit,
-// dropped the one whose group did not exist on the wrong map, and put another 199 steps away.
-//
-// So the sweep is no longer something a reader can trigger. PrimeMapJumpSurfaces is the only writer
-// and runs on the GAME THREAD behind PlayerState::IsFieldNavSafe() -- the same gate that makes
-// NavMesh/NavReach correct across transitions -- and PathPlanner::OnMapTeardown drops the answer on
-// the way out, exactly as it drops the navmesh and the reachable set.
-
-// GAME THREAD ONLY, and only from inside a nav-safe frame. Sweeps when `mapId` is not the map
-// already cached; otherwise a no-op. See PathPlanner::OnGameFrame for the single call site.
-void PrimeMapJumpSurfaces(int mapId);
-
-// Any thread. Serves a COPY of the seams IF AND ONLY IF they were swept for `mapId` -- a caller can
-// never be handed another map's geometry. NEVER sweeps: before the first primed frame of a map this
-// returns false and an empty vector, and the caller says nothing. Silence, not wrong speech.
-// (A copy rather than a reference because the writer thread may rebuild the vector underneath.)
-//
-// The return is SWEPT-ness, not emptiness: "not looked yet" and "looked, and this map has no seams"
-// are different answers, and only the second makes a controller with no surface a MISSING EXIT.
-bool CachedMapJumpSurfaces(int mapId, std::vector<MapJumpSurface>& out);
-
-// GAME THREAD. Drop the cached seams — called from PathPlanner::OnMapTeardown beside
-// NavMesh::Invalidate / NavReach::Invalidate, so a map reloaded onto its own id re-sweeps too.
-void InvalidateMapJumpSurfaces();
-
-// Nearest point of `s` to `from` on the XZ plane, over the seam's own vertices. This is what the
-// player reaches first, and what both the spoken distance and the route goal should aim at.
-bool NearestPointOnSurface(const MapJumpSurface& s, const FVec3& from, FVec3& out);
-
-// Dense traversability of a straight segment (the string-pull validator). Samples every
-// `step` m; at each sample requires floor present (GroundAt), |dFloorY| <= maxStep vs the
-// previous sample, and SegmentClear (walk class) on the ~step sub-segment at the local
-// floor+bodyPad height — plus, when `margin` > 0, two rays offset +/-margin perpendicular so
-// the leg only counts clear with body width on both sides (keeps routes off wall faces).
-// Counts every ray into `rays`; returns false (conservative) on the first failing sample or
-// when `rayCap` is exhausted. Returns true when there is no world.
-bool SegmentTraversable(const FVec3& a, const FVec3& b, float step, float bodyPad,
-                        float maxStep, float margin, int& rays, int rayCap);
+// True when the full displacement is legal. `out` is filled either way, so a caller can ask how far it
+// would have got. GAME THREAD, on a nav-safe frame — same contract as SegmentClear.
+bool BodySweep(const FVec3& from, const FVec3& to, BodyMove& out);
 
 } // namespace MapQuery

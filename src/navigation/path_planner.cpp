@@ -1,6 +1,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
+#include "navigation/map_seams.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/path_search.h"
 #include "navigation/nav_reach.h"
@@ -180,15 +181,38 @@ void OnGameFrame() {
         FVec3 pp;
         if (PlayerState::IsFieldNavSafe() && PlayerState::ReadPlayerPos(pp) &&
             !(pp.x == 0.0f && pp.y == 0.0f && pp.z == 0.0f)) {
-            // Sweep the map's transition seams, ONCE per map, from inside this gate. It has to be
-            // here and nowhere else: IsFieldNavSafe() is false for the whole of a transition (the
-            // area id reads 0xFFFFFFFF and the leader pointer is zeroed at teardown start), so it
-            // is the only cheap proof that the resident walkmap belongs to the map id we are about
-            // to tag the answer with. Sweeping on MapQuery::HasWorld() instead -- which only proves
-            // SOME walkmap is up -- is what left the seam cache a full map behind and scrambled
-            // every exit in Garamsythe Waterway. Runs before the two consumers below, both of which
-            // read the seams. See MapQuery::PrimeMapJumpSurfaces.
-            MapQuery::PrimeMapJumpSurfaces(MapNames::CurrentMapId());
+            // Sweep the map's transition seams, ONCE PER EPOCH, from inside this gate.
+            //
+            // This used to pass only the map id, and the comment here claimed IsFieldNavSafe() is false
+            // for "the whole of a transition" so the id and the resident walkmap could not disagree.
+            // STRUCK (Session 93): it is false for the MIDDLE of a transition. At the LEADING edge the id
+            // has already flipped while the previous map's walkmap is still resident, and the tester's
+            // Ridorana log caught the sweep running on map 306's polygons and tagging them 1101 -- after
+            // which the crossing oracle blamed a "wrong group->destination binding" that was fine.
+            // The epoch this function already holds is the only signal that actually brackets a map.
+            // ONE line per epoch recording the fail mask on the first nav-safe frame of the map. This
+            // is the confirmation for loosening the gate (Session 93): the two manifest bits are now
+            // log-only, so if a map reports them the log says so and routing still runs. It is also how
+            // a regression in the OTHER six bits would surface -- a map that becomes nav-safe with an
+            // unexpected mask is one grep away instead of one play session.
+            {
+                const uint32_t ep = g_epoch.load(std::memory_order_acquire);
+                static uint32_t s_loggedEpoch = 0xFFFFFFFFu;
+                if (s_loggedEpoch != ep) {
+                    s_loggedEpoch = ep;
+                    const uint8_t fm = PlayerState::NavSafeFailMask();
+                    char names[96];
+                    PlayerState::FormatNavSafeMask(fm, names, sizeof(names));
+                    char m[208];
+                    snprintf(m, sizeof(m),
+                             "gate: first nav-safe frame of epoch %u on map %d -- failMask=0x%02X[%s] "
+                             "(bits 2/3 are log-only; routing runs regardless)",
+                             ep, MapNames::CurrentMapId(), fm, names);
+                    Log::Write("NAV-ROUTE", m);
+                }
+            }
+            MapQuery::PrimeMapJumpSurfaces(MapNames::CurrentMapId(),
+                                           g_epoch.load(std::memory_order_acquire));
             NavReach::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
             // Breadcrumb the walked path. Piggybacks on the position read this block already does, and
             // is the only measurement we have of where a transition ACTUALLY fires -- see nav_trace.h.
@@ -302,7 +326,9 @@ void OnGameFrame() {
     PathSearch::Stats st;
     PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st);
 
-    const char* planName = (r == PathSearch::Plan::Route) ? "Route" : "NoPath";
+    const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
+                         : (r == PathSearch::Plan::Frontier) ? "Frontier"
+                                                             : "NoPath";
     // The label is logged here and NOT spoken -- this line is the only record of which target a
     // route was for, now that the speech is bare directions.
     char lm[128]; LabelForLog(label, lm, sizeof(lm));
@@ -377,10 +403,30 @@ void OnGameFrame() {
     // legPoints are the corners where each spoken leg runs out -- the audio beacon's drop points.
     // They come out of the SAME call that produces the words, so the beacon can never aim at a
     // corner the player was not told about.
+    // A FRONTIER ROUTE IS SPOKEN, AND ITS SHORTFALL IS SPOKEN WITH IT.
+    //
+    // The goal could not be reached, so this walks as close as the mesh allows. Saying nothing is not an
+    // option -- a sighted player can see which way to go round an obstacle and a blind one cannot, which
+    // is exactly why "Route unavailable" was rejected. But speaking it as a plain route is the S73/S74
+    // failure that walked the tester confidently to a spot 3 m from an exit 7.8 m overhead, so the legs
+    // are followed by "Blocked" and how far short the frontier lands.
+    //
+    // Both words already exist: `BlockedWord` and `StepsSuffix`. The comma idiom matches the crow-flies
+    // blocked phrasing ("Blocked, bear ..."), so no new phrasebook entry and no new permission.
     std::vector<FVec3> legPoints;
-    std::wstring say = (r == PathSearch::Plan::Route)
-                           ? PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr)
-                           : std::wstring(Phrase::Get(Phrase::Id::NoPath));
+    std::wstring say;
+    if (r == PathSearch::Plan::Route) {
+        say = PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr);
+    } else if (r == PathSearch::Plan::Frontier) {
+        say = PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr);
+        if (!say.empty()) say += L". ";
+        say += Phrase::Get(Phrase::Id::BlockedWord);
+        say += L", ";
+        say += std::to_wstring(NavCommon::DistanceToSteps(st.shortfall));
+        say += Phrase::Get(Phrase::Id::StepsSuffix);
+    } else {
+        say = std::wstring(Phrase::Get(Phrase::Id::NoPath));
+    }
 
     if (seedBeacon) {
         // An empty list (no route, or a route under half a step) stops the beacon -- which is also

@@ -76,7 +76,18 @@ bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective);
 
 // Walkable for the PARTY (movement class 4), i.e. `(effectiveFlags & 7) == 0`. See
 // NavRva::WALK_CLASS_PARTY for why the class collapses to just the type test.
+//
+// This is the engine's PERMISSIVE floor test and a faithful replica of FUN_00230a40 -- keep it that
+// way. It is deliberately NOT the mod's passability predicate: the engine's own hard refusal is a
+// body-versus-boundary test (NavFootprint::Clears) layered on top of this, not a stricter version of
+// it. Anything that makes this function stricter than FUN_00230a40 is a bug.
 bool Walkable(PolyId p);
+
+// Is `p` a legitimate floor-poly index? A poly index is an s16 in the engine and the prim encoding
+// reserves >= 0x4000 for volumes, so a real floor poly is always in [0, 0x4000). Exposed because
+// NavFootprint needs the same notion of validity and a second copy of the bound would be a second
+// place to get it wrong.
+bool ValidPolyId(PolyId p);
 
 // Map-jump group tag, or 0. `(effectiveFlags >> 3) & 0xF` -- four bits, see NavRva.
 int MapJumpGroup(PolyId p);

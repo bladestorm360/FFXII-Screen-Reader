@@ -1,6 +1,7 @@
 #include "navigation/nav_probe.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/map_query.h"
+#include "navigation/map_seams.h"
 #include "navigation/map_names.h"
 #include "navigation/nav_common.h"
 #include "navigation/nav_trace.h"

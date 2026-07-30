@@ -1,6 +1,7 @@
 #include "party_status.h"
 
 #include "battle/battle_state.h"
+#include "battle/battle_state_diag.h"
 #include "../core/logger.h"
 #include "../core/mem_read.h"
 #include "../core/phyre_types.h"

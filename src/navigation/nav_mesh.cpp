@@ -1,5 +1,6 @@
 #include "navigation/nav_mesh.h"
 #include "navigation/map_query.h"
+#include "navigation/nav_footprint.h"
 #include "navigation/nav_rva.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -63,6 +64,8 @@ bool Ready() {
     MapQuery::WalkGridInfo* g = nullptr;
     return Grid(g);
 }
+
+bool ValidPolyId(PolyId p) { return ValidPoly(p); }
 
 void EnsureEpoch(uint32_t epoch) {
     if (epoch != g_epoch) { g_epoch = epoch; g_have = false; g_grid = MapQuery::WalkGridInfo{}; }
@@ -292,19 +295,41 @@ inline float SampleT(int i) {
 
 } // namespace
 
+// Does the party's BODY fit across this edge at parameter `t`? Two questions, both of which the old
+// single hairline ray could not ask:
+//   1. can the body move from one side to the other (MapQuery::BodySweep -- the engine's own 0.27 m
+//      radius sweep with depenetration, which sees obstacles a zero-width line passes beside);
+//   2. does the body FIT at the crossing point without overlapping a boundary of the walkable region
+//      (NavFootprint::Clears -- the replica of the engine's own refusal).
+// Test 2 is the one that catches root cause A: nothing in routing had ever asked whether the corridor
+// was wide enough for the character, only whether a line could be drawn through it.
+bool BodyFitsAt(PolyId p, int e, PolyId neighbor, float t) {
+    FVec3 a{}, b{};
+    if (!StraddleAt(p, e, neighbor, t, a, b)) return true;      // unreadable -> never invent a block
+    MapQuery::BodyMove mv;
+    if (!MapQuery::BodySweep(a, b, mv)) return false;
+    // The crossing point itself, at the surface rather than at body height: Clears works in the ground
+    // plane, so the pad StraddleAt added would only mislead a reader of the log.
+    const FVec3 mid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
+    return NavFootprint::Clears(mid, neighbor, nullptr);
+}
+
 bool EdgePassable(PolyId p, int e, PolyId neighbor) {
     if (!ValidPoly(neighbor)) return false;
     if (!Walkable(neighbor)) return false;
 
     // ANY clear sample means the party can get through somewhere along this edge -- which is what
     // adjacency should mean. Short-circuits on the first hit, so the common (unobstructed) case still
-    // costs one raycast. WHERE it is clear is EdgeClearSpan's job; the search only needs to know the
+    // costs one probe. WHERE it is clear is EdgeClearSpan's job; the search only needs to know the
     // crossing exists at all, and answering "is the midpoint clear" instead used to reject a doorway
     // whose middle happened to be blocked.
+    //
+    // KEEPING "any sample" is what stops the stricter body test from islanding narrow-but-legal
+    // geometry -- an archway needs exactly one parameter along its edge where the character fits, which
+    // is also the engine's own standard. Making this "every sample" would reintroduce S68/S75's
+    // unroutable staircases by a different route.
     for (int i = 0; i < kEdgeSamples; ++i) {
-        FVec3 a{}, b{};
-        if (!StraddleAt(p, e, neighbor, SampleT(i), a, b)) return true;   // unreadable -> do not block
-        if (MapQuery::SegmentClear(a, b)) return true;
+        if (BodyFitsAt(p, e, neighbor, SampleT(i))) return true;
     }
     return false;
 }
@@ -317,9 +342,9 @@ bool EdgeClearSpan(PolyId p, int e, PolyId neighbor, FVec3& outA, FVec3& outB) {
     bool clear[kEdgeSamples] = {};
     int nClear = 0;
     for (int i = 0; i < kEdgeSamples; ++i) {
-        FVec3 a{}, b{};
-        if (!StraddleAt(p, e, neighbor, SampleT(i), a, b)) return true;   // unreadable -> unclipped
-        clear[i] = MapQuery::SegmentClear(a, b);
+        // Same predicate as EdgePassable, deliberately: if the two disagreed, the search would certify a
+        // crossing the string-pull then clipped away, or clip to a span the search never validated.
+        clear[i] = BodyFitsAt(p, e, neighbor, SampleT(i));
         if (clear[i]) ++nClear;
     }
     if (nClear == 0) return false;                       // nothing gets through here at all
