@@ -69,6 +69,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/config_reader.cpp
     src/ui/menu_reader.cpp
     src/ui/choice_reader.cpp
+    src/ui/gambit_reader.cpp
     src/ui/ingame_menu_reader.cpp
     src/ui/char_select_reader.cpp
     src/ui/license_reader.cpp

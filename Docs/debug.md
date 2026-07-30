@@ -180,7 +180,15 @@ with only direction/distance announces surviving.
   proves outright. The oracle is now distance-bounded and says plainly that it cannot attribute the
   crossing. **A diagnostic with no bound on its own confidence will eventually indict correct code.**
 
-### Session 93 — NOT A BUG: the party-status keys `4`/`5`/`6`, and what "full party" meant
+### Session 93 — ~~NOT A BUG~~ **STRUCK BY SESSION 94** — the party-status keys `4`/`5`/`6`
+
+> **STRUCK 2026-07-30.** The "not a bug" verdict below was wrong, and the sentence that carried it —
+> *"There is **no** party line in either log where the name is absent"* — was a claim about the two logs
+> that happened to be on hand, not about the code. It is the same failure this file records twice
+> already (S80, S89): **a sample from the cases you already understand cannot falsify a claim about the
+> ones you do not.** The defect is real, reproduced, and root-caused in the Session 94 entry below; the
+> name resolution was broken *by construction* for every non-leader slot. Everything after this box is
+> kept only so the retracted reasoning is greppable — do not act on it.
 
 **KEYWORDS: party keys 4 5 6 not working names not read only status effects statistics roster list 3
 BtlChrForSlot kRosterSlots 9 reserve members slot genuinely empty deferred S93**
@@ -204,6 +212,111 @@ slots (0-2 active, 3 guest, 4-8 reserve) but only four keys exist, so the reserv
 That is a missing feature rather than a broken one, and the tester deferred it. **"Full party" is ambiguous
 between the 3-slot ACTIVE party and the 6-character ROSTER** -- that ambiguity is what made the original
 report read as a defect, and it is worth settling in words before any key is added.
+
+### Session 94 — SOLVED: a ROSTER member's name resolved through the FIELD ACTOR POOL
+
+**KEYWORDS: party keys 4 5 6 no name only status effects vitals swap party members NameForBtlChr
+ActorForBtlChr actor pool leader only CharacterName DAT_02ebf130 input thread DefName static record**
+
+**Reported:** *"the party bug has resurfaced. Appears to happen when swapping party members explicitly,
+as if it expects a certain name to be in that slot. Only reads the status effects and the vitals."*
+
+**Evidence, one log, unambiguous:**
+
+```
+[PARTY] slot 1 charId=0 "Vaan, Regen, Bubble, Libra, HP 17026/8513, MP 648/648"
+[PARTY] slot 2 charId=3 "Regen, Libra, HP 8437/8437, MP 591/591"
+[PARTY] slot 3 charId=4 "Regen, Bubble, Libra, HP 14638/7319, MP 668/668"
+```
+
+**Root cause.** `party_status.cpp` asked `BattleState::NameForBtlChr`, which is
+`NameForActor(ActorForBtlChr(bc))` — and `ActorForBtlChr` **scans the field actor pool for an actor whose
+def pointer is that BtlChr**. Only the leader reliably has one, so every other slot resolved to nothing.
+Vitals and statuses are read straight off the BtlChr a few lines earlier, which is why they never
+failed — *"only the status effects and the vitals"* is the signature of exactly this split.
+
+**A reader that resolves a ROSTER member through the actor pool is broken by construction, not
+intermittently.** The one slot that worked is what made it look occasional, and it is why the S93 entry
+above closed it: the leader is always slot 1, so the first thing anyone checks always passes.
+
+**Fix.** `BattleState::CharacterName(charId)` — `MasterRecord(DAT_02ebf130, charId)` → `rec+0x30` →
+`PoolString`. Pure memory reads, so it works from either thread, with `NameForBtlChr` kept only as the
+fallback for a guest who may not be in the character table. `char_select_reader.cpp` moved onto it too,
+so there is one choke point for character names.
+
+**Why NOT the obvious `DefName(0x02, charId)`,** which the Party screen already used successfully: it is
+a **game call**. `FUN_0035d330` stages its arguments in the *static* record `DAT_022ca520` and calls
+`FUN_0031c5d0`. The party keys dispatch on the **input thread** (`nav_commands.cpp`), so two callers
+would race in that one buffer — and it would be a game call off the game thread besides. The Party
+screen's use was legal only because its hook runs on the game thread.
+
+**Left open, deliberately, because the log does not settle it:** *why* the non-leader actors stop
+matching after an explicit swap. The slot mapping itself is fine — the charIds in that log (0, then 3
+and 4, later 2) are a coherent active party, and cmd-`0x4b3` toggles independently pin charId 2 to Fran
+and 3 to Balthier. So `BtlChrForSlot` is reading the right members; only the actor binding was absent.
+The fix does not depend on the answer, since a roster member's *name* should never have come from
+whether the field happened to have spawned an actor for them.
+
+### Session 94 — NOT A BUG: five or six characters reading "In party" at once
+
+**KEYWORDS: party membership toggle In party more than three characters staged selection FUN_00284c90
+no clamp row+0xfc bit 3 menuCtx+0xb10 charId not story order**
+
+**Observed:** after two toggles on the Party screen, five of six characters read "In party".
+
+**It is correct.** `FUN_00284c90` XORs bit 3 **unconditionally** — no member count appears anywhere in
+it. The size rule is enforced on menu EXIT, where the game shows *"The party cannot contain more than
+three characters."* and bounces the player back to the field menu. The tester confirms this is the
+game's behaviour, and the live log shows that message already going out through the ordinary message
+reader, so it needs no announce of its own. Bit 3 is a **staged selection**, and "In party" is the right
+word for it.
+
+Two things checked at the same time and also correct, recorded so they are not re-opened:
+- The mod's `row+0xc0 → menuCtx+0xac8 → block+0x60` chain is byte-for-byte the game's own, so the
+  toggle's charId is right. **Internal roster order is not story order** — a toggle with the cursor on
+  Fran logged charId 2. Do not assume `0..5 = Vaan..Penelo`.
+- I had a fix drafted for the "wrong charId" before reading `FUN_00284c90`. Reading the writer refuted
+  it. **The writer of the state is the event, and it is also the arbiter of whether there is a bug.**
+
+### Session 94 — Enemies re-filed as NPCs on rescan: ONE branch, unstable answer
+
+**KEYWORDS: rescan enemies became NPCs classification Enemy Category faction override actor pool
+s_poolObjs FactionOf ScanCombatants AlreadyListed factionVerdict grace window**
+
+**Reported:** *"on rescan, enemies were reclassified as NPCs. Rescan should use the exact same branch as
+the entity collection on map transition."*
+
+**The premise does not hold, and that matters.** There is only ONE builder — `EntityScan::Build`,
+reached only from `EntityList::RescanLocked` — and no transition-time entity path at all
+(`entity_postscan.cpp` runs *over* the finished list; there is no map-change hook in `entity_list.cpp`
+or `entity_scan.cpp`). So this is not two branches disagreeing. It is one branch whose answer is not
+stable across samples, which is a different bug with a different fix.
+
+**Why the answer is unstable.** On the field, `Category::Enemy` is reachable by exactly one route:
+- `entity_classify.cpp` returns **NPC** for anything `isCharacter`, and enemies are characters.
+- `ScanCombatants` — the only other pass that assigns `Enemy` — runs **after** the handle-table loop and
+  skips anything `AlreadyListed`, so it can never correct an entry the handle table already produced.
+  (It must stay that way: its scene-kind nibble is STRUCK as a field faction test in S86 because it
+  files the player's own party as `Enemy`.)
+- That leaves the actor-pool faction override in `BuildLocked` as the whole mechanism. It needs the
+  object found in `s_poolObjs` **and** `FactionOf` to say Foe.
+
+So any single scan where the pool does not answer produces NPC for every enemy on the map — and because
+every cycle keypress rebuilds the list from scratch, the downgrade is immediate. The grace window does
+not help: it carries entities a scan **missed**, not categories a scan got **wrong**.
+
+**Fix.** `Entity::factionVerdict` records whether the pool actually answered for that object, which the
+category alone cannot express — it distinguishes *"the pool said not a foe"* from *"the pool said
+nothing"*. `RescanLocked`'s merge then refuses to downgrade `Enemy` → `NPC` when the fresh scan had no
+verdict. **Only a missing verdict is overridden, and only in that one direction**, so an enemy that
+genuinely turns friendly can still stop being an Enemy.
+
+**Diagnostic added because the cause is not yet proven from a log.** `s_poolOverlap == 0` was ambiguous
+between "pool empty" and "no matches", so the always-printed `rescan:` line now carries
+`actorPool=<size> poolAnswered=<overlap>`. It is on that line and not the conditional inclusion line
+because a pool that comes back empty can leave every counter the latter is gated on at zero — it would
+have gone unprinted exactly when it mattered. **`poolAnswered=0` beside a non-zero `Enemy=` count means
+the categories on screen are carried verdicts, not fresh ones.**
 
 ### Session 92 — SOLVED (see Solved Problems): `doorway` by 2.5 m sign proximity was wrong both ways
 

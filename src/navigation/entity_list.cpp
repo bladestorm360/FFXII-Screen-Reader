@@ -68,8 +68,30 @@ int RescanLocked() {
     // the window measures continuous absence rather than time since the object was first seen.
     for (auto& e : fresh) {
         bool carried = false;
-        for (const auto& old : g_entities)
-            if (old.sceneObj && old.sceneObj == e.sceneObj) { carried = true; break; }
+        for (const auto& old : g_entities) {
+            if (!old.sceneObj || old.sceneObj != e.sceneObj) continue;
+            carried = true;
+            // AN ENEMY DOES NOT BECOME AN NPC BECAUSE ONE SAMPLE CAME BACK QUIET.
+            //
+            // Tester report (S94): on a rescan, enemies were re-filed as NPCs. There is only one
+            // builder -- EntityScan::Build, reached only from here -- so this is not two code paths
+            // disagreeing; it is one path whose answer is not stable across samples. `Enemy` on the
+            // field comes solely from the actor-pool faction override (entity_scan.cpp), because the
+            // classifier calls every character an NPC and ScanCombatants cannot correct an entry the
+            // handle table already listed. So the scan where the pool does not answer produces NPC,
+            // and every cycle keypress rebuilds the list, which makes the downgrade immediate.
+            //
+            // Only a MISSING verdict is overridden, and only in the one direction. A pool that
+            // answered "not a foe" is believed -- an enemy that genuinely turns friendly must be
+            // able to stop being an Enemy. `factionVerdict` is what separates the two, which the
+            // category alone could not.
+            if (!e.factionVerdict && e.category == Category::NPC &&
+                old.category == Category::Enemy) {
+                e.category = Category::Enemy;
+                e.factionVerdict = true;   // the verdict is carried, not re-derived
+            }
+            break;
+        }
         (void)carried;
         e.lastSeenMs = now;
     }

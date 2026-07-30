@@ -69,6 +69,18 @@ struct Entity {
     // (It replaces a `crossRad` heading that was spoken as "walk east" in S59 and refuted in play. There
     // is no crossing direction to derive any more: the route ends ON the trigger.)
     bool         isTransition = false;
+    // The actor pool ANSWERED for this object this scan, i.e. BuildLocked found its scene object in
+    // s_poolObjs and called FactionOf on the matching actor. Distinguishes "the pool said not a foe"
+    // from "the pool said nothing", which the category alone cannot express.
+    //
+    // Why it has to exist: on the field, `Enemy` is reachable by exactly ONE route. The classifier
+    // returns NPC for anything `isCharacter` (entity_classify.cpp:213 -- enemies are characters too),
+    // and ScanCombatants, the only other pass that assigns Enemy, runs AFTER the handle-table loop and
+    // skips anything AlreadyListed. So the faction override is the whole mechanism, and a single scan
+    // where the pool read comes back empty silently re-files every enemy on the map as an NPC. Since
+    // every cycle keypress rebuilds the list from scratch, that verdict is not sticky -- the grace
+    // window carries entities the scan MISSED, not categories the scan got wrong.
+    bool         factionVerdict = false;
     // When this object was last actually reported by a scan (GetTickCount64). The handle table streams
     // objects in and out, so entity_list keeps a recently-missing entity listed for a grace window
     // rather than deleting somebody the player is walking toward. 0 = never confirmed.

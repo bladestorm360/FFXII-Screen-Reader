@@ -27,10 +27,17 @@ pathfinder work:
 
 | File | Lines | Note |
 |---|---|---|
-| `ui/ingame_menu_reader.cpp` | 641 | Was 739; the character chooser moved out to `char_select_reader.cpp` in S93. Still over -- the clean remaining seam is the battle-command half (`RVA_BCMD_*`), which would land both halves near 320. |
-| `navigation/entity_scan.cpp` | 577 | Scan + classify + the handle-table walk |
-| `ui/menu_reader.cpp` | 561 | Hooks + speech decisions; grew past its S51 split |
+| `ui/ingame_menu_reader.cpp` | 648 | Was 739; the character chooser moved out to `char_select_reader.cpp` in S93. Still over -- the clean remaining seam is the battle-command half (`RVA_BCMD_*`), which would land both halves near 320. S94 added only a comment. |
+| `navigation/entity_scan.cpp` | 583 | Scan + classify + the handle-table walk |
+| `ui/menu_reader.cpp` | 570 | Hooks + speech decisions; grew past its S51 split |
 | `navigation/entity_postscan.cpp` | 546 | Sign/doorway tagging + the twin filter |
+
+Re-measured **2026-07-30 (Session 94)**. The same four files are over, and none of them grew materially:
+`menu_reader.cpp` took the two-line gambit dispatch branch and `ingame_menu_reader.cpp` a corrected
+comment, both of which had to land in those files -- the dispatch is the one choke point for `0x8000`,
+and the mislabel was in the row-chain table. The gambit reader itself went into a **new** file
+(`ui/gambit_reader.cpp`, 190) rather than into either of them, which is what kept this table from
+drifting again.
 
 **Paid off in Session 93** (each split on a seam the file already had, no logic change):
 
@@ -49,9 +56,11 @@ has broken working readers here before (S31's chooser consolidation silenced boa
 |---|---|---|
 | `navigation/nav_rva.h` | 572 | ~80% provenance comments. Was recorded as 279; it is the registry every RE finding lands in, so it grows with the project. |
 | `navigation/map_rva.h` | 273 | same, split out of nav_rva.h in Session 51 (recorded as 221) |
-| `navigation/entity_scan.h` | 191 | struct layouts + their derivation |
+| `navigation/entity_scan.h` | 203 | struct layouts + their derivation (S94 added `Entity::factionVerdict` and the reason it has to exist) |
 | `navigation/player_state.h` | 155 | the nav-safe gate's contract, corrected in S93 |
-| `battle/battle_state.h` | 150 | at the cap exactly, after the S93 diag/name split |
+| `battle/battle_state.h` | 160 | was exactly 150 after the S93 diag/name split; S94's `CharacterName` and the thread-safety note that explains why it exists beside `DefName` push it over. The next addition here should take the split. |
+| `navigation/map_query.h` | 146 | under, listed to be watched |
+| `navigation/nav_mesh.h` | 145 | under, listed to be watched |
 
 Both are RVA-documentation headers: for each address they record which reading was **STRUCK**, what
 the evidence was, and what replaced it. That commentary is precisely what stopped past sessions

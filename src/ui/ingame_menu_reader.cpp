@@ -30,7 +30,12 @@ struct RowChainClass { uint32_t rva; uint32_t rowOff; };
 constexpr RowChainClass ROW_CHAIN[] = {
     { 0x160DE0, 0xD8 },   // FUN_00280de0 — field pause command column (+ submenus)
     { 0x1A2320, 0xC8 },   // FUN_002c2320 — inventory category tab bar (pause menu)
-    { 0x445E00, 0xC8 },   // FUN_00565e00 — gambits
+    { 0x445E00, 0xC8 },   // FUN_00565e00 — pause command 0x4B8, NOT the gambit screen. The comment
+                          // used to read "gambits" and it is a MISLABEL (corrected S94): the gambit
+                          // setup screen is FUN_005691e0 (RVA 0x4491E0, cmd 0x4B9) and has its own
+                          // reader, ui/gambit_reader.cpp, because its focus `val` is a display-record
+                          // index rather than an offset into a row array. The entry itself is
+                          // structurally valid and stays — only the name was wrong.
     { 0x44F810, 0xE0 },   // FUN_0056f810 — sub-panel list
     { 0x45B890, 0xD0 },   // FUN_0057b890 — equip-type screen list
 };

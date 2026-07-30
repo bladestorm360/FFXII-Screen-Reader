@@ -3221,7 +3221,7 @@ Spot-checks: `0x000` Cure → 1, `0x00B` Curaja → 1, `0x096` Attack → **0**,
 The 24 / 13 / 18 counts are three independent hard facts about FFXII landing exactly, which is what
 carries this from the archived probe's 0.9 to 0.99. Supersedes the partial note in `battle_state.h`
 ("1 for every magick, 2 for every technick").
-
+
 ## The hard passability check — a BODY vs BOUNDARY test (Session 93)
 
 **This is the engine's "you cannot walk here", and it is not a terrain attribute.** Three research
@@ -3311,6 +3311,134 @@ differs. The active command is `**(int**)(*(u64*)(menuCtx+0xd8) + 0x268)`.
 `FUN_002830a0` iterates **9** rows, matching `BattleState::kRosterSlots`. A refused press takes the
 guard path and plays `FUN_00249c60(5)` (error SE) instead of `0x51` (accept), leaving both witnesses
 unchanged — so a reader that re-speaks the state after the call reports the truth either way.
+
+**THERE IS NO PARTY-SIZE CLAMP IN THE TOGGLE (Session 94, conf 1.00).** `FUN_00284c90` XORs bit 3
+unconditionally; its guards test only an invalid charId, the GUEST bit and two `menuCtx+0xd3c` mode
+bits. Nothing counts members. The size rule is enforced on menu EXIT, which surfaces the panel message
+*"The party cannot contain more than three characters."* and returns the player to the field menu —
+tester-confirmed, and visible in the live log going through the ordinary message reader, so it needs no
+announce of its own. Consequence for readers: **bit 3 is a STAGED selection, and five or six characters
+reading "In party" at once is the game's own state, not a mod fault.** Do not "fix" it.
+
+Also settled live: the mod's `row+0xc0 -> menuCtx+0xac8 -> block+0x60` chain is **byte-for-byte the
+one the game uses** (`*(short*)(*(ctx+0xac8 + *(int*)(row+0xc0)*8) + 0x60)`), so its charId is right.
+Internal roster order is **not** story order — the log has cmd-`0x4b3` toggles logging charId 2 while
+the cursor sat on Fran, and 1 and 3 for Ashe and Balthier. Do not assume 0..5 = Vaan..Penelo.
+
+
+## Gambit setup screen — `FUN_005691e0` (RVA `0x4491E0`) (Session 94) — PROBE-CONFIRMED
+
+Pause command `0x4B9`, reached from the shared chooser above. **Needs no new hook:** every focus
+arrives as msg `0x8000` through `FUN_00247510`, which `menu_reader.cpp` already owns, and `owner` IS
+the panel object. Three instances exist (one per gambit set) in a 3-way carousel with `DAT_02ca9700`
+(RVA `0x2B89700`) holding the visible one; `menuCtx+0x160` also holds a panel but is **not** updated on
+a page flip — do not use it.
+
+Display records at `panel + 0x160 + i*0x20`, 13 of them (the array is `memset` `0x1A0`):
+
+| field | meaning |
+|---|---|
+| `rec+0x00` | codec\* — CONDITION name; on record 0 this is the CHARACTER name |
+| `rec+0x08` | codec\* — ACTION name; **null on record 0** (the header has no second column) |
+| `rec+0x10` / `+0x12` | u16 condition / action id, `0xFFFF` when unset. Condition ids are biased: the master table index is `id - 0x6000` |
+| `rec+0x14` | u8 enabled; on record 0 this is the gambit MASTER toggle |
+| `rec+0x15` | u8 class, `2` = empty row |
+| `panel+0x0F0` | i32 the character's BtlChr index (not a scene handle) |
+| `panel+0x124` | u16 per-row enable mask, **bit `i-1` for display row `i`** |
+| `panel+0x126` | u8 row count (max 12) |
+| `panel+0x33E` / `+0x33F` | u8 COLUMN cursor (0 whole row / 1 condition / 2 action) and its saved copy |
+
+Names are stored **already variant-selected** — decode directly, no `SkipVariantPrefix`.
+
+**The dispatch `val` IS the record index** (0 = header, 1..`panel+0x126` = rows). Confirmed, no
+off-by-one. Two measured hazards any reader must handle:
+
+1. **`0x8000` repeats for an unchanged state** — seven identical `val=1 col=1` messages on entry,
+   because the per-frame cat-`0xA` handler reconciles `+0x33E` against `+0x33F` and re-sends via
+   `FUN_002d1ac0`. A change-check is therefore the sanctioned per-frame exception here, not a dedup.
+2. **A row-0 crossing sends TWO `0x8000` for one keypress and the FIRST carries the STALE column**
+   (`#31 val=0 col=1` then `#33 val=0 col=0`; again at `#42`/`#44`). Forcing column 0 whenever
+   `val == 0` — which record 0's null action pointer independently justifies — collapses the pair.
+
+Corroborating detail, not needed by the reader: msg `0x8005` accompanies a ROW change only, never a
+column-only move.
+
+**The PICKER (`FUN_0056b4d0`, RVA `0x44B4D0`, rows at `picker+0x0E0 + i*0x20`) is UNMEASURED.** The
+probe run never confirmed on a row, so it captured no picker messages at all. Do not build a reader
+against that row layout until it has been.
+
+**STRIKES the `ROW_CHAIN[2] { 0x445E00, 0xC8 } // gambits` label** in `ingame_menu_reader.cpp`: that
+class is command `0x4B8`, not this screen. The entry is structurally valid; only the name was wrong.
+
+
+## Gate-crystal teleport list — substitution rows (Session 94) — PROBE-CONFIRMED
+
+Not a new surface. Touching a crystal opens the field dialogue / choice window `FUN_002a6190`
+(RVA `0x186190`) as a select list, and its cursor moves arrive on the `0x8000` dispatch the mod already
+hooks. The destination rows were silent for one reason: **a row can be nothing but its substitution.**
+
+Option-block layout, measured against a 26-destination list:
+
+- Block header `0e <count | 0x80> …`, so `count = buf[m+1] & 0x7F` — read `0x9a` ⇒ **26**, matching the
+  widget's own capacity byte. The mod had been passing the constant `MAX_OPTIONS` (32) as the total,
+  which is why its log read `choice[25/32]` and why the hide-mask walk scanned six slots past the end.
+- Entries are length-prefixed `[len | 0x80][len bytes]`. A destination row is `84 | 0f 2e <0x80+idx> 90`
+  — `len = 4`, body `0f 2e 80 90`. `DecodeRow` yields nothing for it, because the escape contributes no
+  characters.
+- The label lives in the window's **inline** argument table at `window + 0x1B8 + idx*0x10`, entries
+  `{i32 type, i32 pad, u64 codec*}` with `type == 1` for a string. `window == widget - 0xD0`, confirmed
+  against the live log (widget `0x2C2BEE50`, window `0x2C2BED80`).
+- Row 25 is a **literal** ("Cancel"), which is exactly why that one row spoke and 0..24 did not.
+
+The real row count is available without new offsets at `window + 0xD0 + 0xA2` — the widget field the
+per-frame choice tick already reads.
+
+
+## Character-name master table — `DAT_02ebf130` (Session 94, conf 0.98)
+
+The pure-read path to a party character's name, needed because `FUN_0035d330(0x02, id)` is a **game
+call** that stages its arguments in the static record `DAT_022ca520`, and the party-status keys run on
+the input thread. From `FUN_0031c5d0` **`case 1`** (the arm category `2` takes):
+
+```
+base   = Reloc(*(u32*)(DAT_02ebf130 + 0xc));
+row    = base + *(u16*)(DAT_02ebf130 + 8) * id;   // the standard st2e header shape
+poolId = *(u16*)(row + 0x30);                     // -> the shared pool DAT_02ebf170
+```
+
+That header shape is exactly `BattleState::Internal::MasterRecord`, so `CharacterName(charId)` is
+`PoolString(*(u16*)(rec + 0x30))` and nothing more. The sibling arm for category `3` reads its own
+table identically at `+0x08`, so the layout belongs to the table, not the category.
+
+Category `0x0B` (gambit condition) takes **`case 10`**: table `DAT_02ebf0d8`, index `id - 0x6000`, name
+pool index at `row + 0x14`, plus a menu-text id at `row + 0x04` for `FUN_002f9860`.
+
+
+## Text codec — the comparison operators (Session 94, conf 1.00)
+
+`0xA6` `=` · `0xB2` `<` · `0xC4` `≥`. Dropped until now, so every threshold gambit spoke without the
+operator that carries its meaning ("Foe: HP  90%").
+
+Pinned from the game's own data, which is the only way these can ever be settled — the font atlas *is*
+the character map, so the byte order carries no ASCII relationship to interpolate from. Surveying the
+9,518 NUL-separated strings in `us/binaryfile/word.bin` puts each byte in exactly one syntactic slot:
+`0xA6` only in `status = <name>` (86×) and `HP/MP = 100%`; `0xB2` only in `HP/MP < 10%..100%` and
+`< 500..100,000`; `0xC4` in those same thresholds **minus** 100%. Then `listhelp_targetchip.bin` — the
+help line for these very chips — states two of them **in words**:
+
+- *"Target any ally with **less than** 10% HP."* ⇒ `0xB2` is `<`
+- *"Target any foe with HP **greater than or equal to** 1,000."* ⇒ `0xC4` is `≥`
+
+That is what separates `<` from `≤` and `>` from `≥`; structure alone could not. `0xB2` pairing with
+`100%` independently rules out `≤`, which would be a tautology. `0xA6` rests on the survey: between
+"status" and a status name only equality is meaningful, and `0xAA` is already `:` in the same strings.
+
+Also added: `0x81` = `ú`. Its only use anywhere in the pool is "Cúchulainn" / "Cúchulainn, the Impure",
+which without it said "Cchulainn". Not generalised beyond that one observation.
+
+Still unmapped, deliberately: `0xA3` (only in dev strings marked `NOT USED`, e.g. `all<a3>cancel`, so
+`/` vs `-` cannot be chosen) and `0xAD` (a single dev string, `Team wanted an <ad>ark<ad> immage`,
+which looks like a double quote on one witness — not enough).
 
 
 ## The announce is SUPPRESSED ON REPEAT — `FUN_00304850` (Session 90, 0.97)

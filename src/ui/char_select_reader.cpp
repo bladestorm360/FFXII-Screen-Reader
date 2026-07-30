@@ -37,7 +37,6 @@ constexpr uint32_t OFF_BLK_MAXHP       = 0x24;     // block+0x24 = max HP (i32)
 constexpr uint32_t OFF_BLK_CURMP       = 0x2C;     // block+0x2c = current MP (i32)
 constexpr uint32_t OFF_BLK_MAXMP       = 0x30;     // block+0x30 = max MP (i32)
 constexpr uint32_t OFF_BLK_LEVEL       = 0xBA;     // block+0xba = level (u8)
-constexpr uint32_t CAT_CHARNAME        = 2;        // FUN_0035d330 category for character names
 
 // The field pane's active command. `0x4b3` is Party -- the membership screen.
 constexpr int CMD_PARTY = 0x4b3;
@@ -139,7 +138,10 @@ void HookedStatusCursor(int slot) {
     SlotInfo v;
     if (!ReadSlot(slot, &v)) return;
 
-    const std::wstring name = BattleState::DefName(CAT_CHARNAME, static_cast<uint32_t>(v.charId));
+    // CharacterName, not DefName(0x02, ...): same answer, but by pure reads. This hook is on the game
+    // thread so the game call was legal here -- the party reader's keys are not, and one choke point
+    // that works from either thread beats two paths to one name (S94).
+    const std::wstring name = BattleState::CharacterName(static_cast<uint8_t>(v.charId));
     if (name.empty()) return;                                 // no game-supplied name -> stay silent
 
     const int cmd = ActiveFieldCmd();

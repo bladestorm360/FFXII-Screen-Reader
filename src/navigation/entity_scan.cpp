@@ -401,6 +401,7 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             if (poolActor) {
                 ++s_poolOverlap;
                 if (e.gameNamed) ++s_poolOverlapNamed;
+                e.factionVerdict = true;   // the pool ANSWERED -- see Entity::factionVerdict
 
                 const bool party = IsPartyMemberActor(poolActor);
                 const BattleState::Faction fac = BattleState::FactionOf(poolActor);
@@ -524,14 +525,19 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // had been promoted into were simply not shown. A breakdown that does not add up hides the bug it
     // exists to expose -- if a category is added to the enum, add it to this line.
     char msg[288];
+    // `actorPool` is on THIS line and not the conditional inclusion line below, because the case it
+    // exists to expose -- the pool coming back empty, which re-files every enemy as an NPC -- can
+    // easily leave every counter that line is gated on at zero, so it would go unprinted exactly when
+    // it mattered. `poolAnswered=0` beside a non-zero `Enemy=` count is the signature to look for:
+    // it means the categories on screen are carried verdicts, not fresh ones.
     snprintf(msg, sizeof(msg),
              "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Door=%d Shop=%d Save=%d "
-             "Gate=%d Treasure=%d Items=%d) story-gated=%d",
+             "Gate=%d Treasure=%d Items=%d) story-gated=%d actorPool=%zu poolAnswered=%d",
              out.size(), cc[(int)Category::NPC], cc[(int)Category::Enemy], cc[(int)Category::Object],
              cc[(int)Category::Exit], cc[(int)Category::Door], cc[(int)Category::Shop],
              cc[(int)Category::SaveCrystal],
              cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
-             cc[(int)Category::Items], gated);
+             cc[(int)Category::Items], gated, s_poolObjs.size(), s_poolOverlap);
     Log::Write("NAV", msg);
     if (s_charByName > 0 || s_poolKind5 > 0 || s_dropKind1 > 0 || s_dropKind5 > 0 ||
         s_dropOther > 0 || s_namelessAct > 0 || s_poolOverlap > 0 || OddSlotWins() > 0) {

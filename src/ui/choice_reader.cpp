@@ -224,17 +224,39 @@ void EmitOption(void* logOwner, const char* kind, int idx, int count, const std:
     else       Speech::Output(text, /*interrupt=*/true);
 }
 
-// Build the spoken line for one option: its columns, plus the Status substitution when the owning
+// Build the spoken line for one option: its columns, plus the substitution argument when the owning
 // window carries an argument table. `window` may be null for a surface that has none.
+//
+// A ROW CAN BE NOTHING BUT ITS SUBSTITUTION, and that is what kept the gate-crystal teleport list
+// silent. Its destination rows are literally `0F 2E <idx> 90` and nothing else -- four bytes, measured
+// (probe_teleport_rows, 2026-07-30: entry len `0x84 & 0x7F` = 4, body `0f 2e 80 90`). DecodeRow yields
+// nothing for an escape that contributes no characters, so the old `if (text.empty()) return text` bailed
+// out one line BEFORE the argument that holds the place name was ever looked at. Row 25 spoke only
+// because it is a literal "Cancel".
+//
+// So: resolve first, then decide. Empty text + a resolved argument means the argument IS the row. Text
+// plus an argument keeps appending, which is the notice board's Status column and must not regress.
 std::wstring BuildOptionLine(void* window, const uint8_t* codec, size_t len) {
     std::wstring text = DecodeRow(codec, len);
-    if (text.empty() || !window) return text;
+    if (!window) return text;
     uint32_t argIdx = 0;
-    if (RowArgIndex(codec, len, &argIdx)) {
-        const std::wstring status = ResolveArg(window, argIdx);
-        if (!status.empty()) text += L", " + status;
-    }
-    return text;
+    if (!RowArgIndex(codec, len, &argIdx)) return text;
+    const std::wstring arg = ResolveArg(window, argIdx);
+    if (arg.empty()) return text;
+    if (text.empty()) return arg;              // the row IS the substitution (teleport destinations)
+    return text + L", " + arg;                 // row text PLUS its argument (notice-board Status)
+}
+
+// How many option slots this list really has. The count lives on the widget the window embeds at
+// +0xD0 -- the same OFF_W_COUNT field the per-frame tick reads at HookedChoiceTick, so this is not a
+// new offset. OnFocus used to pass the CONSTANT MAX_OPTIONS as the total, which is why its log lines
+// read `choice[25/32]` on a 26-row list and why the hide-mask walk scanned six slots past the
+// terminator. Measured 26 on the gate-crystal list. MAX_OPTIONS stays the clamp and the fallback.
+int OptionSlotCount(void* window) {
+    uint8_t n = 0;
+    if (!MemRead::SafeReadU8(window, OFF_LIST_BLOCK + OFF_W_COUNT, &n)) return MAX_OPTIONS;
+    if (n == 0 || n > MAX_OPTIONS) return MAX_OPTIONS;
+    return static_cast<int>(n);
 }
 
 // One line per distinct failure reason per window. A silent-if-wrong reader with NO diagnostic
@@ -279,7 +301,8 @@ bool OnFocus(void* window, int visibleIndex) {
         pageOff = g_pageOff;
     }
 
-    const int slot = AbsoluteIndex(window, visibleIndex, MAX_OPTIONS);
+    const int total = OptionSlotCount(window);
+    const int slot = AbsoluteIndex(window, visibleIndex, total);
     const uint8_t* codec = nullptr;
     size_t len = 0;
     if (!OptionCodec(buf, slot, pageOff, &codec, &len)) {
@@ -291,8 +314,12 @@ bool OnFocus(void* window, int visibleIndex) {
     if (text.empty()) { LogFail(window, "row decoded empty", slot, visibleIndex); return false; }
 
     // A 0x8000 reached us: this surface is dispatch-driven, so the tick must not double-speak it.
+    //
+    // This line sits AFTER the empty-text return above, so on the teleport list it had never executed --
+    // every destination row bailed first and the two-detector arbitration never once ran on that
+    // surface. Nothing here needed changing; resolving the substitution is what reaches it.
     { std::lock_guard<std::mutex> lk(g_textMutex); g_dispatchCovers = true; }
-    EmitOption(window, "choice", visibleIndex, static_cast<int>(MAX_OPTIONS), text);
+    EmitOption(window, "choice", visibleIndex, total, text);
     return true;
 }
 

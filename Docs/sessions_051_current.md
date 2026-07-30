@@ -4388,3 +4388,114 @@ Splits (no logic change): `path_search.cpp` 667→499, `battle_state.cpp` 584→
 `ingame_menu_reader.cpp` 739→641. `PerformanceIssues.md`'s claim that every `.cpp` was under 500 was false
 and is corrected with measured numbers.
 
+
+## Session 94 — 2026-07-30 — [menus] Probe results in, and a name resolved through the wrong table
+
+**KEYWORDS: gambit setup screen FUN_005691e0 0x4491E0 display records column cursor double 0x8000
+teleport destination substitution 0f2e window+0x1B8 arg table MAX_OPTIONS 32 real count party keys
+4 5 6 no name CharacterName DAT_02ebf130 PoolString input thread DefName static record codec
+operators 0xA6 = 0xB2 < 0xC4 >= word.bin listhelp_targetchip rescan enemies NPCs factionVerdict**
+
+Both Session 93 probes came back with everything they were built for. They looked empty to the tester —
+*"only values, no text output captured"* — because a probe is forbidden from calling the game's own text
+decoder from the Frida thread, so every string is dumped as hex and decoded offline. That is working as
+designed, but the run instructions should say so next time.
+
+### The party keys, and a claim that was a property of its sample
+
+`[PARTY] slot 1 charId=0 "Vaan, Regen, ... HP 17026/8513"` followed by
+`slot 2 charId=3 "Regen, Libra, HP 8437/8437"` — vitals every time, the name only for slot 1.
+`NameForBtlChr` resolves through `ActorForBtlChr`, which **scans the field actor pool** for an actor whose
+def pointer is that BtlChr. Only the leader reliably has one. Vitals come straight off the BtlChr, which
+is exactly why they never failed: *"only reads the status effects and the vitals"* is that split, spoken.
+
+**A reader that resolves a ROSTER member through the actor pool is broken by construction.** Session 93
+closed this as NOT A BUG on the sentence *"there is no party line in either log where the name is
+absent"* — true of the two logs on hand, and a claim about the code it could not support. The leader is
+always slot 1, so the first case anyone checks always passes. That entry is struck in `debug.md`; this is
+the third time this file records a sample standing in for a population (S80, S89).
+
+The fix could not be the obvious one. `DefName(0x02, charId)` answers the same question and the Party
+screen already used it successfully, but it is a **game call** that stages its arguments in the *static*
+record `DAT_022ca520` — and the party keys dispatch on the **input thread**. Two callers would race in
+one buffer. So `BattleState::CharacterName` walks the character master table by hand
+(`DAT_02ebf130` → `rec+0x30` → the shared pool, from `FUN_0031c5d0 case 1`), which is pure reads and
+therefore thread-agnostic. `char_select_reader.cpp` moved onto it too, so there is one choke point.
+
+### The teleport rows: everything needed was already written
+
+The destination rows are literally `0F 2E <idx> 90` and nothing else — four bytes, no characters. So
+`DecodeRow` returned empty and `BuildOptionLine` bailed on `text.empty()` **one line before** it would
+have resolved the argument holding the place name. `RowArgIndex`, `ResolveArg` and the `window+0x1B8`
+table were all already there and already correct; the bug was the order of two lines. Row 25 spoke only
+because "Cancel" is a literal.
+
+Two things fell out of the same measurement. The block header gives the real count (`0x9a & 0x7F` = 26),
+so `MAX_OPTIONS`'s hardcoded 32 is gone from `OnFocus` — that is why the log read `choice[25/32]` and why
+the hide-mask walk ran six slots past the terminator. And `g_dispatchCovers` sits *after* the empty-text
+return, so the two-detector arbitration had never once run on this surface; resolving the row is what
+reaches it.
+
+### The gambit screen, and the picker I did not build
+
+All four probe criteria passed: `owner` IS the panel, `val` IS the display-record index, `0xFFFF` ids
+land on exactly the rows whose class byte is 2, and `popcount(panel+0x124)` matches the rows whose own
+bit is set. Two hazards were **measured** rather than reasoned about: the panel resends `0x8000` for an
+unchanged state (seven identical messages on entry, from the per-frame cat-`0xA` reconcile), and a row-0
+crossing sends two `0x8000` for one keypress with the **stale** column in the first. Forcing column 0 on
+the header row — which record 0's null action pointer independently justifies — collapses the pair, and
+the change-check that absorbs the resends is the sanctioned per-frame exception, naming the function it
+guards.
+
+**The picker is not built.** The probe run never confirmed on a row, so it captured no picker messages at
+all and `FUN_0056b4d0`'s row layout is unmeasured. Claiming that surface on a guess would silence
+whatever covers it today, which is the regression `menu_reader.cpp` already carries a warning about.
+
+### Three comparison operators, pinned from the game's own words
+
+`0xA6` `=`, `0xB2` `<`, `0xC4` `≥` were all being dropped, so every threshold gambit spoke without the
+operator that carries its meaning — "Foe: HP  90%". The font atlas *is* the character map, so byte order
+offers nothing to interpolate from and these can only ever be settled empirically. Surveying the 9,518
+strings in `word.bin` put each byte in exactly one syntactic slot; then `listhelp_targetchip.bin` — the
+help line for these very chips — said two of them outright: *"Target any ally with **less than** 10%
+HP"* and *"Target any foe with HP **greater than or equal to** 1,000."* That is what separates `<` from
+`≤` and `>` from `≥`, which structure alone could not do.
+
+**I nearly shipped two operators where there are three.** The first pass found `0xA6` and `0xB2` from the
+probe's own two witness strings and stopped, because those were the two bytes in front of me. The full
+survey found `0xC4` sitting in the same slot across 39 more strings. Two witnesses agreed with a
+two-operator story, and the population had three — the same shape of error as the struck claim above, in
+the same session.
+
+Also mapped: `0x81` = `ú`, whose only use anywhere is "Cúchulainn" (previously "Cchulainn"). `0xA3` and
+`0xAD` stay unmapped on purpose — one appears only in dev strings marked `NOT USED`, the other has a
+single witness.
+
+### Enemies re-filed as NPCs on rescan
+
+The tester's framing was *"rescan should use the exact same branch as the entity collection on map
+transition"*. There is only one branch — `EntityScan::Build`, reached only from `RescanLocked`, with no
+transition-time entity path anywhere — so the report is real but the diagnosis had to change: one branch
+whose answer is not stable across samples.
+
+On the field `Category::Enemy` has exactly one source. The classifier calls every character an NPC,
+`ScanCombatants` runs after the handle-table loop and skips anything already listed (and must keep doing
+so — its kind nibble files the player's own party as Enemy, struck in S86), so the actor-pool faction
+override is the whole mechanism. One scan where the pool does not answer re-files every enemy on the map,
+and every cycle keypress rebuilds the list. The grace window carries entities a scan **missed**, never a
+category a scan got **wrong**.
+
+`Entity::factionVerdict` now records whether the pool actually answered, which the category alone cannot
+express, and the merge refuses to downgrade `Enemy`→`NPC` on a missing verdict — one direction only, so
+an enemy that genuinely turns friendly can still stop being one. The cause is not yet proven from a log,
+so `rescan:` gained `actorPool=` and `poolAnswered=`; they are on that line rather than the conditional
+inclusion line because an empty pool can leave every counter the latter is gated on at zero.
+
+### Files
+
+New: `ui/gambit_reader.{h,cpp}`. Changed: `battle_state_names.cpp` + `battle_state.h`
+(`CharacterName`), `party_status.cpp`, `char_select_reader.cpp`, `choice_reader.cpp`, `game_text.cpp`,
+`entity_scan.{h,cpp}`, `entity_list.cpp`, `menu_reader.cpp` (two lines), `ingame_menu_reader.cpp`
+(the `ROW_CHAIN` "gambits" mislabel — that class is cmd `0x4B8`).
+
+**Not play-confirmed.** Nothing in this session has been heard yet.

@@ -202,6 +202,28 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 case 0xA0: cur->push_back(L'&');  break;   // "Magicks & Technicks"
                 case 0x9E: cur->push_back(L'%');  break;
                 case 0x8F: cur->push_back(L'-');  break;   // em-dash
+                // ---- COMPARISON OPERATORS (S94) ----------------------------------------------
+                // Dropped until now, so every threshold gambit spoke as "Foe: HP  90%" -- the
+                // operator, which is the whole meaning of the condition, was inaudible.
+                //
+                // Pinned from the game's own data rather than from the atlas. Surveying the 9,518
+                // NUL-separated strings in `us/binaryfile/word.bin` shows each byte in exactly one
+                // syntactic slot: 0xA6 only in `status = <name>` (86x) and `HP/MP = 100%`; 0xB2 only
+                // in `HP/MP < 10%..100%` and `< 500..100,000`; 0xC4 in those same thresholds MINUS
+                // 100%. Then `listhelp_targetchip.bin` -- the help line for each of these very chips
+                // -- states two of them IN WORDS:
+                //     "Target any ally with less than 10% HP."                        -> 0xB2 is <
+                //     "Target any foe with HP greater than or equal to 1,000."        -> 0xC4 is >=
+                // That is what settles `<` vs `<=` and `>` vs `>=`; structure alone could not, and
+                // 0xB2 pairing with 100% independently rules out `<=` (a tautology). 0xA6 stands on
+                // the survey: between "status" and a status name only equality is meaningful, and
+                // 0xAA is already ':' in the same strings, so it is not that. conf 1.00 / 1.00 / 0.99.
+                case 0xA6: cur->push_back(L'=');  break;
+                case 0xB2: cur->push_back(L'<');  break;
+                case 0xC4: cur->push_back(L'\x2265'); break;  // >=  (>= 60% ASCII still holds)
+                // Sole observed use across the whole pool is "Cuchulainn" / "Cuchulainn, the
+                // Impure", which without this said "Cchulainn". Not generalised beyond that.
+                case 0x81: cur->push_back(L'\x00FA'); break;  // u-acute
                 default:   break;                         // unmapped extended glyph: drop
             }
         }

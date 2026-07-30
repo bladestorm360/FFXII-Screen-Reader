@@ -51,7 +51,22 @@ bool ReadSlot(int slot, SlotVitals& out) {
     out.maxMP       = maxMP;
     out.haveMP      = mpEnabled && maxMP > 0;
     out.status      = sa | sb;   // the natives' own status word is the OR of both
-    out.name        = BattleState::NameForBtlChr(bc);
+    // NAME BY CHAR ID, not by actor. NameForBtlChr resolves through ActorForBtlChr, which scans the
+    // FIELD ACTOR POOL for an actor whose def pointer is this BtlChr -- and only the LEADER has one.
+    // So every non-leader slot came back nameless while HP/MP/status, which are read straight off the
+    // BtlChr a few lines up, were always fine. That is exactly the reported defect: "only reads the
+    // status effects and the vitals", and it surfaced on an explicit party swap because a swap is what
+    // changes which BtlChr sits in each roster slot.
+    //
+    // A reader that resolves a ROSTER member through the actor pool is broken by construction, not
+    // intermittently -- the one slot that worked hid it.
+    out.name = BattleState::CharacterName(charId);
+    if (out.name.empty()) {
+        // A guest may not be in the character master table. The actor path is still the right answer
+        // for anyone the field has actually spawned, so keep it as the fallback rather than a guess --
+        // and if both are empty the line simply starts with the statuses, which already worked.
+        out.name = BattleState::NameForBtlChr(bc);
+    }
     out.statusNames = BattleState::StatusNames(out.status);
     return true;
 }

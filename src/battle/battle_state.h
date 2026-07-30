@@ -45,6 +45,16 @@ void* LeaderActor();
 // GAME CALL -- game thread ONLY. Empty when unresolvable, never a guess.
 std::wstring DefName(uint32_t category, uint32_t id);
 
+// A party character's own name, by roster char id. PURE MEMORY READS -- safe from ANY thread, which
+// is the whole reason it exists beside DefName: `DefName(0x02, id)` answers the same question but
+// gets there by CALLING FUN_0035d330, which stages its arguments in the STATIC record DAT_022ca520.
+// PartyStatus::SpeakSlot runs on the INPUT thread (nav_commands.cpp, keys 4/5/6), so two callers in
+// that one buffer would race -- and it would be a game call off the game thread besides.
+//
+// This walks what FUN_0031c5d0 `case 1` (category 2) walks: the character master table's own header,
+// then the shared string pool. Empty when unresolvable, never a guess.
+std::wstring CharacterName(uint8_t charId);
+
 // ---- gambits ---------------------------------------------------------------------------------
 // Is the GAMBIT master toggle on for the character whose SCENE HANDLE this is? That is the state
 // the battle menu's Gambits row (cmdId 0x0D) flips, and the same one the pause-menu gambit screen

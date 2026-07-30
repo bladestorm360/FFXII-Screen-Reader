@@ -30,6 +30,17 @@ using Internal::RVA_ACTIONTBL;
 
 constexpr uint32_t RVA_STATUSTBL = 0x2D9F118;  // DAT_02ebf118 -- battle status-name table
 
+// DAT_02ebf130 -- the CHARACTER master table, and rec+0x30 is its shared-pool name index. Read off
+// FUN_0031c5d0 `case 1`, which is the arm category 2 takes:
+//     base   = Reloc(*(u32*)(DAT_02ebf130 + 0xc));
+//     row    = base + *(u16*)(DAT_02ebf130 + 8) * id;
+//     poolId = *(u16*)(row + 0x30);              // -> DAT_02ebf170, the shared pool
+// That header shape (count / stride+8 / records+0xc) is exactly Internal::MasterRecord, and the
+// sibling arm for category 3 reads its own table the same way at +0x08 -- so the layout is the
+// table's, not this category's. Confidence 0.98.
+constexpr uint32_t RVA_CHARTBL      = 0x2D9F130;
+constexpr uint32_t OFF_CHAR_NAMEIDX = 0x30;
+
 // FUN_0035d330(category, id) fills a static record and returns it; the localized name is the codec
 // pointer at record+0x18. The game's own name path, and it does NOT depend on the Reloc/PoolString
 // chain -- which is why an ability name can resolve when a status name does not.
@@ -60,6 +71,16 @@ std::wstring DefName(uint32_t category, uint32_t id) {
     if (!codec) return std::wstring();
     std::wstring s = GameText::Decode(codec, 256);
     return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
+// The pure-read twin of DefName(0x02, id) -- see battle_state.h for WHY it has to be pure. Same two
+// helpers StatusName uses, so there is no third master-data walk in the codebase.
+std::wstring CharacterName(uint8_t charId) {
+    void* rec = MasterRecord(RVA_CHARTBL, charId);
+    if (!rec) return std::wstring();          // MasterRecord's count guard already rejected the id
+    uint16_t nameIdx = 0;
+    if (!SafeReadU16(rec, OFF_CHAR_NAMEIDX, &nameIdx)) return std::wstring();
+    return PoolString(nameIdx);
 }
 
 std::wstring AbilityName(uint16_t actionId) {

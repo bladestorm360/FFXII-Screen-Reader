@@ -6,6 +6,7 @@
 #include "ui/char_select_reader.h"
 #include "ui/license_reader.h"
 #include "ui/choice_reader.h"
+#include "ui/gambit_reader.h"
 #include "ui/ability_summary_reader.h"
 #include "ui/shop_reader.h"
 #include "ui/inventory_reader.h"
@@ -319,6 +320,11 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             ChoiceReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val)));
             return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
         }
+
+        // Gambit setup screen (FUN_005691e0). `val` is the display-record index, not a row offset in
+        // any ROW_CHAIN class, so the generic content path below has nothing for it.
+        if (GambitReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val))))
+            return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
 
         const int index = static_cast<int>(static_cast<intptr_t>(val));
         const uint32_t rowOff = IngameMenuReader::RowChainOff(owner);
