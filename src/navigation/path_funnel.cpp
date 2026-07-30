@@ -31,16 +31,21 @@ inline float TriArea2(const FVec3& a, const FVec3& b, const FVec3& c) {
 // Do NOT "restore" these to match a reference without also negating TriArea2 -- the two have to agree,
 // and it is TriArea2's doc comment ("> 0 == LEFT") that is correct for this codebase's frame.
 void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
-            std::vector<FVec3>& out) {
+            std::vector<FVec3>& out, std::vector<int>& outIdx) {
     out.clear();
+    outIdx.clear();
     out.push_back(start);
+    outIdx.push_back(-1);                 // the start belongs to no portal
 
     // A corner is only ever a portal endpoint, and adjacent portals SHARE vertices -- so the raw funnel
     // emits exact duplicates. Collapsing them is not cosmetic: a duplicate at index 1/2 gives the
     // passed-waypoint drop a zero-length segment, which trips its `len2 < 1e-6f` guard on the first
     // iteration and silently disables the whole Session 78 leg-0 reversal fix.
-    auto pushCorner = [&out](const FVec3& p) {
-        if (out.empty() || !SameXZ(out.back(), p)) out.push_back(p);
+    //
+    // The index rides in the SAME branch as the point, so a collapsed duplicate cannot desynchronise
+    // the two vectors -- which would silently mis-address the corridor when a leg is un-pulled.
+    auto pushCorner = [&out, &outIdx](const FVec3& p, size_t i) {
+        if (out.empty() || !SameXZ(out.back(), p)) { out.push_back(p); outIdx.push_back(static_cast<int>(i)); }
     };
 
     FVec3 apex = start, pLeft = start, pRight = start;
@@ -58,7 +63,7 @@ void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& por
                 pRight = right; rightIdx = i;
             } else {
                 // Right crossed left: the left bound is a corner. Emit it and restart from there.
-                pushCorner(pLeft);
+                pushCorner(pLeft, leftIdx);
                 apex = pLeft; apexIdx = leftIdx;
                 pLeft = apex; pRight = apex;
                 leftIdx = rightIdx = apexIdx;
@@ -71,7 +76,7 @@ void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& por
             if (SameXZ(apex, pLeft) || TriArea2(apex, pRight, left) > 0.0f) {
                 pLeft = left; leftIdx = i;
             } else {
-                pushCorner(pRight);
+                pushCorner(pRight, rightIdx);
                 apex = pRight; apexIdx = rightIdx;
                 pLeft = apex; pRight = apex;
                 leftIdx = rightIdx = apexIdx;
@@ -83,7 +88,7 @@ void Funnel(const FVec3& start, const FVec3& end, const std::vector<Portal>& por
 
     // ALWAYS finish on the target itself. `to` is the exact same FVec3 the `/` describe key measures to,
     // so the two keys can never name different destinations (Session 76).
-    if (out.empty() || !SameXZ(out.back(), end)) out.push_back(end);
+    if (out.empty() || !SameXZ(out.back(), end)) { out.push_back(end); outIdx.push_back(static_cast<int>(portals.size())); }
 }
 
 } // namespace
@@ -102,23 +107,94 @@ float PathLenXZ(const std::vector<FVec3>& pts) {
 }
 
 void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
-                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther) {
+                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther,
+                  std::vector<int>* outIdx) {
     std::vector<Portal> mirrored;
     mirrored.reserve(portals.size());
     for (const Portal& p : portals) mirrored.push_back(Portal{ p.right, p.left });
 
     std::vector<FVec3> a, b;
-    Funnel(start, end, portals,  a);
-    Funnel(start, end, mirrored, b);
+    std::vector<int>   ia, ib;
+    // Mirroring swaps left/right WITHIN each portal; it does not reorder them. So a corner's portal
+    // index means the same thing in both polarities and the winner's indices travel with it.
+    Funnel(start, end, portals,  a, ia);
+    Funnel(start, end, mirrored, b, ib);
     const float la = PathLenXZ(a), lb = PathLenXZ(b);
 
     flipped  = (lb < la);
     out      = flipped ? b : a;
     lenKept  = flipped ? lb : la;
     lenOther = flipped ? la : lb;
+    if (outIdx) *outIdx = flipped ? ib : ia;
 }
 
-int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly) {
+// The midpoint of a portal's CLIPPED span, not of the whole edge: EdgeClearSpan already narrowed each
+// portal to the run of samples where the body was measured to fit, so this point is one the body has
+// been shown to pass through rather than one we hope it can.
+FVec3 SpanMid(const Portal& q) {
+    return FVec3{ (q.left.x + q.right.x) * 0.5f,
+                  (q.left.y + q.right.y) * 0.5f,
+                  (q.left.z + q.right.z) * 0.5f };
+}
+
+int Unpull(const std::vector<FVec3>& poly, const std::vector<int>& idx,
+           const std::vector<Portal>& portals, size_t badLeg, std::vector<FVec3>& out) {
+    out.clear();
+    // The mapping has to be intact and the leg has to be a real interior leg. Anything else and we
+    // would be splicing against indices that do not describe this polyline.
+    if (badLeg == 0 || badLeg >= poly.size() || idx.size() != poly.size()) return 0;
+
+    const int lo = idx[badLeg - 1];
+    const int hi = idx[badLeg];
+
+    out.assign(poly.begin(), poly.begin() + static_cast<ptrdiff_t>(badLeg));
+
+    int added = 0;
+    for (int k = lo + 1; k < hi && k < static_cast<int>(portals.size()); ++k) {
+        if (k < 0) continue;
+        const FVec3 m = SpanMid(portals[k]);
+        if (out.empty() || !SameXZ(out.back(), m)) { out.push_back(m); ++added; }
+    }
+
+    // AND THE CORNER ITSELF (Session 96, second correction). Splicing waypoints only into the APPROACH
+    // is a no-op when the unreachable thing IS the corner -- which is what the log showed nine times
+    // running: `1 corridor waypoint spliced -> still breaching`, then five, then still breaching. A
+    // taut corner is a portal ENDPOINT, and the crossing test deliberately never samples endpoints
+    // (`SampleT = (i+0.5)/7`, never 0 or 1), so it is one of exactly two points per portal that were
+    // never measured. Its own span midpoint WAS measured.
+    //
+    // The FINAL point is exempt: that is the caller's destination, the same FVec3 the `/` key
+    // describes, and moving it would make the two keys name different places (S76).
+    const bool interior = (badLeg + 1 < poly.size());
+    if (interior && hi >= 0 && hi < static_cast<int>(portals.size())) {
+        const FVec3 m = SpanMid(portals[hi]);
+        if (out.empty() || !SameXZ(out.back(), m)) {
+            out.push_back(m);
+            ++added;
+            out.insert(out.end(), poly.begin() + static_cast<ptrdiff_t>(badLeg) + 1, poly.end());
+            return added;
+        }
+    }
+
+    if (added == 0) { out.clear(); return 0; }
+    out.insert(out.end(), poly.begin() + static_cast<ptrdiff_t>(badLeg), poly.end());
+    return added;
+}
+
+int FullCorridor(const FVec3& from, const FVec3& to, const std::vector<Portal>& portals,
+                 std::vector<FVec3>& out) {
+    out.clear();
+    out.push_back(from);
+    int added = 0;
+    for (const Portal& q : portals) {
+        const FVec3 m = SpanMid(q);
+        if (!SameXZ(out.back(), m)) { out.push_back(m); ++added; }
+    }
+    if (!SameXZ(out.back(), to)) out.push_back(to);
+    return added;
+}
+
+int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly, std::vector<int>* idx) {
     int dropped = 0;
     while (poly.size() >= 3) {
         const FVec3 c1 = poly[1], c2 = poly[2];
@@ -128,14 +204,32 @@ int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly) {
         const float t = ((from.x - c1.x) * ex + (from.z - c1.z) * ez) / len2;
         if (t <= 0.0f) break;                       // still ahead of the player -- a real waypoint
         poly.erase(poly.begin() + 1);
+        // The portal mapping erases in step, or it stops describing this polyline at all -- and a
+        // mapping that is silently off by one addresses the wrong stretch of corridor when a leg is
+        // un-pulled, which is worse than having no mapping.
+        if (idx && idx->size() > 1) idx->erase(idx->begin() + 1);
         ++dropped;
     }
     return dropped;
 }
 
+// HOW FAR A CORNER IS PULLED OFF THE BOUNDARY IT SITS ON.
+//
+// One body radius (0.27 m) is the minimum that clears the engine's own refusal, and it was what this
+// used -- which left every taut corner 27 cm from a wall. That is fine for a path walked exactly, and
+// hopeless for one walked from an eight-way spoken heading: the tester was routed into a wall on a leg
+// whose corners were legal. Widening is the tester's own choice of fix ("keep the words, widen the
+// route"). The improvement test below still gates every move, so this is a preference for the middle
+// of a corridor, never a licence to push a corner somewhere worse.
+// Reduced from 0.45 (Session 96). The larger margin was chosen for a drift theory that the tester
+// later established was not what was failing, and a wider move is exactly what pushed corners off the
+// walkway and into the water above. The walkability check below is the real fix; this keeps a little
+// clearance without reaching for ground that is not there.
+constexpr float kClearanceMargin = 0.15f;
+
 int InsetCorners(std::vector<FVec3>& poly) {
     if (poly.size() < 3) return 0;
-    const float r = NavFootprint::BodyRadius();
+    const float r = NavFootprint::BodyRadius() + kClearanceMargin;
     int moved = 0;
 
     for (size_t i = 1; i + 1 < poly.size(); ++i) {
@@ -163,6 +257,16 @@ int InsetCorners(std::vector<FVec3>& poly) {
         const FVec3 cand{ cur.x + sx * r, cur.y, cur.z + sz * r };
         const PolyId candPoly = NavMesh::FindPolyAt(cand.x, cand.y, cand.z);
         if (candPoly == NavMesh::kNoPoly) continue;        // inset walked off the mesh -- worse, not better
+        // ...AND IT MUST BE GROUND THE PARTY CAN ACTUALLY STAND ON (Session 96).
+        //
+        // FindPolyAt answers "is there a floor polygon here", on RAW flags, and never asks whether the
+        // party may walk it -- so on its own it happily accepts WATER. This moved route corners onto
+        // surfaces the party cannot stand on, and the leg into such a corner then swept into the
+        // channel and stopped: the measured case was an 8.52 m leg the body got 4.57 m along, on a
+        // route with `inset=3`, while the route beside it with `inset=0` validated clean.
+        //
+        // The corner is a place the player is told to walk to. It has to be walkable.
+        if (!NavMesh::Walkable(candPoly)) continue;
         NavFootprint::Clears(cand, candPoly, &after);
 
         // ONLY IF IT HELPS. An unconditional nudge would be a heuristic; this is a measurement. A corner

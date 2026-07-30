@@ -127,7 +127,35 @@ static DWORD WINAPI DeferredInitThread(LPVOID) {
     return 0;
 }
 
-BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
+// `reserved` IS NOT SPARE — it is the difference between a clean exit and a hung process.
+//
+// On DLL_PROCESS_DETACH Windows sets it NON-NULL when THE PROCESS IS TERMINATING and NULL only when
+// someone called FreeLibrary on us. In the terminating case the documented contract is to do NOTHING:
+// the loader lock is held, every other thread has already been killed without releasing whatever it
+// held, and the OS is about to reclaim all memory, handles, threads and DLLs anyway.
+//
+// WE IGNORED IT, AND IT LEFT A PHANTOM PROCESS ON EVERY EXIT (Session 96, reported by the tester as
+// starting "a couple sessions ago" — which dates it to Session 92, when SDL3 arrived). Three separate
+// illegal calls were reachable from here:
+//
+//   1. AudioEngine::Shutdown -> SDL_QuitSubSystem(SDL_INIT_AUDIO). SDL's audio device runs on its own
+//      worker thread, and quitting the subsystem SIGNALS AND JOINS it. That thread needs the loader
+//      lock to finish exiting; we are holding the loader lock waiting for it. Textbook deadlock, and
+//      the newest of the three — which is exactly why the symptom appeared when it did.
+//   2. Speech::Shutdown -> FreeLibrary(Tolk.dll). Calling FreeLibrary from DllMain is explicitly
+//      forbidden: it re-enters the loader we are already inside.
+//   3. DInput8Proxy::Shutdown -> FreeLibrary(the real dinput8). Same violation.
+//
+// (Hooks::Shutdown is a fourth hazard: MinHook's MH_Uninitialize suspends and resumes threads, which
+// is also unsafe under the loader lock.)
+//
+// So: on process termination, return immediately. The cleanup below is kept for the FreeLibrary case,
+// which for a proxy DLL the game loads at startup and never unloads is effectively unreachable — but
+// it is the one case where the calls are legal, so it stays rather than being deleted.
+//
+// Nothing is lost by skipping it. The log is written and flushed per line as the session plays, not
+// assembled and dumped at exit, so the file on disk is already complete.
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     switch (reason) {
         case DLL_PROCESS_ATTACH: {
             g_selfModule = hinst;
@@ -145,6 +173,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH: {
+            // THE PROCESS IS GOING AWAY -- do nothing. See the note above DllMain.
+            if (reserved != nullptr) break;
             CombatEvents::Shutdown();
             // Before Navigation: the beacon lives under it and must stop pinging before the audio
             // device closes.

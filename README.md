@@ -110,13 +110,19 @@ Press \\ as normal. As well as speaking the directions, the mod starts a repeati
 
 Each turn of the route is a point along the way. Reaching one moves the beacon on to the next without saying anything, and the repeats slow down again — so speeding up means you are getting close to the next turn, and suddenly slowing down means you just passed it. Reaching your actual destination plays the sound once at a higher pitch and then stops.
 
-A sound behind you is quieter and a little duller than one in front. That is deliberate: left and right are easy to place, but straight ahead and directly behind sound identical otherwise.
+A sound behind you is quieter, duller, and about a fifth lower in pitch than one in front. Behind means the whole half of the world behind your shoulders, not just directly astern, and the three cues arrive together — so anything behind you sounds behind you, rather than sounding gradually more behind the further round it goes.
+
+Left and right keep working all the way round. Something behind and to your left is played to your left and carries the behind cues on top, so you hear its bearing and which half it is in at the same time.
 
 If you wander well off the route the mod quietly works out a new one and re-aims the beacon. It does not say anything when it does this — you were not asked for new directions. Press \\ any time to hear the route again and re-aim.
 
-In a fight the beacon changes job. It switches to a different sound and follows whatever your party is attacking, moving as the enemy moves, so you can hear where it is without asking. If nothing is being attacked it stays silent rather than leading you somewhere in the middle of a fight. When the fight is over it goes back to the route, on the same leg it left off.
+#### The target beacon
 
-F9 turns the beacon off and on, and it is also in the F8 menu. Your choice is remembered between sessions. Changing area stops the beacon — the route belonged to the old map.
+In a fight, the route beacon stands down and a second sound takes over: it follows whatever your party is attacking, moving as the enemy moves, so you can hear where it is without asking. If nothing is being attacked it stays silent rather than leading you somewhere in the middle of a fight. When the fight is over the route beacon comes back on the same leg it left off.
+
+This is its own setting. It plays in battle whether or not you had a route running, so you can use it on its own, and switching the route beacon off does not switch it off too. Both beacons have their own volume, from 20% up to 100%. Neither volume goes all the way to silent — each beacon has its own on/off switch, so a beacon that is switched on is never silent for a reason you cannot hear.
+
+F9 turns the route beacon off and on, and both beacons and both volumes are in the F8 menu. Your choices are remembered between sessions. Changing area stops the route beacon — the route belonged to the old map — but not the target beacon, which follows whatever you are fighting wherever you are.
 
 #### Naming things yourself (F6)
 

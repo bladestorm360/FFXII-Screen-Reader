@@ -30,6 +30,7 @@ constexpr bool DIAG_KEYS = false;
 std::atomic<int> g_diagCount{0};
 
 std::atomic<uint64_t> g_lastInputMs{0};
+std::atomic<bool>     g_moveHeld{false};   // W/A/S/D, for the navigation stuck detector
 HHOOK   g_hook = nullptr;
 HANDLE  g_thread = nullptr;
 DWORD   g_threadId = 0;
@@ -86,6 +87,10 @@ constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0x
 // gets them. They only DO anything in the mod while a status buffer is active; elsewhere the mod
 // ignores them. DIK extended-key scan codes (dinput.h): Up 0xC8, Down 0xD0, Left 0xCB, Right 0xCD.
 constexpr int DIK_UP = 0xC8, DIK_DOWN = 0xD0, DIK_LEFT = 0xCB, DIK_RIGHT = 0xCD;
+// The game's movement keys (Docs/Controls.md: W/S/A/D). OBSERVED, never touched -- the buffer is
+// const and stays that way. This exists so navigation can tell "jammed against a wall" apart from
+// "standing still reading a menu", which is the difference between a useful re-plan and a nuisance.
+constexpr int DIK_W = 0x11, DIK_A = 0x1E, DIK_S = 0x1F, DIK_D = 0x20;
 // The game binds F1/F2/F3 to Game Speed and NOTHING above that (Docs/Controls.md), so F4 upward are
 // all ours. Plain keys, no chords -- see the Shift note above.
 // F4: combat verbosity, Normal <-> Verbose. REPURPOSED in S90 from the painter-interception A/B
@@ -334,6 +339,10 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     }
     if (anyRising) g_lastInputMs.store(GetTickCount64(), std::memory_order_relaxed);
 
+    // Movement-key state for the navigation stuck detector. A plain relaxed store of four bits.
+    g_moveHeld.store(((dik[DIK_W] | dik[DIK_A] | dik[DIK_S] | dik[DIK_D]) & 0x80) != 0,
+                     std::memory_order_relaxed);
+
     // All hotkeys are standalone (no Shift — the game binds Left Shift to Walk/Run).
     DInputEdge('O',           g_oDown,       (dik[DIK_O]          & 0x80) != 0, false);
     DInputEdge('T',           g_tDown,       (dik[DIK_T]          & 0x80) != 0, false);
@@ -386,5 +395,8 @@ uint64_t MsSinceLastInput() {
 bool WasRecentInput(uint64_t windowMs) {
     return MsSinceLastInput() <= windowMs;
 }
+
+bool MovementHeld() { return g_moveHeld.load(std::memory_order_relaxed); }
+
 
 } // namespace InputTracker

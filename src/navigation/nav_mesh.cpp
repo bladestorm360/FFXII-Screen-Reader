@@ -1,5 +1,6 @@
 #include "navigation/nav_mesh.h"
 #include "navigation/map_query.h"
+#include "navigation/player_state.h"
 #include "navigation/nav_footprint.h"
 #include "navigation/nav_rva.h"
 #include "core/hooks.h"
@@ -141,12 +142,42 @@ bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective) {
     return true;
 }
 
+// IS THIS A FLOOR THE ROUTER MAY USE? The type test, and deliberately nothing else.
+//
+// SESSION 96 ADDED A TERRAIN REFUSAL HERE AND IT IS NOW STRUCK. The addition routed every walkability
+// question through `FloorWalkable(poly, class 0)`, whose bit-23 branch was described as "the marker the
+// level designer puts on water, lava, bog and out-of-bounds". On map 311 that refused 399 of 690 floor
+// prims and cost the tester an exit that had routed for the whole game to that point.
+//
+// **THE TESTER WALKS THROUGH THAT WATER.** It is ankle-deep -- the game has no swimming, so shallow
+// water is ordinary floor with a puddle on it, and a check that refuses it is refusing ground the
+// player is demonstrably standing on. Whatever bit 23 marks, "the party cannot go here" is not it, at
+// least not for the class we are asking about.
+//
+// AND THE EVIDENCE IT WAS ADDED ON DID NOT SURVIVE EITHER. It was justified by "three sessions of
+// routes through impassable terrain", but [[project-unvalidated-frontier-session95]] had ALREADY found
+// and fixed that: `Plan::Frontier` shipped a straight line to a point several polys away with no
+// validation at all. A second explanation was stacked on top of a solved problem and only the second
+// one broke anything.
+//
+// The question the router actually needs is "can the character get there", and the instrument for that
+// is the engine's own body walk at character scale -- which `path_validate` now runs in 0.5 m steps and
+// which is what will refuse deep water, since the engine has to stop the player walking into it. Terrain
+// TYPE is a hypothesis about that question; the walk is a measurement of it. `TerrainRefused` below
+// keeps the hypothesis under observation without letting it decide anything.
 bool Walkable(PolyId p) {
     uint32_t raw = 0, eff = 0;
     if (!PolyFlags(p, raw, eff)) return false;
-    // Movement class 4 (the party) hits none of FUN_00230a40's per-class branches, so the whole
-    // predicate collapses to the type test. See NavRva::WALK_CLASS_PARTY.
     return (eff & NavRva::WALK_POLY_TYPE_MASK) == 0;
+}
+
+// The engine's per-class floor test, ASKED BUT NEVER OBEYED (Session 96). Nothing routes on this; it
+// exists so `PlayerState::NoteStandingPoly` can check it against the one fact that cannot be argued
+// with -- where the player is actually standing. Until it stops disagreeing with that, it is not fit to
+// refuse anything.
+bool TerrainRefused(PolyId p) {
+    if (!ValidPoly(p)) return false;
+    return !MapQuery::FloorWalkable(p, PlayerState::PartyMovementClass());
 }
 
 int MapJumpGroup(PolyId p) {
@@ -289,29 +320,78 @@ bool StraddleAt(PolyId p, int e, PolyId neighbor, float t, FVec3& a, FVec3& b) {
 
 inline float SampleT(int i) {
     // Half-offset so a sample never lands exactly on a vertex, where the straddle degenerates
-    // against whatever wall meets the triangle there.
+    // against whatever wall meets the triangle there. t runs 0.071 .. 0.929, never 0 or 1.
+    //
+    // KNOWN GAP, RECORDED SO IT IS NOT RE-DISCOVERED (Session 96). A taut funnel corner is by
+    // construction a portal ENDPOINT -- so the string-pull's preferred points are exactly the two
+    // positions per portal this deliberately never measures. `EdgeClearSpan` compounds it by handing
+    // back the FULL edge whenever every sample is clear.
+    //
+    // The fix for that is NOT to inset every span here. That is a global geometry change on every
+    // route on every map, and this session already spent three of those on plausible stories that
+    // broke maps which worked. `path_search`'s repair ladder handles a bad corner on the FAILURE PATH
+    // instead, where a mistake costs one route rather than all of them. Revisit only with a measured
+    // answer to what the corner is actually hitting -- `PathValidate::Diagnose` prints it.
     return (static_cast<float>(i) + 0.5f) / static_cast<float>(kEdgeSamples);
 }
 
 } // namespace
 
-// Does the party's BODY fit across this edge at parameter `t`? Two questions, both of which the old
-// single hairline ray could not ask:
-//   1. can the body move from one side to the other (MapQuery::BodySweep -- the engine's own 0.27 m
+// Crossing points where the body would be pushed off the boundary, and ones sitting inside a collision
+// volume, that we let through anyway. Purely counters for the diagnostic; nothing gates on either.
+// Declared in the header and PRINTED on the `refused:` line -- see the note there.
+int g_tightCrossings  = 0;
+int g_volumeCrossings = 0;
+
+void ResetCrossingCounters() { g_tightCrossings = 0; g_volumeCrossings = 0; }
+
+// Does the party's BODY fit across this edge at parameter `t`? Three questions now:
+//   1. IS THERE A WALL IN THE WAY (MapQuery::PointInVolume -- the engine's own volume test).
+//   2. can the body move from one side to the other (MapQuery::BodySweep -- the engine's own 0.27 m
 //      radius sweep with depenetration, which sees obstacles a zero-width line passes beside);
-//   2. does the body FIT at the crossing point without overlapping a boundary of the walkable region
+//   3. does the body FIT at the crossing point without overlapping a boundary of the walkable region
 //      (NavFootprint::Clears -- the replica of the engine's own refusal).
-// Test 2 is the one that catches root cause A: nothing in routing had ever asked whether the corridor
-// was wide enough for the character, only whether a line could be drawn through it.
+//
+// TEST 1 IS NEW AND IT IS THE ONE THAT MATTERED (Session 96). Tests 2 and 3 both reason about the
+// FLOOR: a swept line and a distance to triangle edges. Walls are not floor geometry -- they are
+// volume primitives in CSR layers 1-2, skipped one line at a time in FindPolyAt above -- so a wall
+// standing inside a floor triangle passed every check the router had. On a mesh whose triangles are
+// often an entire corridor that is the normal case. The tester walked into exactly such a wall and
+// the route neither went round it nor stopped offering it.
 bool BodyFitsAt(PolyId p, int e, PolyId neighbor, float t) {
     FVec3 a{}, b{};
     if (!StraddleAt(p, e, neighbor, t, a, b)) return true;      // unreadable -> never invent a block
+    // The crossing point itself, at the surface rather than at body height: both the volume test and
+    // Clears work in the ground plane, so the pad StraddleAt added would only mislead a reader.
+    const FVec3 mid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
+    // THE VOLUME TEST IS COUNTED, NOT FATAL (Session 96). It was added earlier this session on the
+    // premise that walls were the routing problem; the tester then established that walls were never
+    // failing -- water was. An unproven test that can only ever SUBTRACT edges has no business gating a
+    // hot path when false negatives are the live complaint, and a listed-but-unroutable destination is
+    // the worst outcome there is for a player who cannot see what was hidden. Kept as a measurement so
+    // we can tell whether it would ever have blocked anything.
+    if (MapQuery::PointInVolume(mid)) ++g_volumeCrossings;
     MapQuery::BodyMove mv;
     if (!MapQuery::BodySweep(a, b, mv)) return false;
-    // The crossing point itself, at the surface rather than at body height: Clears works in the ground
-    // plane, so the pad StraddleAt added would only mislead a reader of the log.
-    const FVec3 mid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
-    return NavFootprint::Clears(mid, neighbor, nullptr);
+
+    // NavFootprint::Clears IS FATAL AGAIN (Session 96, second correction -- and this is a REVERT, not a
+    // new idea). It was demoted to a counter earlier this session because with bit-23 newly refusing
+    // water, every walkway in a sewer gained a hard border on both sides and map 315 produced 618
+    // reachable polys and not one completed route.
+    //
+    // THE DEMOTION WAS THE WRONG HALF OF THE FIX. It cost A* the only thing that kept it out of gaps
+    // the body cannot pass, and the tester lost an exit that had routed fine for the whole game up to
+    // that map: A* proposed a corridor through a pinch, the string-pull's chord died in it
+    // (`why=sweep stopPoly=97 walk=1`, on good ground with `volXing=0` -- a border push-back, exactly
+    // what this test measures), and the breach then banned the only opening.
+    //
+    // What was actually wrong was the LEVEL, not the test. A `false` here used to DELETE the edge, and
+    // deleting edges is what emptied 315. It now makes the edge EXPENSIVE instead -- see
+    // kTightPenalty in path_search.cpp. A* avoids a pinch whenever any alternative exists, which is
+    // the pre-Session-96 behaviour that worked, and still has a corridor when the pinch is the only
+    // way through, which is what the deletion took away.
+    if (!NavFootprint::Clears(mid, neighbor, nullptr)) { ++g_tightCrossings; return false; }
+    return true;
 }
 
 bool EdgePassable(PolyId p, int e, PolyId neighbor) {

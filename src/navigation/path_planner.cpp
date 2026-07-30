@@ -4,6 +4,7 @@
 #include "navigation/map_seams.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/path_search.h"
+#include "navigation/nav_blocked.h"
 #include "navigation/nav_reach.h"
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
@@ -54,8 +55,23 @@ bool                  g_seedBeacon = false;
 // beacon re-aiming itself is not something the player asked to hear, and "No path" spoken out of
 // nowhere because they walked round a corner would be worse than the stale beacon it replaced.
 bool                  g_silent = false;
-// A request has been made at least once this session, so RequestReplan has something to repeat.
-bool                  g_haveLast = false;
+
+// ---- the BEACON'S OBJECTIVE (guarded by g_mutex, same as the request above) --------------------
+//
+// A SEPARATE MEMORY FROM "the last request", and that separation is the Session 95 fix. `\` and `p`
+// both call Request(), but only `\` arms the beacon -- and the beacon's off-route recovery used to
+// re-run whatever was requested last, so a mid-fight `p` at an enemy quietly became the destination the
+// beacon led to once the fight ended. It then "arrived" a few metres later and stopped, with the real
+// objective still tens of metres away. See RequestReplan in the header for the log evidence.
+//
+// Only a `seedBeacon` request writes these; `p` cannot touch them. Cleared on map teardown along with
+// everything else that is a coordinate on the dead map.
+FVec3                 g_objTarget;
+std::wstring          g_objLabel;
+bool                  g_objIsTransition = false;
+float                 g_objBandLo = 1.0f, g_objBandHi = -1.0f;
+float                 g_objReach = 0.0f;
+bool                  g_haveObjective = false;
 
 // ~1.5 s: keep retrying a request while the map is still fading in, then give up out loud.
 constexpr int kWaitFrames = 90;
@@ -109,18 +125,27 @@ uint32_t CurrentEpoch() { return g_epoch.load(std::memory_order_acquire); }
 
 bool RequestReplan() {
     std::lock_guard<std::mutex> lk(g_mutex);
-    if (!g_haveLast) return false;
-    // Everything about the destination (target, band, reach, isTransition) is reused as-is; only
-    // the delivery changes.
-    g_silent     = true;
-    g_seedBeacon = true;
+    if (!g_haveObjective) return false;
+    // The whole destination is restored from the OBJECTIVE snapshot -- target, label, band, reach,
+    // isTransition -- so anything requested since (a `p` at an enemy, most often) cannot redirect it.
+    // Only the delivery changes: silent, and it arms the beacon.
+    g_target       = g_objTarget;
+    g_label        = g_objLabel;
+    g_isTransition = g_objIsTransition;
+    g_bandLo       = g_objBandLo;
+    g_bandHi       = g_objBandHi;
+    g_reach        = g_objReach;
+    g_silent       = true;
+    g_seedBeacon   = true;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
     g_framesLeft = kWaitFrames;
     ++g_reqSeq;
     g_hasRequest.store(true, std::memory_order_release);
-    char m[128];
-    snprintf(m, sizeof(m), "replan: silent re-run of last target=(%.2f,%.2f,%.2f) seq=%llu",
-             g_target.x, g_target.y, g_target.z, (unsigned long long)g_reqSeq);
+    char lm[96]; LabelForLog(g_objLabel, lm, sizeof(lm));
+    char m[208];
+    snprintf(m, sizeof(m),
+             "replan: silent re-run of the BEACON OBJECTIVE \"%s\" at (%.2f,%.2f,%.2f) seq=%llu",
+             lm, g_objTarget.x, g_objTarget.y, g_objTarget.z, (unsigned long long)g_reqSeq);
     Log::Write("NAV-ROUTE", m);
     return true;
 }
@@ -136,7 +161,18 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
     g_reach        = reachRadius;
     g_seedBeacon   = seedBeacon;
     g_silent       = false;
-    g_haveLast     = true;
+    // ONLY A REQUEST THAT ARMS THE BEACON BECOMES ITS OBJECTIVE. `p` passes seedBeacon=false because it
+    // has no business steering the beacon; that same flag is what stops it redirecting one that is
+    // already running.
+    if (seedBeacon) {
+        g_objTarget       = target;
+        g_objLabel        = label;
+        g_objIsTransition = isTransition;
+        g_objBandLo       = bandLo;
+        g_objBandHi       = bandHi;
+        g_objReach        = reachRadius;
+        g_haveObjective   = true;
+    }
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
     g_framesLeft = kWaitFrames;
     ++g_reqSeq;
@@ -162,8 +198,10 @@ void OnMapTeardown() {
     // epoch on its next frame anyway, but stopping here cuts a ping mid-transition instead of
     // letting one more fire at a corner that no longer exists.
     AudioBeacon::Stop();
-    g_haveLast = false;                                // nothing on the new map to re-plan to
+    // Measured obstructions are coordinates on the map being torn down.
+    NavBlocked::Clear();
     std::lock_guard<std::mutex> lk(g_mutex);
+    g_haveObjective = false;                           // its coordinates belong to the map being torn down
     g_hasRequest.store(false, std::memory_order_release);
 }
 
@@ -417,15 +455,32 @@ void OnGameFrame() {
     std::wstring say;
     if (r == PathSearch::Plan::Route) {
         say = PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr);
-    } else if (r == PathSearch::Plan::Frontier) {
-        say = PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr);
-        if (!say.empty()) say += L". ";
-        say += Phrase::Get(Phrase::Id::BlockedWord);
-        say += L", ";
-        say += std::to_wstring(NavCommon::DistanceToSteps(st.shortfall));
-        say += Phrase::Get(Phrase::Id::StepsSuffix);
     } else {
+        // A PARTIAL ROUTE IS A FAILURE, AND IS NO LONGER SPOKEN AS A ROUTE (Session 96).
+        //
+        // **This reverses the Session 93 ruling** ("we can not have routes that simply dead end"), on
+        // the tester's explicit instruction: *"we aren't looking for partial paths so there's no reason
+        // to say 'blocked'... if a path is partial, it either means the player can't access it from
+        // this part of the map or the pathfinder failed to find the correct route."*
+        //
+        // What it looked like in play, from one log: `"Northwest 2. 2 steps. Blocked, 195 steps"`, then
+        // "No path" five times, then `"Southeast 12, ... Blocked, 89 steps"` pointing the OTHER way --
+        // and walking southeast led straight back into the region that answers "No path". A two-step
+        // route that falls 195 steps short is not a route; it is the search's failure mode read aloud,
+        // and following it is worse than being told nothing, because it actively misleads.
+        //
+        // The frontier geometry is still COMPUTED and fully logged -- it is the best evidence we have
+        // about where the search ran out -- it is simply not spoken and does not arm the beacon.
         say = std::wstring(Phrase::Get(Phrase::Id::NoPath));
+        if (r == PathSearch::Plan::Frontier) {
+            char lm[128]; LabelForLog(label, lm, sizeof(lm));
+            char m[256];
+            snprintf(m, sizeof(m),
+                     "drain seq=%llu: FRONTIER SUPPRESSED for \"%s\" -- %zu legs reaching %.1fm short; "
+                     "spoken as No path (partial routes are not spoken; see path_planner.cpp)",
+                     (unsigned long long)seq, lm, rawPoly.size(), st.shortfall);
+            Log::Write("NAV-ROUTE", m);
+        }
     }
 
     if (seedBeacon) {

@@ -25,10 +25,27 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > it was holding. `F9` or the `F8` menu turns the whole thing off. **This needs `SDL3.dll` in the
 > game's `x64\` folder — see README.md; without it the mod does not load at all.**
 >
+> **UPDATE (Session 95) — the two beacons are separate now.** The in-combat target sound used to be
+> part of the route beacon and only played if a route beacon happened to be running. It is its own
+> setting in the `F8` menu, plays in battle whether or not you have a route, and has its own volume;
+> the route beacon has a volume too. Everything else is unchanged — the route beacon still stands
+> down for the length of a fight and resumes on the leg it was holding.
+>
 > **The pan is a TRAVEL direction, not a turn instruction.** It is the same angle as the spoken leg,
-> from the same number: if the voice says "Northeast", the beacon sits about 45 degrees right. A
-> sound behind you is quieter and duller than one ahead, because a plain left/right pan renders
-> ahead and behind identically.
+> from the same number: if the voice says "Northeast", the beacon sits about 45 degrees right.
+>
+> **"Behind" means the whole rear half, not just directly astern.** Anything past your shoulders is
+> behind: quieter, duller, and — since Session 95 — about 20% lower in pitch. All three cues arrive
+> together and at full strength a few degrees past the abeam line, so front and back are never a
+> matter of degree; a plain left/right pan renders them identically otherwise.
+>
+> **The pan keeps working all the way round.** Something behind and to your left is panned left AND
+> carries the behind cues, so you get bearing and hemisphere at once. This is a requirement, not a
+> side effect: there is no spatial audio here, so left/right is the only bearing information there is
+> and nothing is allowed to flatten it.
+>
+> **All of this applies to both beacons** — route and target — because it lives in one place that
+> every ping goes through.
 >
 > **UPDATE (Session 69):** `g` added — speaks the party **gil** total (works on the field, in shops, and in
 > menus; silent on the title screen). The game binds nothing to `G` (letters it uses: W/S/A/D, I/K/J/L, Q/E,
@@ -209,15 +226,28 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > setting, and `o` reads its description — the description changes with the value, so it always
 > describes what the setting is doing right now. Closing speaks "Mod menu closed".
 >
+> **`Left` and `Right` are directional as of Session 95.** They used to both advance, which was the
+> same thing while every setting had two values. The volume settings have five, so `Left` goes down
+> and `Right` goes up. A two-valued setting still flips on either arrow. The volumes **stop** at their
+> ends rather than wrapping round — you hear the same number again, which is how you know you are at
+> the limit.
+>
 > **Settings it holds:**
 >
 > | Setting | Values | What it does |
 > |---|---|---|
 > | Combat verbosity | **Normal** (default) / Verbose | What the combat log speaks aloud on top of what it always logs. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose adds enemies readying abilities and beginning to cast. **Damage lines are log-only in both modes** — they have always been read back with `,` / `.` rather than spoken as they happen. |
 > | Audio beacon | Off / **On** (default) | The repeating sound that leads you along the route `\` just spoke, panned toward where you need to walk. See below. |
+> | Audio beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
+> | Target beacon | Off / **On** (default) | A separate repeating sound that tracks the enemy your party is fighting, panned toward it. **Session 95 split this off from the route beacon**, which it used to be part of — it now plays in battle whether or not you had a route running, and switching the route beacon off no longer takes it with it. Still battle-only: it sounds when your party has committed to a target and stops when the fight does. |
+> | Target beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
+>
+> Neither volume goes to zero on purpose — each beacon has its own Off, so a switched-on beacon is
+> never silent for a reason you cannot hear.
 >
 > `F4` toggles Combat verbosity and `F9` toggles the Audio beacon, both from anywhere without opening
-> the menu. Each route changes the same stored value and speaks the same confirmation.
+> the menu. Each route changes the same stored value and speaks the same confirmation. **`F9` is the
+> route beacon only** — the target beacon has no shortcut key and is changed from the menu.
 >
 > Settings persist to `%LOCALAPPDATA%\FFXII-Screen-Reader\mod_settings.txt`. The game folder is never
 > written to. If `%LOCALAPPDATA%` is unavailable the menu still works; the choice just resets on

@@ -49,11 +49,21 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition =
              float bandLo = 1.0f, float bandHi = -1.0f, float reachRadius = 0.0f,
              bool seedBeacon = false);
 
-// GAME THREAD. Re-run the LAST request, silently -- no speech on any outcome, including failure.
+// GAME THREAD. Re-run the BEACON'S OBJECTIVE, silently -- no speech on any outcome, including failure.
 // This is the audio beacon's off-route recovery: the player has wandered, so the leg corners it is
 // steering by are stale, but they were never told a new route and must not suddenly be read one.
-// Returns false if there is no previous request to repeat. Reuses the stored target, band and reach,
-// so it re-plans to the same destination rather than re-resolving what the cursor points at now.
+// Returns false if no objective has been set on this map.
+//
+// THE OBJECTIVE IS ITS OWN MEMORY, NOT "THE LAST REQUEST" (Session 95). It used to be the latter, and
+// `p` overwrote it: route to an enemy mid-fight, and the next off-route re-plan silently re-aimed the
+// beacon at that enemy instead of at the exit the player had asked to be led to. The tester read the
+// symptom exactly right -- "the beacon only remembers the last leg it was on and considers that the
+// destination" -- and the log names the culprit outright: `replan: silent re-run of last
+// target=(66.23,6.85,108.37)` resolving to `target="Steeling A"`, ten seconds after the fight ended.
+//
+// `p` already declares it has no business with the beacon by passing `seedBeacon=false`; that flag now
+// also decides whether the request is allowed to become the objective. Only a request that ARMS the
+// beacon can redirect it.
 bool RequestReplan();
 
 // The current map generation. Bumped by OnMapTeardown; anything holding route geometry compares

@@ -39,7 +39,19 @@ enum class Beacon : uint8_t { Off = 0, On = 1 };
 
 // Settings the menu holds. Add here + in kSettings (mod_menu.cpp) + in the phrasebook, together.
 // The order here IS the order the menu's Up/Down walks them.
-enum class SettingId : int { CombatVerbosity = 0, AudioBeacon, Count };
+//
+// THE TWO BEACONS ARE SEPARATE SETTINGS (Session 95). They used to be one: the in-combat target ping
+// only ever sounded if a route beacon happened to be running, because it lived behind the route
+// beacon's `g_active` flag. They are different features -- one leads you somewhere, one tells you
+// where the thing hitting you is -- and a player may well want the second without the first.
+enum class SettingId : int {
+    CombatVerbosity = 0,
+    AudioBeacon,          // the ROUTE beacon
+    BeaconVolume,
+    TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
+    TargetVolume,
+    Count
+};
 
 // Loads the persisted settings and registers the input callbacks. Safe to call before Speech is up.
 bool Init();
@@ -49,17 +61,34 @@ void Shutdown();
 // from any thread: it is a relaxed atomic load, and the value only ever changes on a keypress.
 Verbosity CombatVerbosity();
 
-// The audio beacon reads this every field frame (AudioBeacon::OnGameFrame). Same lock-free relaxed
-// load as CombatVerbosity, so it is safe to call from the game thread's hot path.
-bool AudioBeaconOn();
+// The audio beacon reads these every field frame (AudioBeacon::OnGameFrame). Same lock-free relaxed
+// load as CombatVerbosity, so they are safe to call from the game thread's hot path -- which matters
+// more now, because `TargetBeaconOn` is what the beacon's O(1) idle check consults before deciding
+// whether it may skip the frame entirely.
+bool AudioBeaconOn();      // the ROUTE beacon
+bool TargetBeaconOn();     // the in-combat target ping
+
+// Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
+// turned off, so the quietest step is still audible and "silent" is never a volume the player can get
+// stuck on without knowing why.
+float BeaconVolume();
+float TargetVolume();
 
 // `F8` — open/close. Speaks "Mod menu. <setting>, <value>." on open, "Mod menu closed" on close.
 void Toggle();
 
-// `F4`, and the menu's own Left/Right. THE ONE PLACE a setting's value changes: it advances the
-// value, persists it, and speaks the new value. Two detectors, one emit function — see CLAUDE.md's
-// "one choke point per surface". Works whether or not the menu is open.
+// `F4`. Advances a setting one step and wraps — the toggle idiom. Works whether or not the menu is
+// open. Thin wrapper over Adjust, kept because F4 has one meaning the player already knows.
 void CycleSetting(SettingId id);
+
+// The menu's own Left/Right. THE ONE PLACE a setting's value changes: it moves the value, persists it,
+// and speaks the new value. Two detectors, one emit function — see CLAUDE.md's "one choke point per
+// surface".
+//
+// `delta` is -1 or +1. A two-valued setting WRAPS (so either arrow toggles it, as before); a volume
+// CLAMPS at its ends, because wrapping 100% round to the quietest step on one keypress is a nasty
+// surprise and the repeated spoken value is how the player hears they are at the end.
+void Adjust(SettingId id, int delta);
 
 bool IsOpen();
 

@@ -4,6 +4,7 @@
 #include "navigation/map_query.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
+#include "core/logger.h"
 
 #include <atomic>
 #include <cmath>
@@ -429,6 +430,48 @@ bool ReadMoveFrame(MoveFrame& out) {
     }
 
     return any;
+}
+
+uint16_t PartyMovementClass() {
+    // Re-read at most every kClassTtlMs; the class only moves on a leader switch, a formation change
+    // or mounting, none of which happen per frame.
+    constexpr uint64_t kClassTtlMs = 250;
+    static uint64_t s_stamp = 0;
+    static uint16_t s_cls   = NavRva::WALK_CLASS_LEADER;
+    const uint64_t now = GetTickCount64();
+    if (s_stamp != 0 && now - s_stamp < kClassTtlMs) return s_cls;
+    s_stamp = now;
+
+    uint16_t cls = NavRva::WALK_CLASS_LEADER;
+    void* sceneObj = ReadLeaderSceneObject();
+    void* holder   = sceneObj ? PtrAt(sceneObj, NavRva::CHAR_WALK_HOLDER) : nullptr;
+    uint8_t raw = 0xFF;
+    const bool got = holder && SafeReadU8(holder, NavRva::WALKHOLDER_CLASS, &raw);
+    if (got && raw <= NavRva::WALK_CLASS_MAX) {
+        cls = raw;
+    } else {
+        // PLAUSIBILITY GATE. The class domain is exactly {0..5}; anything else means the offset chain
+        // is wrong on this build, and believing it would be worse than not reading it at all -- a bogus
+        // class selects a bit that gates nothing and puts us straight back to routing through water.
+        // Logged ONCE per distinct raw value so a broken chain is diagnosable without spamming.
+        static uint8_t s_lastBad = 0;
+        if (raw != s_lastBad) {
+            s_lastBad = raw;
+            char m[160];
+            snprintf(m, sizeof(m),
+                     "movement class: chain unreadable or implausible (holder=%s raw=0x%02X) "
+                     "-- using leader default %u",
+                     holder ? "ok" : "null", raw, NavRva::WALK_CLASS_LEADER);
+            Log::Write("NAV", m);
+        }
+    }
+    if (cls != s_cls) {
+        char m[96];
+        snprintf(m, sizeof(m), "movement class: %u -> %u", s_cls, cls);
+        Log::Write("NAV", m);
+    }
+    s_cls = cls;
+    return cls;
 }
 
 } // namespace PlayerState

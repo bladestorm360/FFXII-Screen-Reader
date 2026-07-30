@@ -49,7 +49,10 @@ struct Stats {
     float nearDist = -1.0f;       // metres from the goal centroid to the closest poly reached
     const char* pass = "mesh";
     int  attempts  = 1;           // A* passes run; > 1 means a breach was found and re-searched around
-    int  bannedEdges = 0;         // portals banned across all attempts
+    int  bannedEdges = 0;         // portals re-costed across all attempts
+    // Corridor waypoints spliced back into a leg whose taut chord did not walk (Session 96). Non-zero
+    // means the route shipped is the un-pulled one -- the corridor was fine and the shortcut was not.
+    int  repaired = 0;
     float shortfall = 0.0f;       // Frontier only: metres from the frontier point to the goal
 };
 

@@ -50,6 +50,14 @@ drifting again.
 Revisit the four over-cap files when one of them next needs new behaviour -- splitting for its own sake
 has broken working readers here before (S31's chooser consolidation silenced board navigation).
 
+**Session 95** split `path_search.cpp` again, and this one was forced rather than tidy: the file sat at
+499 of 500 and the frontier fix needed real code. `path_corridor.{h,cpp}` (83 + 107) took corridor
+reconstruction from A*'s parent links plus the frontier route built on one -- a genuine seam, since the
+frontier's whole defect was that it reused the corridor built for a *different* end poly. `path_search.cpp`
+came out at **495** with more behaviour than it went in with (the banked proven prefix, the two-candidate
+frontier choice). `path_validate.cpp` 71 -> 74, `path_planner.cpp` 453 -> 488 (the beacon's objective
+snapshot); `path_planner.cpp` is the one to watch -- the next feature it takes needs a split first.
+
 ### Header exceptions (deliberate, not oversight)
 
 | File | Lines | Why it stays over 150 |
@@ -153,3 +161,13 @@ party keys silent for two sessions. Re-run this after adding addresses.
 
 `entity_labels.cpp` shrank (273 -> 264) and `entity_labels.h` (75 -> 88, prose rewritten). Everything
 else is comfortably inside the limits.
+
+## Session 96 — file-size debt (logged, not paid)
+
+| file | lines | limit | note |
+|---|---|---|---|
+| `src\navigation\path_search.cpp` | **749** | 500 (hard), 400 (plan a split) | Session 93 split this file at 667 and it has grown again. Obvious seam: the ATTEMPT LOOP body (funnel → validate → repair ladder → re-cost) is self-contained and reads as one unit — it belongs beside `path_corridor` as `path_attempt.cpp`, leaving `Run` as the A* pass plus the outcome block. Deliberately not done inside a regression fix, and after this session that restraint is the point: three global changes in one build is what caused the damage being undone here. |
+| `src\navigation\nav_rva.h` | **~555** | 150 (header rule) | Unchanged debt from Session 81, plus prose this session for the struck bit-23 note. Still wants a split by subsystem. |
+
+`path_validate.cpp` (307), `path_funnel.cpp` (283) and `nav_mesh.cpp` (478) are inside the limit;
+`nav_mesh.cpp` is close enough to watch.

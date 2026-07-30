@@ -8,6 +8,8 @@
 #include "core/phyre_types.h"
 #include "core/mem_read.h"
 #include "core/logger.h"
+#include "navigation/nav_blocked.h"
+#include "input/input_tracker.h"
 #include "ui/mod_menu.h"
 
 #include <windows.h>
@@ -31,11 +33,28 @@ constexpr float  kLegReached   = 2.0f;
 constexpr float  kLegReachedDy = 3.0f;
 // The arrival cue: same sound, pitched up, once.
 constexpr float  kArrivalPitch = 1.5f;
+// BEHIND PITCHES THE PING DOWN TOO, and that lives in audio_engine.cpp beside the gain drop and the
+// low-pass -- NOT here. It was briefly computed in this file from its own reading of `front`, which is
+// the exact shape of the Session 92 pan bug: one fact derived twice, and the copies disagreed. Every
+// ping below passes `front`, so both beacons get all three behind cues from one definition without
+// either call site having to ask.
+//
 // Off-route detection. Deliberately slack -- this fires a whole re-plan, and a beacon that re-aims
 // every time the player rounds a pillar would be worse than one that is briefly stale.
 constexpr float  kStrayDist    = 6.0f;
 constexpr int    kStrayFrames  = 45;      // ~0.75 s at 60 fps
 constexpr uint64_t kReplanCooldownMs = 2000;
+
+// ---- STUCK: pressing forward and going nowhere ---------------------------------------------------
+// The stray test above measures PERPENDICULAR distance from the leg, so it structurally cannot see
+// this: a player jammed at the leg's own start is zero metres from the line. The tester walked into a
+// wall, pressed `\` four times over twelve seconds from one position, and got the identical route
+// every time, because nothing in the mod had noticed they had stopped moving.
+//
+// Gated on a movement key being HELD, which is what separates "jammed against a wall" from "standing
+// still listening". Purely observational -- InputTracker reads a const buffer.
+constexpr float    kProgressEpsilon = 0.6f;    // metres of closing that counts as progress
+constexpr uint64_t kStuckMs         = 1800;    // held, pressing, no closing -> stuck
 
 // ---- state (game thread except where noted) ----------------------------------------------------
 std::atomic<bool>  g_active{false};       // read first thing every frame, hence atomic
@@ -47,6 +66,8 @@ uint64_t           g_nextPingMs = 0;
 int                g_strayCount = 0;
 uint64_t           g_lastReplanMs = 0;
 bool               g_wasEngaged = false;  // edge-detect combat so the log says when it flipped
+float              g_stuckBestDist = -1.0f;   // closest we have come to the current leg point
+uint64_t           g_stuckSinceMs  = 0;       // when that closest approach happened
 
 // Distance -> repeat period. Linear between the two anchors, clamped outside them.
 float IntervalFor(float dist) {
@@ -119,6 +140,8 @@ bool TargetPos(void* actor, FVec3& out) {
 void ResetPhase() {
     g_nextPingMs = 0;          // 0 == ping on the very next frame
     g_strayCount = 0;
+    g_stuckBestDist = -1.0f;   // a new leg: nothing has been approached yet
+    g_stuckSinceMs  = 0;
 }
 
 } // namespace
@@ -166,17 +189,31 @@ void Stop() {
 bool Active() { return g_active.load(std::memory_order_acquire); }
 
 void OnGameFrame() {
-    if (!g_active.load(std::memory_order_acquire)) return;    // O(1) idle cost, the common case
-
-    if (!ModMenu::AudioBeaconOn() || !AudioEngine::Available()) { Stop(); return; }
+    // ---- O(1) idle -------------------------------------------------------------------------------
+    // TWO INDEPENDENT REASONS TO RUN (Session 95). The target ping used to live behind `g_active`, so
+    // it only ever sounded if a route beacon happened to be running -- the tester asked for it to be
+    // its own feature, on its own switch, playing "regardless of whether or not there was a beacon
+    // before". Both loads are relaxed atomics; this is still the cheap common case.
+    // FOLLOWING A ROUTE IS NAVIGATION; PLAYING A SOUND IS AUDIO (Session 96). These used to be one
+    // flag: the very first line returned unless the beacon SETTING was on, and the kill switch called
+    // Stop(), which clears the legs. So turning a sound off threw the navigation state away, and with
+    // the beacon off the mod had no idea where the player was on the route and could not notice them
+    // getting stuck. `objective` now means "a route is being followed" and is independent of whether
+    // anything is audible.
+    const bool audioUp   = AudioEngine::Available();
+    const bool routeAudio = audioUp && ModMenu::AudioBeaconOn();
+    const bool targetOn   = audioUp && ModMenu::TargetBeaconOn();
+    bool objective = g_active.load(std::memory_order_acquire);
+    if (!objective && !targetOn) return;
 
     // The map changed under us. PathPlanner bumps the epoch on teardown, so this needs no hook of
-    // its own and cannot be missed.
-    if (g_epoch != PathPlanner::CurrentEpoch()) {
+    // its own and cannot be missed. Only the route is map-bound; an enemy you are fighting is not.
+    if (objective && g_epoch != PathPlanner::CurrentEpoch()) {
         Log::Write("BEACON", "map changed -> stop");
         Stop();
-        return;
+        objective = false;
     }
+    if (!objective && !targetOn) return;
 
     FVec3 me;
     if (!PlayerState::IsFieldNavSafe() || !PlayerState::ReadPlayerPos(me)) return;   // skip the frame
@@ -189,19 +226,20 @@ void OnGameFrame() {
     // ---- in combat, the beacon tracks the target instead of the route --------------------------
     // FFXII is seamless-battle, so this is a state the player walks into and out of rather than a
     // screen transition. The route is NOT discarded: legs and index survive untouched, and the
-    // objective beacon resumes on the same leg the moment the party is clear.
+    // objective beacon resumes on the same leg the moment the party is clear. That half is unchanged.
     const BattleState::Engagement eng = BattleState::PartyEngagement();
     const bool engaged = eng.engaged;
     if (engaged != g_wasEngaged) {
         g_wasEngaged = engaged;
-        // BOTH HALVES ARE LOGGED, because the fix is exactly about which one fired. One play session now
-        // proves the player-attacks-first case flips the beacon (`committed=1 targeted=0`), proves an
-        // out-of-combat ally heal does NOT (the S49 filter, never exercised until now), and makes any
-        // flapping visible as repeated engaged/clear pairs rather than as a vague report.
-        char m[176];
+        // BOTH HALVES ARE LOGGED, because the S92 fix was exactly about which one fired. One play
+        // session proves the player-attacks-first case flips the beacon (`committed=1 targeted=0`),
+        // proves an out-of-combat ally heal does NOT (the S49 filter), and makes any flapping visible
+        // as repeated engaged/clear pairs rather than as a vague report.
+        char m[192];
         snprintf(m, sizeof(m), "%s (targeted=%d committed=%d action=0x%04X)",
-                 engaged ? "party engaged -> tracking active target"
-                         : "party clear -> resuming objective",
+                 engaged  ? "party engaged -> tracking active target"
+                 : objective ? "party clear -> resuming objective"
+                             : "party clear -> idle (no objective route)",
                  eng.targeted ? 1 : 0, eng.committed ? 1 : 0, eng.actionId);
         Log::Write("BEACON", m);
         ResetPhase();
@@ -210,11 +248,12 @@ void OnGameFrame() {
     if (engaged) {
         FVec3 tgt;
         // Only a COMMITTED target is ever pinged. When the party is merely being attacked with nothing
-        // committed the beacon stays silent -- the tester's decision this session, and the reason
+        // committed the beacon stays silent -- the tester's decision in S92, and the reason
         // `eng.targetActor` is null in that state rather than filled with the attacker.
-        if (!TargetPos(eng.targetActor, tgt)) {
-            // Engaged but nothing committed: say nothing at all. A beacon still leading you to a
-            // shop while something is chewing on you is worse than silence.
+        if (!targetOn || !TargetPos(eng.targetActor, tgt)) {
+            // Engaged but nothing committed, or the target ping switched off: say nothing at all. A
+            // beacon still leading you to a shop while something is chewing on you is worse than
+            // silence, so the route half stays suspended here either way.
             AudioEngine::SilenceAll();
             g_nextPingMs = 0;
             return;
@@ -223,12 +262,16 @@ void OnGameFrame() {
         const float dist = NavCommon::Distance2D(me, tgt);
         float pan = 0.0f, front = 1.0f;
         BearingToPan(me, tgt, facingRad, pan, front);
-        AudioEngine::PlayPing(AudioClips::ActiveTarget(), pan, front, 1.0f, 1.0f);
+        AudioEngine::PlayPing(AudioClips::ActiveTarget(), pan, front,
+                              ModMenu::TargetVolume(), 1.0f);
         g_nextPingMs = now + static_cast<uint64_t>(IntervalFor(dist) * 1000.0f);
         return;   // no arrival cue in combat -- you do not "arrive" at an enemy
     }
 
     // ---- objective beacon ----------------------------------------------------------------------
+    // Reached only when out of combat. With the target ping on and no route running, this is where
+    // the frame ends -- there is nothing to lead anybody along.
+    if (!objective) return;
     if (g_current >= g_legs.size()) { Stop(); return; }
     const FVec3 goal = g_legs[g_current];
 
@@ -238,8 +281,11 @@ void OnGameFrame() {
     if (dist <= kLegReached && dy <= kLegReachedDy) {
         const bool last = (g_current + 1 >= g_legs.size());
         if (last) {
-            // Arrival: the same sound pitched up, once, then done.
-            AudioEngine::PlayPing(AudioClips::Objective(), 0.0f, 1.0f, 1.0f, kArrivalPitch);
+            // Arrival: the same sound pitched up, once, then done. Centred and ahead by construction,
+            // so the behind cue cannot apply -- the arrival pitch is the whole point of this one.
+            if (routeAudio)
+                AudioEngine::PlayPing(AudioClips::Objective(), 0.0f, 1.0f,
+                                      ModMenu::BeaconVolume(), kArrivalPitch);
             Log::Write("BEACON", "arrived at destination -> final cue, stop");
             g_active.store(false, std::memory_order_release);   // not Stop(): let the cue ring out
             g_legs.clear();
@@ -269,6 +315,34 @@ void OnGameFrame() {
         return;
     }
 
+    // ---- STUCK: holding a movement key and getting no closer -----------------------------------
+    // Distinct from the stray test below in the one way that matters: this measures CLOSING on the
+    // leg point, so it fires for a player jammed at the leg's own start, where perpendicular distance
+    // is zero and the stray test is blind by construction.
+    if (InputTracker::MovementHeld()) {
+        if (g_stuckBestDist < 0.0f || dist < g_stuckBestDist - kProgressEpsilon) {
+            g_stuckBestDist = dist;              // real progress -- restart the clock
+            g_stuckSinceMs  = now;
+        } else if (g_stuckSinceMs != 0 && (now - g_stuckSinceMs) >= kStuckMs &&
+                   (now - g_lastReplanMs) >= kReplanCooldownMs) {
+            g_lastReplanMs  = now;
+            g_stuckSinceMs  = now;
+            // RECORD IT FIRST, then re-plan -- the record is what makes the player's own next `\`
+            // come back with a different route, which matters more than this silent re-plan does.
+            NavBlocked::Note(me, g_epoch);
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "stuck -> blocked spot recorded and re-planning: %.1fs pressing with no progress "
+                     "on leg %zu/%zu, %.1fm from its corner",
+                     kStuckMs / 1000.0f, g_current + 1, g_legs.size(), dist);
+            Log::Write("BEACON", m);
+            PathPlanner::RequestReplan();
+            return;
+        }
+    } else {
+        g_stuckSinceMs = 0;                      // not pressing: not stuck, just standing
+    }
+
     // Off-route: re-plan silently. Measured perpendicular to the leg the player is supposed to be
     // walking, not as raw distance to the corner -- walking the leg correctly increases the latter
     // for the whole first half of a dog-leg.
@@ -294,10 +368,14 @@ void OnGameFrame() {
         g_strayCount = 0;
     }
 
+    // TRACKING IS DONE; the rest of this function is sound. With the route beacon switched off the
+    // leg advance, the stray test and the stuck detector above have all still run.
+    if (!routeAudio) return;
     if (now < g_nextPingMs) return;
     float pan = 0.0f, front = 1.0f;
     BearingToPan(me, goal, facingRad, pan, front);
-    AudioEngine::PlayPing(AudioClips::Objective(), pan, front, 1.0f, 1.0f);
+    AudioEngine::PlayPing(AudioClips::Objective(), pan, front,
+                          ModMenu::BeaconVolume(), 1.0f);
     g_nextPingMs = now + static_cast<uint64_t>(IntervalFor(dist) * 1000.0f);
 }
 

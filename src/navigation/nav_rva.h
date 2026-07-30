@@ -256,6 +256,106 @@ constexpr uint32_t WALK_FLAG_GROUP_BASE = 0x40;
 // meaning for the player, floor walkability is EXACTLY `(effectiveFlags & 7) == 0`, with no per-class
 // opt-out bit. (Classes 1/2/3/5 gate on bits 25/26/27/24 and class 0 on bit 23; none apply to us.)
 constexpr uint16_t WALK_CLASS_PARTY    = 4;
+
+// ================= THE UNWALKABLE-TERRAIN CHECK (Session 96) =====================================
+//
+// FUN_00230a40(ctx0, s16 polyIdx, s16 moveClass) -> 1 = may stand, 0 = refused. **PURE** (reads the
+// walkmap and WALK_FLAG_TABLE; writes nothing at all). THIS IS THE ANSWER TO "WHY DO WE ROUTE THROUGH
+// WATER", and the mod had been replicating only its first line for three sessions:
+//
+//     if ((eff & 7) != 0) return 0;                      // type must be 0 (floor)
+//     if (moveClass == 0) return ((eff >> 23) & 1) ^ 1;  // <<< THE PARTY LEADER
+//     if (moveClass == 1) return ((eff >> 25) & 1) ^ 1;  // followers / NPCs
+//     if (moveClass == 2) return ((eff >> 26) & 1) ^ 1;
+//     if (moveClass == 3) return ((eff >> 27) & 1) ^ 1;
+//     if (moveClass == 5) return ((eff >> 24) & 1) ^ 1;  // mounted
+//     return 1;                                          // class 4 -- NEVER refused
+//
+// The DECOMPILE above is not in doubt. What was wrong is the claim built on it:
+//
+// ~~STRUCK (Session 96, end): "the party leader's floor class is 0, so bit 23 gates every poly it
+// stands on, and `(eff & 7) == 0` is not the whole floor test for the player."~~
+//
+// **REFUTED IN PLAY. The tester walks through polys this refuses.** Wiring it into `NavMesh::Walkable`
+// refused 399 of 690 floor prims on map 311 and cost an exit that had routed for the whole game up to
+// that point. The water in Garamsythe is ankle-deep and the game has no swimming, so shallow water is
+// ordinary floor with a puddle on it -- a predicate that refuses ground the player is demonstrably
+// standing on is wrong, whatever function it came from.
+//
+// **THE WALK_CLASS_PARTY NOTE ABOVE STANDS, AND IT IS THE BETTER-EVIDENCED OF THE TWO.** It traced the
+// argument FUN_00230a40 actually receives through the engine's own call sites -- FUN_0032bcc0 and
+// FUN_0032ca70 pass 4 into FUN_00230c10 arg5, which lands at moveCtx+0x50. The struck claim reasoned
+// instead from what FUN_002681d0 WRITES (0, at holder+0x153), and never established that the value the
+// mover passes is the value that field holds. Class 4 hits no per-class branch, which is exactly
+// consistent with the party walking on bit-23 ground. **Prefer the call site over the writer: only one
+// of them says what the callee is handed.**
+//
+// The bit-23 mechanism itself is untouched -- attr 0 via the `mapid` script API (FUN_003792e0, RVA
+// 0x2592E0) sets it, and the material bank can set it map-wide at runtime. What is NOT established is
+// that it means "the party may not stand here". It is still asked, through NavMesh::TerrainRefused,
+// and it decides nothing until it stops disagreeing with where the player is standing.
+constexpr uint32_t MAP_FLOOR_WALKABLE  = 0x110A40;  // FUN_00230a40 -- CALL IT, do not replicate it
+constexpr uint32_t MAP_EFFECTIVE_FLAGS = 0x112020;  // FUN_00232020(raw) -> effective. PURE.
+constexpr uint16_t WALK_CLASS_LEADER   = 0;         // the player-controlled character
+constexpr uint16_t WALK_CLASS_MAX      = 5;         // class domain is exactly {0..5}
+
+// The leader's LIVE movement class. FUN_002681d0 (RVA 0x1481D0) computes it -- 0 for the
+// player-controlled character, 1 for followers, 5 mounted, recomputed on leader switch, formation
+// change and mount toggle -- and writes it to BOTH of these:
+//     walkObj + 0x80   (u16)   where walkObj = *(*(character + 0xC0) + 0x138)
+//     holder  + 0x153  (u8)    where holder  = *(character + 0xC0)
+// The byte is one hop shorter, so that is what PlayerState reads. Chain verified against FUN_00265970
+// (RVA 0x145970) and the writer's own tail. 0xffff at walkCtrl+0x50 is only the pre-init value from
+// FUN_00380b80 for objects that never pass through FUN_002681d0 -- NOT what the party carries.
+constexpr uint32_t CHAR_WALK_HOLDER    = 0xC0;
+constexpr uint32_t WALKHOLDER_CLASS    = 0x153;     // u8
+// ================================================================================================
+
+// ---- THE VOLUME TEST (Session 96) ----------------------------------------------------------------
+// FUN_00232490(ctx0, float pos[4], int flag) -> int hit count. PURE. **0 = no volume at this point.**
+//
+// THIS IS THE PREDICATE, and picking the wrong one cost a build. It is 90 bytes: set the per-primitive
+// callback FUN_0022f8b0, the cell from FUN_00233050, **LAYER MASK 6 (CSR layers 1 and 2 = volumes)**,
+// the position, a zeroed counter, then FUN_0022f830 to iterate -- and return the counter. Structurally
+// identical to the volume half of FUN_00231400, which is how the field layout is known
+// (+0 callback, +8 ctx, +0x10 cell u16, +0x16 mask u8, +0x18 pos, +0x20 counter, +0x24 flag);
+// FUN_00231400 puts 1 in that last slot, so we do too. Confidence 0.98.
+//
+// WHY NOT FUN_00336390 / FUN_00231400 -- BOTH OVER-BLOCK FOR ROUTING (measured, Session 96).
+// FUN_00231400 answers "may the party STAND here", which is a floor lookup AND a volume test, and it
+// returns 0 when there is simply NO FLOOR under the point. FUN_00336390 wraps it and additionally
+// requires the four (x+/-r, z+/-r) diagonals to pass. Every taut route corner is a portal endpoint
+// inset by one body radius, i.e. ~0.27 m from the walkable boundary BY CONSTRUCTION -- so its
+// diagonals land off the mesh, the test says "cannot stand", and routing reads ordinary corridor
+// geometry as a wall. Shipped once: the tester got "almost every path is blocked" and "No path" on a
+// corridor they had just walked down. Those two functions are for PLACEMENT (where may I put a
+// character), where full clearance is the right question. For routing, ask only about volumes.
+constexpr uint32_t MAP_POINT_IN_VOLUME = 0x112490;  // FUN_00232490 -- the one to use
+constexpr uint32_t MAP_STAND_CLEAR     = 0x216390;  // FUN_00336390 -- placement only; over-blocks routing
+constexpr uint32_t MAP_CAN_STAND       = 0x111400;  // FUN_00231400 -- floor AND volume; over-blocks routing
+//
+// The rest of the provenance, which applies to all three:
+//
+// WHY THIS MATTERS MORE THAN ANYTHING ELSE IN THIS FILE: the walkmap's floor adjacency knows nothing
+// about walls. Blockers are VOLUME primitives -- [0x4000,0x5000) static (walls, pillars) and >=0x5000
+// dynamic (doors, moving platforms) -- and until now the mod read ONLY floor polys, stepping over the
+// volumes in the very per-cell list it walks (nav_mesh.cpp FindPolyAt). On a mesh whose triangles are
+// often a whole corridor, a wall standing INSIDE a triangle was invisible to every test we had. That
+// is what routed the tester into a hard stop.
+//
+// PURE: the transitive closure is FUN_0022f830 (CSR layer iterator, takes a layer mask), FUN_0022f8b0
+// (its per-primitive callback), FUN_00230a40, FUN_002324f0, FUN_00233050, FUN_00233110, FUN_00381eb0,
+// FUN_00202b70 -- every one 28-45 lines with ZERO DAT_ assignments. Same footing as the FUN_00230c10
+// body sweep the mod already calls.
+//
+// CALLER MUST GATE ON MapQuery::HasWorld() and pass ctx0; the callee dereferences it unchecked.
+
+// STRUCK BEFORE USE (Session 96): FUN_00232090 (RVA 0x112090) returns a PER-CLASS refusal mask, and
+// it is USELESS TO US. It sets only mask bits 0/1/2/3/5 (from flag bits 23/25/26/27/24) and its
+// consumer FUN_00380d30:20 reads it as `(mask >> actorClass) & 1`. The party's class is
+// WALK_CLASS_PARTY = 4, so the shift lands on bit 4 -- which the function never sets. It can never
+// change a verdict for the player, exactly as the note above already worked out ("none apply to us").
+// Recorded so it is not adopted on a later reading of the decompile.
 // Reference RVAs (read-only replication; NOT called):
 constexpr uint32_t WALK_GRID_ENUM      = 0x10FFE0; // FUN_0022ffe0 (full-grid enumerator; bake model)
 constexpr uint32_t WALK_WORLD_TO_CELL  = 0x113050; // FUN_00233050 (world XZ -> cell)

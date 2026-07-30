@@ -5,7 +5,12 @@
 #include "navigation/nav_common.h"
 #include "navigation/path_funnel.h"
 #include "navigation/path_validate.h"
+#include "navigation/path_corridor.h"
+#include "navigation/nav_blocked.h"
+#include "navigation/player_state.h"
 #include "core/logger.h"
+
+#include <windows.h>
 
 #include <algorithm>
 #include <cmath>
@@ -21,24 +26,26 @@ namespace {
 using NavMesh::PolyId;
 using NavMesh::kNoPoly;
 using PathFunnel::Portal;
-using PathFunnel::SameXZ;
+using PathCorridor::Came;        // A*'s parent links; corridor reconstruction lives in path_corridor
+using PathCorridor::PortalRef;
 
-// Expansion budget. A poly is far coarser than the old 1.5 m cell -- a whole corridor is often two
-// triangles -- so this is generous. It exists only so a torn read cannot spin forever.
-constexpr int kMaxExpand = 20000;
+// (kMaxExpand was removed in Session 96 -- declared, never read. kMaxTotalExpand below is the only
+// expansion bound, and it is the one the log reports.)
 
-// THE RE-SEARCH IS CAPPED BY WORK, NOT BY ATTEMPTS (Session 93).
-//
-// A retry count is the wrong bound because attempts are not equal: four passes over the Giza corridor
-// (1827 expands each) is a different proposition from four passes over a small room, and "slower than
-// vanilla = OUR code" is a standing CRITICAL rule. So attempts stop when either bound is hit, and the
-// log says which -- a map that habitually exhausts the work budget announces itself instead of quietly
-// costing frames.
+// THE RE-SEARCH IS CAPPED BY WORK, NOT BY ATTEMPTS (Session 93). Attempts are not equal -- four passes
+// over the Giza corridor is a different proposition from four over a small room, and "slower than
+// vanilla = OUR code" is a standing CRITICAL rule -- so attempts stop on either bound and the log says
+// which, rather than quietly costing frames.
 constexpr int kMaxAttempts   = 4;
 constexpr int kMaxTotalExpand = 40000;
-// Validation probe budget for the whole request. The Giza route's 140 legs need ~280 probes; this leaves
-// room for four attempts at that scale without letting a pathological map run away.
+// Validation probe budget for the whole request: room for four attempts at Giza scale (~280 probes).
 constexpr int kProbeBudget   = 1600;
+// The frontier gets its own floor on top of whatever the attempts left: a route we are about to SPEAK
+// has to be checked, and "the retries used up the budget" is not a reason to skip it.
+constexpr int kFrontierMinProbes = 128;
+// Final-leg arrival tolerance -- see PathValidate::CheckLegs. Not a tuning knob: it is path_planner's
+// kAtExitDist, the distance at which the planner already says "At the exit", so the two agree.
+constexpr float kArrivalTol = 3.0f;
 
 struct Node {
     float  f;
@@ -46,27 +53,39 @@ struct Node {
     bool operator>(const Node& o) const { return f > o.f; }
 };
 
-struct Came {
-    PolyId parent = kNoPoly;
-    int    edge   = -1;      // edge of `parent` we crossed to get here
-};
+// ---- NOTHING SEVERS THE GRAPH; EVERYTHING DIFFICULT IS EXPENSIVE (Session 96) ----------------------
+//
+// Every routing regression this session came from one move: taking a real measurement and using it to
+// DELETE an edge. Delete enough and a reachable goal becomes unreachable -- and once it is unreachable
+// there is nothing left to validate, repair, or honestly report. The measurements were right; using
+// them as cuts was not.
+//
+// These are costs in METRES, added to the crossing cost, so the ordering is what matters and not the
+// exact figure: clear << tight << terrain. A* takes any detour up to the penalty's worth rather than
+// use the edge, which reproduces the old refusal wherever an alternative exists -- and still hands
+// back a corridor when it is the only way through, which the deletion took away.
+//
+// The heuristic stays plain Euclidean and therefore stays admissible: penalties only ever ADD to the
+// true cost, so a straight-line estimate can never overshoot it.
+constexpr float kTightPenalty   = 500.0f;    // body does not fit anywhere along this edge
+constexpr float kTerrainPenalty = 2000.0f;   // the party's floor class may not stand on the neighbour
+constexpr float kBlockedPenalty = 2000.0f;   // the player PHYSICALLY failed to get past here
+constexpr float kBreachPenalty  = 500.0f;    // a validated leg through this portal did not walk
 
-// A portal the search must not use on a later attempt, because the taut path through it turned out not
-// to be walkable. Scoped to ONE request -- never cached across presses, because the obstacle may be a
-// door that opens, and a permanent ban would be exactly the "learned label" this project forbids.
-struct BannedEdge { PolyId poly; int edge; };
+// A portal a later attempt should avoid, because the taut path through it turned out not to be
+// walkable. Scoped to ONE request -- never cached across presses, because the obstacle may be a door
+// that opens, and a permanent ban would be exactly the "learned label" this project forbids.
+//
+// IT IS A PRICE, NOT A BAN (Session 96). A ban is binary and permanent for the request: ban the only
+// opening and the goal is unreachable, which is exactly how a route that A* had already reached the
+// goal with came back "No path". `pen` accumulates, so a portal that keeps failing keeps getting
+// dearer and the search moves off it on its own, without any attempt ever losing the option.
+struct BannedEdge { PolyId poly; int edge; float pen; };
 
 inline float Dist3(const FVec3& a, const FVec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
-
-// One portal, plus where it came from, so a breaching leg can be traced back to the edge to ban.
-struct PortalRef {
-    Portal p;
-    PolyId poly;   // the parent whose edge this is
-    int    edge;
-};
 
 // ---- One A* pass ---------------------------------------------------------------------------------
 struct PassResult {
@@ -79,6 +98,12 @@ struct PassResult {
     std::vector<PolyId>    chain;
     std::vector<PortalRef> portals;
     int clipped = 0, blocked = 0;
+    // What the corridor this pass returned had to PAY. `penTerrain > 0` means it crosses ground the
+    // party's floor class may not stand on -- such a route is never spoken as a plain Route, however
+    // well it sweeps, because the sweep does not refuse water and never did. `penOther` is pinches,
+    // measured blocks and re-costed portals: all legal to walk, so it only ranks routes.
+    float penTerrain = 0.0f;
+    float penOther   = 0.0f;
     const char* fail = nullptr;   // non-null => this pass produced no corridor at all
 };
 
@@ -95,10 +120,9 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // Both endpoints are located WITH THEIR Y. That single fact is what separates the Highhall seam
     // (7.8 m up) from the floor beneath it -- the old grid had only an (x,z) and could not.
     //
-    // FindPolyAt deliberately keeps the RAW walkable test and gets no footprint check. A player standing
-    // in a doorway or hard against a wall is legitimately within a body radius of a boundary, and
-    // rejecting their own poly here would return `no-start-poly` -> "No path" from a position they are
-    // demonstrably standing on. You can always leave the poly you are on.
+    // FindPolyAt keeps the RAW walkable test and gets no footprint check: a player in a doorway is
+    // legitimately within a body radius of a boundary, and rejecting their own poly would answer
+    // "No path" from a position they are demonstrably standing on.
     const PolyId start = NavMesh::FindPolyAt(from.x, from.y, from.z);
     const PolyId goal  = NavMesh::FindPolyAt(to.x,   to.y,   to.z);
     stats.startPoly = start;
@@ -106,12 +130,27 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
     if (start == kNoPoly) { stats.pass = "no-start-poly"; return Plan::NoPath; }
 
+    // WHAT DO THE TWO ENDPOINTS ACTUALLY LOOK LIKE? Without this a NoPath is unreadable: the poly ids
+    // alone cannot say whether the goal was refused for the party (bit 23 -- water, out of bounds) or
+    // simply disconnected. FindPolyAt uses RAW flags and does NOT consult walkability, so `goal` being
+    // found says nothing about whether A* is allowed to enter it.
+    {
+        uint32_t sr = 0, se = 0, gr = 0, ge = 0;
+        NavMesh::PolyFlags(start, sr, se);
+        if (goal != kNoPoly) NavMesh::PolyFlags(goal, gr, ge);
+        char m[224];
+        snprintf(m, sizeof(m),
+                 "ends: start=%d eff=0x%08X walk=%d | goal=%d eff=0x%08X walk=%d | class=%u",
+                 start, se, NavMesh::Walkable(start) ? 1 : 0,
+                 goal, ge, (goal != kNoPoly && NavMesh::Walkable(goal)) ? 1 : 0,
+                 PlayerState::PartyMovementClass());
+        Log::Write("NAV-ROUTE", m);
+    }
+
     // ---- A target with NO POLYGON OF ITS OWN is still reachable ------------------------------------
-    // A notice board bolted to a wall at y=2.0, a chest on a ledge, an NPC behind a counter: the
-    // object's own point is off the mesh, so FindPolyAt legitimately returns nothing. That is NOT
-    // "no route" -- the game shows an interact prompt, so a place to stand exists.
-    //
-    // Route by the INTERACTION CYLINDER instead (S73: interaction distance is a cylinder, not a point).
+    // A wall-mounted board, a chest on a ledge, an NPC behind a counter: the object's own point is off
+    // the mesh, but the game shows an interact prompt, so a place to stand exists. Route by the
+    // INTERACTION CYLINDER instead (S73: interaction distance is a cylinder, not a point).
     const bool goalOffMesh = (goal == kNoPoly);
     if (goalOffMesh && reachRadius <= 0.01f) {
         stats.pass = "no-goal-poly-no-reach";
@@ -129,23 +168,50 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     const bool haveBand  = (bandHi >= bandLo);
     const bool haveReach = (reachRadius > 0.01f);
 
+    // ---- WHY DID EXPANSION STOP? -----------------------------------------------------------------
+    // A NoPath currently says only "unreachable", which cannot distinguish "the map really is split
+    // here" from "we are refusing something we should not". These count every neighbour A* declined and
+    // WHY, and for the walkability refusals they keep the distinct effective-flags words -- so the log
+    // names the exact terrain class that walled the search in, against the census from the ' key.
+    int refNoPoly = 0, refUnwalkable = 0, refEdge = 0, refBanned = 0, refBlocked = 0;
+    uint32_t refFlags[6] = {};
+    int      refFlagN[6] = {};
+    int      refFlagCount = 0;
+    auto NoteRefusedFlags = [&](uint32_t eff) {
+        for (int i = 0; i < refFlagCount; ++i)
+            if (refFlags[i] == eff) { ++refFlagN[i]; return; }
+        if (refFlagCount < 6) { refFlags[refFlagCount] = eff; refFlagN[refFlagCount] = 1; ++refFlagCount; }
+    };
+
+    // Read once per request, not per edge.
+    const uint64_t nowMs = GetTickCount64();
+    const bool blockedActive = NavBlocked::Any();
+
     std::vector<BannedEdge> banned;
     PassResult best{};                 // the last pass that produced a corridor at all
     std::vector<FVec3> bestPoly;
     PathValidate::LegReport bestReport{};
     int probesLeft = kProbeBudget;
+    NavMesh::ResetCrossingCounters();   // so the `refused:` line counts THIS request, not the session
+
+    // THE FURTHEST-REACHING PROVEN PREFIX, kept ACROSS attempts (Session 95): a breaching attempt
+    // still established that its first N legs are walkable. It must survive the loop because attempts
+    // get WORSE as bans accumulate (one route went 211.6m -> 233.5m), so falling back on the last
+    // attempt means falling back on the worst one.
+    std::vector<FVec3> bestPrefix;
+    float bestPrefixDist = -1.0f;      // metres from the prefix's last point to the goal
+    // A*'s parent links from the LAST pass run. Hoisted out of the attempt loop because the frontier
+    // rebuilds a corridor to a DIFFERENT end poly than the search aimed at; `best` is likewise always
+    // the last pass, so the two always describe the same search.
+    PathCorridor::CameMap came;
 
     // ---- attempt loop: validate, then ban the offending portal and search AGAIN -------------------
+    // THE STRUCTURAL FIX (Session 93). Validation used to sit AFTER the search, where its only options
+    // were accept, substitute, or accept what it had just disproved -- it took the third on 9 of 53
+    // routes. In a loop, a failed validation changes the GRAPH, so A* finds the detour itself.
     //
-    // THIS IS THE STRUCTURAL FIX (Session 93). Validation used to sit after the search as a lambda over
-    // a corridor A* had already committed to, where its only possible outputs were accept, substitute
-    // one pre-built alternative, or accept the thing it had just disproved -- and it took the third
-    // option on 9 of 53 routes in the tester's log, shipping a path it had proved unwalkable with no
-    // change to the speech. A validator in that position can never route AROUND anything.
-    //
-    // Moving the decision into a loop is what turns "report the problem better" into "solve it": a
-    // failed validation now changes the GRAPH the next pass searches, so the detour is found by A*
-    // itself rather than approximated by a fallback polyline.
+    // A BAN IS ONLY AS GOOD AS THE VERDICT BEHIND IT (Session 95): while a false breach was possible,
+    // this loop banned good portals and every retry came back longer. See path_validate.h.
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
         stats.attempts = attempt;
 
@@ -175,6 +241,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         FVec3  fallbackPoint{};
         auto NoteFallback = [&](PolyId p) {
             if (fallbackPoly != kNoPoly || !haveBand || !haveReach) return;
+            // IT HAS TO BE SOMEWHERE THE PARTY CAN STAND (Session 96). Water polys are now EXPANDED
+            // rather than skipped -- that is the whole point of pricing them -- so every consumer that
+            // used to get walkability for free from the search has to ask for it. This one names the
+            // spot the player is told to walk to in order to reach the target.
+            if (!NavMesh::Walkable(p)) return;
             FVec3 cp{};
             if (!NavMesh::ClosestPointOnPoly(p, to.x, to.z, cp)) return;
             if (cp.y < bandLo || cp.y > bandHi) return;                    // engine's vertical gate
@@ -184,19 +255,24 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             fallbackPoint = cp;
         };
 
-        auto IsBanned = [&](PolyId p, int e) -> bool {
-            for (const BannedEdge& b : banned) if (b.poly == p && b.edge == e) return true;
-            return false;
+        auto BanPenalty = [&](PolyId p, int e) -> float {
+            for (const BannedEdge& b : banned) if (b.poly == p && b.edge == e) return b.pen;
+            return 0.0f;
         };
 
         std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open;
         std::unordered_map<PolyId, float> gScore;
-        std::unordered_map<PolyId, Came>  came;
+        // The penalty carried along the best-known path to each poly, split so the terrain half can veto
+        // on its own. Same parent links as gScore, so the two always describe the same route.
+        std::unordered_map<PolyId, float> gPenT, gPenO;
+        came.clear();
 
         FVec3 startC{};
         if (!Centroid(start, startC)) { stats.pass = "start-unreadable"; return Plan::NoPath; }
 
         gScore[start] = 0.0f;
+        gPenT[start]  = 0.0f;
+        gPenO[start]  = 0.0f;
         came[start] = Came{};
         open.push(Node{ Dist3(startC, goalC), start });
 
@@ -215,16 +291,22 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
             FVec3 pc{};
             if (!Centroid(p, pc)) continue;
+            // ...and the same for the frontier. `bestNear` is where a shortfall route ENDS, so it is a
+            // place the player gets told to stand; a priced-but-expanded water poly must never win it.
             const float dGoal = Dist3(pc, goalC);
-            if (dGoal < pr.bestNearD) { pr.bestNearD = dGoal; pr.bestNear = p; }
+            if (dGoal < pr.bestNearD && NavMesh::Walkable(p)) { pr.bestNearD = dGoal; pr.bestNear = p; }
 
             const auto gIt = gScore.find(p);
             if (gIt == gScore.end()) continue;
             const float gCur = gIt->second;
 
+            const float penTCur = gPenT[p], penOCur = gPenO[p];
+
             for (int e = 0; e < 3; ++e) {
                 const PolyId n = NavMesh::Neighbor(p, e);
-                if (n == kNoPoly) continue;                 // boundary edge: map edge or wall
+                // THE ONLY TRUE CUT LEFT. No neighbour is not an expensive edge, it is the absence of
+                // one -- there is nothing on the other side to price.
+                if (n == kNoPoly) { ++refNoPoly; continue; }
 
                 FVec3 nc{};
                 if (!Centroid(n, nc)) continue;
@@ -236,24 +318,40 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 const float step = NavMesh::EdgeMidpoint(p, e, mid)
                                        ? Dist3(pc, mid) + Dist3(mid, nc)
                                        : Dist3(pc, nc);
-                const float tentative = gCur + step;
 
+                // ---- price the crossing -------------------------------------------------------------
+                float penT = 0.0f, penO = 0.0f;
+                if (!NavMesh::Walkable(n)) {
+                    ++refUnwalkable;
+                    uint32_t nr = 0, ne = 0;
+                    if (NavMesh::PolyFlags(n, nr, ne)) NoteRefusedFlags(ne);
+                    penT += kTerrainPenalty;
+                }
+                const float bp = BanPenalty(p, e);
+                if (bp > 0.0f) { ++refBanned; penO += bp; }
+                if (blockedActive && NavBlocked::Contains(nc, epoch, nowMs)) {
+                    ++refBlocked;
+                    penO += kBlockedPenalty;
+                }
+
+                // The body test is the expensive one -- seven straddle sweeps -- so it is asked LAST and
+                // only when the answer can still change the ordering. The early-out below uses the
+                // cheapest price this edge could possibly carry; a pinch can only make it dearer, so
+                // skipping the test on an edge that already cannot improve `n` is exact, not a shortcut.
                 const auto nIt = gScore.find(n);
+                if (nIt != gScore.end() && nIt->second <= gCur + step + penT + penO) continue;
+                if (penT == 0.0f) {                       // terrain already dominates; nothing to add
+                    ++stats.rays;
+                    if (!NavMesh::EdgePassable(p, e, n)) { ++refEdge; penO += kTightPenalty; }
+                }
+
+                const float tentative = gCur + step + penT + penO;
                 if (nIt != gScore.end() && nIt->second <= tentative) continue;
-
-                // The banned set is consulted at the EXISTING passability call site, so a ban is
-                // indistinguishable to A* from a wall -- which is the point. It routes around a ban the
-                // same way it routes around geometry, by not expanding through it.
-                if (IsBanned(p, e)) continue;
-
-                // Walkability + the body test. EdgePassable now asks whether the CHARACTER fits, not
-                // whether a line can be drawn: floor adjacency knows nothing about doors, and a hairline
-                // ray knows nothing about body width.
-                ++stats.rays;
-                if (!NavMesh::EdgePassable(p, e, n)) continue;
 
                 ++stats.touched;
                 gScore[n] = tentative;
+                gPenT[n]  = penTCur + penT;
+                gPenO[n]  = penOCur + penO;
                 came[n] = Came{ p, e };
                 open.push(Node{ tentative + Dist3(nc, goalC), n });
             }
@@ -282,44 +380,25 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         }
 
         pr.reachedGoal = true;
+        // WHAT THIS CORRIDOR COST. Read off the same parent links the corridor is rebuilt from, so it
+        // describes this route and no other.
+        {
+            const auto tIt = gPenT.find(reached), oIt = gPenO.find(reached);
+            pr.penTerrain = (tIt != gPenT.end()) ? tIt->second : 0.0f;
+            pr.penOther   = (oIt != gPenO.end()) ? oIt->second : 0.0f;
+        }
+        if (pr.penTerrain > 0.0f || pr.penOther > 0.0f) {
+            char pm[200];
+            snprintf(pm, sizeof(pm),
+                     "cost: attempt %d corridor pays terrain=%.0f other=%.0f "
+                     "(terrain > 0 => crosses ground the party's class may not stand on)",
+                     attempt, pr.penTerrain, pr.penOther);
+            Log::Write("NAV-ROUTE", pm);
+        }
         pr.endPoly     = reached;
 
-        // ---- Reconstruct: STRING-PULL the corridor -------------------------------------------------
-        for (PolyId p = reached; p != kNoPoly; ) {
-            pr.chain.push_back(p);
-            auto it = came.find(p);
-            if (it == came.end() || it->second.parent == kNoPoly) break;
-            p = it->second.parent;
-        }
-        std::reverse(pr.chain.begin(), pr.chain.end());
-
-        // Collect the portals the route crosses, each as a LEFT/RIGHT pair.
-        //
-        // LEFT IS ALWAYS v[e]; RIGHT IS ALWAYS v[(e+1)%3]. Not an assumption about the mesh -- it is
-        // forced by the engine's own containment test (MapQuery::PolyContainsXZDetail replicates
-        // FUN_002324f0, whose crossY is identically -TriArea2(v[i], v[j], p), so an interior point lies
-        // to the RIGHT of v[e] -> v[e+1] under this file's convention). Every time, no test.
-        //
-        // AND THE PORTAL IS THE OPENING, NOT THE WHOLE EDGE (S86). A* certifies that a crossing EXISTS
-        // on each shared edge; it does not certify where. On this mesh an edge runs 8-16 m, and the field
-        // log caught the taut path threading a portal 4.8 m from the only point that had been tested.
-        pr.portals.reserve(pr.chain.size());
-        for (size_t i = 1; i < pr.chain.size(); ++i) {
-            auto it = came.find(pr.chain[i]);
-            if (it == came.end() || it->second.edge < 0) continue;
-            FVec3 fullA{}, fullB{};
-            if (!NavMesh::EdgePortal(it->second.parent, it->second.edge, fullA, fullB)) continue;
-            FVec3 v0 = fullA, v1 = fullB;
-            if (NavMesh::EdgeClearSpan(it->second.parent, it->second.edge, pr.chain[i], v0, v1)) {
-                if (!SameXZ(v0, fullA) || !SameXZ(v1, fullB)) ++pr.clipped;
-            } else {
-                // No part of this edge tested clear, yet the search crossed it. Keep the full edge: a
-                // hole in the sequence would let the funnel thread an unvalidated chord across the gap.
-                ++pr.blocked;
-                v0 = fullA; v1 = fullB;
-            }
-            pr.portals.push_back(PortalRef{ Portal{ v0, v1 }, it->second.parent, it->second.edge });
-        }
+        // ---- Reconstruct the corridor, then STRING-PULL it -----------------------------------------
+        PathCorridor::Build(came, reached, pr.chain, pr.portals, pr.clipped, pr.blocked);
 
         // ---- string-pull, then repair the corners, then validate -----------------------------------
         std::vector<Portal> plain;
@@ -329,7 +408,8 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         bool  flipped = false;
         float lenKept = 0.0f, lenOther = 0.0f;
         std::vector<FVec3> poly;
-        PathFunnel::BestPolarity(from, to, plain, poly, flipped, lenKept, lenOther);
+        std::vector<int>   polyIdx;      // which portal each corner came from -- see PathFunnel::Unpull
+        PathFunnel::BestPolarity(from, to, plain, poly, flipped, lenKept, lenOther, &polyIdx);
 
         // Pull corners off the boundary BEFORE dropping passed waypoints, because an inset can move a
         // corner past the player and the drop is what notices.
@@ -337,7 +417,7 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // AFTER any step that rebuilds or moves the polyline. The old code ran this once, before a
         // fallback swapped in a freshly built vector -- so on every breaching route the S78 leg-0
         // reversal fix was silently bypassed.
-        const int droppedWp = PathFunnel::DropPassedWaypoints(from, poly);
+        const int droppedWp = PathFunnel::DropPassedWaypoints(from, poly, &polyIdx);
 
         {
             char fm[288];
@@ -352,34 +432,174 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             Log::Write("NAV-ROUTE", fm);
         }
 
-        const PathValidate::LegReport rep = PathValidate::CheckLegs(poly, probesLeft);
+        const PathValidate::LegReport rep = PathValidate::CheckLegs(poly, probesLeft, kArrivalTol);
         probesLeft -= rep.probes;
         stats.rays += rep.probes;
 
         {
-            char vm[288];
+            // `resweep`/`rescued` are the Session 95 proof line, and `bad=` prints the breaching leg's
+            // length against how far the body got -- so a real wall and a measurement artefact read
+            // differently at a glance. Field meanings live on PathValidate::LegReport.
+            // `why=` and `stopPoly=` are the Session 96 additions. A wall met mid-leg and a floor the
+            // body sweep refuses stop at the same coordinates, and the poly under the stop -- with its
+            // effective flags -- is what says whether the thing in the way is water (bit 23) or an
+            // obstacle standing on ground the party may walk.
+            char bad[352] = "";
+            if (rep.firstBad)
+                snprintf(bad, sizeof(bad),
+                         " bad=%zu len=%.2fm reached=%.2fm stop=(%.1f,%.2f,%.1f) why=%s "
+                         "stopPoly=%d walk=%d eff=0x%08X | corner: poly=%d clear=%d margin=%.2fm  "
+                         "vol@stop=%d vol@+0.3m=%d%s",
+                         rep.firstBad, rep.badLength, rep.badReached,
+                         rep.badStopAt.x, rep.badStopAt.y, rep.badStopAt.z,
+                         PathValidate::CauseName(rep.badCause),
+                         rep.badStopPoly, rep.badStopWalk ? 1 : 0, rep.badStopFlags,
+                         rep.badCornerPoly, rep.badCornerClear ? 1 : 0, rep.badCornerMargin,
+                         rep.badStopInVolume ? 1 : 0, rep.badAheadInVolume ? 1 : 0,
+                         rep.walls ? " WALL" : "");
+            char vm[672];
             snprintf(vm, sizeof(vm),
-                     "validate: attempt %d legs checked=%zu/%zu probes=%d worstFrac=%.2f %s%s",
+                     "validate: attempt %d legs checked=%zu/%zu probes=%d worstFrac=%.2f tight=%d@%zu "
+                     "resweep=%d rescued=%d swept=%d blind=%d walls=%d %s%s%s",
                      attempt, rep.checked, rep.total, rep.probes, rep.worstFraction,
-                     rep.ok ? "OK" : "BREACH",
-                     rep.truncated ? "  <== TRUNCATED: budget ran out, remaining legs NOT tested" : "");
+                     rep.tightCorners, rep.firstTight, rep.resweeps, rep.rescued,
+                     rep.swept, rep.blind, rep.walls,
+                     rep.ok ? "OK" : "BREACH", bad,
+                     rep.blind     ? "  <== BLIND: no collision world for some legs; NOT verified"
+                     : rep.truncated ? "  <== TRUNCATED: budget ran out, remaining legs NOT tested" : "");
             Log::Write("NAV-ROUTE", vm);
+        }
+
+        // THE CORNERS, WITH THEIR HEIGHTS, whenever validation fails. Every other line in this log
+        // prints X and Z only, and on a route that drops from a walkway into a channel the Y is the
+        // whole question: a corner that takes its height from the wrong side of a step makes the leg
+        // into it a diagonal through a wall, and the body sweep then reports a breach that has nothing
+        // to do with the ground being unwalkable. Bounded to the first few corners; this fires only on
+        // a failure, never on a good route.
+        if (!rep.ok || rep.truncated) {
+            char pts[240]; int q = 0;
+            for (size_t i = 0; i < poly.size() && i < 7 && q < static_cast<int>(sizeof(pts)) - 30; ++i)
+                q += snprintf(pts + q, sizeof(pts) - static_cast<size_t>(q), "%s(%.1f,%.2f,%.1f)",
+                              i ? " " : "", poly[i].x, poly[i].y, poly[i].z);
+            char m[320];
+            snprintf(m, sizeof(m), "corners(xyz): %s%s", pts,
+                     poly.size() > 7 ? " ..." : "");
+            Log::Write("NAV-ROUTE", m);
+        }
+
+        // ---- REPAIR BEFORE RE-SEARCHING -------------------------------------------------------------
+        // A breach is a verdict on the CHORD, not on the corridor. The corridor was measured edge by
+        // edge with the body's own footprint before A* ever expanded through it; the taut line the
+        // funnel drew across it was an optimisation, and on this mesh -- where one triangle is often an
+        // entire room -- that line can leave the walkable strip while every portal it skipped stays
+        // perfectly crossable. Map 311 proved it both ways in one request: the chord's leg 3 stopped the
+        // body at 6.23 m of 9.00 m on four consecutive attempts, and the frontier's less-taut polyline
+        // walked the same ground with `cutByValidation=0`.
+        //
+        // So undo the pull on the ONE leg that failed and re-validate. Re-searching the whole graph
+        // answers a local question globally, and it was costing the route: every attempt came back with
+        // the same chord and the same breach until the attempts ran out.
+        // THE LADDER: taut chord -> un-pulled leg -> retreat to where the body got -> full corridor.
+        // Shortest thing that works is what gets spoken, and every rung runs ONLY after a breach, so a
+        // route that validates on the chord executes none of it and cannot be changed by any of it.
+        if (!rep.ok && rep.firstBad > 0 && !plain.empty() && probesLeft > 0) {
+            const size_t bad = rep.firstBad;
+            bool mendedOk = false;
+
+            auto tryPoly = [&](std::vector<FVec3>& cand, const char* how, int detail) -> bool {
+                if (cand.size() < 2 || probesLeft <= 0) return false;
+                PathFunnel::InsetCorners(cand);
+                const PathValidate::LegReport r2 =
+                    PathValidate::CheckLegs(cand, probesLeft, kArrivalTol);
+                probesLeft -= r2.probes;
+                stats.rays += r2.probes;
+                const bool good = r2.ok && !r2.truncated;
+                char rm[288];
+                snprintf(rm, sizeof(rm),
+                         "repair[%s]: leg %zu, %d -- %zu->%zu points, probes=%d -> %s",
+                         how, bad, detail, poly.size(), cand.size(), r2.probes,
+                         good ? "OK" : "still breaching");
+                Log::Write("NAV-ROUTE", rm);
+                if (!good) return false;
+                best = pr; bestPoly = cand; bestReport = r2; rawPoly = cand;
+                stats.repaired = detail;
+                return true;
+            };
+
+            // 1. Un-pull the failing leg (and, when it is interior, the corner it aimed at).
+            {
+                std::vector<FVec3> mended;
+                const int spliced = PathFunnel::Unpull(poly, polyIdx, plain, bad, mended);
+                if (spliced > 0) mendedOk = tryPoly(mended, "unpull", spliced);
+            }
+
+            // 2. RETREAT TO WHERE THE BODY ACTUALLY GOT. `badStopAt` is the engine's own resolved
+            //    position, so it is reachable whatever is in the way -- floor border, wall volume, or
+            //    something we have not thought of. That is the point: this rung needs no theory. Only
+            //    for an INTERIOR corner; the final point is the destination and is not ours to move.
+            if (!mendedOk && bad + 1 < poly.size() &&
+                rep.badReached > NavFootprint::BodyRadius()) {
+                std::vector<FVec3> pulled(poly.begin(), poly.begin() + static_cast<ptrdiff_t>(bad));
+                pulled.push_back(rep.badStopAt);
+                pulled.insert(pulled.end(), poly.begin() + static_cast<ptrdiff_t>(bad) + 1, poly.end());
+                mendedOk = tryPoly(pulled, "retreat", static_cast<int>(rep.badReached * 100.0f));
+            }
+
+            // 3. LAST RUNG: the whole corridor, un-pulled. Reserved for the case that has no other
+            //    move at all -- a breach on leg 1, where re-costing is refused because the portal is
+            //    the start poly's own and the frontier's proven prefix is a single point. Measured:
+            //    that combination spoke "No path" from 3 m away from a reachable exit, nine times.
+            if (!mendedOk && bad == 1) {
+                std::vector<FVec3> full;
+                const int pts = PathFunnel::FullCorridor(from, to, plain, full);
+                if (pts > 0) mendedOk = tryPoly(full, "full-corridor", pts);
+            }
+
+            if (mendedOk) break;            // the corridor walks; only the shortcut across it did not
         }
 
         best       = pr;
         bestPoly   = poly;
         bestReport = rep;
 
+        // Bank the part of THIS attempt that validated, before deciding whether to ban and try again.
+        // Whatever happens next, these legs stay proven.
+        {
+            const size_t keep = PathCorridor::ProvenPrefix(rep, poly.size());
+            if (keep >= 2) {
+                const float d = NavCommon::Distance2D(poly[keep - 1], to);
+                if (bestPrefixDist < 0.0f || d < bestPrefixDist) {
+                    bestPrefix.assign(poly.begin(), poly.begin() + static_cast<ptrdiff_t>(keep));
+                    bestPrefixDist = d;
+                }
+            }
+        }
+
+        // THE BODY WALK IS THE AUTHORITY. There was briefly a terrain veto here -- reject a validated
+        // corridor whose flag-based terrain price was non-zero -- written while `Walkable` still meant
+        // "the party's class may stand here". It doesn't any more: the tester walks the shallow water
+        // that reading refused, so `Walkable` is back to the floor-type test and `penTerrain` now only
+        // means "unreadable or not a floor poly". Vetoing a route on THAT would turn a transient mesh
+        // read into "No path", which is the same over-refusal by a shorter road. Priced, logged, and
+        // left to the walk -- which is the only instrument that has ever answered "can the character
+        // get there" rather than "what is this made of".
         if (rep.ok && !rep.truncated) {
             rawPoly = poly;
-            break;                      // fully verified -- this is the route
+            break;                      // fully verified by the engine's own body walk
         }
-        if (rep.ok) break;              // truncated but no breach found; the log already said so
+        // TRUNCATED IS NOT VERIFIED. This used to `break` here and the outcome block then shipped the
+        // whole polyline as Plan::Route -- the exact claim path_validate.h forbids the caller to make.
+        // It now falls to the frontier, which speaks only the legs that were actually tested and says
+        // how far short they stop.
+        if (rep.ok) break;
 
-        // Ban the portal the breaching leg crosses. Which one is a geometric question: the leg that
+        // RE-COST the portal the breaching leg crosses. Which one is a geometric question: the leg that
         // failed runs between two taut corners, and the portal it crosses is the one whose span sits
-        // closest to that leg's midpoint. Ban that (poly, edge) and search again.
-        if (rep.firstBad == 0 || rep.firstBad >= poly.size() || plain.empty()) break;
+        // closest to that leg's midpoint. Make that (poly, edge) dearer and search again.
+        // NEVER RE-COST A FINAL-APPROACH BREACH: the portal nearest the last leg is the one that gets
+        // you TO the target, and banning it is how a route within 2.55 m of an exit became "goal
+        // unreachable" and a frontier 15.2 m short. The banked prefix already carries the honest answer.
+        if (rep.firstBad == 0 || rep.firstBad >= poly.size() - 1 || plain.empty()) break;
         const FVec3 a = poly[rep.firstBad - 1], b = poly[rep.firstBad];
         const FVec3 legMid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
         size_t bestIdx = 0;
@@ -392,23 +612,28 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bestIdx = k; }
         }
         const PortalRef& kill = pr.portals[bestIdx];
-        // The START poly's own edges are never banned: banning one can strand the search on its seed and
-        // reproduce S76's `expands=1 touched=0` (the search never ran).
+        // The START poly's own edges are left alone: pricing one can push the search off its own seed
+        // and reproduce S76's `expands=1 touched=0` (the search never ran).
         if (kill.poly == start) {
             Log::Write("NAV-ROUTE",
-                       "replan: the breaching leg crosses the START poly's own edge -- not banning it "
+                       "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
                        "(that would strand the seed); going to the frontier instead");
             break;
         }
-        banned.push_back(BannedEdge{ kill.poly, kill.edge });
+        float newPen = kBreachPenalty;
+        bool  seen   = false;
+        for (BannedEdge& b : banned)
+            if (b.poly == kill.poly && b.edge == kill.edge) { b.pen += kBreachPenalty; newPen = b.pen; seen = true; break; }
+        if (!seen) banned.push_back(BannedEdge{ kill.poly, kill.edge, kBreachPenalty });
         stats.bannedEdges = static_cast<int>(banned.size());
         {
-            char rm[240];
+            char rm[272];
             snprintf(rm, sizeof(rm),
-                     "replan: breach on leg %zu/%zu (%.1f,%.1f)->(%.1f,%.1f); banning portal "
-                     "(poly %d, edge %d) and searching again -- attempt %d/%d, expands %d/%d",
+                     "replan: breach on leg %zu/%zu (%.1f,%.1f)->(%.1f,%.1f); portal (poly %d, edge %d) "
+                     "re-costed to %.0f and searching again -- attempt %d/%d, expands %d/%d",
                      rep.firstBad, rep.total, a.x, a.z, b.x, b.z,
-                     kill.poly, kill.edge, attempt, kMaxAttempts, stats.expands, kMaxTotalExpand);
+                     kill.poly, kill.edge, newPen, attempt, kMaxAttempts,
+                     stats.expands, kMaxTotalExpand);
             Log::Write("NAV-ROUTE", rm);
         }
         if (probesLeft <= 0 || stats.expands >= kMaxTotalExpand) {
@@ -417,11 +642,36 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         }
     }
 
+    // The pricing histogram. It used to print only when the goal was not reached -- which, now that
+    // nothing severs the graph, is exactly the case that has become rare, so it would have gone quiet
+    // just as it started to matter. It now also prints whenever the corridor had to PAY for something,
+    // because that is the same information arriving one step earlier.
+    if (!best.reachedGoal || best.penTerrain > 0.0f || best.penOther > 0.0f) {
+        char fl[160]; int q = 0;
+        for (int i = 0; i < refFlagCount && q < static_cast<int>(sizeof(fl)) - 24; ++i)
+            q += snprintf(fl + q, sizeof(fl) - static_cast<size_t>(q), "%s0x%08X x%d",
+                          i ? " " : "", refFlags[i], refFlagN[i]);
+        if (q == 0) snprintf(fl, sizeof(fl), "none");
+        // Every field but `noPoly` is now a PRICE, not a refusal -- the count of crossings that were
+        // made expensive rather than deleted. `noPoly` is the one true cut (no neighbour to price).
+        // `tightXing` is how many crossings the footprint test refused; `volXing` measured ZERO on the
+        // map where walls were the leading theory, which is what retired that theory.
+        char m[448];
+        snprintf(m, sizeof(m),
+                 "costed: noPoly=%d(cut) unwalkable=%d edge=%d rePriced=%d measuredBlock=%d "
+                 "tightXing=%d volXing=%d | corridor paid terrain=%.0f other=%.0f "
+                 "| unwalkable eff-flags: %s",
+                 refNoPoly, refUnwalkable, refEdge, refBanned, refBlocked,
+                 NavMesh::g_tightCrossings, NavMesh::g_volumeCrossings,
+                 best.penTerrain, best.penOther, fl);
+        Log::Write("NAV-ROUTE", m);
+    }
+
     // ---- outcome ----------------------------------------------------------------------------------
     stats.endPoly  = best.reachedGoal ? best.endPoly : best.bestNear;
     stats.nearDist = best.reachedGoal ? 0.0f : best.bestNearD;
 
-    if (best.reachedGoal && !bestPoly.empty() && bestReport.ok) {
+    if (best.reachedGoal && !bestPoly.empty() && bestReport.ok && !bestReport.truncated) {
         rawPoly = bestPoly;
         stats.pass = "mesh";
         outPoly = rawPoly;
@@ -437,58 +687,58 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     }
 
     // ---- FRONTIER: never dead-end ------------------------------------------------------------------
-    //
-    // Everything above failed to produce a route we are willing to speak as a route. The work to answer
-    // "then how far CAN they get" is already done -- `bestNear` has been maintained in the A* loop since
-    // Session 74 and was written into stats and then thrown away by `return Plan::NoPath`.
-    //
-    // The risk here is struck IN THE CODE at the line this replaces, so it is worth restating: the grid
-    // era emitted a near-goal fallback and spoke it as a normal set of legs, walking the tester
-    // confidently to a spot 3 m from an exit 7.8 m overhead. The defence is not to withhold the route --
-    // that strands a player who cannot see the obstacle -- it is that Plan::Frontier is a SEPARATE enum
-    // value whose consumers are forced to announce the shortfall.
+    // Nothing above produced a route we are willing to speak as one. The defence is not to withhold a
+    // route -- that strands a player who cannot see the obstacle -- it is that Plan::Frontier is a
+    // SEPARATE enum value whose consumers must announce the shortfall. It is VALIDATED like any other
+    // route (Session 95); path_corridor.h has the evidence.
     {
+        // A -- the furthest-reaching prefix banked during the attempts; already funnelled and validated,
+        // so it costs nothing. B -- a corridor to the nearest poly A* reached, rebuilt for THAT poly and
+        // validated here; only worth its probes when it could finish nearer than A does.
         const PolyId fp = best.bestNear;
-        if (fp == kNoPoly || fp == start) {
+        PathCorridor::FrontierRoute fr;
+        const bool tryNear = (fp != kNoPoly && fp != start) &&
+                             (bestPrefixDist < 0.0f || best.bestNearD < bestPrefixDist);
+        if (tryNear) {
+            const int budget = probesLeft > kFrontierMinProbes ? probesLeft : kFrontierMinProbes;
+            if (!PathCorridor::BuildFrontier(came, fp, from, to, budget, fr)) fr.poly.clear();
+            stats.rays += fr.probes;   // counted whether or not it produced a route -- it was spent
+        }
+
+        const bool useNear = !fr.poly.empty() &&
+                             (bestPrefixDist < 0.0f || fr.shortfall < bestPrefixDist);
+        if (useNear) {
+            rawPoly         = fr.poly;
+            stats.endPoly   = fr.endPoly;
+            stats.shortfall = fr.shortfall;
+        } else if (bestPrefix.size() >= 2) {
+            rawPoly         = bestPrefix;
+            stats.endPoly   = NavMesh::FindPolyAt(rawPoly.back().x, rawPoly.back().y, rawPoly.back().z);
+            stats.shortfall = bestPrefixDist;
+        } else {
             stats.pass = best.fail ? best.fail : "no-frontier";
-            char nm[208];
+            char nm[240];
             snprintf(nm, sizeof(nm),
-                     "mesh: NO route and NO frontier (frontier poly %d == start %d) pass=%s expands=%d",
-                     fp, start, stats.pass, stats.expands);
+                     "mesh: NO route and NO provable frontier (near poly %d, start %d, prefix %zu pts) "
+                     "pass=%s expands=%d attempts=%d banned=%d",
+                     fp, start, bestPrefix.size(), stats.pass, stats.expands, stats.attempts,
+                     stats.bannedEdges);
             Log::Write("NAV-ROUTE", nm);
             return Plan::NoPath;
         }
 
-        FVec3 fpt{};
-        if (!NavMesh::ClosestPointOnPoly(fp, to.x, to.z, fpt)) {
-            stats.pass = "frontier-unreadable";
-            return Plan::NoPath;
-        }
-
-        // Route to the frontier point with a plain second pass over the corridor we already have. The
-        // point TESTED is the point ARRIVED at (S76) -- ClosestPointOnPoly clamps to the triangle, so
-        // this is a place on the mesh, not a centroid several metres away.
-        std::vector<Portal> plain;
-        plain.reserve(best.portals.size());
-        for (const PortalRef& pref : best.portals) plain.push_back(pref.p);
-        bool  flipped = false;
-        float lenKept = 0.0f, lenOther = 0.0f;
-        PathFunnel::BestPolarity(from, fpt, plain, rawPoly, flipped, lenKept, lenOther);
-        PathFunnel::InsetCorners(rawPoly);
-        PathFunnel::DropPassedWaypoints(from, rawPoly);
-
-        stats.pass      = "frontier";
-        stats.endPoly   = fp;
-        stats.shortfall = NavCommon::Distance2D(fpt, to);
-        stats.nearDist  = stats.shortfall;
+        stats.pass     = "frontier";
+        stats.nearDist = stats.shortfall;
         outPoly = rawPoly;
 
-        char fm[288];
+        char fm[320];
         snprintf(fm, sizeof(fm),
-                 "frontier: goal unreachable (%s); ending at poly %d, %.1fm short. "
-                 "tested (%.2f,%.2f,%.2f) arriving (%.2f,%.2f,%.2f) corners=%zu attempts=%d banned=%d",
-                 best.fail ? best.fail : "validation never passed", fp, stats.shortfall,
-                 fpt.x, fpt.y, fpt.z, fpt.x, fpt.y, fpt.z, rawPoly.size(),
+                 "frontier: goal unreachable (%s); source=%s ending at poly %d (%.2f,%.2f,%.2f), "
+                 "%.1fm short. corners=%zu cutByValidation=%zu attempts=%d banned=%d",
+                 best.fail ? best.fail : "validation never passed",
+                 useNear ? "near-poly corridor" : "banked proven prefix",
+                 stats.endPoly, rawPoly.back().x, rawPoly.back().y, rawPoly.back().z,
+                 stats.shortfall, rawPoly.size(), useNear ? fr.cutFrom : 0,
                  stats.attempts, stats.bannedEdges);
         Log::Write("NAV-ROUTE", fm);
 

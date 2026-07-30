@@ -257,6 +257,48 @@ and 3 to Balthier. So `BtlChrForSlot` is reading the right members; only the act
 The fix does not depend on the answer, since a roster member's *name* should never have come from
 whether the field happened to have spawned an actor for them.
 
+### Session 94 — SOLVED: the gambit column cursor, and a label the game already had
+
+**KEYWORDS: gambit left right nav keys wrong announce column cursor panel+0x33E toggle slot ON/OFF
+help_menu.bin 0xCEE 0xCEF 0xCF1 0xCF2 case 0xc carousel three panels triple speak DAT_02ca9700**
+
+**Reported:** *"the left and right nav keys don't seem to be announcing what is highlighted correctly.
+Unsure from experimentation if this is a category switch or more similar to a page-up/page-down."*
+
+**Two defects, one log.**
+
+**1. Column 0 is the ON/OFF CHECKBOX, not "the whole row".** The first version of this reader mapped
+`panel+0x33E` as `0 = whole row / 1 = condition / 2 = action` — an offline inference at 0.97 — so
+arrowing onto column 0 read the entire row out (`"Ally: status = KO, Phoenix Down, on"`) instead of the
+one state the player had highlighted. **The game already had a name for each column and the first pass
+invented one instead of looking for it.** `FUN_005691e0 case 0xc` picks the description bar's text by
+this very cursor, and those ids resolve in `help_menu.bin` (section 3):
+
+| `+0x33E` | id | the game's words |
+|---|---|---|
+| 0 | `0xCF1` | *"Toggle slot ON/OFF."* |
+| 1 | `0xCEE` | *"Change the conditions under which an action is performed."* |
+| 2 | `0xCEF` | *"Change which action is performed."* |
+| no row | `0xCF2` | *"Toggle gambits ON/OFF."* |
+
+The tester's instinct was right — it *is* a three-way cycle, they just could not tell which three.
+
+**Fix, and it is not "speak the column name":** those ids are sentences for the description bar, not
+labels, and inventing "Target"/"Action"/"Toggle" would be fabricated ones. Instead **which key moved
+decides how much to say** — a ROW move speaks the whole row, a COLUMN move speaks only the field
+landed on (condition / action / the on-off state). Arriving on a new panel counts as a row move, so
+entering the screen still announces a full row.
+
+**2. All THREE carousel panels take the entry `0x8000`.** One keypress produced three identical
+utterances at the same millisecond from owners `2BFD8D80` / `2BFE8A80` / `2BFE98C0`. They were
+inaudible only because each speaks with interrupt, so the first two were cut off — which also meant
+**the voice belonged to whichever panel dispatched last, not to the set on screen.** Gated on
+`DAT_02ca9700` (RVA `0x2B89700`), the visible panel. A null read falls through rather than going mute.
+
+**Also confirmed by this log, and it is why the picker was left alone:** the condition/action picker is
+already read by the generic painted-row path (`[READER] focus owner=...2BFE38C0 index=15 item: "Self:
+MP < 60%"`). Claiming `FUN_0056b4d0` on an unmeasured layout would have silenced a working surface.
+
 ### Session 94 — NOT A BUG: five or six characters reading "In party" at once
 
 **KEYWORDS: party membership toggle In party more than three characters staged selection FUN_00284c90
@@ -3802,3 +3844,202 @@ So the options are all real costs, not oversights:
 
 **Do not implement option 3 without asking.** If this gets picked up, option 2 is the one to price
 first. Related: `Docs/Controls.md` "Mod menu (F8)", `feedback_check_controls_md_before_input_diag`.
+
+## SOLVED — three defects behind "routes through walls" and "the beacon stops early" (Session 95, 2026-07-30)
+
+Two tester reports, one log (`FFXII-Screen-Reader-Latest.log`, session of 2026-07-30 19:41–19:51).
+Three separate causes, and each one was **already visible in the log the mod itself writes** — the
+numbers had been printed for a session and nobody had counted them.
+
+### The counting that found all three
+
+```
+plan=Frontier legs   18        worstFrac >= 0.90 BREACH   25   <- corner-footprint failures
+plan=Route    legs   17        worstFrac <  0.90 BREACH   32   <- real body-sweep failures
+validate BREACH      57
+validate OK          17
+frontier: goal unreachable (validation never passed)  17
+frontier: goal unreachable (unreachable)               1
+```
+
+**More than half the routes in the session shipped as `Frontier`, and 17 of those 18 shipped
+BECAUSE VALIDATION FAILED.** That single tally is the whole diagnosis: the escape hatch was being
+taken on most routes, and the escape hatch emitted an unvalidated polyline.
+
+`probes` vs `checked` separates the two breach kinds with no ambiguity, because `CheckLegs` spends
+1 probe per sweep and 1 per interior corner and returns on the first failure: `probes == 2*checked - 1`
+means the **sweep** failed, `probes == 2*checked` means the **corner** did. Every `worstFrac >= 0.90`
+breach in the log is the even case. That is a derivation from the code, not an inference from the
+numbers — the numbers only confirm it.
+
+### 1. The frontier route was never validated, and its geometry was incoherent
+
+`path_search.cpp`, the `Plan::Frontier` block. When no attempt validated, the fallback:
+
+- funnelled **`best.portals` — the corridor to the GOAL poly — toward `fpt`, a point on `best.bestNear`,
+  a DIFFERENT poly.** A portal sequence and an endpoint that do not belong to each other. The funnel
+  cannot repair that; it threads all the portals and then jumps.
+- in the genuinely-unreachable case `best.portals` is **empty** (the code `break`s before reconstructing),
+  so the "route" was a bare straight line from the player to a point several polys away —
+  `corners=2` in the log, e.g. `19:48:52 ... frontier ... ending at poly 73, 6.5m short ... corners=2`.
+- **ran no validation at all.** So `Plan::Frontier` — the enum value introduced precisely so a
+  shortfall could never be spoken as a plain route — announced how far short it stopped *while walking
+  the player through the wall it had failed to route around*.
+
+The clearest instance, `19:49:06`: four attempts, four BREACHes, then
+`frontier: goal unreachable (validation never passed); ending at poly 325, 16.4m short ... corners=20`
+and `say="North 210, Northwest 7, West 64, South 7. 288 steps. Blocked, 22 steps"` — 20 corners lifted
+straight from attempt 4's corridor, which the validator had just failed at leg 10 of 19.
+
+**Fixed** in the new `path_corridor.{h,cpp}`: the corridor is rebuilt from A*'s parent links **for the
+frontier poly**, funnelled, **validated**, and cut back to the part that passed; the shortfall is then
+measured from where the route really ends. Two candidates are considered — the furthest-reaching
+**proven prefix banked during the attempts**, and a fresh corridor to the nearest poly A* reached — and
+the nearer one wins. Neither can contain a leg the body sweep did not pass.
+
+### 2. A tight corner is not impassable terrain
+
+See `GameArchitecture.md`, "THE COROLLARY FOR ROUTE VALIDATION". `NavFootprint::Clears` replicates
+`FUN_0022f9b0`, whose response to a violation is to **push the body to tangency** — it is a
+depenetration rule. `path_validate.cpp` treated a failure of it as a route breach, which cost 25 of
+57 breaches and, worse, **banned the portal on a leg that had swept clear**, so every retry detoured
+around a good opening. Fixed: the sweep decides `ok`; tight corners are counted (`tight=N@i` on the
+`validate:` line) and validation continues past them.
+
+### 3. `p` was silently redirecting the audio beacon
+
+Tester: *"when the targeting state ended, the beacon only routed me to the leg of the route I was on,
+it did not continue on to the next leg."*
+
+`PathPlanner` had ONE "last request" memory. `RequestReplan()` — the beacon's off-route recovery —
+re-ran it. But `\` **and** `p` both call `Request()`, and `p` routes to the locked battle target. So:
+
+```
+19:50:33.890  'p' pressed: target acquired at (66.23,6.85,108.37)      <- an enemy
+19:50:34.078  [BEACON] party clear -> resuming objective
+19:50:36.406  [BEACON] leg reached -> advancing to leg 3 of 10          <- objective route intact
+19:50:44.875  replan: silent re-run of last target=(66.23,6.85,108.37)  <- the ENEMY
+19:50:44.921  drain seq=29: target="Steeling A" ... plan=Route legs=2
+19:50:48.578  [BEACON] arrived at destination -> final cue, stop
+```
+
+The same thing at `19:49:48` → `19:49:50` with `"Dire Rat C"`. The resume itself works perfectly —
+`advancing to leg 3 of 10` proves the route survived combat untouched. What killed it was the FIRST
+off-route re-plan afterwards, which is near-certain to fire: the stray test is skipped while engaged,
+so the moment the party is clear the player is standing wherever the fight took them.
+
+**`p` already declared it has no business with the beacon** — it passes `seedBeacon=false`, and the
+header even explains why. That flag now also gates whether a request becomes the beacon's objective.
+`RequestReplan()` restores from a separate objective snapshot; nothing but `\` can write it.
+
+**The shape of this one:** a flag that correctly said "this request is not the beacon's" was consulted
+on the outbound path and ignored on the recovery path. One fact, two code paths, and only one of them
+knew it.
+
+### Still open, MEASURED, deliberately not changed
+
+**A `Frontier` beacon fires the arrival cue at a point that is not the destination.**
+`19:48:52` seeds the beacon with the frontier point of a route 9 steps short; `19:48:54` logs
+`arrived at destination -> final cue, stop`. The player then pressed `\` again from near that point and
+got a full `plan=Route` (`19:48:56`, `seq=3`) — so the objective was reachable from there all along.
+Changing this means either a new cue/word (needs permission) or continuing the beacon past a frontier
+endpoint, and both should be judged against the NEW frontier behaviour rather than the old one.
+Session 95 fixes 1 and 2 should cut how often it happens (25 of 57 breaches disappear), but they also
+make a frontier route SHORTER when it does occur.
+
+**`kMinFraction = 0.90` is a ratio, so it penalises short legs.** A leg is judged on
+achieved/requested, and the depenetration pull-back at the far end is a fixed ~one body radius
+(0.27 m). On a 2.7 m leg that is exactly the 10% of slack; on a 1 m leg it is more. A distance-based
+test (`(1 - fraction) * legLength <= bodyRadius + slack`) would be dimensionally correct. **Not
+changed — no measurement yet ties a specific false breach to leg length**, and the 0.85 cluster in the
+log could equally be real. Left as a stated hypothesis, not a shipped tuning change.
+
+## Tried & Failed — refusing a TERRAIN TYPE instead of measuring PASSABILITY (Session 96, 2026-07-30)
+
+**Do not re-add a terrain-type gate to `NavMesh::Walkable`.** This was tried, shipped, and refuted in
+play inside one session.
+
+The change: `Walkable` went from `(effectiveFlags & 7) == 0` to
+`MapQuery::FloorWalkable(poly, PartyMovementClass())` — the engine's own `FUN_00230a40`, whose bit-23
+branch was read as "the marker the designer puts on water, lava, bog and out of bounds".
+
+The decompile is not in doubt. The claim built on it is:
+
+- **The party walks on bit-23 polys.** Garamsythe's water is ankle-deep, the game has no swimming, and
+  the tester walks it every time they cross a channel. On map 311 the check refused **399 of 690 floor
+  prims** and made an exit that had routed for the whole game unreachable.
+- **The evidence for it had already been spent.** It was justified as the cause of "three sessions of
+  routes through impassable terrain" — which Session 95 had already diagnosed and fixed (the
+  unvalidated `Plan::Frontier`). A second explanation stacked on a solved problem.
+- **The class it asks about is probably wrong.** `GameArchitecture.md` records at conf 0.97 that the
+  movers pass class **4**, traced through the callers that pass it (`FUN_0032bcc0` / `FUN_0032ca70` ->
+  `FUN_00230c10` arg5 -> `moveCtx+0x50`). The override reasoned instead from what `FUN_002681d0`
+  *writes* (0, to `holder+0x153`) and never showed that field reaches the callee. Class 4 hits no
+  per-class branch — consistent with the party walking bit-23 ground.
+
+**The general lesson: prefer the call site over the writer.** Only one of them says what the callee is
+actually handed.
+
+**And the question the router needs is not what terrain is made of.** It is "can the character get
+there", and the instrument for that is the engine's own body walk at character scale — 0.5 m steps
+with depenetration carried forward, which is the question the game asks itself sixty times a second.
+`NavMesh::TerrainRefused` still asks the per-class flag question and **decides nothing**; `NavTrace`
+checks it every metre against the poly the player is standing on and logs `STANDING-ON-REFUSED` when
+either predicate disagrees with the player's own feet.
+
+### Tried & Failed — demoting `NavFootprint::Clears` in `BodyFitsAt`
+
+The knock-on. With water newly a hard border, every sewer walkway had one on both sides, `Clears`
+started refusing crossings everywhere, and map 315 produced 618 reachable polys and zero routes. The
+response — make `Clears` a counter instead of a refusal — removed the only thing keeping A* out of
+gaps the body cannot pass, and cost a third exit on map 311. The tester diagnosed it from behaviour:
+*"pure A* got us to all 3 exits, so whatever you added is either flagging walkable terrain or routing
+through an obstacle it didn't before."*
+
+**The level was wrong, not the test.** A `false` DELETED the edge; it now makes it expensive
+(`kTightPenalty`). See below.
+
+### SOLVED — nothing severs the graph; everything difficult is expensive
+
+Every routing regression this session came from one move: taking a real measurement and using it to
+DELETE an edge. Delete enough and a reachable goal becomes unreachable — and once it is unreachable
+there is nothing left to validate, repair, or honestly report.
+
+Every refusal in `path_search.cpp` is now a price in metres (terrain 2000, tight 500, measured block
+2000, breach 500 accumulating). The only remaining cut is "no neighbour", where there is nothing on
+the other side to price. The heuristic stays Euclidean and admissible because penalties only add.
+
+**The portal ban went with it.** The log has A* reaching the goal on attempt 1, banning the breaching
+portal, and reporting "goal unreachable" on attempt 2. A ban is a permanent, binary answer to a local
+question; a price is neither.
+
+### SOLVED — a breach is a verdict on the CHORD, not on the corridor
+
+The corridor A* returns is walkable by construction: every portal was measured with the body's own
+footprint and sweep before the edge was expanded. The taut chord the funnel draws across it is an
+optimisation and can leave the walkable strip. Proved both directions in one request on map 311: the
+chord's leg 3 stopped the body at 6.23 m of 9.00 m on four consecutive attempts, while the frontier's
+less-taut polyline walked the same ground with `cutByValidation=0`.
+
+Repair is now a ladder, **entirely on the failure path**: taut chord -> un-pull the failing leg and
+the corner it aimed at -> retreat to `badStopAt` (the engine's own resolved position, reachable
+whatever is in the way) -> full corridor with no string-pull. A route that validates on the chord runs
+none of it and cannot be changed by any of it.
+
+### OPEN — the Northern Sluiceway is NOT a control-room / gate-state problem (Session 96)
+
+Tester, confirmed in play: **the Northern Sluiceway routes through to the North Spur Sluiceway.**
+
+That kills the obvious hypothesis for map 315 — that the sluice puzzle's flood state makes the map
+genuinely unroutable at some gate positions (plausible, because `FUN_00232020`'s material bank can
+flip a whole material's walkability at runtime without touching geometry). The map routes with the
+gates as they stand. Map 315's zero-routes-out-of-five was logged at 10:20–10:40, i.e. the bit-23
+build: **those failures were ours.** Do not re-open the gate theory without new evidence.
+
+### Do not read `tight=0@0` on a breaching route as "the corner was clear"
+
+`PathValidate::CheckLegs` returns on a breach **before** reaching its own interior-corner check, so on
+any route that breached, `tightCorners` means NOT TESTED. This was misread once and nearly bought a
+global geometry change (insetting every portal span by a body radius) on the strength of it.
+`PathValidate::Diagnose` now asks the question properly on a breach — footprint clearance at the
+breaching corner plus volume probes at the stop and 0.3 m beyond.

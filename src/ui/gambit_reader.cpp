@@ -23,6 +23,12 @@ using MemRead::SafeReadU16;
 // ---- panel layout (abs = RVA + 0x120000) -------------------------------------------------------
 // All of these are probe-confirmed; see gambit_reader.h for the pass criteria.
 constexpr uint32_t RVA_PANEL   = 0x4491E0;  // FUN_005691e0 -- the gambit screen, pause cmd 0x4B9
+// DAT_02ca9700 -- THE VISIBLE panel of the three-set carousel. Three panels exist and ALL THREE take
+// the entry 0x8000: the live log caught one keypress producing three identical utterances at the same
+// millisecond from owners 2BFD8D80 / 2BFE8A80 / 2BFE98C0. They were inaudible only because each speaks
+// with interrupt, so the first two were cut off -- which also meant the voice belonged to whichever
+// panel dispatched LAST, not to the set on screen.
+constexpr uint32_t RVA_CUR_PANEL = 0x2B89700;
 constexpr uint32_t P_RECS      = 0x160;     // panel+0x160 + i*0x20 = display record i
 constexpr uint32_t REC_STRIDE  = 0x20;
 constexpr int      REC_MAX     = 13;        // the array is memset 0x1A0 = 13 * 0x20
@@ -35,7 +41,20 @@ constexpr uint32_t R_ON        = 0x14;      // u8  enabled; on rec 0 this is the
 constexpr uint32_t R_CLASS     = 0x15;      // u8  2 = empty row
 
 constexpr uint8_t  CLASS_EMPTY = 2;
-constexpr int      COL_ROW = 0, COL_COND = 1, COL_ACT = 2;
+
+// THE THREE COLUMNS, from the game's own help ids rather than from a guess. FUN_005691e0 `case 0xc`
+// picks the description by this very cursor -- 0xCF1 for 0, 0xCEE for 1, 0xCEF for 2 (and 0xCF2 when
+// there is no row) -- and those ids resolve in `help_menu.bin`, section 3, to:
+//     0xCF1  "Toggle slot ON/OFF."                                            -> column 0
+//     0xCEE  "Change the conditions under which an action is performed."      -> column 1
+//     0xCEF  "Change which action is performed."                              -> column 2
+//     0xCF2  "Toggle gambits ON/OFF."                                         -> record 0's master
+//
+// **Column 0 is the per-slot ON/OFF checkbox, NOT "the whole row"** -- which is what the first version
+// of this reader assumed, so arrowing onto it read the entire row out instead of the one state the
+// player had highlighted. That was the reported defect: *"the left and right nav keys don't seem to be
+// announcing what is highlighted correctly."* There is no "whole row" cursor position at all.
+constexpr int COL_ONOFF = 0, COL_COND = 1, COL_ACT = 2;
 
 // Decode one of the record's two name pointers.
 //
@@ -86,10 +105,27 @@ void* s_lastPanel = nullptr;
 int   s_lastRec   = -1;
 int   s_lastCol   = -1;
 
-bool StateChanged(void* panel, int rec, int col) {
-    if (panel == s_lastPanel && rec == s_lastRec && col == s_lastCol) return false;
+enum class Move { None, Row, Column };
+
+// A ROW move and a COLUMN move are different questions and get different answers, which is the other
+// half of the fix: moving DOWN a row means the player wants the whole row, moving LEFT/RIGHT means
+// they want the one field they just landed on. Arriving on a new panel counts as a row move, so
+// entering the screen (or flipping to another gambit set) always announces a full row.
+Move Moved(void* panel, int rec, int col) {
+    Move m;
+    if (panel != s_lastPanel || rec != s_lastRec) m = Move::Row;
+    else if (col != s_lastCol)                    m = Move::Column;
+    else                                          m = Move::None;
     s_lastPanel = panel; s_lastRec = rec; s_lastCol = col;
-    return true;
+    return m;
+}
+
+// The panel the player is actually looking at. Non-null and different => a background set of the
+// carousel; stay silent for it. A null read means the global is not up yet, in which case believing
+// the dispatch is better than going mute.
+bool IsVisiblePanel(void* panel) {
+    void* cur = PtrAt(Hooks::ResolveRva(RVA_CUR_PANEL), 0);
+    return !cur || cur == panel;
 }
 
 } // namespace
@@ -101,6 +137,9 @@ bool IsGambitPanel(void* owner) {
 bool OnFocus(void* panel, int recIndex) {
     if (!IsGambitPanel(panel)) return false;
     STALL_SCOPE("GambitReader::OnFocus");
+
+    // All three carousel panels take the entry 0x8000; only the visible one has anything to say.
+    if (!IsVisiblePanel(panel)) return true;
 
     uint8_t rowCount = 0, colRaw = 0;
     if (!SafeReadU8(panel, P_COUNT, &rowCount) || !SafeReadU8(panel, P_COL, &colRaw)) {
@@ -117,8 +156,9 @@ bool OnFocus(void* panel, int recIndex) {
     // THE HEADER ROW HAS NO COLUMNS, so force column 0 there. rec[0]'s action-name pointer is null
     // (probe: `actHex = null`), i.e. there is no second column to be on -- and this is what makes the
     // stale-column first message of a row-0 crossing collapse into the corrected one.
-    const int col = (recIndex == 0) ? COL_ROW : static_cast<int>(colRaw);
-    if (!StateChanged(panel, recIndex, col)) return true;
+    const int col = (recIndex == 0) ? COL_ONOFF : static_cast<int>(colRaw);
+    const Move moved = Moved(panel, recIndex, col);
+    if (moved == Move::None) return true;
 
     uint8_t on = 0, cls = 0;
     RecByte(panel, recIndex, R_ON, &on);
@@ -164,15 +204,25 @@ bool OnFocus(void* panel, int recIndex) {
         }
     }
 
-    // Column cursor decides how much of the row to say: on the whole row, everything; inside a
-    // column, that column alone, because the player moved there to hear it.
+    // WHICH KEY MOVED decides how much to say -- not the column, which is what the first version got
+    // wrong. Arrive on a new ROW and you want all of it; move LEFT/RIGHT and you want only the field
+    // you landed on, because you already heard the rest a moment ago and the row has not changed.
     std::wstring line;
-    if (col == COL_COND)      line = cond;
-    else if (col == COL_ACT)  line = act;
-    else {
+    if (moved == Move::Row) {
         line = cond;
         if (!act.empty())  line += (line.empty() ? L"" : L", ") + act;
         if (!line.empty()) line += L", " + OnOffWord(on != 0);
+    } else if (col == COL_COND) {
+        line = cond;
+    } else if (col == COL_ACT) {
+        line = act;
+    } else {
+        // The ON/OFF checkbox. Its STATE is the whole content of this column -- the game's own
+        // description bar already says what the column is ("Toggle slot ON/OFF."), and inventing a
+        // spoken label for it would be a fabricated one. Same call the tester made for the party
+        // toggle: the cursor has not left the row, so repeating the row would bury the one bit they
+        // moved to hear.
+        line = OnOffWord(on != 0);
     }
 
     if (line.empty()) {

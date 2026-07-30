@@ -3,6 +3,7 @@
 #include "navigation/map_query.h"
 #include "navigation/map_seams.h"
 #include "navigation/nav_common.h"
+#include "navigation/nav_mesh.h"
 #include "navigation/exit_scan.h"   // ClaimedDestForGroup -- the crossing oracle's other half
 #include "core/logger.h"
 
@@ -70,6 +71,52 @@ void MeasureSeams(Crumb& c) {
             c.dCentroid = NavCommon::Distance2D(p, s.centroid);
         }
     }
+}
+
+// ---- THE GROUND-TRUTH CHECK ------------------------------------------------------------------------
+//
+// The player is standing here. That is not a theory, an inference or a decompile reading -- it is the
+// one fact in this whole subsystem that cannot be argued with, and it is free, because a crumb is
+// already being laid down.
+//
+// So: does the router's own walkability predicate accept the ground the player is ON? And does the
+// engine's per-class floor test? Session 96 wired `FloorWalkable(poly, class 0)` into `Walkable` on the
+// reading that bit 23 marks water the party cannot enter. It refused 399 of 690 prims on map 311 and
+// cost an exit -- and the tester walks through that water, because it is ankle-deep and the game has no
+// swimming. A predicate that refuses ground under the player's feet is wrong, whatever it was derived
+// from, and this is the line that says so out loud instead of leaving it to be inferred from a route
+// three subsystems away.
+//
+// It also answers the open question underneath: if the class is wrong, or bit 23 means something other
+// than "impassable", this fires constantly. If it NEVER fires across a session of ordinary walking,
+// `TerrainRefused` has earned the right to be priced -- and until then it decides nothing.
+//
+// Log-only, and deduped per (poly, verdict) because a crumb lands every metre and a channel crossing
+// would otherwise print a line a second. That is the CONSOLE OUTPUT BUDGET rule, not speech dedup.
+void GroundTruth(const Crumb& c) {
+    const NavMesh::PolyId p = NavMesh::FindPolyAt(c.x, c.y, c.z);
+    if (p == NavMesh::kNoPoly) return;                 // off-mesh: a cutscene or a lift, not evidence
+
+    const bool routerOk = NavMesh::Walkable(p);
+    const bool engineNo = NavMesh::TerrainRefused(p);
+    if (routerOk && !engineNo) return;                 // both agree with the player's own feet
+
+    static NavMesh::PolyId s_lastPoly = -1;
+    static int             s_lastVerd = -1;
+    const int verdict = (routerOk ? 1 : 0) | (engineNo ? 2 : 0);
+    if (p == s_lastPoly && verdict == s_lastVerd) return;
+    s_lastPoly = p;
+    s_lastVerd = verdict;
+
+    uint32_t raw = 0, eff = 0;
+    NavMesh::PolyFlags(p, raw, eff);
+    char m[288];
+    snprintf(m, sizeof(m),
+             "STANDING-ON-REFUSED: player at (%.2f,%.2f,%.2f) is on poly %d eff=0x%08X -- "
+             "router Walkable=%d, engine FloorWalkable=%d. The player is THERE, so a 0 is the "
+             "predicate being wrong, not the ground.",
+             c.x, c.y, c.z, p, eff, routerOk ? 1 : 0, engineNo ? 0 : 1);
+    Log::Write("NAV-TRACE", m);
 }
 
 void Push(const Crumb& c) {
@@ -253,6 +300,7 @@ void OnFieldFrame(int mapId, const FVec3& pos) {
     }
     Crumb c{ pos.x, pos.y, pos.z };
     MeasureSeams(c);
+    GroundTruth(c);
     g_last = c;
     g_have = true;
     Push(c);

@@ -1,4 +1,5 @@
 #include "navigation/nav_probe.h"
+#include "navigation/exit_diag.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/map_query.h"
 #include "navigation/map_seams.h"
@@ -257,6 +258,12 @@ void RunProbe() {
     // deleted NPCs went unnoticed. Its filter is deliberately wider than the scan's, so an object
     // the scan drops still appears here with its flags, kind, category and position.
     EntityList::LogDiagnostic();
+
+    // THE TERRAIN CENSUS -- every distinct polygon flags word on this map, with the effective flags and
+    // whether the party is refused by bit 23. Revived in Session 96: it had been written, declared and
+    // then left with zero callers, while three research passes argued about terrain attributes it would
+    // have answered in one keypress.
+    ExitDiag::LogWalkPolyClasses();
 
     NavTrace::DumpTrail();
     Log::Write(kTag, "======== end NAV-PROBE ========");

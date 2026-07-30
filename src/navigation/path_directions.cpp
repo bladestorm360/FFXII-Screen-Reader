@@ -123,17 +123,42 @@ int DiagonalBetween(int a, int b) {
     return (b + 1) % 8;                                        // a is b+2
 }
 
+// AN OCTANT BUCKET IS NOT A DIRECTION (Session 96). `RelativeOctant` snaps to 45-degree buckets, so
+// two consecutive segments at +22.4 and -22.4 degrees both read as "North" and used to be summed into
+// ONE spoken leg -- a 44.8-degree bend delivered as a single heading, and the merge could repeat
+// without bound. The player holds the heading they were given, the route does not, and on a taut path
+// that runs one body radius from the wall the difference is a hard stop.
+//
+// Measured: a leg spoken as "North" was 3.55 degrees off, the player's Z never changed across 31.75 m
+// of walking (a wall-slide signature), and they jammed 18.35 m along it -- 18.35 * tan(3.55) = 1.14 m,
+// which is exactly the drift that put them into the wall.
+//
+// So a run now extends only while the new segment stays within kRunSpreadDeg of the bearing the run
+// STARTED with. The words are unchanged -- this only stops one word covering a path that bends.
+constexpr float kRunSpreadDeg = 12.0f;
+
+float AngleDiffDeg(float a, float b) {
+    float d = a - b;
+    while (d >  180.0f) d -= 360.0f;
+    while (d < -180.0f) d += 360.0f;
+    return std::fabs(d);
+}
+
 std::vector<Run> BuildRuns(const std::vector<FVec3>& poly, float facingRad) {
     std::vector<Run> runs;
+    std::vector<float> runBearing;               // the bearing each run opened with
     for (size_t i = 1; i < poly.size(); ++i) {
         const float d = NavCommon::Distance2D(poly[i - 1], poly[i]);
         if (d <= 0.0f) continue;
-        const int oct = NavCommon::RelativeOctant(poly[i - 1], poly[i], facingRad);
-        if (!runs.empty() && runs.back().octant == oct) {
+        const int   oct = NavCommon::RelativeOctant(poly[i - 1], poly[i], facingRad);
+        const float deg = NavCommon::RelativeBearingDeg(poly[i - 1], poly[i], facingRad);
+        if (!runs.empty() && runs.back().octant == oct &&
+            AngleDiffDeg(deg, runBearing.back()) <= kRunSpreadDeg) {
             runs.back().dist += d;
             runs.back().last = i;
         } else {
             runs.push_back(Run{ oct, d, i - 1, i });
+            runBearing.push_back(deg);
         }
     }
     return runs;
@@ -209,7 +234,13 @@ std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad,
         for (size_t i = 0; i < legs.size(); ++i) {
             if (legs[i].steps >= kMinLegSteps) continue;
             const size_t into = (i == 0) ? 1 : i - 1;
-            legs[into].steps += legs[i].steps;
+            // ONLY CARRY THE STEPS WHEN THE DIRECTION MATCHES (Session 96). This used to add them
+            // unconditionally "so the total stays honest" -- but that is the wrong kind of honesty:
+            // it kept the distance right while making the DIRECTION wrong, so "North 117, West 1"
+            // was spoken as "North 118" and a metre of westward travel was described as northward.
+            // A player walking a heading needs the heading to be true; a sub-two-step jog is under
+            // the resolution of the instruction anyway and is better dropped than misattributed.
+            if (wcscmp(legs[into].word, legs[i].word) == 0) legs[into].steps += legs[i].steps;
             // The survivor now covers both stretches, so it ends at whichever corner is later along
             // the route. Absorbing forward (i into i-1) extends it; absorbing leg 0 into leg 1
             // leaves leg 1's own corner, which already sits further on.

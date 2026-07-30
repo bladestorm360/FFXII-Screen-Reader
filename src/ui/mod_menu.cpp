@@ -18,28 +18,51 @@ namespace {
 using Phrase::Id;
 
 // ---- the settings table -------------------------------------------------------------------------
-// One row per SettingId, in enum order. `values` and `descs` are parallel: values[i] is the spoken
-// name of value i, descs[i] the sentence explaining what value i does. `count` is how many values
-// the setting has, which is what CycleSetting wraps on.
+// One row per SettingId, in enum order.
+//
+// TWO KINDS OF SETTING (Session 95, when volume arrived). A `Named` setting has a spoken word per
+// value and a sentence per value; `values`/`descs` are parallel arrays indexed by the value. A
+// `Percent` setting has neither -- its value RENDERS AS A NUMBER, which is deliberate: a digit string
+// needs no phrasebook row, translates itself, and adding five invented loudness adjectives to a
+// 12-locale table would be exactly the fabricated-label failure the phrasebook rules exist to stop.
+enum class Kind : uint8_t { Named, Percent };
+
+// Volume steps: 20% .. 100%, five of them. Deliberately does NOT reach 0 -- each beacon has its own
+// Off toggle, and a volume that can silence a switched-on feature is a support question waiting to
+// happen ("the beacon is on but I hear nothing").
+constexpr int kVolumeSteps   = 5;
+constexpr int kVolumePercent = 20;    // value i speaks as (i + 1) * 20 percent
+
 struct Setting {
-    Id  name;
-    int count;
-    Id  values[2];
-    Id  descs[2];
-    Id  desc;            // the setting-level sentence, spoken before the value's sentence
+    Id   name;
+    Kind kind;
+    int  count;          // how many values; what Adjust wraps or clamps on
+    Id   values[2];      // Named only
+    Id   descs[2];       // Named only
+    Id   desc;           // the setting-level sentence, spoken before the value's sentence
     const char* key;     // token used in the settings file; never spoken
-    int defValue;        // used when there is no stored file, or the stored value is out of range
+    int  defValue;       // used when there is no stored file, or the stored value is out of range
 };
 
 const Setting kSettings[] = {
-    { Id::SettingCombatVerbosity, 2,
+    { Id::SettingCombatVerbosity, Kind::Named, 2,
       { Id::VerbosityNormal,     Id::VerbosityVerbose },
       { Id::VerbosityDescNormal, Id::VerbosityDescVerbose },
       Id::VerbosityDesc, "combat_verbosity", 0 },
-    { Id::SettingAudioBeacon, 2,
+    { Id::SettingAudioBeacon, Kind::Named, 2,
       { Id::BeaconOff,     Id::BeaconOn },
       { Id::BeaconDescOff, Id::BeaconDescOn },
       Id::BeaconDesc, "audio_beacon", 1 },
+    { Id::SettingBeaconVolume, Kind::Percent, kVolumeSteps,
+      {}, {}, Id::BeaconVolumeDesc, "beacon_volume", kVolumeSteps - 1 },
+    // Defaults ON, because that is what today's behaviour already was -- the target ping came free
+    // with the route beacon. Splitting the setting must not silently take a feature away.
+    { Id::SettingTargetBeacon, Kind::Named, 2,
+      { Id::BeaconOff,           Id::BeaconOn },
+      { Id::TargetBeaconDescOff, Id::TargetBeaconDescOn },
+      Id::TargetBeaconDesc, "target_beacon", 1 },
+    { Id::SettingTargetVolume, Kind::Percent, kVolumeSteps,
+      {}, {}, Id::TargetVolumeDesc, "target_volume", kVolumeSteps - 1 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -111,7 +134,19 @@ void Load() {
 // Glue (". ", ", ") is composed here rather than stored in the phrasebook, per its header rule.
 std::wstring ValueOf(int i) {
     const Setting& s = kSettings[i];
-    return Phrase::Get(s.values[g_values[i].load(std::memory_order_relaxed)]);
+    const int v = g_values[i].load(std::memory_order_relaxed);
+    // A number, not a word. `%` is punctuation the screen reader already voices ("eighty percent"),
+    // so this needs no phrasebook row in any of the twelve locales.
+    if (s.kind == Kind::Percent) return std::to_wstring((v + 1) * kVolumePercent) + L"%";
+    return Phrase::Get(s.values[v]);
+}
+
+// Gain 0..1 for a Percent setting, for the audio engine.
+float GainOf(SettingId id) {
+    const int i = static_cast<int>(id);
+    if (i < 0 || i >= kCount || kSettings[i].kind != Kind::Percent) return 1.0f;
+    const int v = g_values[i].load(std::memory_order_relaxed);
+    return static_cast<float>((v + 1) * kVolumePercent) / 100.0f;
 }
 
 std::wstring NameAndValue(int i) {
@@ -147,11 +182,14 @@ bool OnMenuNavKey(int vk) {
             g_cursor = kCount - 1;
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
+        // Left and right are now DIRECTIONAL. They used to both advance, on the reasoning that every
+        // setting was two-valued so "previous" and "next" were the same move -- with a note to widen
+        // it when a setting with three or more values arrived. Volume is that setting.
         case VK_LEFT:
+            Adjust(static_cast<SettingId>(g_cursor), -1);
+            return true;
         case VK_RIGHT:
-            // Both directions advance: every setting here is two-valued, so "previous" and "next"
-            // are the same move. Widen this when a setting with three or more values arrives.
-            CycleSetting(static_cast<SettingId>(g_cursor));
+            Adjust(static_cast<SettingId>(g_cursor), +1);
             return true;
         default:
             return false;
@@ -165,8 +203,12 @@ bool OnDescribe() {
     if (!g_open.load(std::memory_order_relaxed)) return false;
     const Setting& s = kSettings[g_cursor];
     std::wstring out = Phrase::Get(s.desc);
-    out += L' ';
-    out += Phrase::Get(s.descs[g_values[g_cursor].load(std::memory_order_relaxed)]);
+    // A Percent setting has no per-value sentence -- "eighty percent" explains itself, and inventing
+    // five sentences that differ only in a number would be noise.
+    if (s.kind == Kind::Named) {
+        out += L' ';
+        out += Phrase::Get(s.descs[g_values[g_cursor].load(std::memory_order_relaxed)]);
+    }
     Speech::Output(out, true);
     return true;
 }
@@ -201,6 +243,14 @@ bool AudioBeaconOn() {
            == static_cast<int>(Beacon::On);
 }
 
+bool TargetBeaconOn() {
+    return g_values[static_cast<int>(SettingId::TargetBeacon)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
+}
+
+float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
+float TargetVolume() { return GainOf(SettingId::TargetVolume); }
+
 bool IsOpen() { return g_open.load(std::memory_order_relaxed); }
 
 void Toggle() {
@@ -216,16 +266,32 @@ void Toggle() {
     Log::Write("MODMENU", "opened");
 }
 
-void CycleSetting(SettingId id) {
+void CycleSetting(SettingId id) { Adjust(id, +1); }
+
+void Adjust(SettingId id, int delta) {
     const int i = static_cast<int>(id);
     if (i < 0 || i >= kCount) return;
-    const int next = (g_values[i].load(std::memory_order_relaxed) + 1) % kSettings[i].count;
-    g_values[i].store(next, std::memory_order_relaxed);
-    Save();
+    const Setting& s = kSettings[i];
+    const int cur = g_values[i].load(std::memory_order_relaxed);
+
+    int next = cur + (delta < 0 ? -1 : 1);
+    if (s.kind == Kind::Percent) {
+        if (next < 0) next = 0;
+        if (next >= s.count) next = s.count - 1;
+    } else {
+        next = ((next % s.count) + s.count) % s.count;   // wrap, and never go negative
+    }
+    // Speak even when the value did not move: at the end of a volume range the repeated number IS
+    // how the player hears they have run out of range. Going silent there would read as a dropped
+    // keypress. Skip the write and the file, though -- nothing changed.
+    if (next != cur) {
+        g_values[i].store(next, std::memory_order_relaxed);
+        Save();
+        LogState("set", i);
+    }
     // The value alone, not the setting name: F4 is a dedicated key whose meaning the player already
     // knows, and inside the menu they just heard the name. Short enough to use mid-fight.
     Speech::Output(ValueOf(i), true);
-    LogState("set", i);
 }
 
 } // namespace ModMenu

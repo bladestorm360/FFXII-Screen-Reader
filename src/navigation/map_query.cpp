@@ -21,6 +21,14 @@ typedef uint8_t(__fastcall* Pfn_GroundAt)(float x, float z, float* outY);
 // FUN_00230b60(ctx0, outHit16, from[4], to[4], mask, flags) -> int (>=0 blocked, <0 clear).
 typedef int(__fastcall* Pfn_SegTest)(void* ctx, void* out, const float* from,
                                      const float* to, uint16_t mask, uint32_t flags);
+// FUN_00232490(ctx0, pos[4], flag) -> int volume-hit count. Layer mask 6 = CSR layers 1 and 2, which
+// is what finally lets routing see WALLS. See nav_rva.h MAP_POINT_IN_VOLUME.
+typedef int(__fastcall* Pfn_PointInVolume)(void* ctx, const float* pos, int flag);
+// FUN_00230a40(ctx0, s16 polyIdx, s16 moveClass) -> 1 walkable / 0 refused. See nav_rva.h
+// MAP_FLOOR_WALKABLE -- this is the test that knows about water.
+typedef int(__fastcall* Pfn_FloorWalkable)(void* ctx, int16_t poly, int16_t cls);
+// FUN_00232020(rawFlags) -> effective flags. Takes the WORD, not a poly -- no walkmap pointer needed.
+typedef uint32_t(__fastcall* Pfn_EffFlags)(uint32_t raw);
 // FUN_00230c10(ctx0, outPos[4], from[4], to[4], queryClass, bodyRadius) -> int (0 clear, else blocked).
 // Args 5 and 6 land on the stack under MS x64 regardless of type, which is exactly how the engine's
 // own call sites lay them out (`local_a8 = class` then `local_a0 = 0x3e8a3d71` at FUN_0032bcc0:52-53).
@@ -50,6 +58,14 @@ static int CallBodySweep(Pfn_BodySweep fn, void* ctx, float* outPos, const float
     __try { return fn(ctx, outPos, from, to, cls, radius); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }    // fault -> treat as clear (never invent a block)
 }
+static int CallFloorWalkable(Pfn_FloorWalkable fn, void* ctx, int16_t poly, int16_t cls) {
+    __try { return fn(ctx, poly, cls); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 1; }    // fault -> walkable (never invent a block)
+}
+static int CallPointInVolume(Pfn_PointInVolume fn, void* ctx, const float* pos) {
+    __try { return fn(ctx, pos, 1); }                     // 1 matches FUN_00231400's own flag slot
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }    // fault -> no volume (never invent a block)
+}
 
 
 // (ResolveAreaName / ResolveRegionName / CurrentMapId are PUBLIC — defined below in namespace MapQuery.
@@ -61,6 +77,38 @@ namespace MapQuery {
 
 
 bool HasWorld() { return Ctx0() != nullptr; }
+
+uint32_t EffectiveFlags(uint32_t raw) {
+    Pfn_EffFlags fn = reinterpret_cast<Pfn_EffFlags>(Hooks::ResolveRva(NavRva::MAP_EFFECTIVE_FLAGS));
+    if (!fn) return raw;
+    __try { return fn(raw); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return raw; }
+}
+
+bool FloorWalkable(int polyIdx, uint16_t cls, bool* answered) {
+    if (answered) *answered = false;
+    if (polyIdx < 0 || polyIdx > 0x7FFF) return false;
+    void* ctx = Ctx0();
+    if (!ctx) return true;                              // no world -> never invent a block
+    Pfn_FloorWalkable fn =
+        reinterpret_cast<Pfn_FloorWalkable>(Hooks::ResolveRva(NavRva::MAP_FLOOR_WALKABLE));
+    if (!fn) return true;
+    if (answered) *answered = true;
+    return CallFloorWalkable(fn, ctx, static_cast<int16_t>(polyIdx),
+                             static_cast<int16_t>(cls)) != 0;
+}
+
+bool PointInVolume(const FVec3& pos, bool* answered) {
+    if (answered) *answered = false;
+    void* ctx = Ctx0();
+    if (!ctx) return false;                             // no world -> never invent a block
+    Pfn_PointInVolume fn =
+        reinterpret_cast<Pfn_PointInVolume>(Hooks::ResolveRva(NavRva::MAP_POINT_IN_VOLUME));
+    if (!fn) return false;
+    const float p[4] = { pos.x, pos.y, pos.z, 1.0f };
+    if (answered) *answered = true;
+    return CallPointInVolume(fn, ctx, p) > 0;
+}
 
 bool GroundAt(float x, float z, float& outY) {
     if (!HasWorld()) return false;

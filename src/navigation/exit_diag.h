@@ -23,4 +23,13 @@ namespace ExitDiag {
 // SEH-guarded; safe to call whenever a field map is loaded. Called from the `'` diagnostic key.
 void DumpCoverage();
 
+// THE TERRAIN CENSUS. Sweeps the whole walkmap and reports every distinct polygon flags word with its
+// count and a few sample positions — now with the EFFECTIVE flags and, for each class, whether the
+// party is refused by bit 23 (see nav_rva.h MAP_FLOOR_WALKABLE).
+//
+// This is how a terrain question gets answered with a measurement instead of an argument. Three
+// research passes hunted a "water attribute" that does not exist while this function sat in the
+// codebase with zero callers; it is bound to `'` now so the next such question costs one keypress.
+void LogWalkPolyClasses();
+
 } // namespace ExitDiag

@@ -83,6 +83,14 @@ bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective);
 // it. Anything that makes this function stricter than FUN_00230a40 is a bug.
 bool Walkable(PolyId p);
 
+// The engine's own per-class floor test, inverted: "would FloorWalkable refuse the party here?"
+//
+// NOTHING ROUTES ON THIS. It is a hypothesis under observation, not a predicate -- Session 96 wired it
+// into `Walkable` and it refused 399 of 690 prims on map 311, including the shallow water the tester
+// walks through. `NavTrace` checks it against where the player is ACTUALLY standing; until that check
+// stops firing, the answer is not trustworthy enough to refuse anything.
+bool TerrainRefused(PolyId p);
+
 // Is `p` a legitimate floor-poly index? A poly index is an s16 in the engine and the prim encoding
 // reserves >= 0x4000 for volumes, so a real floor poly is always in [0, 0x4000). Exposed because
 // NavFootprint needs the same notion of validity and a second copy of the bound would be a second
@@ -120,13 +128,27 @@ bool ClosestPointOnPoly(PolyId p, float x, float z, FVec3& out);
 // Two gates, and only two. The mesh's own adjacency already encodes every height relationship the
 // engine honours, so there is deliberately NO step gate and NO slope gate here -- adding either is
 // what made stairs unroutable before.
-//   1. the neighbour exists and is walkable for class 4;
-//   2. the edge is not blocked by a VOLUME.
-// Gate 2 is why a raycast survives at all: static volumes (prims 0x4000-0x5000) and dynamic
-// obstacles (>= 0x5000, i.e. doors and moving platforms) block movement WITHOUT appearing in floor
-// adjacency, so the floor under a closed gate is still adjacent to the floor before it. One
-// walk-class segment per expanded edge catches them.
+//   1. the neighbour exists and `Walkable` says the party's own floor class may stand on it;
+//   2. the body can be swept across the shared edge at SOME parameter along it.
+// Gate 1 is the terrain refusal (bit 23 -- water, lava, bog, out of bounds) and it is the only
+// refusal on terrain grounds anywhere in the router. Gate 2 is one body sweep per sample, which is
+// what catches static volumes (prims 0x4000-0x5000) and dynamic obstacles (>= 0x5000, i.e. doors and
+// moving platforms): those block movement WITHOUT appearing in floor adjacency, so the floor under a
+// closed gate is still adjacent to the floor before it.
 bool EdgePassable(PolyId p, int e, PolyId neighbor);
+
+// ---- Crossing-test counters (Session 96) -----------------------------------------------------------
+//
+// `tightCrossings` counts crossings `NavFootprint::Clears` refused -- those edges are not deleted, they
+// are made expensive (kTightPenalty), so this is how many pinches the search had to price. It is a live
+// number, not a leftover: `volumeCrossings` measured ZERO on the map where walls were the leading
+// theory, which is what retired that theory.
+//
+// THEY MUST BE READ SOMEWHERE. Counting a thing and never printing it is how S77's orphaned diagnostic
+// hid its own bug. `path_search` prints both and resets them per search.
+extern int g_tightCrossings;    // crossing points where the footprint overlaps a hard border
+extern int g_volumeCrossings;   // crossing points sitting inside a collision volume (counter only)
+void ResetCrossingCounters();
 
 // The sub-span of the shared edge the party can ACTUALLY cross, as a portal for the string-pull.
 // `outA`/`outB` are always filled with something usable -- the full edge when nothing is blocked or

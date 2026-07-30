@@ -2620,6 +2620,22 @@ Class 4 matches none of the 0/1/2/3/5 branches, so it falls through to walkable.
 
 (For the record: bit 23 blocks class 0, 24 class 5, 25 class 1, 26 class 2, 27 class 3.)
 
+**CONFIRMED IN PLAY, Session 96 — and this entry survived an attempt to overturn it.** That session
+replaced the test with `FUN_00230a40(poly, class 0)` on the reading that the leader's floor class is 0
+(from `FUN_002681d0`, which writes 0 to `holder+0x153`) rather than the 4 the movers pass. On map 311
+it refused **399 of 690 floor prims** and made a previously routable exit unreachable; the tester walks
+that ground — Garamsythe's water is ankle-deep and the game has no swimming. Reverted.
+
+> **The lesson is about which derivation to trust.** This entry traced the value `FUN_00230a40`
+> RECEIVES, through the callers that pass it (`FUN_0032bcc0`, `FUN_0032ca70` → `FUN_00230c10` arg5 →
+> `moveCtx+0x50`). The overturning claim traced what a different function WRITES to a field, and never
+> showed that field is what reaches the callee. **Prefer the call site over the writer: only one of
+> them says what the callee is handed.**
+
+Bit 23 is still read, via `NavMesh::TerrainRefused`, and **nothing routes on it**. `NavTrace` checks it
+every metre against the poly the player is standing on (`STANDING-ON-REFUSED`); it earns the right to
+be priced only once that check stops firing.
+
 ### Effective flags — `FUN_00232020`
 
 ```
@@ -3251,6 +3267,24 @@ and you can slide along angles"): the push removes only the component along the 
 `FUN_002327d0:233-238` zeroes that normal's Y whenever the actor is ground-locked — which
 `FUN_00380b80:8` makes the default. So head-on cancels entirely; oblique keeps its tangential part.
 
+**THE COROLLARY FOR ROUTE VALIDATION, and it was got wrong once (Session 95).** Because the refusal is a
+*push to tangency* and not a stop, **a point that fails the border test is not a point the player cannot
+reach — it is a point the engine nudges them off.** The two questions are different and need different
+instruments:
+
+| question | instrument | verdict it may give |
+|---|---|---|
+| can the body traverse this leg? | `FUN_00230c10` body sweep (achieved/requested fraction, depenetration included) | **walkable / not walkable** |
+| is this exact point one the body can rest on? | `FUN_0022f9b0` border clearance (`NavFootprint::Clears`) | tight / clear — **never** "unreachable" |
+
+`path_validate.cpp` conflated them: a taut corner failing the footprint test failed the whole route. In
+the tester's Session 94 log that was **25 of 57 breaches, every one of them on a route whose legs into
+and out of the corner had both swept clear** — and because the caller then banned the portal on a leg
+that had swept fine, each retry detoured around a good opening and the route got *longer* every attempt
+(211.6 m → 230.9 m → 233.0 m → 233.5 m on one Garamsythe route) before the run gave up. Corrected: the
+sweep decides walkability, the footprint test is counted and reported as a *tight corner*, and validation
+walks past one to ask the question that actually matters — does the next leg sweep?
+
 **Why cliffs need no height test, and why the step/slope gate was struck twice.**
 `FUN_00380c40:24-28` PINS the actor's Y to the poly plane. There is no gravity on the walkmap and
 nothing to fall off: a cliff is an edge whose neighbour index is `< 0`, refused by the identical branch
@@ -3346,7 +3380,28 @@ Display records at `panel + 0x160 + i*0x20`, 13 of them (the array is `memset` `
 | `panel+0x0F0` | i32 the character's BtlChr index (not a scene handle) |
 | `panel+0x124` | u16 per-row enable mask, **bit `i-1` for display row `i`** |
 | `panel+0x126` | u8 row count (max 12) |
-| `panel+0x33E` / `+0x33F` | u8 COLUMN cursor (0 whole row / 1 condition / 2 action) and its saved copy |
+| `panel+0x33E` / `+0x33F` | u8 COLUMN cursor (see below) and its saved copy |
+
+**The three columns are ON/OFF · condition · action — column 0 is the per-slot CHECKBOX, not "the
+whole row".** There is no cursor position that selects a whole row. Left/Right cycle `+0x33E`
+`0→1→2→0` and `2→1→0→2`; the game's own help handler (`case 0xc`) then picks the description by that
+cursor, and those ids resolve in **`help_menu.bin` (section 3)**:
+
+| `+0x33E` | help id | the game's own words |
+|---|---|---|
+| 0 | `0xCF1` | *"Toggle slot ON/OFF."* |
+| 1 | `0xCEE` | *"Change the conditions under which an action is performed."* |
+| 2 | `0xCEF` | *"Change which action is performed."* |
+| — (no row) | `0xCF2` | *"Toggle gambits ON/OFF."* — record 0's master toggle |
+
+**STRIKES this file's own first version of this table (written earlier in Session 94), which called
+column 0 "whole row" at 0.97.** It was an offline inference; the tester heard the whole row read out
+when they arrowed onto the checkbox, and `case 0xc` settles it. The lesson is that the game already
+had a name for each column and the first pass invented one instead of looking for it.
+
+**All THREE carousel panels receive the entry `0x8000`**, not just the visible one — the live log has
+one keypress producing three identical utterances at the same millisecond from three owners. Gate on
+`DAT_02ca9700` (RVA `0x2B89700`), which holds the visible panel.
 
 Names are stored **already variant-selected** — decode directly, no `SkipVariantPrefix`.
 

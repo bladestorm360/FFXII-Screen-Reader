@@ -90,7 +90,18 @@ const Row kTable[] = {
     EN(L"Audio beacon"), EN(L"Off"), EN(L"On"),
     EN(L"A repeating sound that leads you along the route, panned toward where you need to walk."),
     EN(L"Off plays nothing."),
-    EN(L"On plays a sound that speeds up as you near each turn of the route, and tracks your target in battle."),
+    // The trailing "and tracks your target in battle" was REMOVED in S95, not reworded for style: the
+    // battle tracking is now its own setting, so that sentence had become false. Everything the tester
+    // said about the route beacon itself is untouched.
+    EN(L"On plays a sound that speeds up as you near each turn of the route."),
+    EN(L"Audio beacon volume"),
+    EN(L"How loud the route beacon plays."),
+    EN(L"Target beacon"),
+    EN(L"A repeating sound that tracks the enemy your party is fighting, panned toward it."),
+    EN(L"Off plays nothing in battle."),
+    EN(L"On plays in battle whenever your party has committed to a target, whether or not a route beacon is running."),
+    EN(L"Target beacon volume"),
+    EN(L"How loud the target beacon plays."),
 };
 
 #undef EN

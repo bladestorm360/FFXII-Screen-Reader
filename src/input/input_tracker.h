@@ -91,4 +91,12 @@ uint64_t MsSinceLastInput();
 // True if there has been a key-down event within the last `windowMs`.
 bool WasRecentInput(uint64_t windowMs);
 
+// Is the player currently holding a movement key (W/A/S/D — Docs/Controls.md)? Read from the GAME
+// thread by the navigation stuck detector, written by the DirectInput feed; a relaxed atomic, so it
+// is free to call per frame. Purely observational — the mod never writes the input buffer.
+//
+// It exists to tell "jammed against a wall" apart from "standing still in a menu". Without it a stuck
+// detector would fire at anyone who stopped to listen.
+bool MovementHeld();
+
 } // namespace InputTracker

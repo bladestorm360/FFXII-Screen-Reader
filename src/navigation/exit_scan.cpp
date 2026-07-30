@@ -1,6 +1,7 @@
 #include "navigation/exit_scan.h"
 #include "navigation/entity_classify.h"
 #include "navigation/nav_reach.h"
+#include "navigation/nav_mesh.h"
 #include "navigation/map_names.h"
 #include "navigation/map_script.h"
 #include "navigation/map_query.h"
@@ -281,6 +282,36 @@ void ScanExits(std::vector<Entity>& out) {
                  "reachability filter disabled: would drop %zu of %zu exits (reachable cells=%d)",
                  wouldDrop, candidates.size(), NavReach::CellCount());
         Log::Write("NAV-DIAG", m);
+    }
+
+    // ---- THE ROUTABILITY TABLE ------------------------------------------------------------------
+    // One line per exit, every scan, whether or not it is filtered: the poly it stands on, that poly's
+    // EFFECTIVE flags, whether the party may walk it, and whether the flood reaches it.
+    //
+    // WHY THIS EXISTS (Session 96). A blind player cannot see what was hidden from them, so "is this
+    // exit reachable" has to be answerable from DATA rather than from a search that failed. The tester
+    // walked to an exit in Central Spur Waterway that the mod was answering "No path" for -- a listed
+    // destination that would not route -- and nothing in the log could say which of the two was wrong.
+    //
+    // It also makes the two predicates' disagreement visible. `NavReach` floods on Walkable alone;
+    // A* additionally requires EdgePassable. `reach=1` beside a route that says No path is exactly that
+    // divergence, and it is the shape of a false negative.
+    if (NavMesh::Ready()) {
+        for (const auto& c : candidates) {
+            const NavMesh::PolyId ep = NavMesh::FindPolyAt(c.pos.x, c.pos.y, c.pos.z);
+            uint32_t er = 0, ee = 0;
+            const bool haveFlags = (ep != NavMesh::kNoPoly) && NavMesh::PolyFlags(ep, er, ee);
+            char n8[80] = {};
+            for (size_t k = 0; k < c.label.size() && k < 79; ++k)
+                n8[k] = (c.label[k] < 128) ? static_cast<char>(c.label[k]) : '?';
+            char m[240];
+            snprintf(m, sizeof(m),
+                     "  routable? \"%s\" at (%.1f,%.1f,%.1f) poly=%d eff=0x%08X walk=%d reach=%d",
+                     n8, c.pos.x, c.pos.y, c.pos.z, ep, haveFlags ? ee : 0u,
+                     (ep != NavMesh::kNoPoly && NavMesh::Walkable(ep)) ? 1 : 0,
+                     (ready && NavReach::Reachable(c.pos, kExitReachTol)) ? 1 : 0);
+            Log::Write("NAV-DIAG", m);
+        }
     }
 
     size_t listed = 0;

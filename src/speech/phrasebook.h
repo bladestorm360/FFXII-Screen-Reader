@@ -105,6 +105,11 @@ enum class Id {
     VerbosityDesc, VerbosityDescNormal, VerbosityDescVerbose,
     SettingAudioBeacon, BeaconOff, BeaconOn,
     BeaconDesc, BeaconDescOff, BeaconDescOn,
+    // S95: the in-combat target ping became a setting of its own, so it needs its own words. The
+    // Off/On VALUES are reused from above rather than duplicated -- they are generic.
+    SettingBeaconVolume, BeaconVolumeDesc,
+    SettingTargetBeacon, TargetBeaconDesc, TargetBeaconDescOff, TargetBeaconDescOn,
+    SettingTargetVolume, TargetVolumeDesc,
 
     Count
 };

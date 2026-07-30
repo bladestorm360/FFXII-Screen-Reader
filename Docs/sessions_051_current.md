@@ -4450,6 +4450,31 @@ guards.
 **The picker is not built.** The probe run never confirmed on a row, so it captured no picker messages at
 all and `FUN_0056b4d0`'s row layout is unmeasured. Claiming that surface on a guess would silence
 whatever covers it today, which is the regression `menu_reader.cpp` already carries a warning about.
+The first play session settled that: the picker is **already read** by the generic painted-row path
+(`[READER] ... item: "Self: MP < 60%"`), so claiming it would have broken a working surface.
+
+### The column cursor: the game had already named all three
+
+First play session, and the tester was precise — *"the left and right nav keys don't seem to be
+announcing what is highlighted correctly... unsure if this is a category switch or more similar to a
+page-up/page-down."* It is a three-way cycle, and I had one of the three wrong: `panel+0x33E` `0` is
+the **per-slot ON/OFF checkbox**, not "the whole row". So arrowing onto it read the entire row out
+instead of the one state highlighted. There is no whole-row cursor position at all.
+
+**The game had a name for each column and I invented one instead of looking for it.** `case 0xc` picks
+the description bar's text by this exact cursor, and the ids resolve in `help_menu.bin`: *"Toggle slot
+ON/OFF."*, *"Change the conditions under which an action is performed."*, *"Change which action is
+performed."* — the answer was one switch statement away in the function I had already read.
+
+The fix is not "speak the column name": those are sentences for the description bar, and inventing
+"Target"/"Action"/"Toggle" would be fabricated labels. **Which key moved decides how much to say** — a
+ROW move speaks the whole row, a COLUMN move speaks only the field landed on. That also restores the
+row wording the tester chose, which the first version had lost whenever the cursor sat in a column.
+
+Second defect from the same log: **all three carousel panels take the entry `0x8000`**, so one keypress
+produced three identical utterances at the same millisecond. Inaudible only because each interrupts the
+last — which also meant the voice belonged to whichever panel dispatched last rather than the set on
+screen. Now gated on `DAT_02ca9700`.
 
 ### Three comparison operators, pinned from the game's own words
 
@@ -4499,3 +4524,420 @@ New: `ui/gambit_reader.{h,cpp}`. Changed: `battle_state_names.cpp` + `battle_sta
 (the `ROW_CHAIN` "gambits" mislabel — that class is cmd `0x4B8`).
 
 **Not play-confirmed.** Nothing in this session has been heard yet.
+
+## Session 95 — 2026-07-30 — [navigation] Half the routes shipped unvalidated, and a flag that only one code path honoured
+
+**KEYWORDS:** pathfinder, frontier, unvalidated route, PathValidate, corner footprint, tight corner,
+body sweep, depenetration, tangency, path_corridor, ProvenPrefix, banked prefix, audio beacon,
+RequestReplan, beacon objective, seedBeacon, p key, locked target, routing through walls
+
+Two tester reports:
+
+> pathfinder is still bugged: clear evidence of routing through impassible terrain in the log
+
+> also the beacon: when in active targeting state and then restored to beacon, the beacon only
+> remembers the last leg it was on and considers that the destination, once that is reached the beacon
+> stops. for example, I was pathing to a map exit and got into combat. when the targeting state ended,
+> the beacon only routed me to the leg of the route I was on, it did not continue on to the next leg
+
+Three causes. **All three were already printed in the mod's own log** — one had been sitting there for
+a full session. What was missing was not instrumentation; it was counting what the instrumentation had
+already written. Full evidence in `debug.md`, "three defects behind *routes through walls* and *the
+beacon stops early*".
+
+### The tally that diagnosed everything
+
+```
+plan=Frontier legs   18   |   validate BREACH  57   |   worstFrac >= 0.90 BREACH  25  (corner)
+plan=Route    legs   17   |   validate OK      17   |   worstFrac <  0.90 BREACH  32  (sweep)
+frontier: goal unreachable (validation never passed)  17
+```
+
+**More than half the session's routes took the failure path, and the failure path emitted an
+unvalidated polyline.** One `grep | sort | uniq -c` says that; nothing else was needed to find the
+first two defects.
+
+### 1. `Plan::Frontier` shipped geometry nothing had checked
+
+The frontier block funnelled `best.portals` — the corridor to the **goal** poly — toward a point on
+`best.bestNear`, a **different** poly. A portal sequence and an endpoint that do not belong to each
+other. In the genuinely-unreachable case `best.portals` is empty, so the "route" was a straight line
+from the player to a point several polys away. And it ran **no validation at all**.
+
+So the enum value that exists *specifically* so a shortfall can never be spoken as a plain route
+announced its shortfall while walking the player through the wall it had failed to route around:
+
+```
+19:49:06  validate: attempt 4 ... worstFrac=0.85 BREACH
+19:49:06  frontier: goal unreachable (validation never passed); ending at poly 325, 16.4m short ... corners=20
+19:49:06  say="North 210, Northwest 7, West 64, South 7. 288 steps. Blocked, 22 steps"
+```
+
+Twenty corners lifted from attempt 4's corridor, which had just failed at leg 10 of 19.
+
+New `src/navigation/path_corridor.{h,cpp}` (83 + 107 lines): rebuild the corridor **for the frontier
+poly** from A*'s parent links, funnel it, **validate it**, cut it back to the part that passed, and
+measure the shortfall from where it really ends. Two candidates compete — the furthest-reaching
+**proven prefix banked across the attempts** and a fresh corridor to the nearest poly A* reached — and
+the nearer one wins. Also: a `truncated` validation no longer ships as `Plan::Route`, which is the
+exact claim `path_validate.h` forbids its caller to make and which the caller was making.
+
+The prefix is banked **across** attempts on purpose. Attempts get *worse* as bans accumulate —
+211.6 m → 230.9 m → 233.0 m → 233.5 m on one Garamsythe route — so falling back on the last attempt
+means falling back on the worst one.
+
+### 2. A tight corner is not impassable terrain
+
+`NavFootprint::Clears` replicates `FUN_0022f9b0`, and S93 had already established what that function
+does on a violation: **it pushes the body to tangency.** It is a depenetration rule. `path_validate.cpp`
+treated a failure of it as a route breach.
+
+That was **25 of 57 breaches, every one on a route whose legs into and out of the corner had both swept
+clear.** Worse, the caller then banned the portal on a leg that had swept fine, so each retry detoured
+around a good opening — which is why the routes above got longer every attempt and never converged.
+
+Fixed: the body sweep decides `ok`; tight corners are counted and reported (`tight=N@i` on the
+`validate:` line) and validation walks **past** one to ask the question that was never being asked —
+does the next leg sweep? `GameArchitecture.md` now carries the two-instruments table so this cannot be
+re-conflated.
+
+`probes` vs `checked` separates the two breach kinds with no ambiguity, and it is a derivation from the
+code rather than a reading of the numbers: `CheckLegs` spends one probe per sweep and one per interior
+corner and returns on the first failure, so `probes == 2*checked - 1` is a sweep failure and
+`probes == 2*checked` is a corner failure. Every `worstFrac >= 0.90` breach in the log is the even case.
+
+### 3. `p` was silently redirecting the beacon
+
+`PathPlanner` had ONE "last request" memory and `RequestReplan()` re-ran it — but `\` **and** `p` both
+call `Request()`, and `p` routes to the locked battle target.
+
+```
+19:50:33.890  'p' pressed: target acquired at (66.23,6.85,108.37)      <- an enemy
+19:50:34.078  [BEACON] party clear -> resuming objective
+19:50:36.406  [BEACON] leg reached -> advancing to leg 3 of 10          <- objective route INTACT
+19:50:44.875  replan: silent re-run of last target=(66.23,6.85,108.37)  <- the ENEMY
+19:50:44.921  drain seq=29: target="Steeling A" ... plan=Route legs=2
+19:50:48.578  [BEACON] arrived at destination -> final cue, stop
+```
+
+The resume itself is flawless — `advancing to leg 3 of 10` proves the route survived combat untouched,
+exactly as designed. What killed it was the first off-route re-plan afterwards, which is near-certain to
+fire: the stray test is skipped while engaged, so the instant the party is clear the player is standing
+wherever the fight took them, well off the leg they were on.
+
+**`p` already declared it has no business with the beacon** — it passes `seedBeacon=false`, and
+`path_planner.h` explains why (a moving enemy makes static leg corners meaningless). That flag now also
+gates whether a request may become the beacon's **objective**, which is its own snapshot. Only `\` can
+write it; `RequestReplan()` restores from it.
+
+**The shape of this one, and it is worth remembering:** a flag that correctly said *"this request is
+not the beacon's"* was honoured on the outbound path and ignored on the recovery path. One fact, two
+code paths, only one of them knew it. The same shape as S92's "sharing an INPUT is not sharing the
+ANSWER".
+
+### What this session did NOT change, and why
+
+- **A `Frontier` beacon still fires the arrival cue at a point that is not the destination.** Measured:
+  `19:48:52` seeds the beacon with a frontier point 9 steps short; `19:48:54` logs `arrived at
+  destination`. The tester then pressed `\` from near that point and got a full `plan=Route` — so the
+  goal was reachable from there all along. Fixing it means a new cue/word (permission) or continuing
+  the beacon past a frontier endpoint, and either should be judged against the NEW frontier behaviour.
+  Fixes 1 and 2 should make it much rarer; they also make a frontier route shorter when it happens.
+- **`kMinFraction = 0.90` is a ratio, so it penalises short legs** — the fixed ~one-body-radius
+  depenetration pull-back is 10% of a 2.7 m leg but more of a 1 m one. A distance test would be
+  dimensionally correct. **Not changed: no measurement ties a specific false breach to leg length**, and
+  the 0.85 cluster in the log could be real. Recorded as a hypothesis, not shipped as a tuning change.
+
+### Files
+
+`path_corridor.{h,cpp}` (new), `path_search.cpp` (495 lines, was 499 — the corridor rebuild and the
+frontier moved out, the banked prefix and the two-candidate choice moved in), `path_validate.{h,cpp}`,
+`path_planner.{h,cpp}`, `CMakeLists.txt`, `GameArchitecture.md`, `debug.md`.
+
+**Not play-confirmed.** Built and deployed; nothing here has been walked yet.
+
+### Session 95, second round — the sweep was being asked a question it cannot answer
+
+The S95 fixes above deployed (hash-verified, and the new log carries `tight=`, `source=`,
+`cutByValidation=` and `BEACON OBJECTIVE`), and the tester reported the **same failure modes**. The
+new log is `2026-07-30 20:28`.
+
+**Fix 2 worked and that is what made the real defect visible.** Every breach in the new log is a
+SWEEP breach — zero corner breaches, `tight=1@8` counted and stepped over. With the corner noise gone,
+the sweep failures stand alone:
+
+```
+ 0.22 m  leg (174.0,110.0)->(174.2,109.9)   worstFrac 0.02   x14
+16.24 m  leg (158.0,88.0)->(170.8,78.0)     worstFrac 0.19   x15
+26.00 m  leg (179.1,109.5)->(179.1,83.5)    worstFrac 0.38   x13
+26.82 m  leg (179.1,109.5)->(175.0,83.0)    worstFrac 0.42   x12
+42.05 m  leg (26.0,110.0)->(67.8,114.6)                       x3
+```
+
+15 of 24 routes ended as Frontier, every one of them "validation never passed", every one ending at
+the same poly 603 26.5 m short.
+
+#### THE DIAGNOSIS: we were calling a per-frame check with a 26-metre argument
+
+Two proofs, both arithmetic, neither needing another play session.
+
+**1. A leg shorter than the body can never pass a ratio test.** Body radius is 0.27 m; the sweep's
+depenetration pull-back at the far end is one radius. A 0.22 m leg is shorter than the pull-back, so
+`achieved/requested` is ~0 no matter what is or is not in the way. Fourteen breaches were that one
+0.22 m leg. This was recorded as an unmeasured hypothesis at the end of the first round; the log
+turned it into a measurement, with coordinates.
+
+**2. The `+/-30 degree` probes are a capsule approximation that only holds for a short step.**
+Phase 3 of `FUN_00230c10` fires two probes rotated +/-30 degrees about the travel axis and keeps the
+SHORTEST reach. At distance `d` those probes are `0.5*d` off the line. For the cone to stay inside a
+0.27 m body, `d <= ~0.54 m` — which is exactly the per-frame displacement all three of the engine's
+own call sites pass (`FUN_0032bcc0:55`, `FUN_0032beb0:38/:68`, `FUN_0032ca70:70`, already recorded in
+`map_query.cpp`). Handed 26 m, it sweeps a cone 13 m wide and reports a wall in any corridor narrower
+than that. 26.00 m -> 0.38 means it stopped at 9.9 m, where the cone is +/-5 m: a corridor width.
+
+**This is the answer to the tester's "why aren't we just reading the game's check".** We are. It is
+the game's own function, called purely, and it has been since S93. The bug was never the wheel — it
+was the argument. The game asks "may I move 0.15 m?" sixty times a second; we asked "may I move
+26 m?" once.
+
+It also explains why the retry loop made things worse rather than better: a false breach banned a good
+portal, so every attempt came back longer (211.6 -> 230.9 -> 233.0 -> 233.5 m) and none converged. **A
+ban is only as good as the verdict behind it.**
+
+#### The fix
+
+`path_validate.cpp`, rewritten:
+
+- **The one-shot sweep is kept as a FAST PATH.** A `clear` verdict from it is trustworthy — the probe
+  cone only ever makes the test stricter, so nothing it passes can actually be blocked. Clean routes
+  still cost one probe per leg.
+- **A leg it calls blocked is RE-ASKED**, walked in 0.5 m steps with Y pinned to the walkmap under
+  each step (`FindPolyAt` + `PolyHeightAt` — `FUN_00380c40` pins the actor's Y to the poly plane, so
+  this is not an approximation of how the character moves, it is how it moves), carrying **the
+  engine's own resolved position** forward so depenetration slides the body along a wall exactly as it
+  does in play. Only that verdict is final. Bounded at 64 sub-steps per leg.
+- **The test is a DISTANCE, not a ratio**: a leg passes when the body finishes within one body radius
+  plus a little of where it was asked to go. Dimensionally right, and length-independent.
+- **The proof is in the log**: `resweep=N rescued=M` on every `validate:` line, plus
+  `bad=<leg> len=<m> reached=<m>` on a breach. A real wall (stops early on a long leg) and a
+  measurement artefact (stops on a leg shorter than the body) now read differently at a glance. If
+  this fix is wrong, the next log says so instead of needing another round of guessing.
+
+#### Beacon work, requested the same round and shipped with it
+
+- **The two beacons are separate features now.** The in-combat target ping lived behind the route
+  beacon's `g_active` flag, so it only ever sounded if a route beacon happened to be running. It is
+  its own setting, plays in battle whether or not a route exists, and survives the route beacon being
+  switched off or the map changing. Everything else is unchanged: still combat-gated, still only on a
+  COMMITTED target, and the route beacon still stands down for the fight and resumes on the leg it
+  was holding. `OnGameFrame`'s O(1) idle check now consults both.
+- **Behind pitches the ping down** — `PitchFor(front)`, linear, 1.0 ahead and abeam to 0.85 directly
+  behind. A third cue alongside the existing gain drop and low-pass, because attenuation alone reads
+  as "further away". One function, used by both beacons, so they cannot drift apart the way the pan
+  and the spoken word did in S92. The arrival cue is unaffected (centred and ahead by construction).
+- **Volume sliders for both**, 20%-100% in five steps, default 100%. **They render as NUMBERS, not
+  words** — a digit string plus `%` needs no phrasebook row and translates itself, where five invented
+  loudness adjectives across 12 locales would be the fabricated-label failure the phrasebook rules
+  exist to stop. Deliberately does not reach 0: each beacon has its own Off, and a volume that can
+  silence a switched-on feature is a support question waiting to happen.
+- **The mod menu grew a second kind of setting** (`Named` vs `Percent`) and `Left`/`Right` became
+  directional — they used to both advance, which was identical while every setting had two values.
+  Volumes clamp at their ends rather than wrapping; the repeated spoken number is how the player hears
+  the limit. `mod_menu.cpp` 231 -> 297.
+- One phrasebook sentence was **corrected, not reworded**: "On plays a sound that ... and tracks your
+  target in battle" became false when the battle half became its own setting.
+
+#### Files
+
+`path_validate.{h,cpp}` (rewritten), `path_search.cpp` (500, at cap), `audio_beacon.cpp`,
+`mod_menu.{h,cpp}`, `phrasebook.{h,cpp}`, `Controls.md`, `README.md`.
+
+**Deployed. Not play-confirmed.**
+
+#### Behind, corrected the same round
+
+The tester heard the design description and corrected it before play:
+
+> behind should be a 180 degree sweep behind the player, not directly behind. pitch only needs to be
+> a few degrees lower, not an octave. say pitched down by about 20%. the panning must work from
+> behind as well, so behind left would be slightly lower pitched and to the left of the player, since
+> we don't have spatial 3d sound. and all logic should apply to the active target beacon as well.
+
+Three changes and one confirmation:
+
+- **BEHIND IS THE WHOLE REAR HEMISPHERE.** The first version scaled by `-front`, so a target 100
+  degrees round barely differed from one at 80 and only a target dead astern got the full cue. That is
+  "directly behind", not "behind". `BehindAmount(front)` now returns 1 for anything in the rear half,
+  with a 15-degree ramp past the abeam line -- present only so an enemy circling the player does not
+  chatter between two timbres as it crosses, not as a gradient.
+- **Pitch is 20% down** (playback rate x0.80), a few semitones.
+- **The pan is untouched by any behind cue, and that is a REQUIREMENT.** There is no spatial audio
+  here, so left/right is the only bearing information the player has and it has to survive all the way
+  round: behind-left stays panned left and gains the behind cues on top. The attenuation and low-pass
+  scale both channels equally and pitch is a playback rate, so none of the three can flatten it.
+- **All three cues moved INTO `audio_engine.cpp`**, derived from one `behind` value beside the gain
+  and the low-pass. The pitch had spent one build being computed in `audio_beacon.cpp` from its own
+  reading of `front` -- one fact, two derivations, which is the exact shape of the S92 pan bug. Every
+  ping goes through `PlayPing`, so "all logic applies to the active target beacon as well" is now
+  structural rather than something each call site has to remember. The arrival cue multiplies rather
+  than replaces, so it keeps its pitched-UP character.
+
+## Session 96 — 2026-07-30 — [navigation] A terrain type is not a walkability check
+
+KEYWORDS: bit 23, FUN_00230a40, FloorWalkable, movement class, shallow water, Garamsythe, map 311,
+Central Spur Stairs, No. 10 Channel, string-pull, funnel corner, portal endpoint, Unpull, repair
+ladder, retreat, full corridor, cost not cut, penalty, re-cost, ban, EdgeClearSpan, NavFootprint,
+tightXing, volXing, STANDING-ON-REFUSED, stop cause, badStopAt frame
+
+The tester's report was "routing works up to the waterway maps, then it routes through impassable
+terrain." The fix for that shipped early in the session, took routing on map 311 from three working
+exits to two, and took map 315 to **zero completed routes out of five**. Undoing it took the rest of
+the session. Everything below is one lesson wearing four costumes.
+
+### The change that caused it
+
+`NavMesh::Walkable` was `(effectiveFlags & 7) == 0` and became
+`MapQuery::FloorWalkable(poly, PartyMovementClass())` — the engine's own per-class floor test, whose
+bit-23 branch was read as "water, lava, bog, out of bounds". On map 311 it refused **399 of 690 floor
+prims**.
+
+**The tester walks through that water.** Garamsythe's channels are ankle-deep, the game has no
+swimming, and shallow water is ordinary floor with a puddle on it. A predicate that refuses ground the
+player is demonstrably standing on is wrong however good the decompile behind it looks.
+
+Two things went wrong at once and only the second was noticed at the time:
+
+1. **The evidence had already been spent.** The justification written into the code was "three sessions
+   of routes-through-impassable-terrain reports were this one omission". Session 95 had already found
+   and fixed those: `Plan::Frontier` shipped an unvalidated straight line to a point several polys
+   away. A second explanation was stacked on a solved problem, and only the second one broke anything.
+2. **The class was derived from the wrong end.** `GameArchitecture.md` already recorded, at conf 0.97,
+   that the movers pass class **4** — traced through the callers that actually pass it
+   (`FUN_0032bcc0`, `FUN_0032ca70` -> `FUN_00230c10` arg5 -> `moveCtx+0x50`). The overriding claim
+   traced what `FUN_002681d0` *writes* (0, to `holder+0x153`) and never showed that field is what
+   reaches the callee. **Prefer the call site over the writer: only one of them says what the callee
+   is handed.** Class 4 hits no per-class branch, which is exactly consistent with the party walking
+   on bit-23 ground. Registry entry restored and annotated; the S96 override in `nav_rva.h` struck.
+
+### The cascade — three global changes, one play test
+
+With water newly a hard border, every sewer walkway gained one on both sides, and
+`NavFootprint::Clears` started refusing crossings everywhere. Map 315: 618 reachable polys, zero
+routes. The response was to **demote `Clears` in `BodyFitsAt` from a refusal to a counter** — which
+removed the only thing keeping A* out of gaps the body cannot pass. A* then proposed corridors through
+pinches, the string-pull's chord died in them, and the breach banned the only opening.
+
+That is what cost the third exit, and the tester spotted it from behaviour alone: "pure A* got us to
+all 3 exits. So whatever you added is genuinely flagging walkable terrain, or routing through an
+obstacle it didn't before." Both, in fact — the first change did one, the second did the other.
+
+**Three global changes, one build, one play test, and the interaction between them was the
+regression.** `Clears` is fatal again.
+
+### NOTHING SEVERS THE GRAPH; EVERYTHING DIFFICULT IS EXPENSIVE
+
+The structural fix, and the reason this class of failure ends here. Every refusal that used to
+`continue` past an edge now prices it, in metres:
+
+| condition | was | now |
+|---|---|---|
+| no neighbour | cut | **still a cut** — nothing on the other side to price |
+| terrain the class may not stand on | cut | +2000 (inert since the revert; kept for the shape) |
+| body fits nowhere along the edge | cut | +500 |
+| player physically failed here | cut | +2000 |
+| a validated leg through here did not walk | **permanent ban** | +500, accumulating |
+
+A* takes any detour up to the penalty rather than use a bad edge, reproducing the old refusal wherever
+an alternative exists — and still returns a corridor when the bad edge is the only way, which the
+deletion took away. The heuristic stays Euclidean and admissible: penalties only add.
+
+The ban is gone with it. **A ban made a reachable goal unreachable**: the log has A* reaching the goal
+on attempt 1, banning the breaching portal, and reporting "goal unreachable" on attempt 2.
+
+Two holes this opened, closed in the same pass: water polys are now *expanded* rather than skipped, so
+the frontier's `bestNear` and the interaction-cylinder fallback both had to ask for walkability
+explicitly instead of getting it free from the search.
+
+### The string-pull is an optimisation, and it is the thing that fails
+
+With terrain out of the way the real defect was visible, and the log proved it both directions in one
+request: the chord's leg 3 stopped the body at **6.23 m of 9.00 m on four consecutive attempts**, while
+the frontier's less-taut polyline walked the same ground with `cutByValidation=0`.
+
+The corridor A* returns is walkable **by construction** — every portal was measured with the body's own
+footprint and sweep before the edge was expanded. The taut chord across it is not. So a breach is now
+repaired **locally** instead of re-searching the graph: `PathFunnel::Unpull` splices that corridor's
+own portal-span midpoints back into the one failing leg and leaves every other leg taut, so the spoken
+route stays short. 52 successful repairs in the following session.
+
+**And a target is allowed to be inside a volume.** `WallAcross` tested the destination point, so an
+exit — an archway, a map-jump surface — vetoed every route to itself: `reached=0.00m why=wall` on the
+exit's own coordinates, with `volXing=109` in that area. The final leg's endpoint is now exempt; its
+midpoint is still tested.
+
+### What is left, and why it is on the failure path
+
+Nine failures survived, all identical: `bad=1`, `why=sweep`, and **`stop=(*, 0.90, 123.8)` — seven
+different x values, one z**. A straight obstruction at z ~= 124.07 once the 0.27 m body radius is
+added back. A breach on leg 1 had no recovery at all: re-costing is refused (the portal is the start
+poly's own, and that guard is correct), `Unpull` only spliced into the *approach* and never replaced
+the corner itself, and `ProvenPrefix` on `firstBad == 1` yields one point so the frontier had nothing.
+"No path" from 3 m away from a reachable exit.
+
+Fixed as a **ladder, entirely on the failure path**: taut chord -> un-pull the leg *and its corner* ->
+**retreat to `badStopAt`**, the engine's own resolved position, which is reachable whatever is in the
+way -> full corridor with no string-pull at all. A route that validates on the chord executes none of
+it, which is the property that makes it safe to ship after a session like this one.
+
+`badStopAt` had to be made trustworthy first: the sweep branch reported it in the **lifted** frame and
+the wall branch on the **ground**, and the log printed both (`stop=(45.6,0.90,123.8)` against
+`stop=(47.0,-0.00,124.0)`). Harmless as a diagnostic, a leg into the ceiling as a waypoint.
+
+### Struck, and struck for a reason
+
+- **`tight=0@0` on a breaching route means NOT TESTED, not "clear".** `CheckLegs` returns on a breach
+  before reaching its own interior-corner check. This was read the wrong way once and nearly bought a
+  global geometry change on the strength of it. `PathValidate::Diagnose` now asks the question properly
+  — footprint clearance at the breaching corner, plus volume probes at the stop and 0.3 m beyond — so
+  the next log says whether z ~= 124.07 is floor border or wall.
+- **Insetting every portal span by a body radius: proposed, then dropped.** A taut corner is by
+  construction a portal ENDPOINT, and the crossing test deliberately never samples endpoints
+  (`SampleT = (i+0.5)/7`, never 0 or 1) — so the string-pull's preferred points are the two per portal
+  that were never measured. That gap is real and is now recorded at `SampleT`. But the fix would change
+  the geometry of every route on every map, its premise ("the corner is on the boundary") was never
+  established, and it does nothing if the obstruction is a wall volume. After three global changes went
+  wrong in one session, the repair belongs on the failure path where a mistake costs one route.
+- **Orphaned counters.** `g_tightCrossings` / `g_volumeCrossings` were incremented by a comment that
+  claimed they made regressions visible, and read by nothing. They print on the `costed:` line now —
+  and `volXing` measuring 0 on the map where walls were the leading theory is what retired that theory.
+
+### Still open, measured, deliberately unchanged
+
+- **Whether class 4 or class 0 reaches `FUN_00230a40` for the player.** Play says the party walks
+  bit-23 ground, which is consistent with 4. `NavMesh::TerrainRefused` still asks the per-class
+  question and **decides nothing**; `NavTrace` checks it every metre against the poly the player is
+  standing on (`STANDING-ON-REFUSED`) and stayed silent all session. It earns the right to be priced
+  when that check has run for a long time without firing. The clean answer is to read the class the
+  engine passes at its own call site.
+- **The funnel is 2D.** `TriArea2` works in the ground plane and Y rides along on portal vertices. On a
+  corridor that overlaps itself in XZ — a switchback stair, a walkway over the channel it later drops
+  into — a taut chord can cut between levels. Not what failed here (the failing legs were flat), but it
+  will bite on stacked maps.
+- **`path_search.cpp` is 749 lines** against a 500 hard cap. See `PerformanceIssues.md`.
+
+### For the Northern Sluiceway, when we come back to it — tester, end of session
+
+**The Northern Sluiceway routes through to the North Spur Sluiceway.** A valid route exists across
+that map, confirmed in play.
+
+**This rules out the waterway control rooms.** The obvious hypothesis for map 315's failures was the
+sluice-gate puzzle: the channels flood and drain under script control, `FUN_00232020`'s material bank
+can flip a whole material's walkability at runtime without touching geometry, and that would make a
+map genuinely unroutable at some gate states and not others. It is not that — the map routes with the
+gates as they stand.
+
+Consistent with what this session found: 315's zero-routes-out-of-five was recorded at 10:20–10:40,
+which is the bit-23 build. **Those failures were ours, not the map.** Do not re-open the gate-state
+theory without new evidence; start from the repair ladder and the `costed:` line instead.
+
+**BUILT AND DEPLOYED. The repair ladder and the breach diagnostic are NOT play-confirmed.**

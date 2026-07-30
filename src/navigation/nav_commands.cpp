@@ -23,6 +23,12 @@ namespace {
 // `\` — request a turn-by-turn route to the current selection. The actual A* runs on
 // the game thread (crash-safe on transitions); the legs (or "No path") are spoken from
 // there a frame or two later. We only capture the fixed world target here.
+// How near an exit counts as arriving at it, for routing purposes. Deliberately the SAME numbers
+// PathPlanner uses to say "At the exit" (kAtExitDist / kAtExitDy) -- if the planner would call the
+// player arrived there, the search must be allowed to finish there.
+constexpr float kExitArriveDist = 3.0f;
+constexpr float kExitArriveDy   = 3.0f;
+
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     bool isTransition = false;   // exits only: the target is the map-jump surface itself
@@ -46,6 +52,28 @@ void RouteToCurrent() {
     if (!isTransition) {
         band  = InteractTarget::ReadBandFor(sceneObj);
         reach = InteractTarget::ReadReachFor(sceneObj);
+    } else {
+        // AN EXIT IS ARRIVED AT, NOT LANDED ON (Session 96).
+        //
+        // Transitions used to be given no band and no reach at all, which makes PathSearch require A*
+        // to finish on the exit's OWN polygon and nothing else. That is stricter than the rest of the
+        // mod: PathPlanner already calls anything within kAtExitDist "At the exit" and stops routing.
+        //
+        // It produced a FALSE "No path" on an exit the tester then walked to by hand. The log shows why:
+        // `reach=1` (NavReach found a reachable poly within its 4.5 m slack) while A* failed, and
+        // `edge=6` -- the edge tests were barely refusing anything, so the search was not walled in, it
+        // simply could not finish on the one polygon it was told to finish on. A map-jump surface can
+        // easily be bordered by water on the sides you would never approach from.
+        //
+        // Supplying a band and a reach turns on `NoteFallback`, the machinery that already records the
+        // first poly A* pops that you could stand on and interact from -- proven code, used by every
+        // non-transition target since S73. Nothing else changes: if the exit's own poly IS reachable,
+        // IsGoal still matches it first and the fallback is never consulted.
+        band.valid  = true;
+        band.lo     = pos.y - kExitArriveDy;
+        band.hi     = pos.y + kExitArriveDy;
+        reach.valid = true;
+        reach.radiusMin = kExitArriveDist;
     }
     // radiusMin, not radius: the ellipse radius is direction-dependent, and a goal poly has to be
     // interactable from whatever angle the route happens to arrive at.

@@ -94,6 +94,19 @@ void GetAnchorStats(int& withOffset, int& plain, float& maxOffset);
 // Live leader world position.
 bool ReadPlayerPos(FVec3& out);
 
+// The party leader's LIVE movement class — the third argument `FUN_00230a40` needs to decide whether a
+// polygon is walkable. 0 normally, 5 mounted (see nav_rva.h WALK_CLASS_LEADER for the whole table and
+// the offset chain).
+//
+// **NEVER HARDCODED, AND NEVER 4.** The mod used to assume 4, which is the one value `FUN_00230a40`
+// never refuses anything for — so every per-class refusal, water included, was dropped. If the chain
+// cannot be read or returns something outside {0..5} this falls back to **0**, the leader's normal
+// value, and logs the raw byte once so a broken chain arrives as data rather than as silence.
+//
+// Cached briefly (the class only changes on leader switch, formation change or mounting), so this is
+// cheap enough for the A* inner loop.
+uint16_t PartyMovementClass();
+
 // Live leader world FACING yaw (radians) — `faceNode`, the class-3 facing slot on the leader's
 // transform node (node+0xA4; the SAME +0xB8 node as position). Convention: atan2(worldMoveX,
 // worldMoveZ). NOTE: this is NOT the egocentric "forward" reference — it equals "where UP takes you"

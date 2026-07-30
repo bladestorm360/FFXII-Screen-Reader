@@ -48,6 +48,8 @@ constexpr int kPolyClassMax    = 24;      // distinct flag values worth reportin
 constexpr int kPolySamples     = 3;       // example positions per class
 constexpr int kPolyReadBudget  = 200000;  // hard ceiling on primitive reads for the whole sweep
 
+} // namespace
+
 void LogWalkPolyClasses() {
     MapQuery::WalkGridInfo g;
     if (!MapQuery::GetGridInfo(g) || !g.valid) {
@@ -134,13 +136,25 @@ void LogWalkPolyClasses() {
             for (int i = 0; i < 14 && q < static_cast<int>(sizeof(tail)) - 3; ++i)
                 q += snprintf(tail + q, sizeof(tail) - static_cast<size_t>(q), "%02x", cls[c].tail[i]);
         }
-        snprintf(m, sizeof(m), "  flags=0x%08X type=%u count=%-6d at %s| tail(+0x12..0x1F)=%s",
-                 cls[c].flags, cls[c].flags & NavRva::WALK_POLY_TYPE_MASK, cls[c].count, samples, tail);
+        // RAW IS NOT THE VERDICT. Walkability is decided on the EFFECTIVE word (both override banks
+        // applied) and on the per-class refusal bit -- for the party leader, bit 23. Printing raw alone
+        // is what let a whole session look at this table and not see the answer.
+        const uint32_t eff = MapQuery::EffectiveFlags(cls[c].flags);
+        const bool     floorType = (eff & NavRva::WALK_POLY_TYPE_MASK) == 0;
+        const bool     refused23 = (eff & 0x00800000u) != 0;
+        snprintf(m, sizeof(m),
+                 "  raw=0x%08X eff=0x%08X type=%u count=%-6d %s at %s| tail(+0x12..0x1F)=%s",
+                 cls[c].flags, eff, eff & NavRva::WALK_POLY_TYPE_MASK, cls[c].count,
+                 !floorType ? "NOT-FLOOR"
+                            : (refused23 ? "*** UNWALKABLE (bit23) ***" : "walkable"),
+                 samples, tail);
         Log::Write("NAV-DIAG", m);
     }
     if (nCls >= kPolyClassMax)
         Log::Write("NAV-DIAG", "  *** class table full -- more distinct flag values exist than reported ***");
 }
+
+namespace {
 
 // ---- Walkability field around a doorway (Session 59) -------------------------------------------
 // Every model of the transition trigger so far has been derived from the blob and refuted on the

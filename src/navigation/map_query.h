@@ -143,4 +143,45 @@ struct BodyMove {
 // would have got. GAME THREAD, on a nav-safe frame — same contract as SegmentClear.
 bool BodySweep(const FVec3& from, const FVec3& to, BodyMove& out);
 
+// **IS THIS POINT INSIDE A WALL?** The engine's own `FUN_00232490` (nav_rva.h MAP_POINT_IN_VOLUME):
+// iterate this cell's primitives in CSR layers 1 and 2 — the VOLUMES, i.e. the static walls and
+// pillars and the dynamic doors and platforms — and report whether any contains the point.
+//
+// This is the predicate the router was missing. Everything else in this header answers a question
+// about FLOORS; a wall standing inside a floor triangle is invisible to all of them, and on a mesh
+// whose triangles are often a whole corridor that is the normal case, not a corner case.
+//
+// **IT ASKS ONLY ABOUT VOLUMES, AND THAT IS THE POINT.** The neighbouring engine functions
+// `FUN_00231400` / `FUN_00336390` answer "may the party STAND here", which folds in a floor lookup —
+// and a taut route corner sits one body radius from the walkable boundary by construction, so those
+// report "no" for ordinary corridor geometry and block almost every route. See nav_rva.h.
+//
+// `answered` (optional) reports whether the engine was actually consulted. False means no world or an
+// unresolved RVA and the `false` return is a DEFAULT, not a measurement — a blind check must never be
+// logged as a clear one.
+//
+// GAME THREAD, on a nav-safe frame.
+bool PointInVolume(const FVec3& pos, bool* answered = nullptr);
+
+// **MAY THIS MOVEMENT CLASS STAND ON THIS POLYGON?** The engine's own `FUN_00230a40` (nav_rva.h
+// MAP_FLOOR_WALKABLE), called rather than replicated — deliberately, because replicating it is exactly
+// how the mod spent three sessions routing the party through water.
+//
+// It is TWO tests, and the mod only ever implemented the first: the polygon must be type 0 (a floor),
+// AND it must not carry this class's refusal bit. For the party leader — class 0 — that bit is
+// `0x00800000`, and it is what marks water, lava, bog and out-of-bounds. There is no water *type*; the
+// designer simply marks the polys the party cannot stand on.
+//
+// `answered` (optional) reports whether the engine was consulted. False means no world or an unresolved
+// RVA, and the `true` return is a DEFAULT rather than a measurement.
+//
+// GAME THREAD, on a nav-safe frame.
+bool FloorWalkable(int polyIdx, uint16_t cls, bool* answered = nullptr);
+
+// Raw polygon flags word -> EFFECTIVE flags, with both script override banks applied. The engine's own
+// `FUN_00232020`, which takes the word rather than a polygon so it needs no walkmap pointer. PURE.
+// Diagnostics use this to report what a flags word actually MEANS after overrides — a raw word alone
+// does not tell you whether the poly is walkable, which is how a terrain census got read wrong once.
+uint32_t EffectiveFlags(uint32_t raw);
+
 } // namespace MapQuery

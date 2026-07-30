@@ -31,8 +31,48 @@ float PathLenXZ(const std::vector<FVec3>& pts);
 // the portals labelled from the mesh winding and the funnel's comparisons matching TriArea2's own sign,
 // `as-labelled` must win every route with a real corridor; `flipped` on >= 2 portals means one of those
 // two facts is wrong. `lenKept`/`lenOther` are reported so the log can say which.
+// `outIdx` (optional) receives, for each point in `out`, WHICH PORTAL it came from: -1 for the start,
+// `portals.size()` for the end, and the portal index for every taut corner in between. That is what
+// lets a caller undo the string-pull on ONE leg -- see PathFunnel::Unpull.
 void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
-                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther);
+                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther,
+                  std::vector<int>* outIdx = nullptr);
+
+// UNDO THE STRING-PULL ON ONE LEG (Session 96).
+//
+// The corridor A* returns is walkable BY CONSTRUCTION -- every portal in it was measured with the
+// body's own footprint and sweep before the edge was ever expanded. The taut chord the funnel then
+// draws across it is an OPTIMISATION, and on a corridor that bends inside wide triangles the chord can
+// leave the walkable strip entirely. Measured on map 311: the chord's leg 3 stopped the body at 6.23 m
+// of 9.00 m, four attempts running, while the frontier's less-taut polyline crossed the same ground
+// with `cutByValidation=0`.
+//
+// So a breach is repaired LOCALLY: put the corridor's own portal midpoints back between the two corners
+// the failing leg runs between, and leave every other leg taut. The response to a bad chord used to be
+// to re-search the whole graph, which answers a local question globally and costs the route.
+//
+// It also REPLACES the corner the failing leg was aiming at, when that corner is interior, with its
+// own portal's span midpoint. Splicing into the approach alone is a no-op whenever the unreachable
+// thing is the corner -- which the log showed nine times running -- because a taut corner is a portal
+// ENDPOINT and the crossing test never samples endpoints. The final point is never moved: it is the
+// caller's destination and the `/` key measures to the same FVec3 (S76).
+//
+// Returns the number of waypoints spliced in; 0 means there was nothing between those corners to
+// restore and the leg is as un-pulled as it can get.
+int Unpull(const std::vector<FVec3>& poly, const std::vector<int>& idx,
+           const std::vector<Portal>& portals, size_t badLeg, std::vector<FVec3>& out);
+
+// The corridor with NO string-pull at all: start, every portal's span midpoint in order, target.
+//
+// The last rung of the repair ladder, for when a breach on the FIRST leg leaves nothing else -- the
+// re-cost is refused (it would strand the seed), Unpull has already failed, and `ProvenPrefix` on
+// `firstBad == 1` yields one point so the frontier has nothing to speak either. Measured: that
+// combination produced "No path" from 3 m away from a reachable exit, nine times.
+//
+// Wordier to walk than a taut route, and that is the trade: every point in it is one the body was
+// measured to fit through, which is exactly what the chord across them is not.
+int FullCorridor(const FVec3& from, const FVec3& to, const std::vector<Portal>& portals,
+                 std::vector<FVec3>& out);
 
 // Drop leading waypoints the player has already walked past, returning how many went.
 //
@@ -41,7 +81,8 @@ void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal
 // first corner ends up behind them. MUST run AFTER any step that rebuilds the polyline -- Session 93
 // found it was being bypassed on every breaching route, because the fallback swapped in a freshly built
 // vector while this had only ever mutated the discarded one.
-int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly);
+// `idx`, when given, is kept in step with `poly` so the portal mapping survives the erase.
+int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly, std::vector<int>* idx = nullptr);
 
 // Pull interior corners off the boundary they are sitting on.
 //
