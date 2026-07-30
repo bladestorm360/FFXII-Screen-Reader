@@ -20,6 +20,8 @@ const wchar_t* CategoryWord(Category c) {
     switch (c) {
         case Category::All:          return Phrase::Get(Id::CatAll);
         case Category::Exit:         return Phrase::Get(Id::CatExit);
+        case Category::Door:         return Phrase::Get(Id::CatDoor);
+        case Category::Shop:         return Phrase::Get(Id::CatShop);
         case Category::SaveCrystal:  return Phrase::Get(Id::CatSaveCrystal);
         case Category::GateCrystal:  return Phrase::Get(Id::CatGateCrystal);
         case Category::Treasure:     return Phrase::Get(Id::CatTreasure);
@@ -160,9 +162,24 @@ bool InGimmickBand(int16_t nameIdx) {
 // ORDER IS THE WHOLE DESIGN HERE -- see the regression note below before touching it.
 //
 // 1. Named gimmick sub-types come from the npcdic id (sceneObj+0x102 when >= 0): ids 433-469 are the
-//    field gimmick-object band (434 Treasure, 468 Urn, 466 Gate Crystal, 469 Save Crystal,
-//    435-459/467 area/life crystals). Treasure and crystals keep their OWN categories -- they are
-//    never folded into Interactables.
+//    field gimmick-object band. Treasure and crystals keep their OWN categories -- they are never
+//    folded into Interactables. The exact bands are READ OFF THE GAME'S OWN npcdic NAME TABLE
+//    (`FFXII-Decompile\notes\npcdic_names.csv`, extracted from `PS2Data\...\npcdic.bin`), not inferred:
+//
+//      433        "Anchor"                                         -> Object
+//      434        "Treasure"          468 "Urn"                    -> Treasure
+//      435-459    "Rabanastre Crystal" .. "Ridorana Crystal"       -> GateCrystal  (the 25 REAL ones)
+//      460-465    "(Crystal 26)" .. "(Crystal 31)"                 -> GateCrystal  (unused placeholders)
+//      466        "Gate Crystal"       -- the generic label        -> GateCrystal
+//      467        "Life Crystal"      469 "Save Crystal"           -> SaveCrystal
+//
+//    SESSION 92 FIX: 435-459 used to be lumped into SaveCrystal on the guess "area/life crystals", so
+//    the tester's first gate crystal -- id 435, which the game itself calls "Rabanastre Crystal" --
+//    was announced under Save Crystal and the Gate Crystal filter read 0. Every one of 435-465 is a
+//    per-AREA TELEPORT crystal; the name table says so in the game's own words. `Life Crystal` (467)
+//    stays with Save Crystal, which is where it already was: it is a restorative dungeon crystal
+//    rather than a teleport, that grouping is untouched by this fix, and nothing has reported it
+//    wrong -- but it is the one line here NOT confirmed against play, so treat it as inherited.
 // 2. `isCharacter` (scene category sceneObj+0x03 & 0x1f in 5-7, the classes carrying a char
 //    component) => a person/actor => NPC. **People win over every kind test.**
 // 3. Only THEN the KIND nibble (sceneObj+0x0E & 0xF), and only for non-characters: kind 5 is the
@@ -188,11 +205,10 @@ bool InGimmickBand(int16_t nameIdx) {
 Category ClassifyByNameKey(uint32_t flags, int16_t nameIdx, bool isCharacter, uint8_t kind) {
     if (nameIdx >= 0) {
         int id = static_cast<int>(static_cast<uint32_t>(nameIdx) & NavRva::NPCDIC_NAME_MASK);
-        if (id == 434 || id == 468)                    return Category::Treasure;
-        if (id == 466)                                 return Category::GateCrystal;
-        if (id == 469 || id == 467 || (id >= 435 && id <= 459))
-                                                       return Category::SaveCrystal;
-        if (id >= 433 && id <= 469)                    return Category::Object;   // misc gimmick
+        if (id == 434 || id == 468)                    return Category::Treasure;   // Treasure, Urn
+        if (id >= 435 && id <= 466)                    return Category::GateCrystal;// per-area + generic
+        if (id == 467 || id == 469)                    return Category::SaveCrystal;// Life, Save
+        if (id >= 433 && id <= 469)                    return Category::Object;     // misc gimmick
     }
     if (isCharacter) return Category::NPC;   // person/actor -- dominates every kind test
     if (kind == NavRva::KIND_ACTION_GIMMICK) return Category::Object;  // gate/door/switch/lever/well

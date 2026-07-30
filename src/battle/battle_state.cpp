@@ -63,6 +63,11 @@ constexpr uint32_t A_FLAGS = 0x00, A_HANDLE = 0x08, A_PHASE = 0x6B4,
                    A_QUEUED_ACT = 0xBA0, A_QUEUED_TGT = 0xBB8;
 constexpr uint64_t A_FLAG_QUEUED = 0x4000;
 
+// The aggro pair (GameArchitecture / combat_system.md section 7.1, confidence 0.97):
+//   +0xEA4  u32  bit i set <=> the actor whose OWN pool index is i has committed an action at me
+//   +0xEA9  u8   this actor's own pool index, i.e. which bit it sets in everyone else's mask
+constexpr uint32_t A_ENGAGED_BY = 0xEA4, A_POOL_INDEX = 0xEA9;
+
 // sceneObj fields
 constexpr uint32_t SO_INST = 0x100, SO_NAMEKEY = 0x102;
 
@@ -290,6 +295,55 @@ Faction FactionOf(void* actor) {
         return Faction::Neutral;
     }
     return Faction::Neutral;
+}
+
+// "Is the party actually under attack right now" — FFXII has no in-battle global to read.
+//
+// WHY THIS SHAPE. combat_system.md section 7.1 records `+0xEA4` at 0.97 as "who has committed an
+// action against me", and then STRIKES the obvious use of it — "in battle = any party actor has
+// +0xEA4 != 0" — because FUN_0030f760:84-88 sets the bit with NO hostility gate, so an ally's
+// out-of-combat Cure trips it. The strike is about the missing filter, not about the field.
+//
+// Filtering by faction removes exactly that false positive and needs nothing new: FactionOf is
+// already a shipped read-only reimplementation of FUN_002f8e90. The doc's suggested replacement
+// `*(u32*)(actor+4) & 0x100000` sits at 0.90 with a "may lag the engage edge" caveat and is
+// deliberately NOT used here.
+//
+// Two passes over a <=40-entry pool, no allocation, no game calls. Cheap enough for the audio
+// beacon to ask once per field frame.
+bool PartyEngaged() {
+    void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);
+    if (!pool) return false;
+    uint32_t count = 0;
+    SafeReadU32(Hooks::ResolveRva(NavRva::ACTOR_POOL_COUNT), 0, &count);
+    if (count == 0 || count > 128) return false;
+
+    // Pass 1: which pool-index bits belong to a FOE. Anything above bit 31 cannot be represented in
+    // the mask the engine itself uses, so it cannot be an attacker either.
+    uint32_t foeMask = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        void* actor = static_cast<char*>(pool) + static_cast<size_t>(i) * NavRva::ACTOR_STRIDE;
+        if (FactionOf(actor) != Faction::Foe) continue;
+        uint8_t idx = 0xFF;
+        if (!SafeReadU8(actor, A_POOL_INDEX, &idx) || idx >= 32) continue;
+        foeMask |= (1u << idx);
+    }
+    if (foeMask == 0) return false;
+
+    // Pass 2: is any LIVING party-side actor targeted by one of them? Dead members are skipped —
+    // a KO'd character still carries whatever mask it had when it went down.
+    for (uint32_t i = 0; i < count; ++i) {
+        void* actor = static_cast<char*>(pool) + static_cast<size_t>(i) * NavRva::ACTOR_STRIDE;
+        const Faction f = FactionOf(actor);
+        if (f != Faction::Party && f != Faction::Guest) continue;
+        void* bc = BtlChrForActor(actor);
+        int32_t hp = 0;
+        if (bc && SafeReadU32(bc, BC_CURHP, reinterpret_cast<uint32_t*>(&hp)) && hp <= 0) continue;
+        uint32_t engagedBy = 0;
+        if (!SafeReadU32(actor, A_ENGAGED_BY, &engagedBy)) continue;
+        if (engagedBy & foeMask) return true;
+    }
+    return false;
 }
 
 Committed CommittedTargetOf(void* actor) {

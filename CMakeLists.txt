@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(FFXII-Screen-Reader LANGUAGES C CXX)
+# RC is listed explicitly: src/audio/beacon_assets.rc embeds the beacon sounds as RCDATA.
+project(FFXII-Screen-Reader LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,12 +18,38 @@ target_include_directories(MinHook PRIVATE
     ${CMAKE_SOURCE_DIR}/include/MinHook
 )
 
+# ---- SDL3 (audio output for the navigation beacon; later, controller support) ----
+# Built from source and LINKED, the same way DQ7R does it. Audio only — every other
+# subsystem is switched off so we are not compiling a renderer we never call.
+#
+# Consequence to be aware of: this puts a static import on SDL3.dll, so without that DLL
+# next to FFXII_TZA.exe the whole mod fails to load — not "no beacon", but no speech and
+# no navigation either. That is the accepted trade (the user supplies SDL3.dll the same way
+# they supply Tolk.dll); it is called out in README.md's install section because the failure
+# mode gives a blind user nothing to go on.
+#
+# `build_and_deploy.bat` must NOT copy SDL3.dll into the game directory — the user manages
+# that install. DQ7R's deploy script does copy it; ours deliberately does not. The RELEASE
+# zip does ship it (Docs\release_procedure.md) — deploy, link and release are three separate
+# questions, exactly as they are for Tolk.
+set(FFXII_SDL3_SOURCE "D:/Games/Dev/SDL3-source" CACHE PATH
+    "Path to the SDL3 source tree (release-3.4.4 or newer)")
+set(SDL_SHARED       ON  CACHE BOOL "" FORCE)
+set(SDL_STATIC       OFF CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS        OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL      OFF CACHE BOOL "" FORCE)
+set(SDL_VIDEO        OFF CACHE BOOL "" FORCE)
+set(SDL_RENDER       OFF CACHE BOOL "" FORCE)
+set(SDL_GPU          OFF CACHE BOOL "" FORCE)
+set(SDL_CAMERA       OFF CACHE BOOL "" FORCE)
+set(SDL_DIALOG       OFF CACHE BOOL "" FORCE)
+add_subdirectory("${FFXII_SDL3_SOURCE}" "${CMAKE_BINARY_DIR}/SDL3-build" EXCLUDE_FROM_ALL)
+
 # ---- Main mod DLL (standalone dinput8.dll proxy) ----
 # Our DLL ships AS `dinput8.dll` next to FFXII_TZA.exe. Windows' DLL search order
 # loads our local copy before searching System32. Inside DllMain we lazy-load the
 # real System32\dinput8.dll and forward all exports to it.
-# No SDL3 — speech-only; the game's own audio panning covers what an audio-cue
-# layer would have done in DQ7R.
 add_library(${PROJECT_NAME} SHARED
     src/proxy/dllmain.cpp
     src/proxy/dinput8_proxy.cpp
@@ -33,6 +60,9 @@ add_library(${PROJECT_NAME} SHARED
     src/core/item_names.cpp
     src/speech/speech.cpp
     src/speech/phrasebook.cpp
+    src/audio/audio_clips.cpp
+    src/audio/audio_engine.cpp
+    src/audio/beacon_assets.rc
     src/input/input_tracker.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
@@ -87,6 +117,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/nav_trace.cpp
     src/navigation/path_search.cpp
     src/navigation/path_planner.cpp
+    src/navigation/audio_beacon.cpp
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -111,7 +142,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/src/proxy/dinput8.def
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE MinHook Psapi)
+target_link_libraries(${PROJECT_NAME} PRIVATE MinHook Psapi SDL3::SDL3)
 
 # Tolk.dll + nvdaControllerClient64.dll are user-supplied; loaded at runtime via
-# LoadLibrary. We deliberately do NOT redistribute them.
+# LoadLibrary. The build never links them and build_and_deploy.bat never copies them.
+# (The release zip DOES ship them — see Docs\release_procedure.md. Deploy, link and
+# release are three separate questions; collapsing them once cost a release its TTS DLLs.)
+#
+# SDL3 is a THIRD case and does not follow either rule above: the build links it, deploy
+# still does not copy it, and the release zip must ship it.

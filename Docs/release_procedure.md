@@ -34,20 +34,28 @@ directory, which is fine and expected — that is how the tester picks it up.
 
 ### 2. Assemble `Releases\V<version>\`
 
-Create the directory and copy in **exactly four** files:
+Create the directory and copy in **exactly five** files:
 
 | File | Source |
 |---|---|
 | `dinput8.dll` | `build\bin\Release\dinput8.dll` (the fresh build from step 1) |
+| `SDL3.dll` | `build\SDL3-build\Release\SDL3.dll` (produced by the same build) |
 | `Tolk.dll` | most recent prior `Releases\V*\`; for the first release, `D:\Games\Dev\Unity\FFPR\ff1\ff1-screen-reader\Releases\V1.4\Tolk.dll` |
 | `nvdaControllerClient64.dll` | most recent prior `Releases\V*\`; for the first release, the same FFPR `V1.4` directory |
 | `ReadMe.txt` | `README.md` converted to plain text (see below) |
 
-**Preserve casing exactly:** capital `T` in `Tolk.dll`, lowercase `n` in `nvdaControllerClient64.dll`.
+**Preserve casing exactly:** capital `T` in `Tolk.dll`, lowercase `n` in `nvdaControllerClient64.dll`,
+capitals in `SDL3.dll`.
 
-**The TTS DLLs must be x64.** `FFXII_TZA.exe` is 64-bit; a 32-bit `Tolk.dll` loads and then simply
-never speaks, which is a miserable bug to diagnose from a user report. Verify before copying — the PE
-machine field must read `8664`, not `014c`:
+**`SDL3.dll` IS NOT OPTIONAL (added Session 92).** The mod links against it, so unlike the TTS pair a
+missing `SDL3.dll` does not degrade the mod — `dinput8.dll` fails to load outright and the game will
+not start, with nothing useful on screen for a blind player to act on. Omitting it from a zip breaks
+the release completely rather than partially. It is **built from source by our own build**, so it is
+always in step with the DLL beside it; never source it from anywhere else.
+
+**All shipped DLLs must be x64** — `SDL3.dll` included. `FFXII_TZA.exe` is 64-bit; a 32-bit `Tolk.dll`
+loads and then simply never speaks, which is a miserable bug to diagnose from a user report. Verify
+before copying — the PE machine field must read `8664`, not `014c`:
 
 ```
 od -An -tx2 -j$(( $(od -An -tu4 -j0x3c -N4 "<file>" | tr -d ' ') + 4 )) -N2 "<file>"
@@ -61,11 +69,13 @@ heading markers, `**`/`*` emphasis, code-fence ` ``` ` lines, and leading `-` bu
 convert `[text](url)` to `text (url)`; convert tables to plain columns. No leftover `#` or backticks.
 Save as `ReadMe.txt` (capital R, capital M) in the version directory.
 
-**These four files are the entire release.** Do not add:
+**These five files are the entire release.** Do not add:
 
 - **`mod_config.ini`** — the mod's RVA byte-validator writes it on first launch. Shipping one would
   mask a validator failure.
 - **FF12 Module Loader / External File Loader** — incompatible; both want the `dinput8.dll` slot.
+- **The beacon sounds** — they are embedded in `dinput8.dll` as RCDATA (`src\audio\beacon_assets.rc`),
+  not shipped loose. There is deliberately no asset folder in the zip.
 
 > **Note on the TTS DLLs (corrected 2026-07-15).** These used to be excluded from the release on the
 > strength of a "user-supplied, never bundled" rule. That rule was about **deploy**, not release —
@@ -80,6 +90,17 @@ Save as `ReadMe.txt` (capital R, capital M) in the version directory.
 > 3. **Release** — the zip DOES include `Tolk.dll` + `nvdaControllerClient64.dll`. This is the one
 >    that changed.
 
+> **Note on SDL3 (Session 92) — it is a THIRD case and follows neither rule above.** Do not reason
+> about it by analogy with Tolk; the three answers are different:
+> 1. **Deploy** — `build_and_deploy.bat` still copies `dinput8.dll` ONLY. It does **not** copy
+>    `SDL3.dll`, even though our own build produces one, because the tester manages that file in the
+>    game folder themselves. (DQ7R's deploy script *does* copy it — do not port that across.)
+> 2. **Build** — unlike Tolk, the build **does** link SDL3: real headers, `add_subdirectory` of
+>    `D:/Games/Dev/SDL3-source`, `target_link_libraries(... SDL3::SDL3)`. There is no `LoadLibrary`
+>    path and no silent-when-absent behaviour to fall back on.
+> 3. **Release** — the zip **must** ship it, for the reason in step 2 above: without it the mod does
+>    not load at all.
+
 ### 3. Zip with 7-Zip
 
 ```
@@ -88,8 +109,9 @@ Save as `ReadMe.txt` (capital R, capital M) in the version directory.
 
 - Zip name: `FFXII-Screen-ReaderV<version>.zip`, placed in `Releases\` — a **sibling** of the version
   directory, not inside it.
-- The zip's root contains the four files **directly**, with no nested `V<version>\` folder, so the
-  user can extract straight into the game's `x64\` folder as the ReadMe instructs.
+- The zip's root contains the five files **directly**, with no nested `V<version>\` folder and no
+  asset subfolder, so the user can extract straight into the game's `x64\` folder as the ReadMe
+  instructs.
 
 ### 4. Record the release — in THIS file, not the session log
 

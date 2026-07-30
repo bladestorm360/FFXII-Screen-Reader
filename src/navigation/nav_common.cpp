@@ -91,9 +91,15 @@ const wchar_t* CardinalOfHeading(float headingRad) {
     return Cardinal(OctantOf(deg));
 }
 
+// THE relative bearing. Everything relative -- the spoken octant word and the beacon's pan --
+// is a rendering of this one number; see the header for the Session 92 mirror bug that came from
+// a second caller deriving its own version of it.
+float RelativeBearingDeg(const FVec3& from, const FVec3& to, float facingRad) {
+    return Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
+}
+
 const wchar_t* CardinalBearingRelative(const FVec3& from, const FVec3& to, float facingRad) {
-    const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
-    return Cardinal(OctantOf(ego));
+    return Cardinal(OctantOf(RelativeBearingDeg(from, to, facingRad)));
 }
 
 const wchar_t* CardinalOfHeadingRelative(float headingRad, float facingRad) {
@@ -102,8 +108,7 @@ const wchar_t* CardinalOfHeadingRelative(float headingRad, float facingRad) {
 }
 
 const wchar_t* EgoBearing(const FVec3& from, const FVec3& to, float facingRad) {
-    const float ego = Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
-    return Ego(OctantOf(ego));
+    return Ego(OctantOf(RelativeBearingDeg(from, to, facingRad)));
 }
 
 const wchar_t* EgoOfHeading(float headingRad, float facingRad) {
@@ -112,7 +117,7 @@ const wchar_t* EgoOfHeading(float headingRad, float facingRad) {
 }
 
 int RelativeOctant(const FVec3& from, const FVec3& to, float facingRad) {
-    return OctantOf(Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad)));
+    return OctantOf(RelativeBearingDeg(from, to, facingRad));
 }
 
 // SHIPPED vocabulary: compass words on the relative frame (North == forward).

@@ -1593,10 +1593,30 @@ gate whose class isn't 1/3, dropping it. `PlayerState::ReadSceneObjectPos` now g
 chosen interaction target: container id `DAT_0209a2b4`, object id `DAT_0209a2b8`, min-dist
 `DAT_0209a2b0` (RVA 0x1F7A2B4/B8/B0); leader scene object `DAT_02099d78` (RVA `0x1F79D78`).
 
-**Classify** by the npcdic id band (`sceneObj+0x102 & 0xbfff`): 433–469 = gimmick objects (434
-Treasure, 468 Urn, 466 Gate Crystal, 469 Save Crystal, 435–459/467 crystals) → sub-type; else
-talk-flag → Person; else Object. **`def+0x05` is 0=static/1=animated, NOT an NPC flag** — the old
+**Classify** by the npcdic id band (`sceneObj+0x102 & 0xbfff`): 433–469 = gimmick objects → sub-type;
+else talk-flag → Person; else Object. **`def+0x05` is 0=static/1=animated, NOT an NPC flag** — the old
 `(kind==0)?NPC:Object` mislabeled every NPC (they are kind 1); the pool path is now unused.
+
+~~435–459/467 crystals~~ — **STRUCK (Session 92).** That vague "crystals" grouping was implemented as
+`435–459 → Save Crystal`, and the tester's first gate crystal (id **435**, which the game itself calls
+**"Rabanastre Crystal"**) was therefore announced under Save Crystal while the Gate Crystal filter read
+0. The band table above at "Object name (master data)" was **already right** — *"435–465 = area gate
+crystals"* — so this is the read-before-you-dig failure in its purest form: the correct fact and a
+mushier restatement of it both lived in this file, and the code followed the mush. The bands, read
+directly off the game's own npcdic name table (`FFXII-Decompile\notes\npcdic_names.csv`, from
+`PS2Data\...\npcdic.bin`), conf **1.00**:
+
+| npcdic id | Game's own name | Category |
+|---|---|---|
+| 433 | `Anchor` | Object |
+| 434, 468 | `Treasure`, `Urn` | Treasure |
+| 435–459 | `Rabanastre Crystal` … `Ridorana Crystal` (25 named area crystals) | **GateCrystal** |
+| 460–465 | `(Crystal 26)` … `(Crystal 31)` (unused placeholders) | **GateCrystal** |
+| 466 | `Gate Crystal` (generic label) | GateCrystal |
+| 467, 469 | `Life Crystal`, `Save Crystal` | SaveCrystal |
+
+Every one of 435–465 is a per-AREA **teleport** crystal. `467 Life Crystal` is grouped with Save
+Crystal — inherited, unchanged by the fix, and the one row here not confirmed against play.
 
 **Route drain moved to `FUN_0022a770` (RVA `0x10A770`)** — the no-arg per-field-frame tick
 (walking-state `DAT_02064ad3==2`), returns u64. Replaces `FUN_00314020` (0x1F4020): its `mode==0`
@@ -2020,6 +2040,30 @@ Session 43 — ~~**Map-exit source CORRECTED.**~~ **STRUCK (Session 45) — the 
 > The `+0x70` field-sign array below is **real and still the destination-name source** — but note the
 > getters take a **GROUP index** (see the Session 45 block at the top: `FUN_00264ac0(group)` was being
 > called with no argument, which is why it always reported 0 exits).
+
+**`+0x70` GROUP SEMANTICS — measured Session 92.** The groups are not interchangeable, and treating
+them as one pool is what mis-tagged a gate crystal as a door. Full table dumped on **map 306**
+(Rabanastre, 4 records) with the entity list beside it, corroborated on map 12 (0 records) and map 702
+(28 records):
+
+| group | holds | evidence | conf |
+|---|---|---|---|
+| **0** | **press-Enter DOORWAYS** — the objects `[`/`]` lists and you open with Enter | `g0[0]` `destIdx=20` at (119.95,−10,127.00) ↔ `"South Gate"` (124.00,−10,127.00); `g0[1]` `destIdx=21` ↔ `"Lowtown"`. Non-zero `destIdx` (indexes the `+0x8c` dest table); map 702 has 4 live + 20 all-zero slots | **0.98** |
+| **1** | **walk-onto MAP-JUMP surface** — the `Category::Exit` source | `g1[0]` (112.12,−10,198.00) is the **only** record on map 306 whose `areaId` resolves (**14**), and it lands inside the exit surface bbox `x[112..136] z[198..225]` | **0.98** |
+| **2** | **a GATE CRYSTAL's own teleport record** | `g2[0]` (115.00,−10,151.00) sits at **0.00 m** from `"Rabanastre Crystal"` (115.00,−10,151.00), `destIdx=0` | 0.90 — **n=1** |
+| **3** | **arrival markers** (where the party lands coming in) | map 702: two coincident pairs, `destIdx=0`; matches the pre-existing East End note | 0.95 |
+
+**A group-0 record is NOT co-located with its doorway — it is 3.5–6.4 m away**, because the record
+marks the "→ area" ARROW and not the thing you press: 4.05 m and 3.50 m on map 306, 3.6–6.4 m already
+recorded on East End, against ~24–25 m to the next-nearest candidate. So the object↔record binding is
+**nearest-wins per record**, never a radius test — a `2.5 m` radius silently missed both of
+Rabanastre's gates. Group 0 is a **fixed-size array with unused slots reading exactly `(0,0,0)`**;
+filter on the position, not on `shown` (a live render gate — "the arrow is being drawn this instant" —
+so tagging would otherwise depend on where the camera points).
+
+Only the group-0 row is load-bearing for the shipped Door/Shop split; groups 1–3 are needed there
+merely as **"not a press-Enter doorway"**, which each row clears comfortably. The 0.90 group-2
+identification is explanatory and nothing is built on it.
 
 The `mapData+0x70` field-sign array — the list the game draws as
 radar blips / 3D "→ area" arrows (`FUN_003f9720`/`FUN_003c34e0`). Enumerate via getters:

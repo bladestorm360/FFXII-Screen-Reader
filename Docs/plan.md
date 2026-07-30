@@ -131,6 +131,15 @@ movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
 - [x] Distance + direction announcement (`\`=route legs, `/`=crow-flies describe)
 - [x] Basic pathfinding (A* over the SQEX walkmap; string-pulled + cardinal-decomposed legs)
 - [~] Auto-walk to selected entity — DROPPED (announce-only)
+- [x] **Audio beacon** (Session 92) — `\` drops a panned, accelerating ping on each route leg corner;
+      silent leg advance, pitched-up arrival cue, silent off-route re-plan. In combat it tracks the
+      committed target instead. `F9` / `F8` menu toggle. SDL3-backed. **Built, not play-confirmed.**
+- [x] **Door / Shop categories** (Session 92) — split out of Interactables; Shop is a doorway with a
+      same-named text-only sign beside it. **The Shop rule's evidence is one district — validate from
+      the log before trusting it** (see `debug.md`).
+- [ ] Entity spatialization — every entity emitting its type's sound from its own position.
+      Sounds exist for 7 of the categories; `SaveCrystal`/`GateCrystal`/`Items` still needed.
+      Designed and documented in `debug.md`, **not built**.
 - [ ] Map menu reading
 - [ ] Locale detection finalized via `GetUserDefaultLangID` hook
 - [ ] Phrasebook live across all 12 locales

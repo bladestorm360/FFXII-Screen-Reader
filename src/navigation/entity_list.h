@@ -14,16 +14,23 @@ namespace EntityList {
 
 enum class Category {
     All = 0,      // filter pseudo-category
-    Exit,
+    Exit,         // a map-jump SURFACE you walk onto; arriving at it IS crossing it
+    Door,         // a press-Enter OBJECT that carries map-transition data (Entity::doorway)
+    Shop,         // a Door with its own name sign beside it (Entity::hasNameSign)
     SaveCrystal,
     GateCrystal,
     Treasure,
     NPC,
-    Object,       // unclassified gimmick
+    Object,       // unclassified gimmick — signs, levers, switches: NO map transition
     Enemy,        // live battle combatant (BtlWork pool), read separately from the handle table
     Items,        // ground loot an enemy dropped (DAT_02ec0fa0 pool), read separately again
     Count
 };
+// Door and Shop sit IMMEDIATELY after Exit on purpose (tester's instruction): all three are ways off
+// this map, so cycling between them is one `=` press. They are three genuinely different things and
+// exit_diag.h already called the middle one out as "a third class again" -- the five East End shops,
+// The Sandsea, the Stair to Lowtown. Exit is a floor you step on; Door and Shop are objects you press
+// Enter at; Object is everything interactable that leads nowhere.
 // Items sits IMMEDIATELY after Enemy on purpose: the cycle is a plain modulo over [0, Count), so
 // one `=` press flips between the enemies you are fighting and the loot they left. Requested by the
 // tester -- checking for drops is what you do the moment a fight ends. Do not reorder.

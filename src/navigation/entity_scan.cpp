@@ -518,11 +518,18 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
         if (ci >= 0 && ci < static_cast<int>(Category::Count)) ++cc[ci];
         if (!e.available) ++gated;
     }
-    char msg[224];
+    // EVERY category is counted, so the tally always sums to `out.size()`. Door and Shop were missing
+    // here for the whole of the session that introduced them, which is how a gate crystal sitting in
+    // the wrong bucket stayed invisible: the line read "Save=1 Gate=0" and the two new categories it
+    // had been promoted into were simply not shown. A breakdown that does not add up hides the bug it
+    // exists to expose -- if a category is added to the enum, add it to this line.
+    char msg[288];
     snprintf(msg, sizeof(msg),
-             "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Save=%d Gate=%d Treasure=%d Items=%d) story-gated=%d",
+             "rescan: %zu field objects (NPC=%d Enemy=%d Object=%d Exit=%d Door=%d Shop=%d Save=%d "
+             "Gate=%d Treasure=%d Items=%d) story-gated=%d",
              out.size(), cc[(int)Category::NPC], cc[(int)Category::Enemy], cc[(int)Category::Object],
-             cc[(int)Category::Exit], cc[(int)Category::SaveCrystal],
+             cc[(int)Category::Exit], cc[(int)Category::Door], cc[(int)Category::Shop],
+             cc[(int)Category::SaveCrystal],
              cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
              cc[(int)Category::Items], gated);
     Log::Write("NAV", msg);

@@ -42,6 +42,17 @@ struct Entity {
     // (`setfieldsignlocationjumpinfo`) -- it is a DOORWAY, not a decorative sign. The engine treats both
     // as action targets with identical flags, so this is the only sound way to tell them apart.
     bool         doorway   = false;
+    // A text-only twin -- same game-given name, no location jump of its own -- was found repeating
+    // this doorway's name, i.e. the doorway has a SHOPFRONT SIGN beside it. That is what separates a
+    // shop from an ordinary door or gate, and it is the pairing TagDoorwaysAndDropSignTwins already
+    // finds in order to delete the twin; before this flag the fact was computed and thrown away.
+    //
+    // Evidence caveat worth keeping visible: the pairing is confirmed for East End's shops (every
+    // doorway matched a sign within ~2 m, every twin 6-15 m away). It is NOT established that a
+    // non-shop door never has a same-named placard. The drop line at the bottom of that function
+    // logs every pairing unconditionally, so a session's log is the falsifier -- read it before
+    // treating Category::Shop as settled.
+    bool         hasNameSign = false;
     // `label` is the game's own string (npcdic or the map's fieldsignmes text), not the category-word
     // fallback. The sign-twin drop compares labels, and an unnamed object whose label is merely the word
     // "Interactables" must never match another unnamed object.
@@ -78,10 +89,36 @@ constexpr float kExitMaxDist = 2000.0f;
 // measured 3.6-6.4 m apart on every East End district door, against ~25 m to the next-nearest door.
 constexpr float kSignMatchDist = 8.0f;
 
-// How near a field-sign record must be to a scene object for that object to BE the doorway rather than a
-// decorative sign of the same name. Every East End shop doorway matched inside ~2 m; its same-named twin,
-// which carries no jump info at all, is 6-15 m away.
-constexpr float kSignObjectDist = 2.5f;
+// ---- Which scene object a `+0x70` field-sign record is describing --------------------------------
+//
+// STRUCK (Session 92): `kSignObjectDist = 2.5f`, "how near a field-sign record must be to a scene
+// object for that object to BE the doorway", on the evidence "every East End shop doorway matched
+// inside ~2 m". That radius is REFUTED, and by the constant ten lines above it: `kSignMatchDist`
+// already records these records sitting **3.6-6.4 m** from the doorway they describe, because a
+// record marks the "-> area" ARROW and not the thing you press. Two constants for one geometric
+// fact, and the tighter, wrong one was the load-bearing one. Measured on the tester's Rabanastre
+// map (map 306), both gates fell in the gap between them and stayed Interactables:
+//
+//   g0[0] (119.95,-10,127.00) destIdx=20 -> "South Gate" (124.00,-10,127.00)  = 4.05 m   MISSED
+//   g0[1] (138.24,-10,140.53) destIdx=21 -> "Lowtown"    (137.82,-10,144.00)  = 3.50 m   MISSED
+//   g2[0] (115.00,-10,151.00)            -> gate crystal (115.00,-10,151.00)  = 0.00 m   tagged!
+//
+// Lowtown's own map passed only because its records happen to land inside 2.5 m -- the threshold was
+// never right, it was lucky.
+//
+// So doorway matching is NOT a radius test. Two rules replace it, both from the data above:
+//
+//   1. ONLY GROUP 0. `EnumerateFieldSignRaw` walks every `+0x70` group, and only group 0 holds
+//      press-Enter doorways: group 1 is the walk-onto map-jump surface (`g1[0]` above is the one
+//      record whose `areaId` resolves, 14, matching the exit surface at z 198-225 -- already the
+//      Exit category), group 2 is a GATE CRYSTAL's own teleport record sitting exactly on the
+//      crystal, group 3 is arrival markers. Consulting all of them is what tagged the crystal.
+//   2. NEAREST WINS, not everything-in-radius. A doorway record describes exactly ONE door, so each
+//      record claims its closest eligible object. `kSignMatchDist` is then a sanity BOUND rather
+//      than a discriminator -- and the separation is wide enough for that to be unambiguous: 4.05 m
+//      to the right object against 24 m to the next candidate here, 3.6-6.4 m against ~25 m on East
+//      End. `g1[0]` was 47 m from anything, which is what a record with no object looks like.
+constexpr int   kSignDoorwayGroup = 0;
 // Two PEOPLE this close together are one actor registered twice, not two NPCs. Deliberately tiny:
 // the rule is "literally the same coordinates", because at any real separation they are two people
 // the game happened to give one name, and deleting one of those cost a tester a story NPC.

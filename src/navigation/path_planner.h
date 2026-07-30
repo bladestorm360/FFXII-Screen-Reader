@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include "navigation/nav_types.h"
 
@@ -40,8 +41,24 @@ void Shutdown();
 // interact from, which is what removes the 3-4 step overshoot past the point where `;` starts
 // answering. Either one missing (inverted band, or a zero radius) routes to the target's own poly,
 // which is the older behaviour.
+// `seedBeacon`: arm the audio beacon on the resulting route. True for `\` (the route the player
+// asked to be led along); FALSE for `p`, whose target is a moving enemy -- static leg corners would
+// be pointing at where it used to be within a second. In combat the beacon tracks the active target
+// on its own (see audio_beacon.cpp), so `p` needs no beacon wiring.
 void Request(const FVec3& target, const std::wstring& label, bool isTransition = false,
-             float bandLo = 1.0f, float bandHi = -1.0f, float reachRadius = 0.0f);
+             float bandLo = 1.0f, float bandHi = -1.0f, float reachRadius = 0.0f,
+             bool seedBeacon = false);
+
+// GAME THREAD. Re-run the LAST request, silently -- no speech on any outcome, including failure.
+// This is the audio beacon's off-route recovery: the player has wandered, so the leg corners it is
+// steering by are stale, but they were never told a new route and must not suddenly be read one.
+// Returns false if there is no previous request to repeat. Reuses the stored target, band and reach,
+// so it re-plans to the same destination rather than re-resolving what the cursor points at now.
+bool RequestReplan();
+
+// The current map generation. Bumped by OnMapTeardown; anything holding route geometry compares
+// against it to notice a map change without needing a hook of its own.
+uint32_t CurrentEpoch();
 
 // GAME THREAD. Called once per field frame from the FUN_0022a770 hook (at entry). If a
 // request is pending and still valid for this map and the field is fully live, plan the

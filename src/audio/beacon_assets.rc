@@ -1,0 +1,11 @@
+#include "beacon_assets.h"
+
+// Paths are relative to THIS FILE's directory (src/audio/), which is how rc.exe resolves them --
+// deliberately not relying on the RC include path being propagated by the generator.
+//
+// Only the two sounds the beacon actually plays are embedded. The other seven files in
+// `FF 12 SFX\` belong to the planned entity-spatialization layer; embedding them before that
+// feature exists would grow the DLL for nothing. See Docs/debug.md.
+
+IDR_SND_OBJECTIVE      RCDATA "../../assets/objective.wav"
+IDR_SND_ACTIVE_TARGET  RCDATA "../../assets/active_target.wav"

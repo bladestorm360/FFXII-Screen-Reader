@@ -15,6 +15,21 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 >
 > **UPDATE (Session 54):** `F5` added (nav availability filter).
 >
+> **UPDATE (Session 92) — the audio beacon.** `\` now also starts a repeating sound that leads you
+> along the route it just spoke. Each corner where a spoken leg runs out is a beacon point; the ping
+> is panned toward it and speeds up from about one per second to five per second as you close on it.
+> Reaching a corner advances to the next one **silently**; reaching the destination plays the sound
+> pitched up once and stops. Wander well off the route and it silently re-plans. In combat it
+> switches to tracking whatever your party is committed to attacking, using a different sound, and
+> goes quiet if there is no such target; when the fight is over it picks the route back up on the leg
+> it was holding. `F9` or the `F8` menu turns the whole thing off. **This needs `SDL3.dll` in the
+> game's `x64\` folder — see README.md; without it the mod does not load at all.**
+>
+> **The pan is a TRAVEL direction, not a turn instruction.** It is the same angle as the spoken leg,
+> from the same number: if the voice says "Northeast", the beacon sits about 45 degrees right. A
+> sound behind you is quieter and duller than one ahead, because a plain left/right pan renders
+> ahead and behind identically.
+>
 > **UPDATE (Session 69):** `g` added — speaks the party **gil** total (works on the field, in shops, and in
 > menus; silent on the title screen). The game binds nothing to `G` (letters it uses: W/S/A/D, I/K/J/L, Q/E,
 > C, F, R, H, X, M, Z) and the mod reserved nothing to it — free on both sides. Shop Buy/Sell/Bazaar item
@@ -99,17 +114,18 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 |---|---|---|
 | `o` | Describe / read focused tooltip | free |
 | `t` | Re-read last spoken line | free |
-| `\` | Nav: turn-by-turn route to current selection | free |
+| `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim | free |
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
 | `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key | reserved |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
+| `F9` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at | free — game binds F1/F2/F3 only |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |
 | `-` | Nav: previous category | free |
-| `=` | Nav: next category — All, Exit, Save Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy, **Items**. **Items sits next to Enemy on purpose** (Session 72): one press flips between the enemies you are fighting and the loot they dropped | free |
+| `=` | Nav: next category — All, Exit, **Door**, **Shop**, Save Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy, **Items**. **Items sits next to Enemy on purpose** (Session 72): one press flips between the enemies you are fighting and the loot they dropped. **Door and Shop sit next to Exit on purpose** (Session 92): all three are ways off this map | free |
 | `` ` `` | Nav: rescan + area name | free |
 | `;` | **Context-gated target readout.** In battle: **committed** target status (name + instance letter + HP), silent on a merely browsed cursor — see below. In the field: **who Confirm will address**, e.g. "Talk: Montblanc" / "Action: Save Crystal", silent when nothing is in reach | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
@@ -180,9 +196,10 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > | Setting | Values | What it does |
 > |---|---|---|
 > | Combat verbosity | **Normal** (default) / Verbose | What the combat log speaks aloud on top of what it always logs. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose adds enemies readying abilities and beginning to cast. **Damage lines are log-only in both modes** — they have always been read back with `,` / `.` rather than spoken as they happen. |
+> | Audio beacon | Off / **On** (default) | The repeating sound that leads you along the route `\` just spoke, panned toward where you need to walk. See below. |
 >
-> `F4` toggles Combat verbosity from anywhere without opening the menu, so it is usable mid-fight.
-> Both routes change the same stored value and speak the same confirmation.
+> `F4` toggles Combat verbosity and `F9` toggles the Audio beacon, both from anywhere without opening
+> the menu. Each route changes the same stored value and speaks the same confirmation.
 >
 > Settings persist to `%LOCALAPPDATA%\FFXII-Screen-Reader\mod_settings.txt`. The game folder is never
 > written to. If `%LOCALAPPDATA%` is unavailable the menu still works; the choice just resets on

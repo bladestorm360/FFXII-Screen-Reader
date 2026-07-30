@@ -33,8 +33,13 @@ namespace ModMenu {
 // Damage lines are log-only in BOTH modes and always have been; this setting never touches them.
 enum class Verbosity : uint8_t { Normal = 0, Verbose = 1 };
 
+// Whether the navigation audio beacon runs at all. Off silences it immediately, including a ping
+// already sounding.
+enum class Beacon : uint8_t { Off = 0, On = 1 };
+
 // Settings the menu holds. Add here + in kSettings (mod_menu.cpp) + in the phrasebook, together.
-enum class SettingId : int { CombatVerbosity = 0, Count };
+// The order here IS the order the menu's Up/Down walks them.
+enum class SettingId : int { CombatVerbosity = 0, AudioBeacon, Count };
 
 // Loads the persisted settings and registers the input callbacks. Safe to call before Speech is up.
 bool Init();
@@ -43,6 +48,10 @@ void Shutdown();
 // The combat log's realtime policy reads this (CombatFormat::ShouldSpeakNow). Lock-free and safe
 // from any thread: it is a relaxed atomic load, and the value only ever changes on a keypress.
 Verbosity CombatVerbosity();
+
+// The audio beacon reads this every field frame (AudioBeacon::OnGameFrame). Same lock-free relaxed
+// load as CombatVerbosity, so it is safe to call from the game thread's hot path.
+bool AudioBeaconOn();
 
 // `F8` — open/close. Speaks "Mod menu. <setting>, <value>." on open, "Mod menu closed" on close.
 void Toggle();

@@ -49,6 +49,17 @@ const wchar_t* CardinalOfHeading(float headingRad);
 // and points at the target in combat. "North" = forward, "East" = right, "South" = behind,
 // "West" = left, whatever true compass direction those happen to be.
 
+// THE relative bearing, in degrees [0,360): 0 = forward, 90 = right, 180 = behind, 270 = left.
+// Every relative direction in the mod is a rendering of THIS number — the octant word, and the
+// audio beacon's stereo pan. Take it from here; never re-derive it.
+//
+// Session 92 is why this is public. The beacon computed its own `atan2(dx, dz) - facingRad`, which
+// is the exact NEGATION of the expression below (`atan2(dx,-dz)` reflects the Z axis, and
+// CompassFaceDeg is `180 - yaw`, not `yaw`) — so `sin()` came out MIRRORED and the ping panned hard
+// right while the route said "Northwest". `cos()` is even, so front/back looked fine and hid it.
+// Two encodings of one angle must come from one number, or they drift apart in exactly this way.
+float          RelativeBearingDeg(const FVec3& from, const FVec3& to, float facingRad);
+
 // The raw octant INDEX in the relative frame (0 = forward, 2 = right, 4 = behind, 6 = left,
 // clockwise), and the word for an index. EVEN indices are cardinal, ODD are diagonal —
 // PathDirections relies on that parity to enforce "a diagonal word only ever describes a genuinely

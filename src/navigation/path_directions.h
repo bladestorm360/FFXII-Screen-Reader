@@ -25,7 +25,17 @@ namespace PathDirections {
 
 // Full route as egocentric turn-by-turn legs, e.g. L"ahead 18, right 7. 25 steps."
 // Empty if < 2 points or the whole route rounds to 0 steps.
-std::wstring Describe(const std::vector<FVec3>& rawPolyline, float facingRad);
+//
+// `outLegPoints`, when given, receives the WORLD CORNER AT THE END OF EACH SPOKEN LEG — one point
+// per leg, in order, with the last element being the route's destination. This is what the audio
+// beacon walks: leg 1's corner is where the first spoken instruction runs out, and so on.
+//
+// It is an out-param on the existing function rather than a second entry point ON PURPOSE. The
+// corners have to come from the same simplify/collapse/absorb pipeline that produced the words, or
+// the beacon would be aiming at a corner the player was never told about. Two implementations of
+// "where do the legs end" is exactly the kind of parallel path that drifts.
+std::wstring Describe(const std::vector<FVec3>& rawPolyline, float facingRad,
+                      std::vector<FVec3>* outLegPoints = nullptr);
 
 // Just the immediate next leg, e.g. L"ahead 13 steps".
 std::wstring NextInstruction(const std::vector<FVec3>& rawPolyline, float facingRad);

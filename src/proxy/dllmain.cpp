@@ -9,6 +9,7 @@
 #include "ui/message_reader.h"
 #include "ui/dialogue_reader.h"
 #include "ui/mod_menu.h"
+#include "audio/audio_engine.h"
 #include "navigation/navigation.h"
 #include "battle/combat_events.h"
 
@@ -72,6 +73,11 @@ static void DeferredInitImpl() {
     // the Hooks::Init() block below: it installs no hooks, only input callbacks and a settings file,
     // so it must keep working on a session where MinHook fails and the player needs to hear why.
     ModMenu::Init();
+
+    // SDL3 audio for the navigation beacon. Outside the Hooks block for the same reason — it
+    // installs no hooks. A failure here is not fatal: AudioEngine::Available() goes false and the
+    // beacon silently does nothing, exactly as speech no-ops when Tolk is missing.
+    AudioEngine::Init();
 
     // Menu-reading pipeline. Order matters: hooks -> text_capture (installs
     // wrapper hooks) -> reader (subscribes to focus events; queries
@@ -140,6 +146,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID /*reserved*/) {
         }
         case DLL_PROCESS_DETACH: {
             CombatEvents::Shutdown();
+            // Before Navigation: the beacon lives under it and must stop pinging before the audio
+            // device closes.
+            AudioEngine::Shutdown();
             ModMenu::Shutdown();
             Navigation::Shutdown();
             DialogueReader::Shutdown();

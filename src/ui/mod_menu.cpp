@@ -28,13 +28,18 @@ struct Setting {
     Id  descs[2];
     Id  desc;            // the setting-level sentence, spoken before the value's sentence
     const char* key;     // token used in the settings file; never spoken
+    int defValue;        // used when there is no stored file, or the stored value is out of range
 };
 
 const Setting kSettings[] = {
     { Id::SettingCombatVerbosity, 2,
       { Id::VerbosityNormal,     Id::VerbosityVerbose },
       { Id::VerbosityDescNormal, Id::VerbosityDescVerbose },
-      Id::VerbosityDesc, "combat_verbosity" },
+      Id::VerbosityDesc, "combat_verbosity", 0 },
+    { Id::SettingAudioBeacon, 2,
+      { Id::BeaconOff,     Id::BeaconOn },
+      { Id::BeaconDescOff, Id::BeaconDescOn },
+      Id::BeaconDesc, "audio_beacon", 1 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -78,6 +83,11 @@ void Save() {
 // Unknown keys and out-of-range values are IGNORED, not clamped onto a neighbouring setting: a file
 // written by a future build with more settings must degrade to defaults, never to wrong ones.
 void Load() {
+    // Defaults FIRST, so a missing file, an unreadable one, or a key absent from an older file all
+    // land on the intended value rather than on whatever zero happens to mean for that setting.
+    for (int i = 0; i < kCount; ++i)
+        g_values[i].store(kSettings[i].defValue, std::memory_order_relaxed);
+
     const std::wstring path = StorePath(/*createDir=*/false);
     if (path.empty()) return;
     FILE* f = nullptr;
@@ -165,12 +175,11 @@ bool OnDescribe() {
 
 bool Init() {
     if (g_initialized) return true;
-    for (int i = 0; i < kCount; ++i) g_values[i].store(0, std::memory_order_relaxed);  // defaults
-    Load();
+    Load();                                     // seeds defaults, then overlays the stored file
     InputTracker::SetModMenuNavCallback(&OnMenuNavKey);
     InputTracker::SetModMenuDescribeCallback(&OnDescribe);
     g_initialized = true;
-    LogState("initialized", static_cast<int>(SettingId::CombatVerbosity));
+    for (int i = 0; i < kCount; ++i) LogState("initialized", i);
     return true;
 }
 
@@ -185,6 +194,11 @@ void Shutdown() {
 Verbosity CombatVerbosity() {
     const int v = g_values[static_cast<int>(SettingId::CombatVerbosity)].load(std::memory_order_relaxed);
     return static_cast<Verbosity>(v);
+}
+
+bool AudioBeaconOn() {
+    return g_values[static_cast<int>(SettingId::AudioBeacon)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
 }
 
 bool IsOpen() { return g_open.load(std::memory_order_relaxed); }

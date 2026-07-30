@@ -8,6 +8,7 @@
 #include "navigation/map_names.h"
 #include "navigation/path_directions.h"
 #include "navigation/nav_common.h"
+#include "navigation/audio_beacon.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
 #include "core/logger.h"
@@ -46,6 +47,14 @@ uint32_t              g_reqEpoch = 0;       // g_epoch captured at Request()
 uint64_t              g_reqSeq   = 0;       // distinguishes successive requests
 int                   g_framesLeft = 0;     // retry countdown while not yet safe
 uint64_t              g_notSafeLoggedSeq = 0; // game-thread only: dedupe the per-frame not-safe log to once/request
+// Arm the audio beacon when this route lands. Set by `\`, clear for `p` -- see the header.
+bool                  g_seedBeacon = false;
+// Suppress ALL speech for this request, whatever the outcome. Only RequestReplan sets it: the
+// beacon re-aiming itself is not something the player asked to hear, and "No path" spoken out of
+// nowhere because they walked round a corner would be worse than the stale beacon it replaced.
+bool                  g_silent = false;
+// A request has been made at least once this session, so RequestReplan has something to repeat.
+bool                  g_haveLast = false;
 
 // ~1.5 s: keep retrying a request while the map is still fading in, then give up out loud.
 constexpr int kWaitFrames = 90;
@@ -95,8 +104,28 @@ void ClearIfSeq(uint64_t seq) {
 bool Init()  { return true; }
 void Shutdown() { g_hasRequest.store(false, std::memory_order_release); }
 
+uint32_t CurrentEpoch() { return g_epoch.load(std::memory_order_acquire); }
+
+bool RequestReplan() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    if (!g_haveLast) return false;
+    // Everything about the destination (target, band, reach, isTransition) is reused as-is; only
+    // the delivery changes.
+    g_silent     = true;
+    g_seedBeacon = true;
+    g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
+    g_framesLeft = kWaitFrames;
+    ++g_reqSeq;
+    g_hasRequest.store(true, std::memory_order_release);
+    char m[128];
+    snprintf(m, sizeof(m), "replan: silent re-run of last target=(%.2f,%.2f,%.2f) seq=%llu",
+             g_target.x, g_target.y, g_target.z, (unsigned long long)g_reqSeq);
+    Log::Write("NAV-ROUTE", m);
+    return true;
+}
+
 void Request(const FVec3& target, const std::wstring& label, bool isTransition,
-             float bandLo, float bandHi, float reachRadius) {
+             float bandLo, float bandHi, float reachRadius, bool seedBeacon) {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_target       = target;
     g_label        = label;
@@ -104,6 +133,9 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
     g_bandLo       = bandLo;
     g_bandHi       = bandHi;
     g_reach        = reachRadius;
+    g_seedBeacon   = seedBeacon;
+    g_silent       = false;
+    g_haveLast     = true;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
     g_framesLeft = kWaitFrames;
     ++g_reqSeq;
@@ -125,6 +157,11 @@ void OnMapTeardown() {
     NavMesh::Invalidate();                             // drop the cached walkmap arrays for the dead map
     NavReach::Invalidate();                            // and the reachable-set answer built on it
     MapQuery::InvalidateMapJumpSurfaces();             // and the seams, which are walkmap geometry too
+    // The beacon's leg corners are coordinates on the map being torn down. It would notice via the
+    // epoch on its next frame anyway, but stopping here cuts a ping mid-transition instead of
+    // letting one more fire at a corner that no longer exists.
+    AudioBeacon::Stop();
+    g_haveLast = false;                                // nothing on the new map to re-plan to
     std::lock_guard<std::mutex> lk(g_mutex);
     g_hasRequest.store(false, std::memory_order_release);
 }
@@ -162,13 +199,14 @@ void OnGameFrame() {
     if (!g_hasRequest.load(std::memory_order_acquire)) return;   // O(1) common case
 
     FVec3 target; std::wstring label; uint32_t reqEpoch; uint64_t seq;
-    bool isTransition; float bandLo, bandHi, reach;
+    bool isTransition; float bandLo, bandHi, reach; bool silent, seedBeacon;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_hasRequest.load(std::memory_order_relaxed)) return;
         target = g_target; label = g_label; reqEpoch = g_reqEpoch; seq = g_reqSeq;
         isTransition = g_isTransition;
         bandLo = g_bandLo; bandHi = g_bandHi; reach = g_reach;
+        silent = g_silent; seedBeacon = g_seedBeacon;
     }
 
     // Map changed since the request was made -> un-revivably stale; drop silently.
@@ -214,9 +252,11 @@ void OnGameFrame() {
         if (giveUp) {
             char lm[128]; LabelForLog(label, lm, sizeof(lm));
             char m[208];
-            snprintf(m, sizeof(m), "drain: gave up (never nav-safe within window) for \"%s\" -> Route unavailable", lm);
+            snprintf(m, sizeof(m), "drain: gave up (never nav-safe within window) for \"%s\" -> Route unavailable%s",
+                     lm, silent ? " (silent replan; not spoken)" : "");
             Log::Write("NAV-ROUTE", m);
-            Speech::Output(Phrase::Get(Phrase::Id::RouteUnavailable), true);
+            if (silent) AudioBeacon::Stop();
+            else        Speech::Output(Phrase::Get(Phrase::Id::RouteUnavailable), true);
         }
         return;
     }
@@ -251,7 +291,9 @@ void OnGameFrame() {
                  (unsigned long long)seq, lm, exitDist, exitDy, from.x, from.y, from.z,
                  target.x, target.y, target.z);
         Log::Write("NAV-ROUTE", m);
-        Speech::Output(say, true);
+        // Standing on the destination: there is no route left to lead anybody along.
+        if (seedBeacon) AudioBeacon::Stop();
+        if (!silent) Speech::Output(say, true);
         ClearIfSeq(seq);
         return;
     }
@@ -332,20 +374,33 @@ void OnGameFrame() {
     // L-shaped route across open ground becomes one diagonal chord, and the player is told to walk a
     // line the route never takes -- then any drift off that imaginary diagonal comes back as a
     // completely different direction. `poly` stays the validated geometry and the diagnostic below.
-    std::wstring say = (r == PathSearch::Plan::Route) ? PathDirections::Describe(rawPoly, facingRad)
-                                                      : std::wstring(Phrase::Get(Phrase::Id::NoPath));
+    // legPoints are the corners where each spoken leg runs out -- the audio beacon's drop points.
+    // They come out of the SAME call that produces the words, so the beacon can never aim at a
+    // corner the player was not told about.
+    std::vector<FVec3> legPoints;
+    std::wstring say = (r == PathSearch::Plan::Route)
+                           ? PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr)
+                           : std::wstring(Phrase::Get(Phrase::Id::NoPath));
+
+    if (seedBeacon) {
+        // An empty list (no route, or a route under half a step) stops the beacon -- which is also
+        // the right answer for a failed silent re-plan, so it needs no separate branch.
+        AudioBeacon::Seed(legPoints, curEpoch);
+    }
 
     // Log the spoken directions (ASCII cardinals/digits) so the exact leg text is diagnosable.
     {
         char t[192]; size_t n = 0;
         for (wchar_t wc : say) { if (n + 1 >= sizeof(t)) break; t[n++] = (wc < 128) ? static_cast<char>(wc) : '?'; }
         t[n] = '\0';
-        char mt[224];
-        snprintf(mt, sizeof(mt), "drain seq=%llu: say=\"%s\"", (unsigned long long)seq, t);
+        char mt[256];
+        snprintf(mt, sizeof(mt), "drain seq=%llu: say=\"%s\"%s beaconLegs=%zu",
+                 (unsigned long long)seq, t,
+                 silent ? " (SILENT replan -- not spoken)" : "", legPoints.size());
         Log::Write("NAV-ROUTE", mt);
     }
 
-    Speech::Output(say, true);
+    if (!silent) Speech::Output(say, true);
     ClearIfSeq(seq);
 }
 

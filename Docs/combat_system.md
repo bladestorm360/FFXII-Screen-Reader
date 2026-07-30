@@ -1000,6 +1000,35 @@ edge by one action — settle with `probe_combat_state.js`. Pure on-demand read 
 ⚠️ **`FIELD_ACTIVE2` (RVA `0x1F69300`) is "battle-work system alive", NOT "a battle is happening"**
 (0.97). Do not use it as such.
 
+### 7.1a RESOLVED (Session 92) — `BattleState::PartyEngaged()`, and the probe is NOT needed
+
+**Shipped.** The struck rule above was struck for its missing FILTER, not for the field it read.
+`+0xEA4` itself stands at 0.97, and its meaning — "who has committed an action against me" — is
+exactly the question. The false positive S49 caught (an ally's out-of-combat Cure) is removed by
+asking *who* set the bit:
+
+> **In battle** = some **living** party-side actor has a `+0xEA4` bit set whose owner is a
+> **`Faction::Foe`**.
+
+Every input is already shipped and confirmed: `FactionOf` (read-only reimplementation of
+`FUN_002f8e90`), `+0xEA9` = each actor's own pool index (0.97, so a set bit maps back to its owner),
+and `BC_CURHP` for the liveness test. Two passes over the ≤40-entry actor pool, no allocation, no
+game calls — cheap enough for the audio beacon to poll once per field frame.
+
+**`probe_combat_state.js` was therefore never written, and should not be.** The 0.90
+`*(u32*)(actor + 4) & 0x100000` replacement this section recommends is **not used** and needs no
+confirmation: it was only ever a workaround for the missing filter, and it carries a documented
+"may lag the engage edge" caveat that the filtered version does not.
+
+**Escape mode needs no flag either.** Under this rule the state clears when foes stop targeting the
+party, which is what happens once a flee actually breaks away — so the beacon resumes on its own.
+Known deviation: it resumes when the escape **succeeds**, not when the player **toggles** it, so
+while toggled-to-flee but still being chased the state stays engaged. Accepted as shipped; finding
+the real Escape flag is a follow-up, not a prerequisite.
+
+Implementation: `src\battle\battle_state.cpp`, `PartyEngaged()`. Consumer:
+`src\navigation\audio_beacon.cpp`.
+
 ### 7.2 Event hooks
 
 | RVA | function | fires | gives |

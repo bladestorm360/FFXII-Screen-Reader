@@ -3,6 +3,7 @@
 #include "navigation/map_rva.h"
 #include "navigation/bullet_query.h"
 #include "navigation/path_planner.h"
+#include "navigation/audio_beacon.h"
 #include "navigation/nav_probe.h"
 #include "navigation/entity_list.h"
 #include "core/hooks.h"
@@ -147,6 +148,10 @@ uint64_t __fastcall HookedFieldFrame() {
         STALL_SCOPE("NavHooks::HookedFieldFrame");
         EntityList::OnFieldFrame();   // auto-rescan when handle-table containers stream in (fixes empty list after a save-load)
         { STALL_SCOPE("PathPlanner::OnGameFrame"); PathPlanner::OnGameFrame(); }
+        // AFTER the planner, so a route seeded on this frame starts pinging immediately rather than
+        // a frame later. Returns on a single atomic load whenever no beacon is running, which is
+        // the common case; see the polled-monitor note in audio_beacon.h.
+        { STALL_SCOPE("AudioBeacon::OnGameFrame"); AudioBeacon::OnGameFrame(); }
         // The `'` probe drains here rather than running on the input thread: Gate B needs
         // MapQuery::GroundAt, which is a game call. O(1) when nothing is pending.
         NavProbe::OnGameFrame();

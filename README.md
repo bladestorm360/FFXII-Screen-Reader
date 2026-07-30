@@ -36,7 +36,9 @@ If you installed to a Steam library on another drive, it is:
 
 drive:\\path to library\\SteamLibrary\\steamapps\\common\\FINAL FANTASY XII THE ZODIAC AGE\\x64
 
-Copy all three DLLs from the release zip — dinput8.dll, Tolk.dll and nvdaControllerClient64.dll — into that x64 folder, alongside FFXII\_TZA.exe. All three go in the same place.
+Copy all four DLLs from the release zip — dinput8.dll, SDL3.dll, Tolk.dll and nvdaControllerClient64.dll — into that x64 folder, alongside FFXII\_TZA.exe. All four go in the same place.
+
+**SDL3.dll is required, not optional.** The mod plays its own sounds through it, and it is loaded the moment the mod starts. If SDL3.dll is missing the game will fail to start rather than simply running without sound, and Windows will say very little about why. If you have copied the other files and the game will not launch at all, this is the first thing to check.
 
 Launch the game. The mod announces itself a few seconds after the game starts.
 
@@ -46,11 +48,19 @@ There is no configuration file to install — the mod writes its own on first la
 
 The mod ships as dinput8.dll. The FF12 External File Loader and FF12 Module Loader use that same filename, so they cannot be installed at the same time as this mod — installing this replaces them. This means for now other mods are likely not supported.
 
+### If the game will not start at all
+
+Check that SDL3.dll is in the x64 folder next to dinput8.dll. The mod links against it directly, so a missing SDL3.dll stops the game from launching instead of just disabling the beacon.
+
 ### If it does not speak
 
 Check that Tolk.dll and nvdaControllerClient64.dll are in the x64 folder next to dinput8.dll and FFXII\_TZA.exe. Without them the mod loads but stays silent.
 
 Check the log the mod writes next to the game executable: FFXII-Screen-Reader-Latest.log. It records what loaded and what failed.
+
+### If the beacon makes no sound
+
+Speech working but no beacon means SDL3 loaded and the audio device did not open. The log records this under AUDIO, including the reason SDL gave. Check the beacon is switched on with `F9` or the `F8` menu.
 
 ## Keys
 
@@ -84,12 +94,29 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * \-: previous object category.
 * =: next object category.
 * /: describe the selected object — name, direction, distance, and whether anything blocks the way.
-* \\: turn-by-turn directions to the selected object.
+* \\: turn-by-turn directions to the selected object, and start the audio beacon — see below.
 * P: turn-by-turn directions to the target the game currently has selected.
 * F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
 * F6: give the selected object your own name, taken from the clipboard.
+* F9: turn the audio beacon on or off.
 * F8: open or close the mod menu.
+
+#### The audio beacon
+
+Turn-by-turn directions tell you the route once. The beacon keeps telling you, while you walk.
+
+Press \\ as normal. As well as speaking the directions, the mod starts a repeating sound placed in the direction you need to walk — to the right if the route says northeast, hard left if it says west, and so on. It is the same direction as the spoken word, just given as a sound instead of a syllable. As you get closer the sound repeats faster, from about once a second up to five times a second when you are nearly there.
+
+Each turn of the route is a point along the way. Reaching one moves the beacon on to the next without saying anything, and the repeats slow down again — so speeding up means you are getting close to the next turn, and suddenly slowing down means you just passed it. Reaching your actual destination plays the sound once at a higher pitch and then stops.
+
+A sound behind you is quieter and a little duller than one in front. That is deliberate: left and right are easy to place, but straight ahead and directly behind sound identical otherwise.
+
+If you wander well off the route the mod quietly works out a new one and re-aims the beacon. It does not say anything when it does this — you were not asked for new directions. Press \\ any time to hear the route again and re-aim.
+
+In a fight the beacon changes job. It switches to a different sound and follows whatever your party is attacking, moving as the enemy moves, so you can hear where it is without asking. If nothing is being attacked it stays silent rather than leading you somewhere in the middle of a fight. When the fight is over it goes back to the route, on the same leg it left off.
+
+F9 turns the beacon off and on, and it is also in the F8 menu. Your choice is remembered between sessions. Changing area stops the beacon — the route belonged to the old map.
 
 #### Naming things yourself (F6)
 
@@ -137,8 +164,9 @@ F8 opens the mod's own settings, and F8 again closes it. Up and Down move betwee
 One setting so far:
 
 * Combat verbosity — Normal or Verbose. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose speaks everything Normal does, and also tells you when an enemy is readying an ability or beginning to cast a spell, which is your window to interrupt or move. Normal is the default.
+* Audio beacon — On or Off. The repeating sound that leads you along the route, described under Navigation above. On is the default.
 
-F4 switches Combat verbosity without opening the menu, so you can change it in the middle of a fight. Your choice is remembered between sessions.
+F4 switches Combat verbosity and F9 switches the Audio beacon, both without opening the menu, so you can change either in the middle of a fight. Your choices are remembered between sessions.
 
 Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it: the game stays quiet when an enemy repeats the same ability on the same target, and when the caster is a long way off. That pacing is the game's own, not something the mod is hiding from you.
 

@@ -50,8 +50,9 @@ void RouteToCurrent() {
     // radiusMin, not radius: the ellipse radius is direction-dependent, and a goal poly has to be
     // interactable from whatever angle the route happens to arrive at.
     const float reachRadius = reach.valid ? reach.radiusMin : 0.0f;
-    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius);
-    else            PathPlanner::Request(pos, label, isTransition);
+    // seedBeacon=true: `\` is the "lead me there" key, so its route arms the audio beacon.
+    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true);
+    else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true);
 }
 
 // `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the
@@ -109,6 +110,10 @@ void OnNavKey(int vk) {
         // F4 speaks the new value; F8 opens/closes the menu that holds the same setting. Both route
         // through ModMenu so there is exactly one place a value changes, persists and is announced.
         case VK_F4:         ModMenu::CycleSetting(ModMenu::SettingId::CombatVerbosity); break;
+        // Same arrangement for the beacon: F9 is the shortcut, the F8 menu holds the same value.
+        // Turning it OFF silences a running beacon; turning it ON only re-arms the feature, since an
+        // On press has no destination to aim at -- press `\` to seed one.
+        case VK_F9:         ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
         case VK_F8:         ModMenu::Toggle();                break;  // F8 mod menu
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category

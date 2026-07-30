@@ -37,6 +37,7 @@ const Row kTable[] = {
     // -- Entity categories --------------------------------------------------------------------
     EN(L"All"), EN(L"Exit"), EN(L"Save Crystal"), EN(L"Gate Crystal"), EN(L"Treasure"),
     EN(L"NPC"), EN(L"Interactables"), EN(L"Enemy"), EN(L"Items"), EN(L"Sign"), EN(L"Story-gated"),
+    EN(L"Door"), EN(L"Shop"),
 
     // -- Navigation status --------------------------------------------------------------------
     EN(L"Position unavailable"), EN(L"Path clear"), EN(L"Blocked, bear "), EN(L"Blocked"),
@@ -80,6 +81,10 @@ const Row kTable[] = {
     EN(L"Determine what is spoken aloud from the combat log."),
     EN(L"Normal speaks enemy defeat and EXP, party member low HP and KO, loot drops."),
     EN(L"Verbose speaks everything from normal, as well as enemies readying abilities or casting spells."),
+    EN(L"Audio beacon"), EN(L"Off"), EN(L"On"),
+    EN(L"A repeating sound that leads you along the route, panned toward where you need to walk."),
+    EN(L"Off plays nothing."),
+    EN(L"On plays a sound that speeds up as you near each turn of the route, and tracks your target in battle."),
 };
 
 #undef EN

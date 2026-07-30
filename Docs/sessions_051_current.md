@@ -3957,3 +3957,292 @@ tutorial/telop banners (the content-setter hook that used to speak them is delet
 through the page cursor). If dialogue ever goes silent, grep the log for `DIALOGUE text widget
 outside the message-window registry`: that is the live-widget gate rejecting a page it should have
 spoken, and it is a one-line fix.
+
+---
+
+## Session 92 — 2026-07-29 — [navigation+audio] The audio beacon, and SDL3 arrives
+
+**KEYWORDS: audio beacon SDL3 SDL_OpenAudioDeviceStream SDL_LoadWAV_IO SDL_ClearAudioStream
+SDL_SetAudioStreamFrequencyRatio RCDATA beacon_assets.rc audio_engine audio_clips audio_beacon
+objective.wav Active_target.wav pan equal-power behind lowpass leg points outLegPoints endIdx
+PathDirections::Describe RequestReplan CurrentEpoch seedBeacon silent replan PartyEngaged 0xEA4
+0xEA9 FactionOf Category::Door Category::Shop hasNameSign sign repeats a doorway F9 mod menu
+polled monitor**
+
+**BUILT + DEPLOYED, NOT play-confirmed.** Not committed.
+
+### What shipped
+
+`\` still speaks the route; it now also drops an **audio beacon** on every corner where a spoken leg
+runs out. The ping is panned toward the current corner and accelerates from 1.0 s to 0.2 s as the
+player closes; reaching a corner advances **silently**; reaching the destination plays the sound
+pitched up once and stops. Straying off the leg triggers a **silent re-plan**. In combat it switches
+to `Active_target.wav` tracking the committed target live, goes quiet when there is no target, and
+resumes the route on the leg it was holding. `F9` or the `F8` menu turns it off.
+
+### THE ROUTE WAS BEING THROWN AWAY
+
+`PathSearch::Run` fills a function-local `rawPoly`; `PathDirections::Describe` builds its legs in
+another function-local. Both die on return, and a grep for `g_lastRoute` / `static std::vector<FVec3>`
+found nothing persisting a route anywhere. **`Run::first/last` already tracked the corner indices** —
+they were simply dropped at the `Run` → `Leg` boundary. So the fix is an out-param on the existing
+`Describe`, not a second entry point: the corners MUST come from the same simplify/collapse/absorb
+pipeline that produced the words, or the beacon aims at a corner the player was never told about.
+`Leg` gains `endIdx`, carried through both the merge and the absorb passes. The DIAGONAL RULE is
+untouched.
+
+Last beacon point is forced to `poly.back()`: a trailing run that rounds to zero steps produces no
+leg, so the final leg's own corner can stop short of the goal.
+
+### SDL3 IS A THIRD KIND OF DEPENDENCY — it matches neither Tolk rule
+
+Deploy does NOT copy it (the tester manages that file, as with Tolk). But the build **does link it** —
+real headers, `add_subdirectory` of `D:/Games/Dev/SDL3-source` (release-3.4.4), `SDL3::SDL3` — so
+unlike Tolk there is no silent-when-absent path: **without `SDL3.dll` the mod does not load at all**,
+and the game will not start. The release zip therefore MUST ship it (now five files, not four).
+Recorded in `release_procedure.md` as its own three-part note so nobody reasons about it by analogy
+with Tolk. DQ7R's deploy script *does* copy SDL3 — deliberately not ported.
+
+### The engine is a wrapper, not a mixer
+
+First draft was a 4-voice sample mixer with interpolation and a callback-side scheduler. **The tester
+struck it: "you shouldn't need the sampling since we're playing .wavs directly. just the SDL
+integration."** They were right, and checking the 3.4.4 headers made it concrete — SDL already
+provides pitch (`SDL_SetAudioStreamFrequencyRatio`), gain, retrigger (`SDL_ClearAudioStream`), format
+conversion, and silence-when-empty. **The only thing SDL3 has no API for is PAN** (there is gain and a
+channel map; neither is per-channel gain). So the one place samples are touched is interleaving mono
+to stereo with L/R gains — applying volume, not mixing — and the behind-filter rides along in that
+same loop. `audio_engine.cpp` came out ~170 lines with no callback, no voice array and no threading.
+
+### The pan is a TRAVEL direction, not a turn instruction
+
+Tester's correction, and it changed a justification as well as a test. The pan angle answers "which
+way do I walk", not "how far do I rotate" — it is **the same angle as the spoken leg, from the same
+`ReadCameraForwardStable` call `Describe` gets**, so "beacon pans right while the voice says West" is
+structurally impossible rather than a bug to test for.
+
+**The player does not drive the camera** — they treat FFXII as top-down movement, and the camera only
+moves when the game moves it. That makes the behind-attenuation + lowpass **load-bearing, not
+polish**: a pure `sin()` pan renders ahead and behind identically, and in a game where you turn to
+look around that resolves itself the moment you turn. Here there is no such move, so front/back must
+be carried by the sound or it is not conveyed at all.
+
+### PartyEngaged: the probe was NOT needed
+
+Planned a `probe_combat_state.js` to settle "am I in battle". **The tester pushed back — "we already
+have it… it's basically just when being targeted" — and they were right.** Re-reading §7.1 rather
+than its summary: `+0xEA4` stands at **0.97** and means literally "who is targeting me". What S49
+struck was the *unfiltered* use of it (an ally's out-of-combat Cure sets the same bit, no hostility
+gate). Filtering by `FactionOf` — already shipped — removes exactly that, using `+0xEA9` to map a set
+bit back to its owner. The 0.90 `+4 & 0x100000` replacement the doc recommends is **not used**.
+Escape mode needs no flag either: the state clears when foes stop targeting you. Known deviation — it
+resumes when the escape *succeeds*, not when it is *toggled*.
+
+### Doors and Shops: the discriminator was already there, and already discarded
+
+Tester asked for doors as their own category, and suggested shops be told apart by "an interactable
+that is text only, same label but with no map transition". **`TagDoorwaysAndDropSignTwins` already
+finds exactly that pair** — `entity_postscan.cpp:238-240` even calls it "the shop SIGN and the shop
+DOORWAY" — logs it as `sign repeats a doorway`, and **deletes the twin without recording that the
+pairing happened.** One flag (`hasNameSign`) set before the erase, while the index is still valid, and
+`Category::Shop` falls out. New order: `All, Exit, Door, Shop, SaveCrystal, …`.
+
+**Not yet earned:** the evidence is East End's shops (doorway within ~2 m, twin 6-15 m away). That
+shows shops HAVE the pairing; it does not show non-shop doors never do. The drop already logs
+unconditionally — **grep `sign repeats a doorway` across several maps and check every pairing is a
+shopfront before trusting the category.** Same shape as S89's mistake: a property of the sample read
+as a property of the world.
+
+**Deliberately NOT changed:** the `CatSign` fallback for an unnamed doorway. With a Door category the
+generic path would say "Door", but "Sign" there is a word the tester authorised specifically for the
+North End sign the game renders as "???" — swapping an authorised word for a generic one is not a
+refactor. Left alone with a comment saying why.
+
+### First play test: the beacon works, and found two bugs
+
+Tester ran it and the beacon sounds, tracks, accelerates and advances. Two defects, both fixed below.
+
+#### 1. The pan was MIRRORED — and the cause was computing one angle twice
+
+Route to the south gate spoke "Northwest"; the beacon panned **hard right**. The section above
+claims a beacon/voice disagreement is "structurally impossible" because both come from the same
+`ReadCameraForwardStable` call. **That claim was wrong, and the reason is worth keeping.** Sharing
+the *facing* input is not sharing the *angle*. `BearingToPan` took that shared facing and then
+re-derived the bearing itself:
+
+```
+beacon:     atan2(dx,  dz) - facingRad
+NavCommon:  atan2(dx, -dz) - CompassFaceDeg(facingRad)      // == 180 - yaw, not -yaw
+```
+
+Those are not two spellings of one expression — the second is the **exact negation** of the first
+(reflecting Z flips the angle's sign, and `180 - yaw` flips it back the other way). Negation leaves
+`cos` untouched and flips `sin`, so **front/back was correct and only left/right was inverted**,
+which is precisely the failure that survives a code read: every term is present and plausible.
+Northwest is relative octant 7 ≈ 315°, `sin` = −0.707 = left; the shipped code emitted +0.707.
+
+The fix is not a sign flip. `Norm360(BearingDeg - CompassFaceDeg)` appeared **six times** in
+`nav_common.cpp` as an inline expression with no name, which is what made a seventh, wrong copy the
+path of least resistance. It is now **one shipped function, `NavCommon::RelativeBearingDeg`**, and
+`CardinalBearingRelative`, `EgoBearing`, `RelativeOctant` and the beacon all call it. The plan for
+this feature said the pan and the word are "two encodings of one value" that "must never be computed
+twice" — the rule was right and the code did not honour it, because the value had no name to reuse.
+
+**`Seed` now logs the first leg's octant beside the pan it will use** (`leg 1 octant=7 pan=-0.71`),
+so the next sign error is a grep rather than a play session. Octants 1-3 must pan positive, 5-7
+negative, 0 and 4 near zero.
+
+#### 2. A gate crystal was filed under Doors
+
+First gate crystal the tester has reached. `ClassifyByNameKey` correctly identifies it from the
+game's own npcdic id (466 → `Category::GateCrystal`), and then the new Door/Shop promotion
+overwrote it, because that loop re-categorised **any** `doorway` entity that was not an NPC.
+
+`doorway` is TRUE and CORRECT on a gate crystal — it teleports, so the map script binds it a
+`setfieldsignlocationjumpinfo` record like any other transition. So the flag is not the bug; the
+promotion's reach was. **Door/Shop now refine `Category::Object` only** — the bucket the classifier
+uses when it recognised nothing. Every other category is a positive identification off the game's
+own name id or the character class, and a **proximity heuristic must never overwrite a name the game
+supplied.** Clearing `doorway` instead would have been the wrong repair: the sign-twin dedup keys on
+that flag, not on category, and would have started leaking duplicate shop signs.
+
+Note the near-miss: the old guard was `!= NPC`, written to stop a person near a shop sign becoming a
+door. It was the right instinct applied to one category instead of to the general rule.
+
+### Second play test: pan confirmed fixed, two category defects left
+
+Tester: *"works perfectly"* on the beacon — the pan now matches the spoken route. The remaining two
+reports were both about categories, and neither was where I had looked.
+
+#### 3. The gate crystal was in SAVE crystal — and the right answer was already written down
+
+Narrowing the Door/Shop promotion (fix 2) did not put the crystal in GateCrystal; it revealed where it
+had actually been classified all along. From the `'` dump: `nameIdx=435`, and `ClassifyByNameKey`
+mapped `435-459 → SaveCrystal` under the comment *"area/life crystals"*.
+
+The game's own npcdic name table settles it at conf **1.00** with no probe —
+`FFXII-Decompile\notes\npcdic_names.csv`, extracted from `PS2Data\...\npcdic.bin`:
+
+```
+435 Rabanastre Crystal   436 Nalbina Crystal   ...   459 Ridorana Crystal
+460 (Crystal 26) ... 465 (Crystal 31)          466 Gate Crystal
+467 Life Crystal         468 Urn               469 Save Crystal
+```
+
+**435-459 are the 25 named per-area TELEPORT crystals**, 460-465 unused placeholders, 466 the generic
+label. So `435-466 → GateCrystal`, and only `467`/`469` → SaveCrystal. Id 435 is literally
+"Rabanastre Crystal" — a gate crystal, in Rabanastre.
+
+**The lesson is where the answer was, not what it was.** `GameArchitecture.md` already said
+*"435–465 = area gate crystals"* — **correctly** — under "Object name (master data)". And 130 lines
+further down, the same file restated it as *"435–459/467 crystals"*. The code implemented the second
+one. Grepping the canonical registry was not enough, because the registry contained a precise
+statement of the fact **and a mushier paraphrase of it**, and the paraphrase is what got built. Struck
+in place with the full table. **When you restate a fact you have already recorded, restate it exactly
+or point at the original.**
+
+Contributing cause worth its own note: the `rescan:` tally never got `Door=`/`Shop=` columns when
+those categories were added this session, so it read `Save=1 Gate=0` and the two buckets an object
+could have been promoted into were simply not printed. It now counts every category and sums to
+`out.size()` — **a breakdown that does not add up hides the bug it exists to expose.**
+
+#### 4. "South Gate" was a portal stuck in Interactables — the `+0x70` GROUPS are not one pool
+
+Tester's rule: *"doors are portals that have map data, shops are doors that also have signs with the
+same label within a close distance from them."* And a decisive extra observation — **Lowtown's own map
+classified doors correctly**, so this looked map-specific. It was not; that map was lucky.
+
+`doorway` had one writer: a **2.5 m radius test against ANY `+0x70` record**. Rather than guess a
+threshold I added `LogSignTableOnce` and read it. Map 306, the whole table beside the objects:
+
+```
+g0[0] (119.95,-10,127.00) destIdx=20 -> "South Gate"          (124.00,-10,127.00) = 4.05m  MISSED
+g0[1] (138.24,-10,140.53) destIdx=21 -> "Lowtown"             (137.82,-10,144.00) = 3.50m  MISSED
+g2[0] (115.00,-10,151.00)            -> "Rabanastre Crystal"  (115.00,-10,151.00) = 0.00m  tagged
+g1[0] (112.12,-10,198.00) areaId=14  -> walk-onto exit surface, bbox z[198..225]  = 47m
+```
+
+**My arrival-marker hypothesis was wrong.** The crystal was not tagged by a group-3 marker; `g2[0]`
+sits *exactly* on it — a gate crystal's own teleport record. Two independent faults:
+
+1. **Only group 0 holds press-Enter doorways.** Group 1 is the walk-onto map-jump surface — the one
+   record whose `areaId` resolves (14), landing inside the exit surface bbox, and already the `Exit`
+   category. Group 2 is the crystal's teleport record. Group 3 is arrival markers. Consulting every
+   group is what tagged the crystal, and restricting to group 0 kills that by **data** rather than by
+   the category-precedence guard from fix 2 (which stays as belt and braces).
+2. **A group-0 record is never co-located with its door**, because it marks the "→ area" ARROW rather
+   than the thing you press. So matching is **nearest-wins per record**, not everything-in-radius:
+   each record claims its closest eligible non-NPC object, `kSignMatchDist = 8.0f` demoted to a sanity
+   bound. The loop is inverted to records-outer — per record there is exactly one door; per object the
+   question is ill-posed. Unused group-0 slots read exactly `(0,0,0)` (map 702: 4 live, 20 zeroed);
+   filter on position, **not** on `shown`, which `map_exits.h` records as a live render gate and would
+   make classification depend on where the camera points.
+
+**The refuting constant was ten lines above the broken one in the same header.** `kSignMatchDist =
+8.0f` already carried: *"a sign marks the '→ area' arrow and the slot is the volume you step into, so
+they are never coincident: measured 3.6-6.4 m apart on every East End district door, against ~25 m to
+the next-nearest door."* Same relationship, same scale, already measured — and `kSignObjectDist =
+2.5f` sat under it doing the work. **Two constants for one geometric fact, and the wrong one was
+load-bearing.** That is the same shape as defect 3's mushy-paraphrase and defect 1's duplicated angle:
+three defects this session, one cause — *a fact stated twice gets built on in its weaker form.*
+
+Also, the diagnostic's own first version latched on the first call of a new map — the one call where
+`out` is still empty, because the handle table streams in over the next few rescans. It printed the
+table and not a single object line. It now latches only once there is something to compare against.
+Full group table with per-row confidence recorded in `GameArchitecture.md`; only the group-0 row is
+load-bearing, and the 0.90 `n=1` group-2 identification is explanatory with nothing built on it.
+
+### Verification status
+
+Play-confirmed: the beacon sounds, tracks, accelerates and advances legs; **the pan agrees with the
+spoken route**; the **active-target beacon works**; the gate crystal reads under Gate Crystal; "South
+Gate" and "Lowtown" read under Doors. The category work was tested on **both** the Lowtown map and the
+South Gate map, so the group-0 + nearest-wins rewrite did not regress the map that already passed under
+the old radius — the one real risk in changing the matching rule underneath it.
+
+#### 5. OPEN — the objective beacon does not stop when the PLAYER starts the fight
+
+Found in the same test. `PartyEngaged()` is *"a living party actor has a `+0xEA4` bit set whose owner is
+a `Faction::Foe`"*, and `+0xEA4` means **"who is targeting me"** — a **being-attacked** test and
+nothing more. FFXII is seamless-battle, so combat starts two ways, and only one is covered: a foe
+aggroing works, **the player attacking first does not**, so the route beacon keeps pinging toward a
+shop mid-fight.
+
+The definition came from the tester's own words (*"it's basically just when being targeted"*) — true of
+the aggro case and silent about the other. **An accurate statement about one direction, implemented as
+though it covered both.**
+
+Engagement must become the OR: targeted by a foe **or** committed against a foe. And the second half
+**already exists and is discarded** — `ActiveTargetPos()` resolves `CommittedTargetOf(LeaderActor())`
+today, but the beacon only calls it *after* `PartyEngaged()` returns true. The discriminator is in the
+file, behind the wrong gate. That is the third time this session a needed value turned out to be
+computed and thrown away (the route corners, the shop sign pairing, now this) — **before adding a
+source, check whether the value is already being calculated and dropped.**
+
+Implementation constraints, in `debug.md` so they are not got wrong twice: filter the target's faction
+to `Faction::Foe` (committing a *heal* is not combat — the same ally-heal false positive S49 struck on
+the other side), scan party-wide rather than leader-only to match the existing side (gambits commit
+non-leader members), and **measure how long a commitment lingers** — if it outlives the foe, the beacon
+sticks in combat mode, which is this bug mirrored.
+
+Still unexercised — not failures, simply never tested: the ally-heal false positive on `PartyEngaged`,
+and whether `STALL_SCOPE("AudioBeacon::OnGameFrame")` ever shows up in a stall warning (it must not —
+that would mean audio work reached the game thread).
+
+Still not earned: **the Shop rule's premise.** Unchanged by any of this — grep `sign repeats a
+doorway` across several maps and confirm every pairing is a shopfront. Shops *have* the pairing;
+non-shop doors have never been shown to lack it. Cheaper to settle now, since `LogSignTableOnce`
+prints the whole `+0x70` table per map beside it.
+
+### ⚠ NOT COMMITTED
+
+This entry is written but **the work is still in the work tree** — the shell permission classifier was
+down at the end of the session and neither Claude nor the tester could run `git`, so the commit was
+deferred to the start of the next session. Two things for whoever picks it up:
+
+- **Session 92 is logged with no commit.** This is CLAUDE.md's `6f619e3` hazard inverted — that was a
+  commit with no log; this is a log with no commit. **The next new session is 93.** Do not renumber
+  this entry, and do not assume the highest logged `## Session N` has been committed.
+- **Stage explicitly (`git add <paths>`), never `git add -A`** — the tree may also hold another
+  track's files. The full file list is in the session memory
+  (`project_audio_beacon_sdl3_session92.md`).

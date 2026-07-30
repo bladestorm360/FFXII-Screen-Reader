@@ -174,9 +174,15 @@ std::vector<Run> CollapseStaircases(const std::vector<Run>& runs, const std::vec
 struct Leg {
     const wchar_t* word  = nullptr;
     int            steps = 0;
+    // Index into the SIMPLIFIED poly of the corner this leg ends at. Carried all the way through
+    // the merge and absorb passes below so the audio beacon can aim at the same corners the words
+    // describe. Runs already track this (Run::last); it used to be dropped at the Run -> Leg
+    // boundary, which is why nothing downstream could ever point at a leg.
+    size_t         endIdx = 0;
 };
 
-std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad) {
+std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad,
+                           std::vector<FVec3>* outLegPoints) {
     // Accurate smoothing FIRST (see the header note): corners survive, grid jitter goes.
     const std::vector<FVec3> poly = Simplify(rawPoly, kSimplifyTol);
     std::vector<Run> runs = CollapseStaircases(BuildRuns(poly, facingRad), poly);
@@ -186,8 +192,13 @@ std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad) {
         const int steps = NavCommon::DistanceToSteps(r.dist);
         if (steps == 0) continue;
         const wchar_t* w = NavCommon::RelativeWord(r.octant);
-        if (!legs.empty() && wcscmp(legs.back().word, w) == 0) legs.back().steps += steps;
-        else                                                   legs.push_back(Leg{ w, steps });
+        // A merge always extends FORWARD along the route, so the survivor takes the later corner.
+        if (!legs.empty() && wcscmp(legs.back().word, w) == 0) {
+            legs.back().steps += steps;
+            legs.back().endIdx = r.last;
+        } else {
+            legs.push_back(Leg{ w, steps, r.last });
+        }
     }
     // Absorb a sub-kMinLegSteps leg into a neighbour. Its STEPS are added, never dropped, so the
     // total stays honest; only the spurious extra instruction goes away. This never invents a
@@ -199,6 +210,10 @@ std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad) {
             if (legs[i].steps >= kMinLegSteps) continue;
             const size_t into = (i == 0) ? 1 : i - 1;
             legs[into].steps += legs[i].steps;
+            // The survivor now covers both stretches, so it ends at whichever corner is later along
+            // the route. Absorbing forward (i into i-1) extends it; absorbing leg 0 into leg 1
+            // leaves leg 1's own corner, which already sits further on.
+            if (legs[i].endIdx > legs[into].endIdx) legs[into].endIdx = legs[i].endIdx;
             legs.erase(legs.begin() + static_cast<long>(i));
             changed = true;
             break;
@@ -207,10 +222,24 @@ std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad) {
         for (size_t i = 1; i < legs.size(); ++i) {
             if (wcscmp(legs[i - 1].word, legs[i].word) != 0) continue;
             legs[i - 1].steps += legs[i].steps;
+            legs[i - 1].endIdx = legs[i].endIdx;
             legs.erase(legs.begin() + static_cast<long>(i));
             changed = true;
             break;
         }
+    }
+
+    if (outLegPoints) {
+        outLegPoints->clear();
+        outLegPoints->reserve(legs.size());
+        for (const Leg& l : legs)
+            outLegPoints->push_back(poly[l.endIdx < poly.size() ? l.endIdx : poly.size() - 1]);
+        // The last beacon point is ALWAYS the destination. A trailing run that rounded to zero
+        // steps produces no leg, so the final leg's own corner can stop short of the goal -- and a
+        // beacon that switches off a few metres early is worse than one that is a step long.
+        // path_search puts the exact target last in the polyline, so this is the real destination,
+        // not an extrapolation.
+        if (!outLegPoints->empty()) outLegPoints->back() = poly.back();
     }
     return legs;
 }
@@ -220,10 +249,15 @@ std::vector<Leg> BuildLegs(const std::vector<FVec3>& rawPoly, float facingRad) {
 // `poly` is the RAW cell path (see the diagonal-rule note above — do NOT pass the smoothed chord).
 // Each leg is one compass word + step count in the relative frame, the same frame and vocabulary the
 // `/` describe uses, so a leg and a crow-flies bearing to the same point always agree.
-std::wstring Describe(const std::vector<FVec3>& poly, float facingRad) {
+std::wstring Describe(const std::vector<FVec3>& poly, float facingRad,
+                      std::vector<FVec3>* outLegPoints) {
+    if (outLegPoints) outLegPoints->clear();
     if (poly.size() < 2) return L"";
-    std::vector<Leg> legs = BuildLegs(poly, facingRad);
-    if (legs.empty()) return L"";                   // whole route < half a step
+    std::vector<Leg> legs = BuildLegs(poly, facingRad, outLegPoints);
+    if (legs.empty()) {                             // whole route < half a step
+        if (outLegPoints) outLegPoints->clear();
+        return L"";
+    }
 
     // REVERSAL INVARIANT (log-only). A route must never send the player one way and then straight
     // back; if it does, the polyline is wrong, not the wording.
@@ -286,7 +320,7 @@ std::wstring Describe(const std::vector<FVec3>& poly, float facingRad) {
 
 std::wstring NextInstruction(const std::vector<FVec3>& poly, float facingRad) {
     if (poly.size() < 2) return L"";
-    std::vector<Leg> legs = BuildLegs(poly, facingRad);
+    std::vector<Leg> legs = BuildLegs(poly, facingRad, nullptr);
     if (legs.empty()) return L"";
     std::wstring s = legs.front().word;
     s += L" ";

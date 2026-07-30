@@ -98,6 +98,19 @@ enum class Faction { Party, Guest, Ally, Foe, Neutral, Unknown };
 Faction FactionOf(void* actor);          // read-only reimplementation of FUN_002f8e90
 bool    IsPartySide(void* bc);           // BtlChr kind byte == 0
 
+// ---- "am I in battle?" -------------------------------------------------------------------------
+// FFXII is seamless-battle: no encounter transition, no victory screen, and NO GLOBAL to read
+// (combat_system.md section 7.1). True when some LIVING party-side actor is currently targeted by a
+// Faction::Foe, read from the per-actor aggro mask at +0xEA4.
+//
+// The faction filter is the whole point. S49 struck the unfiltered version of this test because the
+// bit is set without any hostility gate, so an ally healing you out of combat set it too. Do NOT
+// reach for `*(u32*)(actor+4) & 0x100000` instead — that is the 0.90-confidence replacement the doc
+// suggests, and it is documented as possibly lagging the engage edge.
+//
+// Pure memory reads over the actor pool; cheap enough to poll per frame. Game thread preferred.
+bool PartyEngaged();
+
 // ---- the committed target (what the character is actually acting on) ---------------------------
 // NOT the browse cursor at P+0x9FD8, which only follows the highlight -- confirmed live: the
 // cursor moved across two enemies while the commitment held on a third.

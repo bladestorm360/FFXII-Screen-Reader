@@ -171,6 +171,12 @@ void ApplyFallbackLabels(std::vector<Entity>& out) {
         // An unnamed object carrying a `+0x70` field-sign record IS a sign: the map script bound it
         // with `setfieldsignlocationjumpinfo`, which is what `doorway` records. Shop doorways carry
         // the same record but resolve a real name, so they never reach here.
+        //
+        // KEPT DELIBERATELY when Category::Door arrived. Such an object is now categorised Door, so
+        // the generic branch would say "Door" instead -- but "Sign" here is a word the TESTER
+        // authorised specifically, for the North End sign the game itself renders as "???" /
+        // "(You're not sure what this sign is for.)". Swapping an authorised word for a generic one
+        // is not a refactor; ask before changing it.
         e.label = e.doorway ? std::wstring(Phrase::Get(Phrase::Id::CatSign)) : std::wstring(CategoryWord(e.category));
     }
 }
@@ -195,19 +201,115 @@ void ApplyFallbackLabels(std::vector<Entity>& out) {
 // carrying ANY other text (a slogan, a notice) has a different label and survives untouched -- the test
 // is exact string equality on the game's own words, so nothing is invented and nothing is paraphrased.
 // This is collection dedup, the same category as AlreadyListed; it never suppresses a repeat announcement.
+// DIAGNOSTIC (log-file only), ONCE PER MAP: the raw `+0x70` field-sign table, followed by every
+// candidate object's NEAREST record and its distance.
+//
+// `doorway` -- and therefore the entire Door/Shop split -- rests on a single 2.5 m proximity test
+// against this table, and Session 92 caught that test wrong in BOTH directions on one map: the
+// Rabanastre gate crystal was tagged a doorway (false positive), while "South Gate" and "Lowtown",
+// the map's two actual portals, were not (false negatives). The table has never been printed, so
+// there is no way to tell a distance problem from a wrong-GROUP problem from a record that simply
+// does not exist -- and `EnumerateFieldSignRaw` walks EVERY group, including the arrival markers
+// map_exits.h notes are group 3 on East End, which a portal test has no business matching.
+//
+// Prints before the empty-table early-out on purpose: "this map has no records at all" is itself the
+// answer on a map where the split misbehaves.
+//
+// Logs per RECORD, mirroring the tagging loop below, so the line IS the decision: which object each
+// record claimed and at what distance. The first version of this printed per OBJECT and latched on
+// the first call of a new map -- which is the one call where `out` is still empty, because the
+// handle table streams in over the following rescans (see CachedSigns). It printed the table and not
+// one object line. So the latch is only taken once there was actually something to compare against;
+// until then the map is re-reported, which settles within a rescan or two rather than spamming.
+static void LogSignTableOnce(const std::vector<Entity>& out,
+                             const std::vector<MapExits::SignRec>& signs) {
+    static int s_loggedMap = -1;
+    const int m = MapNames::CurrentMapId();
+    if (m == s_loggedMap) return;
+
+    int candidates = 0;
+    for (const auto& e : out)
+        if (e.sceneObj && e.category != Category::NPC) ++candidates;
+    if (candidates > 0 || signs.empty()) s_loggedMap = m;   // else try again next rescan
+
+    char h[192];
+    snprintf(h, sizeof(h),
+             "field-sign +0x70 table: %zu record(s) on map %d, %d candidate object(s) "
+             "(doorway = group %d, nearest wins, bound %.1fm)",
+             signs.size(), m, candidates, kSignDoorwayGroup, kSignMatchDist);
+    Log::Write("NAV-DIAG", h);
+
+    for (const auto& s : signs) {
+        const bool unused = (s.pos.x == 0.0f && s.pos.y == 0.0f && s.pos.z == 0.0f);
+
+        int   best  = -1;
+        float bestD = 0.0f;
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (!out[i].sceneObj) continue;
+            if (out[i].category == Category::NPC) continue;
+            const float d = NavCommon::Distance2D(s.pos, out[i].pos);
+            if (best < 0 || d < bestD) { best = static_cast<int>(i); bestD = d; }
+        }
+
+        char n8[64] = {};
+        if (best >= 0)
+            for (size_t k = 0; k < out[best].label.size() && k < 63; ++k)
+                n8[k] = (out[best].label[k] < 128) ? static_cast<char>(out[best].label[k]) : '?';
+
+        const char* verdict = "-";
+        if (s.group != kSignDoorwayGroup) verdict = "skipped: not group 0";
+        else if (unused)                  verdict = "skipped: unused slot (0,0,0)";
+        else if (best < 0)                verdict = "no candidate object";
+        else if (bestD > kSignMatchDist)  verdict = "TOO FAR, unclaimed";
+        else                              verdict = "CLAIMED -> doorway";
+
+        char l[288];
+        snprintf(l, sizeof(l),
+                 "  sign g%d[%d] pos=(%.2f,%.2f,%.2f) areaId=%u destIdx=%u usable=%d shown=%d "
+                 "| nearest \"%s\" %.2fm | %s",
+                 s.group, s.index, s.pos.x, s.pos.y, s.pos.z,
+                 static_cast<unsigned>(s.areaId), static_cast<unsigned>(s.destIdx),
+                 s.usable ? 1 : 0, s.shown ? 1 : 0,
+                 best >= 0 ? n8 : "", best >= 0 ? bestD : 0.0f, verdict);
+        Log::Write("NAV-DIAG", l);
+    }
+}
+
 void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
     const std::vector<MapExits::SignRec>& signs = CachedSigns();
+    LogSignTableOnce(out, signs);
     if (signs.empty()) return;                 // no field-sign table on this map -> nothing to judge with
 
-    // Tag doorways -- but NEVER a person. A character who happens to stand within 2.5 m of a shop
-    // sign is not a doorway, and tagging one made it an ANCHOR that then deleted every same-named
-    // NPC on the map (Session 77: four "Nomad" NPCs, 17-30 m apart, one of them story-critical).
-    for (auto& e : out) {
-        if (!e.sceneObj) continue;             // fixed exits have no scene node
-        if (e.category == EntityList::Category::NPC) continue;
-        for (const auto& s : signs) {
-            if (NavCommon::Distance2D(s.pos, e.pos) <= kSignObjectDist) { e.doorway = true; break; }
+    // Tag doorways: each GROUP-0 record claims its NEAREST eligible object. See the long note on
+    // kSignDoorwayGroup in entity_scan.h for the measurement -- the radius test this replaces missed
+    // both of Rabanastre's gates by ~1-1.5 m while tagging a gate crystal from another group.
+    //
+    // The loop is inverted on purpose (records outer, objects inner). Per RECORD there is exactly one
+    // door, so "nearest object to this record" is well posed; per OBJECT it is not -- an object near
+    // two records is still one door, and everything-within-a-radius let one record tag a whole
+    // cluster.
+    //
+    // NEVER a person. A character standing near a shop sign is not a doorway, and tagging one made it
+    // an ANCHOR that then deleted every same-named NPC on the map (Session 77: four "Nomad" NPCs,
+    // 17-30 m apart, one of them story-critical).
+    for (const auto& s : signs) {
+        if (s.group != kSignDoorwayGroup) continue;
+        // Unused slot. Group 0 is a fixed-size array -- map 702 carried 24 entries of which 20 read
+        // exactly (0,0,0) -- and a doorway at the world origin is not a thing. Tested on the POSITION
+        // rather than on `shown`, because map_exits.h records `shown` as a live RENDER gate ("the
+        // arrow is being drawn this instant"), which is not a statement about whether the record
+        // exists and would make tagging depend on where the camera is pointing.
+        if (s.pos.x == 0.0f && s.pos.y == 0.0f && s.pos.z == 0.0f) continue;
+
+        int   best  = -1;
+        float bestD = 0.0f;
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (!out[i].sceneObj) continue;                  // fixed exits have no scene node
+            if (out[i].category == Category::NPC) continue;
+            const float d = NavCommon::Distance2D(s.pos, out[i].pos);
+            if (best < 0 || d < bestD) { best = static_cast<int>(i); bestD = d; }
         }
+        if (best >= 0 && bestD <= kSignMatchDist) out[best].doorway = true;
     }
 
     for (size_t i = 0; i < out.size();) {
@@ -272,10 +374,42 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
         // filtered object is a LIVE engine object whose transform keeps reading, so `lastSeenMs`
         // keeps being refreshed and it never ages out. Without this the twin came straight back,
         // permanently, while this pass logged the deletion on every single rescan.
+        // RECORD THE PAIRING BEFORE THE ERASE. The twin is about to go, but the FACT that a
+        // text-only same-named sign stood beside this doorway is exactly what distinguishes a
+        // shopfront from an ordinary door or gate -- and until now it was computed here and thrown
+        // away. Set it while `twin` is still a valid index: erasing element `i` shifts everything
+        // after it down by one.
+        if (out[twin].doorway) out[twin].hasNameSign = true;
         NoteFiltered(cur.sceneObj);
         out.erase(out.begin() + static_cast<long long>(i));
     }
     (void)logDetail;   // drops are unconditional now; the flag remains for the caller's signature
+
+    // Categories LAST, once doorway and hasNameSign have both settled. Ordering matters here for the
+    // same reason the fallback labels run last (entity_scan.h): read either flag too early and it is
+    // simply false.
+    //
+    // DOOR/SHOP ONLY EVER REFINE `Object`. `Object` is the bucket ClassifyByNameKey drops an
+    // interactable into when it recognised NOTHING -- the misc gimmick, the kind-5 gate/switch/lever,
+    // the bare prop. Everything else in that enum is a POSITIVE identification off the game's own
+    // npcdic name id (466 = Gate Crystal, 469/467/435-459 = Save Crystal, 434/468 = Treasure) or off
+    // the character class (NPC). Those outrank this pass unconditionally: it decides category from
+    // PROXIMITY to a field-sign record, which is a heuristic, and a heuristic must never overwrite a
+    // name the game itself supplied.
+    //
+    // Session 92, caught in play on the first gate crystal the tester ever reached: the old test here
+    // was `!= NPC`, so the crystal -- tagged `doorway` off its own group-2 teleport record -- was
+    // promoted to Door and vanished out of the GateCrystal filter.
+    //
+    // The group-0 restriction in the tagging loop above now stops that crystal being tagged at all,
+    // so this guard is no longer what fixes it. KEEP IT ANYWAY: it is a true invariant on its own
+    // terms, it is one comparison, and it is the thing that holds if some other group ever turns out
+    // to mark real doorways too. Belt and braces, deliberately.
+    for (auto& e : out) {
+        if (!e.doorway) continue;
+        if (e.category != EntityList::Category::Object) continue;
+        e.category = e.hasNameSign ? EntityList::Category::Shop : EntityList::Category::Door;
+    }
 }
 
 // Append " 1", " 2", ... to labels that occur more than once, so fifteen identically-named townsfolk

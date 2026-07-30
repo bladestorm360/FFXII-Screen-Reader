@@ -57,6 +57,7 @@ enum class Id {
     // -- Entity categories (entity_classify.cpp, entity_postscan.cpp, entity_commands.cpp) ----
     CatAll, CatExit, CatSaveCrystal, CatGateCrystal, CatTreasure,
     CatNPC, CatInteractables, CatEnemy, CatItems, CatSign, StoryGated,
+    CatDoor, CatShop,
 
     // -- Navigation status (entity_commands.cpp, path_planner.cpp, entity_list.cpp, ...) ------
     PositionUnavailable, PathClear, BlockedBearPrefix, BlockedWord, RouteUnavailable,
@@ -97,6 +98,8 @@ enum class Id {
     ModMenu, ModMenuClosed, SettingCombatVerbosity,
     VerbosityNormal, VerbosityVerbose,
     VerbosityDesc, VerbosityDescNormal, VerbosityDescVerbose,
+    SettingAudioBeacon, BeaconOff, BeaconOn,
+    BeaconDesc, BeaconDescOff, BeaconDescOn,
 
     Count
 };
