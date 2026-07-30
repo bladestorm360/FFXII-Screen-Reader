@@ -3,6 +3,7 @@
 #include "ui/menu_state.h"
 #include "ui/config_reader.h"
 #include "ui/ingame_menu_reader.h"
+#include "ui/char_select_reader.h"
 #include "ui/license_reader.h"
 #include "ui/choice_reader.h"
 #include "ui/ability_summary_reader.h"
@@ -331,7 +332,7 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         // FUN_00244830 (e.g. focus returning after a pop-up closed) replayed a focus the dispatch
         // path had ALREADY spoken: the row was announced twice, which meant two blocking
         // Tolk_Output(interrupt) calls on the game thread in one frame and a visible hitch on
-        // opening the party menu. The battle command menu never had it because FUN_00244830 does
+        // opening the field menu. The battle command menu never had it because FUN_00244830 does
         // not replay that path -- which is why it always felt instant by comparison.
         void* focusWin = MenuState::FocusedOwner();
         const bool willBeGated = (owner != focusWin);
@@ -421,7 +422,7 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     // DAT_0208ebc0), so if this does not speak it, nothing does.
     //
     // WHEN to speak splits by pane, exactly mirroring the battle command menu. FUN_00244830 fires at
-    // the START of menu construction, so for the field/party menu (FUN_00280de0) speaking here lands
+    // the START of menu construction, so for the field menu (FUN_00280de0) speaking here lands
     // "Status" in the player's ear before the menu is visible -- the reported "speaks then lags". For
     // that ONE class we stash the focus and let the menu's own SHOW message (cat 0x13, in
     // IngameMenuReader) release it, so speech coincides with the menu appearing -- just as the battle
@@ -520,6 +521,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
+    ok     &= CharSelectReader::Init();   // field-menu character chooser: Party membership + Status vitals
     ok     &= ChoiceReader::Init();       // mid-dialogue choice widget (polls input, sends no message)
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
@@ -542,6 +544,7 @@ void Shutdown() {
     InputTracker::SetDescribeCallback(nullptr);
     ChoiceReader::Shutdown();
     IngameMenuReader::Shutdown();
+    CharSelectReader::Shutdown();
     BattleTargetReader::Shutdown();
     LicenseReader::Shutdown();
     AbilitySummaryReader::Shutdown();

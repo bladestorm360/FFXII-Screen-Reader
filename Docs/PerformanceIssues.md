@@ -15,23 +15,43 @@ From `CLAUDE.md`:
 
 ## Current state
 
-**Every `.cpp` is under 500.** Four are in the 400-500 "plan a split" band:
+> **CORRECTED (Session 93).** This section said "**Every `.cpp` is under 500**" and listed four files in
+> the 400-500 band. That was false when written and had drifted further since: `battle_state.cpp` was 584
+> and absent from the table entirely, `path_search.cpp` had reached 667, and two UI readers were over.
+> **An audit that reports a rule as satisfied is worse than no audit** -- it is the thing a later session
+> greps to find out whether it may add lines, and this one licensed 700-line files. The numbers below are
+> measured, not remembered; re-measure them rather than editing them by hand.
+
+**Four `.cpp` files are OVER the 500 cap**, all pre-existing and none of them touched by the Session 93
+pathfinder work:
 
 | File | Lines | Note |
 |---|---|---|
-| `navigation/map_exits.cpp` | 451 | Four independent exit sources; splits cleanly by source if it grows |
-| `ui/battle_target_reader.cpp` | 431 | Nameplate hook + snapshot hook + the `p` cache |
-| `ui/menu_reader.cpp` | 416 | Down from 667; now hooks + speech decisions only |
-| `navigation/path_planner.cpp` | 404 | A* + string-pull + the game-thread request drain |
+| `ui/ingame_menu_reader.cpp` | 641 | Was 739; the character chooser moved out to `char_select_reader.cpp` in S93. Still over -- the clean remaining seam is the battle-command half (`RVA_BCMD_*`), which would land both halves near 320. |
+| `navigation/entity_scan.cpp` | 577 | Scan + classify + the handle-table walk |
+| `ui/menu_reader.cpp` | 561 | Hooks + speech decisions; grew past its S51 split |
+| `navigation/entity_postscan.cpp` | 546 | Sign/doorway tagging + the twin filter |
 
-Nothing here is urgent. Revisit when one crosses 450 with new behaviour rather than pre-emptively.
+**Paid off in Session 93** (each split on a seam the file already had, no logic change):
+
+| File | Before | After | Split into |
+|---|---|---|---|
+| `navigation/path_search.cpp` | 667 | 499 | `path_funnel.{h,cpp}` (string-pull, corner inset), `path_validate.{h,cpp}` (leg validation) |
+| `battle/battle_state.cpp` | 584 | 468 | `battle_state_diag.cpp`, `battle_state_names.cpp`, `battle_state_internal.h` |
+| `navigation/map_query.cpp` | 499 | 402 | `map_seams.{h,cpp}` (the map-jump sweep + its cache) |
+
+Revisit the four over-cap files when one of them next needs new behaviour -- splitting for its own sake
+has broken working readers here before (S31's chooser consolidation silenced board navigation).
 
 ### Header exceptions (deliberate, not oversight)
 
 | File | Lines | Why it stays over 150 |
 |---|---|---|
-| `navigation/nav_rva.h` | 279 | ~80% provenance comments |
-| `navigation/map_rva.h` | 221 | same, split out of nav_rva.h in Session 51 |
+| `navigation/nav_rva.h` | 572 | ~80% provenance comments. Was recorded as 279; it is the registry every RE finding lands in, so it grows with the project. |
+| `navigation/map_rva.h` | 273 | same, split out of nav_rva.h in Session 51 (recorded as 221) |
+| `navigation/entity_scan.h` | 191 | struct layouts + their derivation |
+| `navigation/player_state.h` | 155 | the nav-safe gate's contract, corrected in S93 |
+| `battle/battle_state.h` | 150 | at the cap exactly, after the S93 diag/name split |
 
 Both are RVA-documentation headers: for each address they record which reading was **STRUCK**, what
 the evidence was, and what replaced it. That commentary is precisely what stopped past sessions

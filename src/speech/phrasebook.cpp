@@ -55,6 +55,12 @@ const Row kTable[] = {
     EN(L"Level "), EN(L"HP "), EN(L"MP "), EN(L"LP "), EN(L"EXP "), EN(L"Next "),
     EN(L" of "), EN(L" percent"), EN(L"queued"),
 
+    // -- Field menu, Party screen (portrait position + alpha dim only; no string exists). USER-AUTHORIZED.
+    // POSITIONAL TABLE: these two must sit at the SAME index as in phrasebook.h's enum. The
+    // static_assert only checks the COUNT, so inserting at the wrong offset silently shifts every later
+    // phrase by two and the build still passes.
+    EN(L"In party"), EN(L"Not in party"),
+
     // -- Title menu (baked sprite art — the one sanctioned label exception). TitleExit is its own
     //    id and NOT shared with CatExit: identical in English, not necessarily anywhere else.
     EN(L"New Game"), EN(L"Load Game"), EN(L"Trial Mode"), EN(L"Credits"), EN(L"Exit"),

@@ -85,6 +85,13 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | Game Speed (1×/2×/4×) | 1 | 2 | 3 |
 | Escape | Left Ctrl | — | — |
 
+> **VOCABULARY (Session 93).** The row above is the GAME's own label, captured verbatim from its
+> Controls screen, and it stays that way — the mod reads that screen back to you, so rewriting it here
+> would put a word on your screen that the game never says. Internally the project calls the outer `R`
+> menu the **field menu**, because its own first command is now a distinct **Party** screen for
+> managing who is in the active party. So: the game's "Party Menu" (`R`) is our "field menu"; our
+> "party menu" means that first command.
+
 > **CORRECTION (Session 44):** an earlier capture of this menu row mislabeled `1`/`2`/`3`
 > as "Game Speed / Target Group / Lock On". **Runtime disproved that — `1`, `2`, and `3`
 > all change GAME SPEED** (they mirror the `F1`/`F2`/`F3` "Regular/Double/Quadruple Game
@@ -162,6 +169,17 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
 | `Up` / `Down` | **Status Attributes page only:** previous / next entry in the virtual buffer | free on that page |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
+
+> **Party screen — who is in the party (Session 93).** The field menu's first command, **Party**, is a
+> membership toggle rather than a stat screen. Moving between the portraits speaks the character and
+> their membership — "Vaan: In party", "Balthier: Not in party" — and pressing Confirm (or Left / Right)
+> speaks just the new state, because the toggle does not move the cursor. The game refuses some presses
+> on its own: a guest cannot be removed, and it will not let you drop below one or go above three
+> members. A refused press plays the game's own error sound and the mod re-speaks the unchanged state,
+> so a press always tells you where you ended up.
+>
+> Status and Equipment share this same portrait grid, and there they still speak name, Level, HP and MP
+> as before — the readout follows the command you came in on.
 
 > **Status screen virtual buffer (Session 71).** The Status screen's **Attributes page** is a static
 > display with no in-game cursor, so the mod exposes it as an FF1-style navigable buffer on the arrow

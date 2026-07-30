@@ -73,6 +73,11 @@ enum class Id {
     LevelPrefix, HPPrefix, MPPrefix, LPPrefix, EXPPrefix, NextPrefix,
     OfJoiner, PercentSuffix, Queued,
 
+    // -- Field menu, Party screen: membership is a portrait POSITION plus an alpha dim, with no text
+    // anywhere in the binary to read. USER-AUTHORIZED this conversation (Session 93), for exactly these
+    // two words and no others. (char_select_reader.cpp)
+    InParty, NotInParty,
+
     // -- Title menu: baked sprite art, the one sanctioned label exception (title_reader.cpp) ---
     TitleNewGame, TitleLoadGame, TitleTrialMode, TitleCredits, TitleExit,
 

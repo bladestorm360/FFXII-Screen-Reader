@@ -401,8 +401,8 @@ every load (139 / 1997 / 139 polys across 311 → 315 → 311):
 
 | | |
 |---|---|
-| **writer** | `MapQuery::PrimeMapJumpSurfaces(mapId)` — GAME THREAD, called **only** from inside `PathPlanner::OnGameFrame`'s nav-safe + non-origin-position block. The only caller of `ReadMapJumpSurfaces`. |
-| **why that gate** | `PlayerState::IsFieldNavSafe()` is false for the **whole** of a transition (`CondAreaId` rejects `0xFFFFFFFF`, `CondLeaderPtr` is zeroed at teardown start), so it is the cheap proof that the resident walkmap belongs to the id we tag the answer with. |
+| **writer** | `MapQuery::PrimeMapJumpSurfaces(mapId, epoch)` (moved to `map_seams.cpp`, S93) — GAME THREAD, called **only** from inside `PathPlanner::OnGameFrame`'s nav-safe + non-origin-position block. The only caller of `ReadMapJumpSurfaces`. |
+| **why that gate** | ~~`IsFieldNavSafe()` is false for the **whole** of a transition, so it is the cheap proof that the resident walkmap belongs to the id we tag the answer with.~~ **STRUCK (S93): it is false for the MIDDLE of a transition, not the whole of one.** At the LEADING edge the map id has already flipped while the previous map's walkmap is still resident; the sweep ran on map 306's polygons and tagged them 1101, after which the crossing oracle blamed a "wrong group->destination binding" that was correct. Nav-safety is LIVENESS, not IDENTITY -- the same distinction S85 drew about `HasWorld()`, one level up. The cache is now keyed on the **teardown epoch**, the only signal that actually brackets a map, and `CondAreaId` is no longer in the gate at all. `map_query.h`'s own header already recorded the phenomenon ("the map id flips BEFORE the engine swaps the walkmap") without anyone connecting it to this line. |
 | **invalidation** | `MapQuery::InvalidateMapJumpSurfaces()` from `PathPlanner::OnMapTeardown`, beside `NavMesh::Invalidate` / `NavReach::Invalidate`. Handles a map reloaded onto its own id. |
 | **readers** | `CachedMapJumpSurfaces(mapId, out)` — any thread, **never sweeps**, serves only when the cached answer was swept for that same `mapId`. The two possible answers are "this map's seams" and "nothing yet". |
 
@@ -1650,8 +1650,19 @@ every map, independent of Bullet, so live in the prologue). Shipped `src/navigat
   flags=0 (WALK class)** — the exact query the PLAYER leader's own per-frame wall feelers use
   (`FUN_002593a0`→`FUN_00259990(1,0,…)` slot-0=leader→`FUN_003d9930`→…→`FUN_0032cf50`→
   `FUN_003d97e0(…,4)`→`FUN_00230b60(…,4,0)`; NPCs share the funnel byte-for-byte). Class 4 blocks real
-  walls (edge type 0, type1/bit30=0) + character-only invisible walls (type 4), and **skips** camera-only
-  occluder planes (type1/bit30=1), floors/ceilings (poly records), triggers/water (types 2,3,5,6,7).
+  walls (edge type 0, type1/bit30=0) + character-only invisible walls (type 4), and skips camera-only
+  occluder planes (type1/bit30=1).
+  > **STRUCK (Session 93) -- two halves of that sentence were wrong, and both shipped code.**
+  > (a) It does **NOT** skip "floors/ceilings (poly records)": `FUN_0022cc50:26` tests type-0 FLOOR
+  > triangles unconditionally. That claim, at conf **0.98**, is what licensed `MapQuery::SegmentHit`
+  > flattening its far endpoint to `from.y` -- which ran a rising portal's ray UNDER the destination
+  > floor and reported the floor as a wall: a false BLOCK on exactly the geometry routing most needs to
+  > cross. The engine never flattens; `FUN_0032bcc0:20-23` LIFTS instead. Fixed in `map_query.cpp`.
+  > (b) "triggers/water (types 2,3,5,6,7)" is an **invented label**. Nothing in the binary ties any of
+  > those type values to water or to triggers; `FUN_0022cc50` simply has no branch for them. Three
+  > research passes searched for a water attribute on the strength of that phrase and there is none --
+  > the engine has no water concept anywhere in the movement path. What actually refuses water (and
+  > cliffs, and fences) is a body-versus-boundary test: see "The hard passability check" below.
   `0xffff/1` is the CAMERA/occlusion class — doubly wrong for routing (blocks camera planes → phantom
   detours; passes character-only walls). flags: 0 = nearest-blocker (movement), 1 = first-hit (occlusion).
   Material override tables `DAT_0209a3e0/…3e4` are benign (applied identically to every caller, zeroed at
@@ -1712,7 +1723,7 @@ wall. Directions stay WORLD-ABSOLUTE (no egocentric). **Direct read is conf 0.92
 
 Root cause of the S67 "routes through impassable elevation" bug. Decompile trace of the FIELD walkmap
 movement (**not** Bullet — absent in the field):
-- **`FUN_0022cc50`** (RVA 0x102C50) — the per-poly handler used both by the segment test `FUN_00230b60`
+- **`FUN_0022cc50`** (RVA **0x10CC50** -- this entry said 0x102C50, arithmetically wrong: 0x22CC50 - 0x120000 = 0x10CC50. Corrected S93) — the per-poly handler used both by the segment test `FUN_00230b60`
   and by the character move-across-walkmap — decides walkability purely from **baked walk-type flags**
   (poly+0xC low 3 bits, after a remap through `DAT_0209a3e0`/`DAT_0209a3e4`): **0 = walkable**, 1/4 =
   conditionally blocked (party/enemy side, `param_2+0x46`), walls (prim idx ≥ 0x4000) block. **There is
@@ -3210,6 +3221,97 @@ Spot-checks: `0x000` Cure → 1, `0x00B` Curaja → 1, `0x096` Attack → **0**,
 The 24 / 13 / 18 counts are three independent hard facts about FFXII landing exactly, which is what
 carries this from the archived probe's 0.9 to 0.99. Supersedes the partial note in `battle_state.h`
 ("1 for every magick, 2 for every technick").
+
+## The hard passability check — a BODY vs BOUNDARY test (Session 93)
+
+**This is the engine's "you cannot walk here", and it is not a terrain attribute.** Three research
+passes searched the walkmap flags word for a per-type or per-class bit that distinguishes water, a
+cliff or a steep slope, and there is none — the record is exhausted, `+0x1C` has zero readers in all
+33,128 functions, and no script override can even write bits 0-2. The refusal lives in the MOTION path.
+
+| what | RVA | conf | notes |
+|---|---|---|---|
+| `FUN_0022f9b0` border clearance | `0x10F9B0` | 0.99 | The refusal itself. Replicated in `nav_footprint.cpp`. |
+| `FUN_0022ef20` footprint transform | `0x10EF20` | 0.99 | Builds the ellipse matrices from `moveCtx+0x80`/`+0x84`. **Writes globals — this is why the border test cannot be called.** |
+| `FUN_00230c10` body sweep | `0x110C10` | 0.98 | (start,to) → achieved position + blocked. **PURE**: 29-function closure, zero game-memory writes. Wrapped as `MapQuery::BodySweep`. |
+| `FUN_00231400` can-stand-here | `0x111400` | 0.98 | Class-walkable floor AND not inside a volume. Pure; 11-function closure. Not yet used. |
+| `FUN_00232490` point-in-volume | `0x112490` | 0.98 | CSR layers 1,2. Pure. Not yet used. |
+| `FUN_00380c40` the resolver | `0x260C40` | 0.99 | `(ctrl, delta)` → resolved position. **Writes 14 globals; do NOT call.** |
+
+**The mechanism.** For each of the current triangle's three edges, `FUN_0022f9b0` takes the neighbour
+across it and — at `:85-88` — **DEMOTES a neighbour that fails `FUN_00230a40` for the movement class to
+`-1`, making it indistinguishable from a map edge.** One branch, two causes. The character is an ellipse
+normalised to a unit circle, so the test is literally `if (distance < 1.0)` at `:120`; on violation it
+pushes the position back to exact **tangency** along the edge perpendicular (`:129-142`), accumulates the
+correction at `moveCtx+0x40`, and sets **`moveCtx+0x60 |= 0x10`** — the "was blocked" bit. It then
+recurses into every walkable neighbour the body overlaps (`:152-167`).
+
+**Why that produces the observed behaviour** ("you can walk against a cliff, you just make no progress,
+and you can slide along angles"): the push removes only the component along the edge NORMAL, and
+`FUN_002327d0:233-238` zeroes that normal's Y whenever the actor is ground-locked — which
+`FUN_00380b80:8` makes the default. So head-on cancels entirely; oblique keeps its tangential part.
+
+**Why cliffs need no height test, and why the step/slope gate was struck twice.**
+`FUN_00380c40:24-28` PINS the actor's Y to the poly plane. There is no gravity on the walkmap and
+nothing to fall off: a cliff is an edge whose neighbour index is `< 0`, refused by the identical branch
+that refuses a wall. Water, a fence line, the map edge and ground the party's class cannot stand on are
+all that same branch reached by different routes. **One mechanism** — which is why S68 and S75 were
+right to strike a height/slope threshold, and why looking for a terrain bit could never have worked.
+
+**Two things called "class 4", and conflating them cost a research pass.** The `4` the actor movers pass
+is the **SEGMENT** class (query struct `+0x46`, compared `== 4` in `FUN_0022cc50`). The **FLOOR** class
+that `FUN_00230a40` actually receives is a different field on a different object:
+`*(u16*)(walkCtrl + 0x50)`, read at `FUN_002327d0:267`. `FUN_00380b80:12` initialises it to `0xffff`,
+which falls through `FUN_00230a40`'s 0/1/2/3/5 branches identically to 4 — so the conclusion
+`(effectiveFlags & 7) == 0` survives, but its stated REASON in `nav_rva.h` was wrong. Named apart now as
+`MAP_CLASS_PARTY_SEG` versus the runtime-read floor class.
+
+**Body radius `0.27f`** (`0x3e8a3d71`), the literal at all three `FUN_00230c10` call sites
+(`FUN_0032bcc0:52-55`, `FUN_0032beb0:36-38`/`:66-68`, `FUN_0032ca70:68-70`). **Not** the interaction
+ellipse at `XFORM_PLAYER_SHAPE` — that is a reach envelope for the `;` target test, a different
+quantity. The engine additionally shapes the collision body as an ellipse from `moveCtx+0x80`/`+0x84`
+(reached via actor → `+0xC0` → `+0x138` → `+0x30`, getter `FUN_00265970`); those two half-extents are
+**not read** by the mod, because that offset chain is unconfirmed against the live process and
+`FUN_002327d0:254` compares them against 2.0, so they are plainly per-actor. A circle of the confirmed
+radius is the honest approximation until a probe settles the pair.
+
+## Area resource manifest — NOT "area collision", and NOT a readiness signal (Session 93)
+
+`DAT_02b5e0b8` (RVA `0x2A3E0B8`, area id) and `DAT_02b5e0c0` (RVA `0x2A3E0C0`) are the per-AREA streamed
+resource manifest, **not** collision data, and navigation never reads either. The area loader
+`FUN_003ea820` (RVA `0x2CA820`) looks the resource up and, when the lookup returns `< 1`, frees the
+previous blob and writes exactly `DAT_02b5e0b8 = -1; DAT_02b5e0c0 = 0` — and **nothing retries for the
+rest of the visit.**
+
+So `failMask = 0x0C` is the engine's TERMINAL "this area has no such resource", not "not loaded yet".
+Ridorana/Pharos (map 1101) published it on all ~3,530 field frames of a 2m36s visit while the other six
+nav-safe conditions passed, which killed `\`/`p` routing, the audio beacon, the seam sweep (hence the
+whole Exit list), the `NavReach` flood and the `NavTrace` trail there — only direction/distance announces
+survived. Both bits are now **log-only**; `IsFieldNavSafe()` keeps the six conditions that describe
+something navigation actually dereferences. Labelled `areaId(log)` / `areaManifest(log)` in the fail-mask
+formatter so the old "areaColl" misnomer cannot be read as collision again.
+
+## Field-menu character chooser + the Party screen (Session 93)
+
+One controller, four commands. `FUN_00285290` (RVA `0x165290`, parked at `menuCtx+0xf8`) serves Party
+`0x4b3`, Status `0x4b4`, Equipment `0x4b6` and Gambits `0x4b9`; only the mode the field pane arms it in
+differs. The active command is `**(int**)(*(u64*)(menuCtx+0xd8) + 0x268)`.
+
+**Party `0x4b3` is a membership TOGGLE.** `FUN_00284c90` (RVA `0x164C90`) is the writer:
+
+| field | meaning |
+|---|---|
+| `row+0xfc` bit 3 (`0x08`) | in the active party — the bit the toggle XORs |
+| `row+0xfc` bit 4 (`0x10`) | party LEADER (`FUN_002830a0` migrates it when the leader leaves) |
+| `row+0xc0` | index into `menuCtx+0xac8` for this row's member block |
+| `menuCtx+0xb10 + charId` | u8 mirror of bit 3, written by the toggle from the value it just set |
+| `block+0x60` | charId (i16; `< 0` = empty portrait) |
+| `block+0x00` bit 1 | GUEST — the toggle refuses to change it |
+
+`FUN_002830a0` iterates **9** rows, matching `BattleState::kRosterSlots`. A refused press takes the
+guard path and plays `FUN_00249c60(5)` (error SE) instead of `0x51` (accept), leaving both witnesses
+unchanged — so a reader that re-speaks the state after the call reports the truth either way.
+
 
 ## The announce is SUPPRESSED ON REPEAT — `FUN_00304850` (Session 90, 0.97)
 

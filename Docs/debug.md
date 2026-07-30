@@ -7,7 +7,18 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-### Session 92 — OPEN: `PartyEngaged` only detects being ATTACKED, not attacking
+### Session 92 — ~~OPEN~~ **SOLVED in Session 93**: `PartyEngaged` only detected being ATTACKED
+
+**Fixed.** `PartyEngagement()` now returns the OR of both directions plus the target it resolved, so the
+beacon consumes one answer instead of re-deriving half of it one line too late. The commitment side
+filters to a LIVING `Faction::Foe`. **The UNKNOWN this entry flagged is ANSWERED from the decompile and
+needed no probe:** the ACTIVE pair `+0x710`/`+0x714` lives exactly one action (written at dispatch by
+`FUN_0030f760`, cleared by `FUN_003105d0` on action end / next dispatch / KO / actor detach), and the
+QUEUED pair is flag-gated with the flag cleared unconditionally at pickup by `FUN_00305ab0`. One
+staleness channel exists and is explicit -- several abort paths PRESERVE the queue flag when the queued
+action id is `0x95` or `0x113` -- and requiring a living foe closes it by construction. The original text
+is kept below because the reasoning (an accurate statement about ONE direction, implemented as if it
+covered both) is the reusable part.
 
 **KEYWORDS: audio beacon does not stop player starts combat initiates attack first PartyEngaged
 +0xEA4 being targeted only bidirectional engagement CommittedTargetOf LeaderActor ActiveTargetPos
@@ -54,6 +65,145 @@ Constraints for whoever implements it, so it is not got wrong twice:
   today; do not assume it clears promptly.
 - Escape mode is unaffected — the existing deviation (resumes when the escape *succeeds*, not when
   *toggled*) is documented in the Session 92 log entry and is a separate question.
+
+### Session 93 — SOLVED: the hard walkability check is a BODY vs BOUNDARY test, not a terrain type
+
+**KEYWORDS: routes through impassable terrain hard walkability check passability water cliff steep hill
+fence wall no progress slide along angles FUN_0022f9b0 border clearance elliptical footprint
+moveCtx+0x80 +0x84 was blocked bit moveCtx+0x60 0x10 tangency FUN_00230c10 body sweep pure getter
+FUN_0022ef20 globals FUN_00380c40 resolver CORRIDOR BREACH portal-crossing path also breaches
+kMaxSegChecks 24 truncated Plan::Frontier dead end route around obstacles S93**
+
+**Reported in play:** routes went through terrain the character cannot walk on, and the tester was
+explicit that neither refusing to route nor degrading gracefully was acceptable: *"you have to find some
+way to route AROUND obstacles. We can not have routes that simply dead end."* They also named the
+mechanism: *"it isn't a hard stop -- the player can still walk against a cliff or steep hill, they just
+make no progress. The player can, to some extent, slide along angles."*
+
+**WHERE THREE RESEARCH PASSES WENT WRONG: they looked for a TERRAIN ATTRIBUTE.** The walkmap record is
+exhausted and there is no passability field in it -- `+0x1C` has zero readers in all 33,128 functions, no
+script override can write flag bits 0-2, and `(effectiveFlags & 7) == 0` really is the whole floor test
+for the party. Two passes then went looking for water specifically, on the strength of an INVENTED LABEL
+in `GameArchitecture.md:1654` ("triggers/water (types 2,3,5,6,7)") that nothing in the binary supports.
+**Water was only ever the tester's EXAMPLE; the ask was a passability check.**
+
+**THE ANSWER IS `FUN_0022f9b0` (RVA `0x10F9B0`)** -- full mechanism, RVAs and the purity audit are in
+`GameArchitecture.md` under "The hard passability check". In short: the character's elliptical footprint
+may not overlap any triangle edge whose neighbour is absent **or fails `FUN_00230a40` for the movement
+class** (`:85-88` demotes the second case to the first), and on violation the engine pushes the position
+back to exact tangency along the edge normal and sets a "was blocked" bit. The push removes only the
+NORMAL component and that normal's Y is zeroed when ground-locked, so head-on cancels and oblique slides
+-- the tester's description, exactly. **And it explains cliffs with no height test at all**, because
+`FUN_00380c40:24-28` pins the actor's Y to the poly plane: a cliff is an edge with no neighbour, refused
+by the same branch as a wall. Which is independently why S68 and S75 were right to strike a step/slope
+gate twice.
+
+**REPLICATED, NOT CALLED.** `FUN_0022f9b0` takes no footprint argument -- the body reaches it only through
+globals `FUN_0022ef20` writes -- so there is NO way to call any footprint-aware engine predicate without
+writing game memory. The tester's ruling was explicit ("DO NOT WRITE TO THE GAME... simply do what we're
+already doing by calling the game's own NavMesh equivalent"), so the border test is a memory-only replica
+in `nav_footprint.cpp`, in the idiom `nav_mesh.cpp` and `map_query.cpp` already use for `FUN_00231890`,
+`FUN_002324f0` and `FUN_00231900`. The body SWEEP half IS a genuine pure call and stays one:
+`MapQuery::BodySweep` wraps `FUN_00230c10`, whose 29-function closure was verified write-free.
+
+**THE ARCHITECTURAL DEFECT, and why the old check could never have worked.** Validation sat AFTER the
+search, as a lambda over a corridor A* had already committed to. Its only three possible outputs were
+accept, substitute one pre-computed alternative, or **accept the thing it had just proved wrong** -- and
+it took the third option on **9 of 53 routes** in the tester's log (17%), shipping a path the mod itself
+had disproved, with no change to the speech. A validator in that position cannot route around anything by
+construction. It now bans the offending portal and searches again, so the detour comes from A*.
+
+**Four smaller defects found in the same pass, each of which had been hiding the others:**
+
+1. **`MapQuery::SegmentHit` flattened its far endpoint to `from.y`.** `FUN_0022cc50:26` tests type-0
+   FLOOR triangles unconditionally, so a flattened ray across a RISING portal runs UNDER the destination
+   floor and reads the floor as a wall -- a false BLOCK on exactly the geometry routing most needs. The
+   engine never flattens (`FUN_0032bcc0:20-23` LIFTS). Licensed by the 0.98 claim now struck.
+2. **`kMaxSegChecks = 24` made the log lie.** The validator stopped at 24 legs and the caller then printed
+   `portal-crossing path is clear` -- a claim about 24 legs presented as a claim about all 140.
+3. **The passed-waypoint drop was bypassed on every breaching route.** The fallback swapped in a freshly
+   built vector while the drop had only ever mutated the discarded one, so S78's leg-0 reversal fix was
+   silently inactive exactly when routes were worst.
+4. **Every taut corner sat ON a boundary.** A funnel corner IS a portal endpoint, i.e. a mesh vertex on
+   the edge of the walkable region -- the precise thing the footprint may not overlap. Measured in the
+   Giza log: the breach leg ran (260.9,104.5)->(266.2,104.8) and the same line lists both as portal
+   endpoints. Corners are now inset along the leg bisector by the engine's own body radius, and only
+   where the footprint test measures better.
+
+**THE LESSON.** The tester described a MOTION behaviour ("no progress, but you can slide") and three
+passes translated it into a question about TERRAIN. A depenetration solver and an attribute lookup have
+completely different signatures, and the signature was in the report from the first sentence. **When a
+report describes what something DOES, look for the code that does it -- not for the data you expect to be
+behind it.** `MapQuery::SegmentTraversable` is the monument to the other approach: 40 lines of dense
+sampling, zero callers, and it carried both a `maxStep` cliff gate and per-sample `GroundAt`, each already
+struck. Deleted.
+
+### Session 93 — SOLVED: the nav-safe gate waited for a resource the map does not have (Ridorana)
+
+**KEYWORDS: Ridorana Pharos Wellspring map 1101 route unavailable never nav-safe failMask 0x0C areaId
+areaColl areaManifest CondAreaId CondAreaCollision DAT_02b5e0b8 DAT_02b5e0c0 FUN_003ea820 terminal state
+90-frame retry gave up beacon silent Exit list empty seam sweep NavReach NavTrace dead S93**
+
+**Reported in play:** *"Ridorana pathfinding fails completely."* Confirmed in the log, diagnosed, fixed.
+
+**Evidence.** On map 1101 every route request failed the nav-safe gate with
+`failMask=0x0C[areaId,areaColl]`, on all ~3,530 field frames of a 2m36s visit, while the other six gate
+conditions passed. Requests retried their 90 frames and then `drain: gave up (never nav-safe within
+window) -> Route unavailable`. Critically, **the map was otherwise fine**: the entity scan listed
+`Ridorana Crystal`, `Altar of Night` and `Carven Pillar` with real positions, and direction/distance
+announces tracked the player (27->26 steps, 4->2 steps). So only the navmesh/collision side was dead.
+
+**Cause -- the mod was waiting for something that was never coming.** The area loader `FUN_003ea820`
+(RVA `0x2CA820`) looks up the area's streamed resource and, when the lookup returns `< 1`, frees the
+previous blob and writes exactly `DAT_02b5e0b8 = -1; DAT_02b5e0c0 = 0` -- **then nothing retries for the
+rest of the visit.** `0x0C` is the engine's TERMINAL "this area has no such resource", not "not loaded
+yet", so no retry window of any length could ever clear it.
+
+**Navigation never needed that resource.** The pair was adopted as a cheap heuristic for "the field is
+gone", and the name `areaColl` (area collision) was wrong -- it is a per-area resource manifest. Both bits
+are now **log-only** and the gate keeps the six conditions that describe something routing actually
+dereferences. Blast radius while it was a gate: route requests, the audio beacon, the seam sweep and
+therefore the whole Exit list, the `NavReach` flood and the `NavTrace` trail -- all dead on such a map,
+with only direction/distance announces surviving.
+
+**Two companion defects fell out of the same log, and both were making the mod accuse itself:**
+
+- **`PrimeMapJumpSurfaces` was mis-keyed at a transition's leading edge.** It swept map 306's walkmap and
+  tagged the result 1101. This **STRIKES** the justification the seam cache shipped with -- nav-safety is
+  false for the MIDDLE of a transition, not the whole of one -- and the cache is now keyed on the teardown
+  EPOCH. `map_query.h`'s own header already said "the map id flips BEFORE the engine swaps the walkmap"
+  without anyone connecting it to that line.
+- **Both `CROSSING ORACLE ... MISMATCH -- the group->destination binding is WRONG` lines in that log are
+  ARTIFACTS.** The oracle attributed a departure to the nearest seam with no ceiling on distance, and
+  these were 48-49 m away because the player left by **gate-crystal teleport** -- which crosses no seam at
+  all, and which the dialogue two lines earlier (`"You touch the gate crystal."` / `Save` / `Teleport`)
+  proves outright. The oracle is now distance-bounded and says plainly that it cannot attribute the
+  crossing. **A diagnostic with no bound on its own confidence will eventually indict correct code.**
+
+### Session 93 — NOT A BUG: the party-status keys `4`/`5`/`6`, and what "full party" meant
+
+**KEYWORDS: party keys 4 5 6 not working names not read only status effects statistics roster list 3
+BtlChrForSlot kRosterSlots 9 reserve members slot genuinely empty deferred S93**
+
+**Reported:** *"the party reader keys are not working correctly. I have a full party. Only 4 and 5 are
+working, not 6. The names are not being read though, only the status effects and their statistics."*
+**The tester retracted this on a second play session** ("on second play, the party keys did work") and it
+is deferred. Recorded so it is not re-diagnosed from the original report.
+
+**What the logs actually show, across both archives:**
+- **Every** successful `[PARTY]` line begins with the name, and `SpeakSlot` logs the very same `wstring`
+  object it hands to Tolk. There is **no** party line in either log where the name is absent.
+- Key `6` fired correctly in three of the four `4`/`5`/`6` bursts. In the one where it did not, the roster
+  had **compacted to two members** mid-Party-menu (`4` spoke Basch, `5` spoke Penelo) and the mod printed
+  `party slot 3: SILENT ... rosterEntry=0xFFFF(read) [slot genuinely empty]` -- every link succeeded and
+  the engine's own empty sentinel was read. 3.5 s later all three keys read Vaan/Basch/Penelo again.
+  Silence on an empty slot is the no-filler rule working, not a failure.
+
+**The one real gap, left open deliberately:** `BattleState::BtlChrForSlot` already supports **9** roster
+slots (0-2 active, 3 guest, 4-8 reserve) but only four keys exist, so the reserve members are unreachable.
+That is a missing feature rather than a broken one, and the tester deferred it. **"Full party" is ambiguous
+between the 3-slot ACTIVE party and the 6-character ROSTER** -- that ambiguity is what made the original
+report read as a defect, and it is worth settling in words before any key is added.
 
 ### Session 92 — SOLVED (see Solved Problems): `doorway` by 2.5 m sign proximity was wrong both ways
 

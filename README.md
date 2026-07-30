@@ -73,8 +73,8 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 * Space or Enter: confirm, battle menu.
 * C or Backspace: cancel.
 * F: battle menu.
-* R: party menu.
-* Left Ctrl: escape. This is a toggle,  pressing it plays a sound and locks the menus when in battle. so the battle menu and party menu will not open. Pressing it again plays another sound and unlocks them. If your menus suddenly stop opening, press Left Ctrl once.
+* R: field menu (the game's own Controls screen calls this the "Party Menu").
+* Left Ctrl: escape. This is a toggle,  pressing it plays a sound and locks the menus when in battle. so the battle menu and field menu will not open. Pressing it again plays another sound and unlocks them. If your menus suddenly stop opening, press Left Ctrl once.
 * Esc: pause game. Note that alt tabbing out of the game window pauses the game automatically. To resume press backspace.
 * M, Numpad Plus, or Z: display map.
 * H, Numpad 0, or X: reset camera.

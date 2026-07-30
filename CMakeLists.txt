@@ -70,6 +70,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/menu_reader.cpp
     src/ui/choice_reader.cpp
     src/ui/ingame_menu_reader.cpp
+    src/ui/char_select_reader.cpp
     src/ui/license_reader.cpp
     src/ui/ability_summary_reader.cpp
     src/ui/shop_reader.cpp

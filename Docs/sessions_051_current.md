@@ -4246,3 +4246,145 @@ deferred to the start of the next session. Two things for whoever picks it up:
 - **Stage explicitly (`git add <paths>`), never `git add -A`** — the tree may also hold another
   track's files. The full file list is in the session memory
   (`project_audio_beacon_sdl3_session92.md`).
+
+## Session 93 — 2026-07-30 — [navigation] The hard walkability check is a BODY vs BOUNDARY test
+
+**KEYWORDS: hard walkability passability check routes through impassable terrain water cliff steep hill
+fence no progress slide FUN_0022f9b0 border clearance elliptical footprint was-blocked bit FUN_00230c10
+body sweep pure getter replicate not call Plan::Frontier never dead end ban portal re-search
+kMaxSegChecks truncated corner inset SegmentHit flatten Ridorana failMask 0x0C areaManifest seam epoch
+crossing oracle artifact PartyEngagement bidirectional stray re-plan storm party membership In party
+field menu rename S93**
+
+Six items came in for a ship-prep build. Five landed; one (party keys) was retracted by the tester and
+one (gambit + teleport menus) is probe-gated and deferred to the next build.
+
+### The tester was right, and three research passes had been asking the wrong question
+
+The report was *"there are still bugs in the pathing... the pathfinder routed through impassible
+terrain"*, with water on the Strand as an example. Two multi-agent passes (27 agents) went looking for a
+terrain ATTRIBUTE that distinguishes water — and exhausted the walkmap record proving none exists. The
+tester then corrected the framing outright:
+
+> *"You hyperfocused on water. Water is just one example. We were looking for a HARD WALKABILITY CHECK...
+> Focus on either collision physics or a strict function that stops the player from moving in a certain
+> direction. It isn't a hard stop — the player can still walk against a cliff or steep hill, they just
+> make no progress. The player can, to some extent, slide along angles."*
+
+**That description IS the diagnosis.** "No progress head-on, slides when oblique" is the signature of a
+sweep-plus-depenetration MOTION solver, not of an attribute lookup, and it was in the first sentence of
+the original report. `FUN_0022f9b0` (RVA `0x10F9B0`) is the function: the character's elliptical footprint
+may not overlap any triangle edge whose neighbour is absent **or fails `FUN_00230a40` for the movement
+class** — `:85-88` demotes the second case to the first, which is why walls, cliffs, water, fences and
+unwalkable ground all come out of ONE branch. On violation it pushes back to exact tangency along the edge
+normal and sets `moveCtx+0x60 |= 0x10`. The push removes only the normal component, and
+`FUN_002327d0:233-238` zeroes that normal's Y when ground-locked, so head-on cancels and oblique slides.
+
+**Cliffs need no height test**, because `FUN_00380c40:24-28` pins the actor's Y to the poly plane — a cliff
+is an edge with no neighbour. Which is independently why S68 and S75 were right to strike a step/slope
+gate twice: there is no vertical term in the engine's refusal to gate on.
+
+Full mechanism, RVAs, offsets and the purity audit are in `GameArchitecture.md` ("The hard passability
+check"); the reasoning and the lesson are in `debug.md`.
+
+### Replicated, not called — and the ruling that settled it
+
+`FUN_0022f9b0` takes no footprint argument; the body reaches it only through globals `FUN_0022ef20`
+writes. So **no footprint-aware engine predicate can be called without writing game memory.** Asked
+directly, the tester ruled: *"DO NOT WRITE TO THE GAME, simply do what we're already doing by calling the
+game's own NavMesh equivalent."* So the border test is a memory-only replica (`nav_footprint.cpp`), and
+only the provably write-free half is called — `MapQuery::BodySweep` wraps `FUN_00230c10`, whose complete
+29-function closure was verified free of game-memory writes by transitive closure plus an
+assignment-target and out-param scan.
+
+### The architectural defect: a validator that could only ever degrade
+
+Validation sat AFTER the search, as a lambda over a corridor A* had already committed to. Its three
+possible outputs were accept, substitute one pre-built alternative, or **accept the thing it had just
+proved wrong** — and on the tester's own log it took the third option on **9 of 53 routes (17%)**,
+shipping a path the mod had disproved with no change to the speech.
+
+Now a failed validation **bans the offending portal and searches again** (capped by WORK, not retries), so
+the detour is found by A* rather than approximated. And routes no longer dead-end: `Plan::Frontier` routes
+to the reachable point closest to the goal, from a `bestNear` the A* loop had tracked since S74 and then
+thrown away at `return Plan::NoPath`. It is a separate enum value so every consumer's switch is forced to
+handle it — because the failure recorded at that exact line was a near-goal fallback SPOKEN AS A NORMAL
+ROUTE, which walked the tester to a spot 3 m from an exit 7.8 m overhead. It speaks the legs, then
+"Blocked", then how far short; both words already existed.
+
+Four smaller defects, each of which had been masking the others: `SegmentHit` flattened its far endpoint
+(a false BLOCK on rising portals, licensed by a 0.98 claim now struck); `kMaxSegChecks = 24` printed a
+24-leg claim as a 140-leg one; the passed-waypoint drop was bypassed on exactly the routes that breached;
+and every taut corner sat ON the boundary the footprint may not overlap. Details in `debug.md`.
+
+### Ridorana: waiting for a resource the map does not have
+
+*"Ridorana pathfinding fails completely."* On map 1101, `failMask=0x0C[areaId,areaColl]` on all ~3,530
+field frames of the visit while the other six conditions passed. `FUN_003ea820` (RVA `0x2CA820`) writes
+`DAT_02b5e0b8 = -1; DAT_02b5e0c0 = 0` when the area's streamed resource is absent, and nothing retries —
+so `0x0C` is TERMINAL, not "not loaded yet", and no retry window could clear it. Navigation never read
+that resource; the pair was a heuristic and `areaColl` was a misnomer. Both bits are now log-only.
+
+Two companions from the same log, both cases of the mod accusing itself: the seam sweep was mis-keyed at a
+transition's leading edge (now keyed on the teardown EPOCH — **strikes** the "nav-safe spans the whole
+transition" justification), and both `CROSSING ORACLE ... MISMATCH` lines were ARTIFACTS of a gate-crystal
+teleport 48-49 m from the nearest seam. **A diagnostic with no bound on its own confidence will eventually
+indict correct code.**
+
+### Beacon engagement, and a re-plan storm nobody had reported
+
+`PartyEngaged` read only `+0xEA4` = "who is targeting me", so it was a being-ATTACKED test: start the
+fight yourself and the route beacon kept pinging its way to a shop. `PartyEngagement` returns the OR plus
+the target it resolved, so the beacon consumes one answer instead of re-deriving half of it one line too
+late. The commitment side requires a LIVING `Faction::Foe`, which filters out an ally heal and closes the
+one staleness channel the decompile leaves open. **The UNKNOWN S92 flagged is answered without a probe.**
+
+Separately, the log showed `off route -> silent re-plan requested` firing every 3-7 seconds during
+ordinary walking. The leg's reference line was seeded with the PLAYER's position instead of the route's
+previous corner, so advancing a leg while standing a few metres to one side skewed the line, walking the
+real route read as deviation, and the re-plan re-seeded the same skew. The corners were in `g_legs` all
+along. The line now prints the measurement, because a bare event line sat in the log for a whole session
+without being read as a defect.
+
+### Party membership, and a rename with a trap in it
+
+The field menu's first command `0x4b3` is a membership TOGGLE, not a stat screen — and the mod was already
+speaking on that surface, wrongly: the live log has it saying *"Vaan, Level 99, HP 17026/8513, MP 648/648"*
+one second after the row "Party" was spoken, which was the reported defect verbatim. `FUN_00284c90`
+(RVA `0x164C90`) is the writer, and the writer is the event. Highlight now speaks "Vaan: In party" and a
+toggle speaks the new state alone (the cursor does not move, so a press would otherwise be silent). Two
+new phrasebook strings, authorized by the tester this session and no others.
+
+The chooser moved out of `ingame_menu_reader.cpp` (739 lines) into `char_select_reader.cpp`, which owns the
+shared grid for Party / Status / Equipment / Gambits — one controller, four commands. Its old header block
+claimed `FUN_00285a10` does not fire on menu entry; the live log refutes that, and the S31 observation
+behind it was made on the one-character prologue party — **a property of the sample, not of the handler.**
+
+**The rename trap:** the game itself calls the outer `R` menu the "Party Menu" — that is the label on its
+own Controls screen, which the mod reads back to the player, and its own banner says "Clan Primer has been
+added to the Party Menu." Renaming the captured `Controls.md` row would fabricate a UI label. Ruled by the
+tester: code, comments and README say **field menu**; the captured row keeps the game's words with a
+footnote explaining the mapping.
+
+### Deferred, and why
+
+- **Party keys `4`/`5`/`6`** — retracted ("on second play, the party keys did work"). The logs never
+  contained a nameless party line, and the one silent `6` was a genuinely empty slot during a two-member
+  party. Written up in `debug.md` as NOT A BUG so it is not re-diagnosed. The real gap it exposed: keys
+  reach 4 of the 9 roster slots `BtlChrForSlot` already supports, so reserve members are unreachable.
+- **Gambit setup menu (`FUN_005691e0`) and the gate-crystal teleport list** — both fully reverse-engineered
+  this session and both PROBE-GATED by the tester's own choice. The gambit screen needs one measurement
+  (a row-0 crossing sends a SECOND `0x8000` whose first carries a stale column cursor) and the teleport
+  rows rest on a 0.80 hypothesis about the option-entry bytes. Neither needs a new hook — every event
+  already travels the `FUN_00247510` dispatch `menu_reader.cpp` owns. RVAs and offsets are recorded so the
+  next session starts from the design, not the search.
+
+### Files
+
+New: `nav_footprint.{h,cpp}`, `path_funnel.{h,cpp}`, `path_validate.{h,cpp}`, `map_seams.{h,cpp}`,
+`battle_state_diag.{h,cpp}`, `battle_state_names.cpp`, `battle_state_internal.h`,
+`ui/char_select_reader.{h,cpp}`.
+Splits (no logic change): `path_search.cpp` 667→499, `battle_state.cpp` 584→468, `map_query.cpp` 499→402,
+`ingame_menu_reader.cpp` 739→641. `PerformanceIssues.md`'s claim that every `.cpp` was under 500 was false
+and is corrected with measured numbers.
+

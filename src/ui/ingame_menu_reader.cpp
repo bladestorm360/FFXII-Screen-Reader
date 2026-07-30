@@ -38,7 +38,7 @@ constexpr uint32_t ROW_STRIDE   = 0x20;   // row record size
 constexpr uint32_t OFF_ROW_NAME = 0x10;   // NAME codec* (built by FUN_002cd3c0)
 
 // ---- The field pause menu's OWN window handler (drives the entry announce) -------------------
-// FUN_00280de0 == ROW_CHAIN[0]. The field/party menu announces its first row the SAME WAY the battle
+// FUN_00280de0 == ROW_CHAIN[0]. The FIELD MENU announces its first row the SAME WAY the battle
 // command menu does: the entry focus is STASHED (see MenuReader::HookedFocusSet -> ArmPaneEntry) and
 // released by the menu's own "show" event, so speech lands WITH the menu instead of during its
 // construction. The battle menu releases on its row DRAW (FUN_00276be0); this window has no per-row
@@ -146,39 +146,6 @@ constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // chooser category otherwise (Ma
 // removed: probing proved it never fires for normal Foes/Party/Allies selection (it is the
 // free-aim/area mode only), which is why targeting was silent.
 
-// ---- Status screen party-member chooser (FIELD menu; the shared "Select a character" grid) -----
-// ⚠️ DEFERRED / NOT WORKING YET (Session 31, 2026-07-11). This reader is SILENT and does not ship a
-// usable feature — do not treat it as done. Two issues, both decompile-confirmed:
-//   1. FUN_00285a10 (the chooser cursor-set) does NOT fire for the highlight on menu ENTRY. Trace of
-//      FUN_00285290 case 1: it calls FUN_002858a0(1), then FUN_00285a10(0xffffffff) (CLEARS — we bail on
-//      negative slot), then sets ctrl+0x117=0 (highlights slot 0) by a DIRECT WRITE, not via FUN_00285a10.
-//      FUN_00285a10 only gets a valid slot from the nav FUN_00285190 on an actual d-pad MOVE to another
-//      valid portrait; the prologue tutorial party is one character (Reks) so there is nothing to move to
-//      and it never fires. => needs the broader "speak initial focus on menu entry" work + a different
-//      hook event (likely read ctrl+0x117 after entry / on the controller's own event). Revisit post-tutorial.
-//   2. RVA_PAUSE_CTX below was miscalculated (0xE9AC30); corrected to 0x1F7AC30 (DAT_0209ac30 abs 0x209AC30
-//      − 0x120000; add-back 0x1F7AC30+0x120000=0x209AC30 ✓; sibling DAT_0209be80→0x1F7BE80). Latent — it
-//      would fault the read chain, but issue #1 means the hook never fires, so this alone changes nothing.
-// The read design below (once a firing event is found) resolves the highlighted character exactly as the
-// game's own portrait draw FUN_00283e40 does: ctx = *DAT_0209ac30; controller = *(ctx+0xf8);
-// portrait = *(controller+0xc0 + slot*8); block = *(ctx+0xac8 + *(int)(portrait+0xc0)*8); fields are plain
-// loads off `block`; name via FUN_0035d330(2,charId). Labels (LEVEL/HP/MAX/MP/MAX) still to be sourced.
-constexpr uint32_t RVA_STATUS_CURSOR   = 0x165A10; // FUN_00285a10(slot) — chooser cursor-set (per highlight)
-constexpr uint32_t RVA_PAUSE_CTX       = 0x1F7AC30; // DAT_0209ac30 (ptr) — pause-menu context (was 0xE9AC30, wrong)
-constexpr uint32_t OFF_CTX_CTRL        = 0xF8;     // ctx+0xf8 = active chooser controller (FUN_00285290)
-constexpr uint32_t OFF_CTX_BLOCKS      = 0xAC8;    // ctx+0xac8 + blockIdx*8 = per-character HUD block ptr
-constexpr uint32_t OFF_CTRL_PORTRAITS  = 0xC0;     // controller+0xc0 + slot*8 = portrait child ptr
-constexpr uint32_t OFF_PORTRAIT_BLKIDX = 0xC0;     // portrait+0xc0 = index into ctx+0xac8 (int)
-constexpr uint32_t OFF_BLK_CHARID      = 0x60;     // block+0x60 = char id (i16; < 0 = empty slot)
-constexpr uint32_t OFF_BLK_CURHP       = 0x20;     // block+0x20 = current HP (i32)  [FUN_00283e40 puVar3[8]]
-constexpr uint32_t OFF_BLK_MAXHP       = 0x24;     // block+0x24 = max HP (i32)      [puVar3[9]]
-constexpr uint32_t OFF_BLK_CURMP       = 0x2C;     // block+0x2c = current MP (i32)  [puVar3[0xb]]
-constexpr uint32_t OFF_BLK_MAXMP       = 0x30;     // block+0x30 = max MP (i32)      [puVar3[0xc]]
-constexpr uint32_t OFF_BLK_LEVEL       = 0xBA;     // block+0xba = level (u8)
-constexpr uint32_t CAT_CHARNAME        = 2;        // FUN_0035d330 category for character names
-
-typedef void (*Pfn_StatusCursor)(int);
-Pfn_StatusCursor s_origStatusCursor = nullptr;
 
 std::mutex   g_mutex;
 std::wstring g_bcmdName[256];              // top-level cmdId -> decoded name (cached from FUN_00276be0)
@@ -444,69 +411,6 @@ std::wstring BattleCommandName(void* panel, int index, int cmdId) {
     return std::wstring();                                   // unmapped list type — stay silent
 }
 
-// Read the highlighted Status-chooser slot's vitals + the active controller (log tag only). Returns
-// false on empty slot / fault. POD-only under __try (decode happens outside). Mirrors FUN_00283e40.
-struct StatusVitals { int charId; int curHP; int maxHP; int curMP; int maxMP; int level; };
-bool ReadStatusSlot(int slot, StatusVitals* out, void** outCtrl) {
-    *outCtrl = nullptr;
-    if (slot < 0) return false;
-    __try {
-        void* ctx = *reinterpret_cast<void* const*>(Hooks::ResolveRva(RVA_PAUSE_CTX));
-        if (!ctx) return false;
-        char* c = reinterpret_cast<char*>(ctx);
-        void* ctrl = *reinterpret_cast<void* const*>(c + OFF_CTX_CTRL);
-        *outCtrl = ctrl;
-        if (!ctrl) return false;
-        void* portrait = *reinterpret_cast<void* const*>(
-            reinterpret_cast<char*>(ctrl) + OFF_CTRL_PORTRAITS + static_cast<size_t>(slot) * 8);
-        if (!portrait) return false;
-        int blkIdx = *reinterpret_cast<int*>(reinterpret_cast<char*>(portrait) + OFF_PORTRAIT_BLKIDX);
-        if (blkIdx < 0) return false;
-        void* block = *reinterpret_cast<void* const*>(
-            c + OFF_CTX_BLOCKS + static_cast<size_t>(blkIdx) * 8);
-        if (!block) return false;
-        char* b = reinterpret_cast<char*>(block);
-        int charId = *reinterpret_cast<int16_t*>(b + OFF_BLK_CHARID);
-        if (charId < 0) return false;                              // empty portrait slot
-        out->charId = charId;
-        out->curHP  = *reinterpret_cast<int32_t*>(b + OFF_BLK_CURHP);
-        out->maxHP  = *reinterpret_cast<int32_t*>(b + OFF_BLK_MAXHP);
-        out->curMP  = *reinterpret_cast<int32_t*>(b + OFF_BLK_CURMP);
-        out->maxMP  = *reinterpret_cast<int32_t*>(b + OFF_BLK_MAXMP);
-        out->level  = *reinterpret_cast<uint8_t*>(b + OFF_BLK_LEVEL);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
-// FUN_00285a10(slot): the Status chooser's cursor-set. Fires on each highlight (and on open) with
-// `slot` = the highlighted portrait (< 0 = cleared). Speak name + Level + HP + MP.
-//
-// NO dedup. All 8 call sites in the decompile live in FUN_00284ec0 / FUN_00285190 / FUN_00285290 /
-// FUN_00285b20 -- open, cursor-set and close handlers, none of them per-frame -- so every fire is a
-// real highlight change. Re-opening the chooser on the same slot therefore re-announces, which is
-// the point. If a single highlight ever produces TWO `status:` lines, two of those handlers are
-// firing for one input: narrow the hook to the one that owns the event, do NOT re-add a filter.
-//
-// NOTE: "Level"/"HP"/"MP" are mod-emitted labels matching the on-screen columns (English for now).
-void HookedStatusCursor(int slot) {
-    if (s_origStatusCursor) s_origStatusCursor(slot);
-    STALL_SCOPE("IngameMenu::HookedStatusCursor");              // let the game set +0x114/+0x117 first
-    if (slot < 0) return;
-
-    StatusVitals v;
-    void* ctrl = nullptr;                                          // used for the log tag only
-    if (!ReadStatusSlot(slot, &v, &ctrl)) return;
-
-    std::wstring name = ResolveDefNameText(CAT_CHARNAME, static_cast<uint32_t>(v.charId));
-    if (name.empty()) return;
-
-    std::wstring line = name;
-    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::LevelPrefix) + std::to_wstring(v.level);
-    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(v.curHP) + L"/" + std::to_wstring(v.maxHP);
-    line += std::wstring(L", ") + Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
-    Log::WriteW("INGAME", "status:", ctrl, line);
-    Speech::Output(line, /*interrupt=*/true);
-}
 
 // Resolve and speak the highlighted battle command. Returns FALSE when the name is not resolvable
 // yet -- on menu OPEN that is the normal case, not an error: the 0x8000 arrives before FUN_00276be0
@@ -648,19 +552,19 @@ namespace IngameMenuReader {
 bool Init() {
     bool ok = Hooks::InstallTyped(RVA_FIELD_PANE_WND, &HookedFieldPaneWnd, &s_origFieldPaneWnd);
     ok     &= Hooks::InstallTyped(RVA_BCMD_DRAW,     &HookedBcmdDraw,    &s_origBcmdDraw);
-    ok     &= Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor,&s_origStatusCursor);
     ok     &= Hooks::InstallTyped(RVA_BCMD_CTRL,     &HookedBcmdCtrl,    &s_origBcmdCtrl);
     ok     &= Hooks::InstallTyped(RVA_BCMD_CONFIRM,  &HookedBcmdConfirm, &s_origBcmdConfirm);
+    // The character-chooser hook moved to char_select_reader.cpp (Session 93) -- see that file's
+    // header for why one reader owns Party/Status/Equipment/Gambits together.
     Log::Write("INGAME", ok ? "IngameMenuReader: field-pane show + battle command-draw + battle char "
-                              "switch + status-chooser hooks installed"
-                            : "IngameMenuReader: a field/battle/status hook FAILED to install");
+                              "switch hooks installed"
+                            : "IngameMenuReader: a field/battle hook FAILED to install");
     return ok;
 }
 
 void Shutdown() {
     Hooks::Uninstall(RVA_BCMD_CONFIRM);
     Hooks::Uninstall(RVA_BCMD_CTRL);
-    Hooks::Uninstall(RVA_STATUS_CURSOR);
     Hooks::Uninstall(RVA_BCMD_DRAW);
     Hooks::Uninstall(RVA_FIELD_PANE_WND);
     std::lock_guard<std::mutex> lk(g_mutex);
