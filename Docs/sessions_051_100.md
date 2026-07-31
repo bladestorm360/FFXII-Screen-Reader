@@ -5461,3 +5461,39 @@ off-line stop against the channel side. **Fastest path to closure: implement the
 GOAL SET (endpoint = wherever the search first reaches the surface — no self-derived reference, so
 the S99 circularity rule is satisfied by construction), get a full Route on 315, and let auto-walk
 walk it — its stuck line then gives the exact ground truth.**
+
+### Session 100 addendum 2 — the probe AT x≈45.5: THE 315 BLOCKER IS A TERRAIN-FLAG BOUNDARY
+
+The tester pressed `'` standing at the blocked point (45.50,4.00,112.14). Everything converges on
+one line in the mesh dump:
+
+- The player stands on **poly 23, raw=eff=0x00200000** (clean). Immediately EAST — exactly where
+  every session's walk has stopped — is **poly 224, raw=eff=0x17A00000: bits 23,24,25,26 set.**
+  The walked trail (34 crumbs) ends at x=45.2; the flag boundary is the stop line.
+- The terrain census: **2,545 polys on 315 carry 0x17A00000** — the flooded channels. The census
+  has labelled that class "UNWALKABLE (bit23)" since S96.
+- `dynprobe` AT the point: no dynamic obstacle (prim=-1, push=0, ret=0xFFFF), scratch deltas=0
+  (write-freedom data points now 3/3 clean across 315+321).
+- The march and the sweeps pass the east channel — correctly, per their own definitions: adjacency
+  is connected and no volume exists. Neither instrument tests PER-CLASS terrain bits. The blocker
+  is the one class of refusal no shipped instrument models.
+- Decoded per the engine's floor test: 0x17A00000 refuses classes 0 (bit 23 — the LEADER per
+  FUN_002681d0), 1 (bit 25 — followers), 2, 5; passes only 3 and 4. The real path the tester
+  hand-walks is the SOUTH BANK (polys 26/27, y=6-8, clean 0x00200000) — exactly where the S99
+  player's own detour went (45.48,5.84,105.08).
+- **STANDING-ON-REFUSED has NEVER fired** (NavTrace is alive — trail dumps prove it): the player
+  has never once stood on TerrainRefused ground. The S96 "the party wades that water" refutation
+  condemned the predicate for polys the player never actually stood on; what S96 proved wrong was
+  the LEVEL (a graph CUT) and possibly the class arg, not the predicate.
+
+**VERIFICATION GATES before anything ships on this (0.98 rule):** (1) pin in the decompile which
+class reaches FUN_00230a40 for the LEADER's per-frame mover (moveCtx+0x50 contents for the
+player-controlled character — the S75 "movers pass 4" was traced at the SWEEP call-site; "one
+name, two facts"); (2) one `'` press standing IN the water the tester wades on 311 — if that
+ground is bit-23-clear in effective, the record reconciles completely.
+
+**FIX SHAPE (proposed):** price TerrainRefused crossings in A* (kTerrainPenalty channel already
+exists; price, never cut) + march/validation treat a leader-refused crossing as a BREACH (falls
+back honestly through repair/re-cost/frontier — the S96-safe level). With the flood priced, the
+clean south-bank route wins immediately and 315 routes around — globally, no per-map anything.
+The S98 surface-vs-vertex goal fix stays on the list (EXIT-AIM still shows 17.4 m overshoot).
