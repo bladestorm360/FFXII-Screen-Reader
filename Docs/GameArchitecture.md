@@ -1980,7 +1980,12 @@ Downstream: `FUN_002a35b0` (0x1835b0) → `FUN_002a3250` (0x183250, caption/body
 
 **NOT readable (baked assets — discarded):** pre-rendered FMV movie subtitles (movie-embedded
 glyph runs; the "Subtitles" toggle gates this, `DAT_0209be80+0x10f68` bit0xc → `FUN_00550510` →
-overlay `DAT_02ca8f38`); tutorial panels (Handbook images `menuhandbook_tutorialNNN.dat`). Battle
+overlay `DAT_02ca8f38`); tutorial panels (Handbook images `menuhandbook_tutorialNNN.dat`) — **but
+PARTIALLY AMENDED (Session 106): only the page BODIES are baked art** (`hdatg` graphics container).
+`menuhandbook_tutorial.bin` (`hctgf`) carries per-panel TITLE STRING IDS (`0x116e9`-`0x116f7` for
+tutorials 000-008) — real game text a reader can speak on panel open. Extracted to
+`..\FFXII-Decompile\extracted\ps2data\image\ff12\myoshiok\us\handbook\`; viewer class unidentified
+(probe authored: `frida\probe_controls_overlay.js`); work DEFERRED per user 2026-07-31. Battle
 multi-line detail builder `FUN_00293310` family (unresolved `.rdata` dispatch) — header line still
 captured by B. Target-select window `DAT_0209be80`/`FUN_00552250` = battle targeting UI, out of scope.
 
@@ -2164,17 +2169,26 @@ trusting anything below it.**
 - **Codec escape params are SELECTOR-dependent**, from the game's own interpreter **`FUN_002ac5f0`**
   (RVA `0x18C5F0`): `0x21` = 0 params; `0x20/0x27/0x2f/0x32/0x34/0x35/0x37/0x3a/0x3c/0x3d/0x3e/0x56`
   = 2 (`FUN_003ffab0`); **`0x31` = 3** (`FUN_003fff10`, the sprintf "%s" slot); `0x40`-`0x6b` = the
-  icon/glyph family (`FUN_002aeb20`, RVA `0x18EB20` — selector->button mapping NOT yet decoded).
+  icon/glyph family (`FUN_002aeb20`, RVA `0x18EB20` — **1 param; returns 2 on every path**, shipped in
+  `game_text.cpp` Session 49; the Session 45 "pressing Touching" corruption is FIXED).
   The old "skip every following byte >= 0x80" rule is only an approximation and **corrupts live text**:
   digits are `0x85`-`0x8e` and punctuation `0x99/0x9a/0xa0`-`0xaf`, so a 0-param escape followed by a
   number ate it ("Obtained 3 Potions!" -> loses the 3 and the !).
-  **STILL BROKEN for the icon family (open):** `0x40`-`0x6b` have an unknown param count, so they fall
-  back to the legacy `>= 0x80` run and it eats the byte after the glyph. Live proof (Session 45 test):
-  *"...by approaching a save crystal and pressing Touching one of these crystals..."* — the button
-  glyph AND the `.` (`0xa8`) after it are both gone. **Fix = decode `FUN_002aeb20` (RVA `0x18EB20`)**,
-  which yields the param count and the selector→button-name mapping together. Do NOT patch this by
-  making the fallback stop at any decodable byte — a genuine param byte landing in `0x85`-`0x8e` or
-  the punctuation range would then be emitted as literal text. Get the real count.
+  **The selector→button mapping IS decoded (Session 106, offline; probe-pending before shipping speech):**
+  `idx = selector - 0x40`; `FUN_002b5b60` (abs `0x2b5b60`) rebuilds the KEYBOARD glyph table
+  `DAT_01e0ce30` (RVA `0x1CECE30`) from the LIVE bindings — fixed action list
+  `idx 0..13 -> {0x0d,0x0c,0x0a,0x08,0x0b,0x09,0x01,0x02,0x0f,0x0e,0x07,0x05,0x04,0x06}`; Confirm
+  Type (`*(u32*)(DAT_01f82d20{RVA 0x1E62D20, qword ptr}+0x64)`, `FUN_0017e210`) nonzero swaps ONLY
+  idx 0<->9 (actions 0x0d/0x0e — the game's own "Type A/B applies to O/X"). The LIVE binding bank is
+  `DAT_01f80f90` (RVA `0x1E60F90`): byte DIK codes, `[col*0x1c + action]`, col 0 = keyboard Main
+  (`FUN_00197710` kind 0; kind 1 bank `+0x40`; kind 2 u32 bank `+0x60`). DIK→glyph-slot tables
+  `DAT_01df1030`/`DAT_01df0e80` (0x6a entries, `FUN_00197790`); selectors `0x60`-`0x6b` alias down
+  via `FUN_002ab8f0` (cases 0x20/0x21/0x23/0x27 config-dependent on `DAT_01e0c2a0/2a4`); controller
+  table `DAT_01e0ce10` built by `FUN_002b5c90` with pad-style variants `DAT_009165f0/00916670`
+  indexed by `DAT_0208f574 >> 4 & 3`. GROUND TRUTH: the 568 palace call prompt (rrp_a02.ebp msgs
+  23/24/25/28) is `0f 48 80` -> idx 8 -> action `0x0f` (predicted key: the Battle Menu binding, F).
+  Key name from a DIK code: the shipped `KeyCodeToStringId` arithmetic (`config_reader.cpp`,
+  replicating `FUN_001e0b00`) + string id. Confirmation probe: `frida\probe_key_bindings.js`.
 - **The `nav_rva.h:247` formula `sel-0 slot = mapctrl.dbg_idx - 5140` is BROKEN** — not a constant
   offset (`getmapjumpposbyindex` implies 5142, `getmapjumpanglebyindex` implies 5140), because the
   .dbg symbol list interleaves variables/source-markers with actions. Resolve natives **by behaviour**,

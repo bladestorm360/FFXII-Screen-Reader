@@ -4457,3 +4457,21 @@ any route that breached, `tightCorners` means NOT TESTED. This was misread once 
 global geometry change (insetting every portal span by a body radius) on the strength of it.
 `PathValidate::Diagnose` now asks the question properly on a breach — footprint clearance at the
 breaching corner plus volume probes at the stop and 0.3 m beyond.
+
+### Session 106 — SOLVED: a start-edge breach broke the whole failure ladder (12 false No-paths)
+
+`path_search.cpp` re-cost attribution picked the portal nearest the breaching leg's MIDPOINT. A
+first leg crossing a room-sized start triangle (568's z=121 lane: len 8.13m, reached 7.51m, stop at
+the stair pinch 7.5m away) put that midpoint nearest the SEED's own protected edge, so the attempt
+loop broke instantly: no retry, no banked prefix (firstBad=1), BuildFrontier aimed past the pinch
+and failed -> pass=no-frontier -> spoken "No path" while other starts a few metres away got full
+routes. Fixed (`01b7746`): when midpoint attribution lands on the seed's edge, re-attribute by the
+sweep's own STOP point; concede to the frontier only when that portal is ALSO the seed's edge.
+Grep for `re-attributed by the sweep stop` to see it fire.
+
+Same session, related ship: `path_danger.{h,cpp}` (`1a6b9dc`) — soft penalty discs around scripted
+danger actors, per-map data, ARMED PER TARGET only (568 door_gunbit). See sessions_101_current.md
+S106 for the full write-up and the deferred 0x0f-glyph / controls-overlay groundwork.
+
+**KEYWORDS: midpoint attribution start poly edge strand seed no-frontier false No path z=121 lane
+568 danger zones path_danger npcdic 694 Imperial scene-gap capture distance**

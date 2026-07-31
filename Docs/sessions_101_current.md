@@ -488,3 +488,60 @@ The 2-against-2 maps above. Map 568 is the worked example and its two doors are 
 invisible. Whatever discriminator is chosen must come from the game's own data, and **the scan hole
 must be fixed first or measured around** — a routine the reader never read cannot be counted, and both
 of this problem's counts (unclaimed surfaces, group-less candidates) are counts.
+
+## Session 106 — 2026-07-31 — [navigation] The palace sneak: danger zones + the midpoint-attribution defect
+
+**KEYWORDS: Royal Palace Cellars 568 sneak minigame guards Imperial npcdic 694 servant door_gunbit 569
+danger zones penalty disc path_danger target-conditional tight quarters z=121 lane start poly edge
+midpoint attribution sweep stop re-attribute no-frontier false No path capture distance scene-gap
+controls overlay tutorial re-arm capture restart 0x0f glyph selector 0x48 action 0x0f DAT_01f80f90
+binding bank FUN_002b5b60 menuhandbook hctgf hdatg probe_key_bindings probe_controls_overlay DEFERRED**
+
+Commits: `1a6b9dc` (danger zones) + `01b7746` (start-edge re-attribution), separate so either reverts
+alone. Built, NOT yet play-confirmed.
+
+**The tester's palace session (log 12:35) diagnosed end to end.** Map 568 lists 0 exits (the S105
+2-against-2, unchanged); the tester routed to the raw "Door 2" object — which works and is the
+approved approach for this puzzle. Three findings:
+
+1. **The "controls overlay" mystery is CLOSED, by the tester**: the panel re-appears because getting
+   too close to a guard fires a capture ("Vaan captured" routine, `distance` native x8 in
+   rrp_a02.ebp) and RESTARTS the minigame — nothing on 568 records success (story flags are written
+   on 569), so the instructions re-arm every time. The overlay itself is engine-fired (the map script
+   calls no tutorial native) and is very likely the menuhandbook image viewer — its `.bin` (`hctgf`)
+   carries per-panel TITLE STRING IDS (0x116e9..0x116f7), its `NNN.dat` (`hdatg`) are baked page
+   graphics. **DEFERRED with W1 below** (user instruction: pathing only this session).
+
+2. **12 of 17 spoken "No path"s were false** — search collapse from the z≈121 lane, NOT the guard:
+   the breaching first leg crossed the room-sized start triangle, midpoint attribution landed on the
+   seed's own (protected) edge, the loop broke with no retry, no banked prefix (`firstBad=1`), and
+   `BuildFrontier` aimed past the pinch and failed → `pass=no-frontier`. **Fix (`01b7746`)**:
+   re-attribute by the sweep's STOP point before conceding; the seed rule holds only when the stop's
+   portal is also the seed's edge. Falsifier in the log: the new `re-attributed by the sweep stop`
+   line, and lane starts producing `plan=Route` when the way is open.
+
+3. **Danger zones (`1a6b9dc`)**: the script's notice radius exists only as literals in story-script
+   code, so it is priced, never cut — soft discs (r=9m est., w=2000) around npcdic-694 actors, LIVE
+   positions per replan, **armed ONLY when the route target is the 568 door at (38.60,0.00,117.85)**.
+   Routing to the Palace Servant (3.4 m from the guards) or anything else passes null — search
+   byte-identical (S101 unreachable-not-skipped). USER AUTHORIZED map-specific data; user chose
+   SILENT SHAPING ONLY (no proximity speech/tone). A log-only `DANGER scene-gap` diagnostic on table
+   maps records pre-gap player position + actor distances so every real capture measures the radius.
+   Map 569 (capture rects, eight soldiers) is known and deliberately NOT entered yet.
+
+**Binding user decisions this session:** partial-route speech REJECTED ("a hard progress block —
+partial route is worse than no route"); FRONTIER SUPPRESSED stays. Glyph speech = BOUND KEY NAME.
+Danger pathing may be map-specific but arms per target only.
+
+**DEFERRED, groundwork done (do not re-derive):** the 0x0f button-glyph chain is fully mapped —
+`0f 48 80` in rrp_a02 msgs 23/24/25/28 → idx 8 → action 0x0f → DIK byte at `DAT_01f80f90[action]`
+(RVA 0x1E60F90, stride 0x1c, col 0 = Main; builder FUN_002b5b60 abs 0x2b5b60; Confirm Type
+`DAT_01f82d20+0x64` swaps only actions 0x0d/0x0e; DIK→glyph tables DAT_01df1030/01df0e80; keyboard
+glyph table DAT_01e0ce30 rebuilt from LIVE bindings). Predicted palace call key: F (DIK 0x21).
+Probes authored and user-run pending: `probe_key_bindings.js`, `probe_controls_overlay.js`.
+menuhandbook_* extracted to `..\FFXII-Decompile\extracted\...\handbook\`.
+
+**Verify next play (568):** `zones armed:` on a Door-2 route and `danger=` in its `costed:` line —
+and NEITHER on a servant route; a z≈121-lane start giving `plan=Route` with the way open; honest
+"No path" only with the guard at post; `DANGER scene-gap` lines on any capture; CROSSING ORACLE
+568 → 569 on success. Regression gate: no `pass=seam`; working routes still `pass=mesh`.
