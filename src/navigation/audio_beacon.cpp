@@ -9,6 +9,7 @@
 #include "core/mem_read.h"
 #include "core/logger.h"
 #include "navigation/nav_blocked.h"
+#include "navigation/auto_walk.h"
 #include "input/input_tracker.h"
 #include "ui/mod_menu.h"
 
@@ -45,16 +46,28 @@ constexpr float  kStrayDist    = 6.0f;
 constexpr int    kStrayFrames  = 45;      // ~0.75 s at 60 fps
 constexpr uint64_t kReplanCooldownMs = 2000;
 
-// ---- STUCK: pressing forward and going nowhere ---------------------------------------------------
+// ---- STUCK: trying to move and going nowhere -----------------------------------------------------
 // The stray test above measures PERPENDICULAR distance from the leg, so it structurally cannot see
 // this: a player jammed at the leg's own start is zero metres from the line. The tester walked into a
 // wall, pressed `\` four times over twelve seconds from one position, and got the identical route
 // every time, because nothing in the mod had noticed they had stopped moving.
 //
-// Gated on a movement key being HELD, which is what separates "jammed against a wall" from "standing
-// still listening". Purely observational -- InputTracker reads a const buffer.
+// POSITION-BASED SINCE SESSION 100. The old gate was `InputTracker::MovementHeld()`, whose only
+// writer is the DirectInput KEYBOARD buffer -- the mechanism could never fire for a pad player, and
+// in the S99 log the player oscillated at one spot for ~40 s across eleven route requests without a
+// single `stuck ->` line. The clock now runs whenever a route is live; FIRING needs evidence that
+// movement was being ATTEMPTED, any of:
+//   * a movement key held (keyboard players -- the old gate, kept);
+//   * auto-walk engaged (the mod itself is commanding movement);
+//   * accumulated 2D displacement >= kStuckMotionMinM since the clock started (pad players: pushing
+//     a wall produces depenetration jitter and slides without closing; standing still accumulates
+//     ~nothing, so an idle player can NEVER read as stuck -- no replan storm, no NavBlocked spam).
+// Accepted blind spot, so it is not rediscovered: a pad player pushing PERFECTLY head-on produces
+// zero slide and no readable input; nothing observational can see that case (S93: head-on cancels).
 constexpr float    kProgressEpsilon = 0.6f;    // metres of closing that counts as progress
-constexpr uint64_t kStuckMs         = 1800;    // held, pressing, no closing -> stuck
+constexpr uint64_t kStuckMs         = 1800;    // trying, no closing -> stuck
+constexpr float    kStuckMotionMinM = 1.0f;    // displacement that proves movement was attempted
+constexpr float    kMotionTeleportM = 5.0f;    // per-frame delta above this = teleport, not walking
 
 // ---- state (game thread except where noted) ----------------------------------------------------
 std::atomic<bool>  g_active{false};       // read first thing every frame, hence atomic
@@ -68,6 +81,10 @@ uint64_t           g_lastReplanMs = 0;
 bool               g_wasEngaged = false;  // edge-detect combat so the log says when it flipped
 float              g_stuckBestDist = -1.0f;   // closest we have come to the current leg point
 uint64_t           g_stuckSinceMs  = 0;       // when that closest approach happened
+float              g_motionAccum   = 0.0f;    // 2D displacement since the stuck clock (re)started
+FVec3              g_lastPos{};               // previous frame's position, for the accumulator
+bool               g_motionValid   = false;   // g_lastPos holds a real position
+StopReason         g_lastStopReason = StopReason::None;
 
 // Distance -> repeat period. Linear between the two anchors, clamped outside them.
 float IntervalFor(float dist) {
@@ -142,12 +159,15 @@ void ResetPhase() {
     g_strayCount = 0;
     g_stuckBestDist = -1.0f;   // a new leg: nothing has been approached yet
     g_stuckSinceMs  = 0;
+    g_motionAccum   = 0.0f;
+    g_motionValid   = false;
 }
 
 } // namespace
 
 void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
-    if (legPoints.empty()) { Stop(); return; }
+    if (legPoints.empty()) { Stop(StopReason::External); return; }   // a failed plan/re-plan
+    g_lastStopReason = StopReason::Reseeded;   // a NEW route replaced the old one
     g_legs    = legPoints;
     g_current = 0;
     g_epoch   = epoch;
@@ -177,16 +197,39 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
     Log::Write("BEACON", m);
 }
 
-void Stop() {
+void Stop(StopReason reason) {
     if (g_active.exchange(false, std::memory_order_acq_rel)) {
         AudioEngine::SilenceAll();
         Log::Write("BEACON", "stop");
+        g_lastStopReason = reason;
     }
     g_legs.clear();
     g_current = 0;
 }
 
 bool Active() { return g_active.load(std::memory_order_acquire); }
+
+StopReason LastStopReason() { return g_lastStopReason; }
+
+bool GetLegSnapshot(LegSnapshot& out) {
+    out = LegSnapshot{};
+    out.routeActive   = g_active.load(std::memory_order_acquire);
+    out.engagedCombat = g_wasEngaged;
+    out.epoch         = g_epoch;
+    if (!out.routeActive || g_current >= g_legs.size()) return false;
+    out.legIndex    = g_current;
+    out.legCount    = g_legs.size();
+    out.legTarget   = g_legs[g_current];
+    out.finalTarget = g_legs.back();
+    FVec3 me;
+    if (PlayerState::ReadPlayerPos(me)) {
+        float len = NavCommon::Distance2D(me, g_legs[g_current]);
+        for (size_t i = g_current + 1; i < g_legs.size(); ++i)
+            len += NavCommon::Distance2D(g_legs[i - 1], g_legs[i]);
+        out.routeLenM = len;
+    }
+    return true;
+}
 
 void OnGameFrame() {
     // ---- O(1) idle -------------------------------------------------------------------------------
@@ -210,7 +253,7 @@ void OnGameFrame() {
     // its own and cannot be missed. Only the route is map-bound; an enemy you are fighting is not.
     if (objective && g_epoch != PathPlanner::CurrentEpoch()) {
         Log::Write("BEACON", "map changed -> stop");
-        Stop();
+        Stop(StopReason::MapChange);
         objective = false;
     }
     if (!objective && !targetOn) return;
@@ -287,6 +330,7 @@ void OnGameFrame() {
                 AudioEngine::PlayPing(AudioClips::Objective(), 0.0f, 1.0f,
                                       ModMenu::BeaconVolume(), kArrivalPitch);
             Log::Write("BEACON", "arrived at destination -> final cue, stop");
+            g_lastStopReason = StopReason::Arrived;
             g_active.store(false, std::memory_order_release);   // not Stop(): let the cue ring out
             g_legs.clear();
             g_current = 0;
@@ -315,32 +359,49 @@ void OnGameFrame() {
         return;
     }
 
-    // ---- STUCK: holding a movement key and getting no closer -----------------------------------
+    // ---- STUCK: trying to move and getting no closer -------------------------------------------
     // Distinct from the stray test below in the one way that matters: this measures CLOSING on the
     // leg point, so it fires for a player jammed at the leg's own start, where perpendicular distance
-    // is zero and the stray test is blind by construction.
-    if (InputTracker::MovementHeld()) {
-        if (g_stuckBestDist < 0.0f || dist < g_stuckBestDist - kProgressEpsilon) {
-            g_stuckBestDist = dist;              // real progress -- restart the clock
-            g_stuckSinceMs  = now;
-        } else if (g_stuckSinceMs != 0 && (now - g_stuckSinceMs) >= kStuckMs &&
-                   (now - g_lastReplanMs) >= kReplanCooldownMs) {
-            g_lastReplanMs  = now;
-            g_stuckSinceMs  = now;
-            // RECORD IT FIRST, then re-plan -- the record is what makes the player's own next `\`
-            // come back with a different route, which matters more than this silent re-plan does.
-            NavBlocked::Note(me, g_epoch);
-            char m[192];
-            snprintf(m, sizeof(m),
-                     "stuck -> blocked spot recorded and re-planning: %.1fs pressing with no progress "
-                     "on leg %zu/%zu, %.1fm from its corner",
-                     kStuckMs / 1000.0f, g_current + 1, g_legs.size(), dist);
-            Log::Write("BEACON", m);
-            PathPlanner::RequestReplan();
-            return;
+    // is zero and the stray test is blind by construction. POSITION-BASED since Session 100 -- see
+    // the constants block for the firing evidence and the accepted blind spot.
+    {
+        // Per-frame displacement accumulator (teleports and map snaps rejected, not accumulated).
+        if (g_motionValid) {
+            const float ddx = me.x - g_lastPos.x, ddz = me.z - g_lastPos.z;
+            const float d = std::sqrt(ddx * ddx + ddz * ddz);
+            if (d < kMotionTeleportM) g_motionAccum += d;
         }
-    } else {
-        g_stuckSinceMs = 0;                      // not pressing: not stuck, just standing
+        g_lastPos     = me;
+        g_motionValid = true;
+    }
+    if (g_stuckBestDist < 0.0f || dist < g_stuckBestDist - kProgressEpsilon) {
+        g_stuckBestDist = dist;              // real progress -- restart the clock
+        g_stuckSinceMs  = now;
+        g_motionAccum   = 0.0f;
+    } else if (g_stuckSinceMs != 0 && (now - g_stuckSinceMs) >= kStuckMs &&
+               (now - g_lastReplanMs) >= kReplanCooldownMs &&
+               (InputTracker::MovementHeld() || AutoWalk::Engaged() ||
+                g_motionAccum >= kStuckMotionMinM)) {
+        g_lastReplanMs  = now;
+        g_stuckSinceMs  = now;
+        const float motion   = g_motionAccum;
+        const bool  walking  = AutoWalk::Engaged();
+        g_motionAccum   = 0.0f;
+        // RECORD IT FIRST, then re-plan -- the record is what makes the player's own next `\`
+        // come back with a different route, which matters more than this silent re-plan does.
+        NavBlocked::Note(me, g_epoch);
+        char m[224];
+        snprintf(m, sizeof(m),
+                 "stuck -> blocked spot recorded and re-planning: %.1fs with no progress "
+                 "on leg %zu/%zu, %.1fm from its corner, motion=%.1fm%s",
+                 kStuckMs / 1000.0f, g_current + 1, g_legs.size(), dist, motion,
+                 walking ? " [auto-walk]" : "");
+        Log::Write("BEACON", m);
+        // The ground-truth line the pathing track consumes: exactly where the engine refused a
+        // commanded walk. AutoWalk owns its wording (poly, injected direction, replan count).
+        if (walking) AutoWalk::OnStuckFired(me, g_current, g_legs.size(), dist);
+        PathPlanner::RequestReplan();
+        return;
     }
 
     // Off-route: re-plan silently. Measured perpendicular to the leg the player is supposed to be

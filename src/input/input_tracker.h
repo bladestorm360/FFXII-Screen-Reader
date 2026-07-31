@@ -99,4 +99,9 @@ bool WasRecentInput(uint64_t windowMs);
 // detector would fire at anyone who stopped to listen.
 bool MovementHeld();
 
+// Is the game window the foreground window? This has always existed as the dispatch gate inside the
+// tracker; exposed in Session 100 because AutoWalk must stop commanding movement the moment the game
+// loses focus, and a second copy of the check would be a second place for it to be wrong.
+bool GameForeground();
+
 } // namespace InputTracker

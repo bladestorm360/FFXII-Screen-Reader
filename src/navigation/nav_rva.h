@@ -361,6 +361,25 @@ constexpr uint32_t WALK_GRID_ENUM      = 0x10FFE0; // FUN_0022ffe0 (full-grid en
 constexpr uint32_t WALK_WORLD_TO_CELL  = 0x113050; // FUN_00233050 (world XZ -> cell)
 constexpr uint32_t WALK_PLANE_HEIGHT   = 0x111890; // FUN_00231890 (plane height at XZ)
 
+// ---- THE DYNAMIC-OBSTACLE QUERY, DIAGNOSTIC-ONLY (Session 100) -----------------------------------
+// FUN_00231690(ctx, outPush float[4], outPrim short*, shapeMat float[12], pos float[4], flags,
+// enableDyn, bodyObj) -- the generic volume PUSH-OUT, and per the S100 decompile sweep the ONLY
+// callable path that can see dynamic obstacle prims (>= 0x5000: doors, sluice gates, platforms;
+// every ray/sphere callback hard-excludes them, so the sweep, the point-in-volume test and the mesh
+// are all blind to a closed gate). CONDITIONALLY write-free at conf 0.97 -- BELOW THE 0.98 BAR:
+// safe iff the caller-supplied bodyObj keeps +0x80/+0x84 <= 2.0 (we control it); above that it
+// spills into the shared visit scratch below. The `'` probe's dyn diagnostic exists to raise that
+// to >= 0.98 FROM C++ (user directive: C++ diagnostics, not Frida) by snapshot/diffing the scratch
+// around a safe-path call. NOTHING ROUTES ON THIS until that record exists.
+constexpr uint32_t MAP_VOLUME_PUSHOUT  = 0x111690;  // FUN_00231690
+// The conditional-write targets the S100 research identified: the collision visit scratch
+// (DAT_02088fe0 array + DAT_020891e0/e4 counters, shared by the mover/boundary/push-out family)
+// and FUN_00230790's dynamic-obstacle OBB build scratch (DAT_022d91b0..bc).
+constexpr uint32_t COLL_VISIT_ARRAY    = 0x1F68FE0; // DAT_02088fe0, int[128]
+constexpr uint32_t COLL_VISIT_COUNT    = 0x1F691E0; // DAT_020891e0
+constexpr uint32_t COLL_VISIT_AUX      = 0x1F691E4; // DAT_020891e4
+constexpr uint32_t COLL_BUILD_SCRATCH  = 0x21B91B0; // DAT_022d91b0..bc, 16 bytes
+
 // ---- Handle-table layout (from FUN_003588b0 + FUN_00263ff0) -----------------
 constexpr uint32_t HANDLE_TABLE_STRIDE = 0x288;  // 0x51 * sizeof(uint64)
 constexpr uint32_t HANDLE_TABLE_CONTAINERS = 5;  // 5 map containers (sel 0..4)

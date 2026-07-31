@@ -138,7 +138,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 |---|---|---|
 | `o` | Describe / read focused tooltip | free |
 | `t` | Re-read last spoken line | free |
-| `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim | free |
+| `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim. **With Auto-walk On in the `F8` menu (Session 100) it also WALKS you there** — see the Auto-walk section | free |
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
@@ -241,6 +241,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > | Audio beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
 > | Target beacon | Off / **On** (default) | A separate repeating sound that tracks the enemy your party is fighting, panned toward it. **Session 95 split this off from the route beacon**, which it used to be part of — it now plays in battle whether or not you had a route running, and switching the route beacon off no longer takes it with it. Still battle-only: it sounds when your party has committed to a target and stops when the fight does. |
 > | Target beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
+> | Auto-walk | **Off** (default) / On | **Session 100.** With it On, `\` does not just speak the route and start the beacon — the mod walks your character along it, steering with the same directions the voice speaks. It stops the instant you touch a movement key (W/A/S/D or the arrows), the instant combat starts, when you arrive, when a menu opens, and after 15 seconds of no progress ("Auto-walk stopped"). It never re-starts on its own — press `\` again. **Gamepad players:** the mod cannot see the stick, so the stick does NOT cancel it — tap any movement key or use this toggle. |
 >
 > Neither volume goes to zero on purpose — each beacon has its own Off, so a switched-on beacon is
 > never silent for a reason you cannot hear.

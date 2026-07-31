@@ -21,6 +21,12 @@ namespace MapQuery {
 // Memory-only. This is the "world" liveness signal for IsFieldNavSafe.
 bool HasWorld();
 
+// S100, DIAGNOSTIC ONLY: the raw field-collision world pointer for the `'` probe's
+// dynamic-obstacle diagnostic (FUN_00231690, below the 0.98 bar until that probe's record exists).
+// Null when no world. Routing code must never take this -- every routing entry point resolves it
+// internally.
+void* DebugCollisionCtx();
+
 // Walkable-floor test at an arbitrary world (X,Z): true + ground height on success.
 // The single best call for the A* grid's cell walkability. Gated on HasWorld().
 bool GroundAt(float x, float z, float& outY);

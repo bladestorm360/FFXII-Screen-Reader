@@ -1,6 +1,7 @@
 #include "navigation/nav_commands.h"
 #include "navigation/entity_list.h"
 #include "ui/mod_menu.h"
+#include "navigation/auto_walk.h"
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
 #include "navigation/nav_types.h"
@@ -84,6 +85,11 @@ void RouteToCurrent() {
     // seedBeacon=true: `\` is the "lead me there" key, so its route arms the audio beacon.
     if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true, seamGroup);
     else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true, seamGroup);
+    // S100: with the Auto-walk toggle ON, `\` also walks the route. Only a pending stamp here --
+    // the game thread engages once the beacon reports an active route, so a plan that fails
+    // (Frontier / "No path") structurally cannot start the character walking. `p` deliberately
+    // gets no equivalent call: its route never arms the beacon.
+    AutoWalk::NotifyRoutePressed();
 }
 
 // `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the

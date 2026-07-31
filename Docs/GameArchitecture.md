@@ -3274,7 +3274,7 @@ cliff or a steep slope, and there is none — the record is exhausted, `+0x1C` h
 |---|---|---|---|
 | `FUN_0022f9b0` border clearance | `0x10F9B0` | 0.99 | The refusal itself. Replicated in `nav_footprint.cpp`. |
 | `FUN_0022ef20` footprint transform | `0x10EF20` | 0.99 | Builds the ellipse matrices from `moveCtx+0x80`/`+0x84`. **Writes globals — this is why the border test cannot be called.** |
-| `FUN_00230c10` body sweep | `0x110C10` | 0.98 | (start,to) → achieved position + blocked. **PURE**: 29-function closure, zero game-memory writes. Wrapped as `MapQuery::BodySweep`. **Iterates CSR layers 0,1,2 — it sees volumes; see below.** |
+| `FUN_00230c10` body sweep | `0x110C10` | 0.98 | (start,to) → achieved position + blocked. **PURE**: 29-function closure, zero game-memory writes. Wrapped as `MapQuery::BodySweep`. **Iterates CSR layers 0,1,2 — it sees volumes; see below.** **ANATOMY CORRECTED S100 (0.98): it is NOT a swept capsule — ONE zero-radius centre ray (exact grid-cell marcher, no distance cap or precision loss) + ONE 0.27 m sphere at the DESTINATION only; the ±30° side rays fire ONLY when that sphere hits. It never reads walkmap adjacency, so cliff lips / mesh-boundary jogs / unwalkable neighbours are invisible to it at ANY length — the mod-side adjacency march (`path_march.cpp`) exists for exactly that class. Returns `int` 0/1, NOT a fraction: the achieved/requested fraction is computed by callers (`FUN_0032beb0:52-58`) from the out-position, which is what `MapQuery::BodySweep` already does.** |
 | `FUN_00231400` can-stand-here | `0x111400` | 0.98 | Class-walkable floor AND not inside a volume. Pure; 11-function closure. Volume half is byte-identical to `FUN_00232490` and inherits its coarseness. **Still unused, and should stay that way for routing.** |
 | `FUN_00232490` point-in-volume | `0x112490` | 0.98 | CSR layers 1,2. Pure. Wrapped as `MapQuery::PointInVolume` (Session 96). **COUNTER ONLY — never a verdict; see the section below for why.** |
 
@@ -3299,10 +3299,10 @@ class-aware cast `FUN_0022d4b0`) reads `merged_flags & 7` against the mover's qu
 
 | `flags & 7` | behaviour | conf |
 |---|---|---|
-| 0 | always solid | 0.95 |
-| 1 | solid if bit 31 clear; if bit 30 set, only when `queryClass == 4` | 0.92 |
-| 4 | **solid only when `queryClass != 4`** | 0.95 |
-| 2, 3, 5, 6, 7 | fall through every arm — **never collide** | 0.95 |
+| 0 | always solid | 0.99 |
+| 1 | bit 31 set ⇒ ignored; bit 31 clear & bit 30 clear ⇒ solid for all; bit 31 clear & bit 30 set ⇒ solid only for `queryClass != 4` (party passes) | 0.98 |
+| 4 | ~~solid only when `queryClass != 4`~~ **STRUCK S100 — INVERTED. Solid ONLY for `queryClass == 4`: the party-only invisible walls** (zone gates, story barriers). Verified 0.99 by direct read of BOTH callbacks: `FUN_0022cc50:92-95` and `FUN_0022d4b0:73-76` — `bVar9 = (class != 4)`, intersect only when `!bVar9`. No behaviour change for the mod (sweep passes class 4, so sweep and mover always agreed) | 0.99 |
+| 2, 3, 5, 6, 7 | fall through every arm — **never collide** (exact for FLOOR prims in both callbacks, and for volume prims in `FUN_0022d4b0`; **`FUN_0022cc50`'s volume-prim branch guards only type 1** — other volume types intersect unconditionally there, S100 read) | 0.99 |
 
 plus **bit 23** = a "soft" hit, recorded as result code 1 instead of 2 with no hit point written, i.e.
 detected and not blocking (0.90); **bit 26** gated on `ctx+0x3c` (0.90); **bit 31** = disabled/passable
@@ -3317,10 +3317,63 @@ both directions.
 **No pseudocode anywhere names these categories.** There is no string, enum or table mapping class 0/1/4
 or bit 23 to water / trigger / camera blocker / door. Do not label them; the numbers are what is known.
 
-> **If a class-aware wall test is ever needed, it is `FUN_0022d4b0`, reached via
-> `FUN_002315e0(ctx, from, to)` — not `FUN_00232490`.** But ask first whether the body sweep has not
-> already answered: it is the same collision, with the party's own class, over the whole displacement.
+> ~~**If a class-aware wall test is ever needed, it is `FUN_0022d4b0`, reached via
+> `FUN_002315e0(ctx, from, to)` — not `FUN_00232490`.**~~ **STRUCK S100: `FUN_002315e0` is NOT
+> class-aware — it hard-codes class `0xFFFF` (-1) into the query struct, so it misses the type-4
+> party-only barriers entirely (0.96).** The class-aware ray is **`FUN_00230b60`** (RVA `0x110B60`),
+> which takes the class as a parameter — `FUN_003cc970` calls it with class 4, i.e. it is the
+> engine's own party-class segment test (write-free 0.98, S100 sweep). But ask first whether the
+> body sweep has not already answered: same collision, party's class, whole displacement.
 | `FUN_00380c40` the resolver | `0x260C40` | 0.99 | `(ctrl, delta)` → resolved position. **Writes 14 globals; do NOT call.** |
+
+### Session 100 sweep — the findings that reframed S96-S99 (three-agent decompile exhaustion)
+
+- **Only THREE functions in the whole binary read the walkmap adjacency array (`+0x16/18/1A`)**:
+  the mover `FUN_002327d0`, the boundary check `FUN_0022f9b0`, and a single-edge push-out
+  `FUN_0022eac0` (0.97). There is NO engine "can walk A→B" helper and **NO engine route planner at
+  all**: exactly one goal-seeking steering routine exists (`FUN_002e45e0`, RVA `0x1C45E0`; its
+  bearing helper `FUN_003a19c0` has exactly one caller), movement goals are single straight-line
+  targets set by the `move*`/`cmove*` script natives, NPC routes are authored coordinate sequences
+  in EBP2 bytecode (0.95), and followers seek the leader's LIVE position (no breadcrumbs). The
+  mod's own A* is the only planner in the process. `planmap` = level-asset naming + the PLMN
+  area-name string table; not navigation (0.99). CLOSED.
+- **Dynamic obstacles (prims ≥ 0x5000 — doors, sluice gates, platforms)** are tested ONLY by
+  `FUN_0022d7e0`, gated on queryStruct+0x38 (set only by the mover) AND a per-obstacle state int at
+  `level(DAT_0209a670)+0x1d8[idx]` (the "closed" flag, 0.97; its writer is unlocated, 0.30). Every
+  ray/segment/sphere callback hard-excludes ≥ 0x5000, so the sweep, the point-in-volume test and
+  the mesh are ALL blind to a closed gate. The only callable dynamics-capable query is
+  **`FUN_00231690`** (RVA `0x111690`, `nav_rva.h MAP_VOLUME_PUSHOUT`) — **conditionally write-free
+  at 0.97, BELOW the bar**: safe iff the caller-supplied body object keeps `+0x80/+0x84 ≤ 2.0`,
+  else it spills into the shared visit scratch (`DAT_02088fe0`/`DAT_020891e0`). The `'` probe's
+  `dynprobe` block snapshot/diffs that scratch around a safe-path call to settle it from C++.
+  Nothing routes on it until the ≥0.98 record exists.
+- **Bit-26 volumes** are admitted by the mover only when ground-locked and have NO code path in the
+  sweep's sphere callback — a second sweep blind spot, also covered by `FUN_00231690` (0.96).
+- **Water depth exists but never refuses** (0.96): layer-3 effective-type-4 water polys
+  (`FUN_002321d0`, RVA `0x1121D0`), surface Y at `moveCtx+0x90`, "in water" bit 3 of `+0x60` — and
+  no depth term anywhere in the movement refusal. Confirms S96: bit 23 is not walkability;
+  deep-water boundaries are mesh boundaries. No step/slope/drop/one-way gate for class 4 anywhere
+  (0.97) — S68/S75 strikes re-confirmed.
+- **Layer table** (0.96): FOUR CSR layers — 0 floor polys, 1 primary volumes, 2 secondary volumes,
+  3 attributes (water surfaces, region tints, trigger zones; never in any collision mask). Mover
+  uses mask 2 (not ground-locked) or 3 (ground-locked, +dynamics +bit-26); the sweep's spheres use
+  7; `FUN_00231400`/`FUN_00232490` use 6. The segment casts' layer list is `DAT_00908df8` (.rdata,
+  contents unrecovered).
+- **The engine mover's footprint ellipse converges toward ~0.5 m semi-axes** (`FUN_00380b80` seeds
+  `+0x64/+0x68 = 0.5`, `FUN_003808a0` converges `+0x80/+0x84` toward them; authoring site of
+  per-character values unresolved, 0.60) vs the sweep's 0.27 — a ~0.6 m gap passes the sweep and
+  jams the body. The march's 1.0 m graze allowance is sized from this.
+- **OPEN, deliberately NOT acted on in S100 (live code impact):** the sweep found THREE override
+  banks (`+0x00-0x1F` and `+0x40-0x4F` for walkability via `FUN_00230a40`/`FUN_00232020`;
+  `+0x20-0x3F` for collision via the segment callbacks). `nav_mesh.cpp EffectiveFlags` reads two.
+  If a third bank is confirmed to affect walkability, `Walkable` may under-apply script overrides —
+  verify in a dedicated session; changing it blind could alter working maps.
+
+**The corollary that drove the S100 build: the sweep and the refusal barely overlap.** Adjacency
+walls stop the party and no sweep at any step size can see them; the mod-side march
+(`path_march.cpp MarchLeg`, replicating the 0.99-established accept rule `neighbour ≥ 0 &&
+Walkable(neighbour)`) is the instrument for that class, and the sweep remains the instrument for
+volumes. Neither replaces the other.
 
 **The mechanism.** For each of the current triangle's three edges, `FUN_0022f9b0` takes the neighbour
 across it and — at `:85-88` — **DEMOTES a neighbour that fails `FUN_00230a40` for the movement class to

@@ -102,6 +102,12 @@ const Row kTable[] = {
     EN(L"On plays in battle whenever your party has committed to a target, whether or not a route beacon is running."),
     EN(L"Target beacon volume"),
     EN(L"How loud the target beacon plays."),
+    // S100: auto-walk (wording from the approved plan; flag to the user before reword).
+    EN(L"Auto-walk"),
+    EN(L"Walks the character along the route after the route key. Pressing any movement key cancels it instantly."),
+    EN(L"Off never moves the character."),
+    EN(L"On walks the route automatically after the route key. Combat, menus, or your own movement stop it instantly."),
+    EN(L"Auto-walk stopped."),
 };
 
 #undef EN

@@ -233,16 +233,36 @@ things. Rules 1 and 2 are absolute; only rule 3 changed.
   response to nothing-to-say.
 - **REMOVE dead fallbacks.** Silence is always better than wrong speech. A fallback
   is only justified if it provides correct, relevant information.
-- **THE MOD IS STRICTLY READ-ONLY on input and game memory.** It observes — it never
-  injects keystrokes/mouse (`SendInput`/`keybd_event`/`mouse_event`/`PostMessage(WM_KEY…)`),
-  never presses game buttons, never writes game memory (`WriteProcessMemory`/any mem-write
-  helper), and never mutates the DirectInput buffer (passed to the tracker as `const`). It
-  changes nothing the player does — no auto-walk, no lock-on presses, no speed changes. The
-  ONLY `VirtualProtect` is the one-time vtable patch installing the read-only `GetDeviceState`
-  hook; all game calls are pure getters. Any feature that would *drive* the game (move the
-  character, press a button, set a value) requires **explicit user permission** and a design
-  discussion first — it is a category change, not a normal feature. (Confirmed Session 44
-  after a tester speed-jump turned out to be their own `1`/`2`/`3` = Game Speed keypress.)
+- **THE MOD IS STRICTLY READ-ONLY on input and game memory — with ONE recorded exception
+  (Auto-walk, user-authorized 2026-07-31, Session 100).** It observes — it never injects
+  keystrokes/mouse (`SendInput`/`keybd_event`/`mouse_event`/`PostMessage(WM_KEY…)`), never
+  presses game buttons, never writes game memory (`WriteProcessMemory`/any mem-write helper),
+  and never swallows a key. The ONLY `VirtualProtect` is the one-time vtable patch installing
+  the `GetDeviceState` hook; all game calls are pure getters.
+
+  **The exception:** the user explicitly authorized, in the conversation of 2026-07-31, the
+  **Auto-walk** feature to OR the four movement-key bits (**DIK W/A/S/D only**) into the
+  keyboard state buffer inside `HookedGetDeviceState` (`src\proxy\dinput8_proxy.cpp`) — the
+  mod's one existing input hook — through exactly **one** function, `AutoWalk::OnDevicePoll`,
+  and nowhere else. Boundaries, all non-negotiable:
+  1. **default OFF**, gated on the ModMenu Auto-walk toggle;
+  2. with the toggle off the injection function returns on its first line — the input path is
+     byte-identical to the read-only mod (the write is unreachable, not merely skipped);
+  3. injection is movement keys ONLY — extending it to any other key (Confirm, Cancel, menu
+     keys, anything) is a NEW category change requiring new explicit permission;
+  4. `InputTracker::FeedDInputKeyboard` is always fed the PRE-injection buffer, so every
+     mod-side observation sees only the player's real keys;
+  5. a real movement key in the same poll suppresses injection in that poll and cancels the
+     feature — the player always wins, instantly;
+  6. auto-walk disengages on combat engagement (hard requirement, within one frame), route
+     loss, map change, focus loss, menu open, field-tick stall, and a 15 s no-progress cap —
+     it never keeps walking a character the player has lost control of.
+
+  Everything else in this rule stands unchanged: no lock-on presses, no speed changes, and any
+  OTHER feature that would *drive* the game still requires **explicit user permission** and a
+  design discussion first. (Original rule confirmed Session 44 after a tester speed-jump turned
+  out to be their own `1`/`2`/`3` = Game Speed keypress; exception recorded Session 100 so the
+  audit trail stays truthful — `debug.md`'s read-only-input entries carry the same note.)
 
 ### Combat log specifics
 

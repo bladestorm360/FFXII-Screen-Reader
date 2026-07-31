@@ -50,6 +50,7 @@ enum class SettingId : int {
     BeaconVolume,
     TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
     TargetVolume,
+    AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
     Count
 };
 
@@ -67,6 +68,7 @@ Verbosity CombatVerbosity();
 // whether it may skip the frame entirely.
 bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
+bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get

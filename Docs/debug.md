@@ -68,10 +68,14 @@ one-directional: they cannot improve a working route, and they can spoil a faili
 confident wrong one — which is exactly what row 6 does.** That is why "no change at all" is the
 optimistic reading and "worse than when we started" is the realistic one.
 
-**⚠ THE BUILD AS COMMITTED (`b21d0e8`) IS NOT SAFE TO TRUST ON TRANSITIONS.** The S98 seam pass will
+~~**⚠ THE BUILD AS COMMITTED (`b21d0e8`) IS NOT SAFE TO TRUST ON TRANSITIONS.** The S98 seam pass will
 turn "No path" into a confident full route ending wherever the previous attempt happened to stop, on
 ANY map where a transition's single-point goal fails — not just 315. For a blind player that is worse
-than the "No path" it replaced. **Revert or fix row 6 before anything else.**
+than the "No path" it replaced. **Revert or fix row 6 before anything else.**~~
+
+**RESOLVED S100: the seam pass is REVERTED** (the block deleted from `path_search.cpp`; `seamPolys`
+stays plumbed-but-unread with the circularity rule in the header). `pass=seam` can never appear in a
+log again — if it does, the revert failed.
 
 ### The complaint, unchanged since Session 96
 
@@ -91,7 +95,10 @@ work started. **SELF-INFLICTED** = introduced by one of these sessions trying to
 | 3 | S96 | **PRE-EXISTING** (taut-chord breaches predate all of this) | A breach is a verdict on the CHORD, not the corridor | Repair ladder: un-pull → retreat → full corridor | **A REAL GAIN, kept** (17/17 on the maps that work). Did not unblock 315 |
 | 4 | S97 | **SELF-INFLICTED** (`WallAcross` was added in S96) | The volume probe `FUN_00232490` was vetoing routes | Veto deleted; kept as `volHit`/`volWalked` counters | **NET ZERO — it restored pre-S96 behaviour.** The removal is PROVEN correct by the next log (`why=wall` 16 → 0, `volHit=2 volWalked=2`), but the thing it removed was ours |
 | 5 | S97 | **SELF-INFLICTED** (a gap in S96's own ladder) | The repair ladder could not touch a FINAL-leg breach | `UnpullDeparture`; `retreat` inserts on a final leg; `full-corridor` ungated | Completes row 3, so the ladder-plus-reach is a gain overall. Rungs all ran on 315 and all still breached. **Untested elsewhere** — the case they were built for has not recurred |
-| 6 | S98 | **SELF-INFLICTED, AND STILL LIVE** | The route target was a seam VERTEX picked by straight-line distance | `Entity::seamGroup` plumbed; `PathSearch::Run` takes the seam poly set; a failure-path re-run aims at the seam | **MADE THINGS WORSE AND IS STILL IN THE TREE — see below.** The diagnosis (a vertex is on the boundary; straight-line ≠ walking-nearest) still stands and is still real; the fix does not |
+| 6 | S98 | **SELF-INFLICTED — REVERTED S100** | The route target was a seam VERTEX picked by straight-line distance | `Entity::seamGroup` plumbed; `PathSearch::Run` takes the seam poly set; a failure-path re-run aims at the seam | **MADE THINGS WORSE; REVERTED in S100** (block deleted, plumbing kept inert). The diagnosis (a vertex is on the boundary; straight-line ≠ walking-nearest) still stands and is still real; any future fix must be an in-search goal set with a reference the current attempt did not produce |
+| 7 | S100 | **PRE-EXISTING** (the sweep was adjacency-blind from birth) | `FUN_00230c10` is ONE zero-radius centre ray + a destination sphere and NEVER reads adjacency; the engine's real refusal (`FUN_0022f9b0`) is PURELY adjacency-based — the two instruments barely overlap | The adjacency march (`path_march.cpp`, `MarchLeg`): every leg marched poly-to-poly with the mover's own accept rule; fail-open, free, breach -> the existing ladder/re-cost/frontier | **Awaiting tester round.** The first march of 315's leg 3 IS the x≈45.5 measurement, whatever it shows |
+| 8 | S100 | **PRE-EXISTING** (S99 struck the long-CLEAR claim; the branch never existed) | No length test at the one-shot gate: a 43.4 m CLEAR shipped on one probe | `kLongLegResweep=12 m`: long one-shot CLEARs are confirm-walked (`long=` counter); `kMaxSubSteps` 64→256 as a COVERAGE bound, never a step-size divisor | **Awaiting tester round.** +0 probes on maps without long legs |
+| 9 | S100 | **PRE-EXISTING** (keyboard-only gate, S99 defect) + NEW feature | Stuck detection could never fire for a pad player; and no instrument ever measured a commanded walk | Position-based stuck evidence (key held OR auto-walk engaged OR ≥1 m jitter without closing); AUTO-WALK (user-authorized injection, default OFF) with `AUTOWALK stuck:`/`summary:` ground-truth lines | **Awaiting tester round.** Auto-walk on 315 produces the stop line either way |
 
 ### What Session 98 actually did, and why it is a regression
 
@@ -162,7 +169,12 @@ exactly this situation is untested code that has never run in a tester log.
   `FUN_00232490` tests one bit (31) with no class filter, and `FUN_00230c10` already iterates the
   volume layers with the party's own class.
 - **The string-pull / taut chord.** The full corridor (75 points, the least-taut polyline that
-  exists) breaches identically.
+  exists) breaches identically. **ANNOTATED S100, verified against the raw S99 log: this ruled out
+  LESS than it seemed to.** All 54 full-corridor failures were `bad=<FINAL leg>` at the S98 vertex
+  goal (stop=(167.4,9.00,61.8) every time) — they re-validated the same broken DESTINATION, and no
+  full-corridor run ever tested a mid-route chord at x≈45.5. With the S98 goal reverted and the
+  adjacency march in place, the chord-vs-corridor question at x≈45.5 is OPEN again and the S100
+  build measures it.
 - **The repair ladder's reach.** All three rungs run on 315 and all three still breach.
 
 ### The shape to carry forward
@@ -1766,6 +1778,11 @@ installs the read-only hook. (3) Every game function the mod calls is a pure get
 segment/exit queries). **The speed change was the tester's own `1`/`2`/`3` keypress** (those are Game
 Speed 1×/2×/4× — see Controls.md; the old "Lock On / Target Group" labels were wrong). The mod reserves
 none of `1`/`2`/`3`.
+**AUDIT UPDATE, Session 100:** the read-only rule now carries ONE recorded, user-authorized
+exception — Auto-walk (`AutoWalk::OnDevicePoll`, dinput8_proxy.cpp) may OR the W/A/S/D bits into
+the keyboard buffer while engaged, default OFF, with the tracker still fed the PRE-injection state.
+Everything else in this audit still holds: no SendInput, no memory writes, nothing swallowed. See
+CLAUDE.md's amended rule for the full boundary list.
 
 **KEYWORDS: left ctrl escape toggle battle menu won't open menus locked stuck ctrl sound cue ping
 whoosh Controls.md binding INPUT-DIAG modifiers not the mod** (Session 47) SOLUTION: The tester could
@@ -3999,8 +4016,10 @@ the tester; `F4` is the workaround (it toggles Combat verbosity with no arrow ke
 
 ### This is NOT a broken intercept — there is no intercept to fix
 
-Read this before "fixing" it. The mod is **strictly read-only on input** (`CLAUDE.md`): the
-DirectInput buffer arrives as `const`, nothing is ever swallowed, injected or rewritten. The mod
+Read this before "fixing" it. The mod is **strictly read-only on input** (`CLAUDE.md`; since S100
+with the one recorded Auto-walk exception, which INJECTS movement bits and still never SWALLOWS a
+key — swallowing remains forbidden, and injection is not swallowing): the DirectInput buffer
+arrives at the tracker as `const`, nothing is ever swallowed or rewritten on the read path. The mod
 observes keys; it has never consumed one. `MenuNavCallback`'s `bool` return means only "a mod-side
 consumer handled this", which suppresses the mod's *own* fallback dispatch — it has never had any
 effect on what the game sees, and was never intended to. The status virtual buffer has behaved this

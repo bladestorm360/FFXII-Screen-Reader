@@ -2,6 +2,7 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "input/input_tracker.h"
+#include "navigation/auto_walk.h"
 #include <Windows.h>
 #include <atomic>
 #include <cstdio>
@@ -160,6 +161,12 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
             // A fault here must never propagate into the game's input thread.
             __try {
                 InputTracker::FeedDInputKeyboard(reinterpret_cast<const unsigned char*>(lpvData));
+                // S100, THE ONE SANCTIONED INPUT WRITE (user-authorized; see auto_walk.h and
+                // CLAUDE.md). Strictly AFTER the tracker was fed, so every mod-side observation
+                // sees the PRE-injection buffer -- and the hook read the real state first by
+                // construction, which is what lets a real key suppress injection in the same poll.
+                // With the Auto-walk toggle off, this returns on its first line.
+                AutoWalk::OnDevicePoll(reinterpret_cast<unsigned char*>(lpvData));
             } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
     }

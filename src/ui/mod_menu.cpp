@@ -63,6 +63,12 @@ const Setting kSettings[] = {
       Id::TargetBeaconDesc, "target_beacon", 1 },
     { Id::SettingTargetVolume, Kind::Percent, kVolumeSteps,
       {}, {}, Id::TargetVolumeDesc, "target_volume", kVolumeSteps - 1 },
+    // Default OFF -- auto-walk moves the character, and a feature that drives the game must be
+    // something the player deliberately switched on, never something an install surprised them with.
+    { Id::SettingAutoWalk, Kind::Named, 2,
+      { Id::BeaconOff,       Id::BeaconOn },
+      { Id::AutoWalkDescOff, Id::AutoWalkDescOn },
+      Id::AutoWalkDesc, "auto_walk", 0 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -245,6 +251,11 @@ bool AudioBeaconOn() {
 
 bool TargetBeaconOn() {
     return g_values[static_cast<int>(SettingId::TargetBeacon)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
+}
+
+bool AutoWalkOn() {
+    return g_values[static_cast<int>(SettingId::AutoWalk)].load(std::memory_order_relaxed)
            == static_cast<int>(Beacon::On);
 }
 

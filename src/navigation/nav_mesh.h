@@ -70,6 +70,17 @@ bool EdgePortal(PolyId p, int e, FVec3& a, FVec3& b);
 // Neighbour across edge `e`, or kNoPoly. A boundary edge (map edge, wall) has no neighbour.
 PolyId Neighbor(PolyId p, int e);
 
+// Neighbour with the READ FAILURE separated from "genuinely no neighbour". Returns false when the
+// mesh could not be read at all (no grid, invalid poly, torn read) -- `n` is then meaningless. On
+// true, `n == kNoPoly` means a real boundary. The adjacency march needs the distinction because it
+// must fail OPEN: a torn read reported as a boundary would be an invented wall.
+bool NeighborChecked(PolyId p, int e, PolyId& n);
+
+// Is (x,z) inside `p`'s triangle in the XZ plane? False on any read failure -- callers that care
+// about the difference should treat a persistent false alongside failing edge tests as "unreadable",
+// not as "outside".
+bool PolyContains(PolyId p, float x, float z);
+
 // Raw and effective flags. `Effective` applies the runtime override table (FUN_00232020) -- a script
 // that opens a gate changes these without touching geometry.
 bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective);

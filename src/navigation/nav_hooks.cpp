@@ -4,6 +4,7 @@
 #include "navigation/bullet_query.h"
 #include "navigation/path_planner.h"
 #include "navigation/audio_beacon.h"
+#include "navigation/auto_walk.h"
 #include "navigation/nav_probe.h"
 #include "navigation/entity_list.h"
 #include "core/hooks.h"
@@ -152,6 +153,9 @@ uint64_t __fastcall HookedFieldFrame() {
         // a frame later. Returns on a single atomic load whenever no beacon is running, which is
         // the common case; see the polled-monitor note in audio_beacon.h.
         { STALL_SCOPE("AudioBeacon::OnGameFrame"); AudioBeacon::OnGameFrame(); }
+        // AFTER the beacon, so the leg snapshot auto-walk steers by is post-advance -- same-frame
+        // fresh, never a corner behind. One relaxed load when idle.
+        { STALL_SCOPE("AutoWalk::OnGameFrame"); AutoWalk::OnGameFrame(); }
         // The `'` probe drains here rather than running on the input thread: Gate B needs
         // MapQuery::GroundAt, which is a game call. O(1) when nothing is pending.
         NavProbe::OnGameFrame();

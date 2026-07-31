@@ -9,7 +9,10 @@
 #include "navigation/player_state.h"
 #include "navigation/interact_target.h"
 #include "navigation/entity_list.h"
+#include "navigation/nav_rva.h"
+#include "core/hooks.h"
 #include "core/logger.h"
+#include "core/mem_read.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
@@ -228,6 +231,118 @@ void DumpExitAim(const FVec3& player, int mapId) {
     }
 }
 
+// ---- FUN_00231690 DYNAMIC-OBSTACLE DIAGNOSTIC (Session 100) --------------------------------------
+// The S100 decompile sweep found exactly ONE callable path that can see dynamic obstacle prims
+// (>= 0x5000 -- doors, sluice gates, moving platforms; every ray/sphere callback hard-excludes
+// them): FUN_00231690, the generic volume push-out, conditionally write-free at conf 0.97 -- BELOW
+// the 0.98 bar. This diagnostic exists to settle that FROM C++ (user directive: C++ diagnostics,
+// not Frida): snapshot the conditional-write targets the research identified, make one safe-path
+// call (caller-owned body object with the ellipse semi-axes at 0.27, far under the 2.0 spill
+// threshold), re-snapshot, and log every delta plus anything the call returned. Verdict rule,
+// recorded in the plan: deltas confined to the per-use scratch (which every engine caller rewrites
+// before use) across several presses/maps -> promoted; ANY unexpected delta -> the function is
+// dropped and the dynamic-obstacle census dies. NOTHING ROUTES ON THIS.
+typedef int(__fastcall* Pfn_VolumePushOut)(void* ctx, float* outPush, short* outPrim,
+                                           float* shapeMat, float* pos,
+                                           uint32_t flags, int enableDyn, void* bodyObj);
+
+struct ScratchSnap {
+    uint32_t visit[8] = {};   // head of the 128-int visit array
+    uint32_t count = 0, aux = 0;
+    uint32_t build[4] = {};   // FUN_00230790's OBB build scratch
+};
+
+bool SnapScratch(ScratchSnap& s) {
+    void* va = Hooks::ResolveRva(NavRva::COLL_VISIT_ARRAY);
+    void* vc = Hooks::ResolveRva(NavRva::COLL_VISIT_COUNT);
+    void* vx = Hooks::ResolveRva(NavRva::COLL_VISIT_AUX);
+    void* vb = Hooks::ResolveRva(NavRva::COLL_BUILD_SCRATCH);
+    if (!va || !vc || !vx || !vb) return false;
+    bool ok = true;
+    for (uint32_t i = 0; i < 8; ++i) ok = ok && MemRead::SafeReadU32(va, i * 4u, &s.visit[i]);
+    ok = ok && MemRead::SafeReadU32(vc, 0, &s.count);
+    ok = ok && MemRead::SafeReadU32(vx, 0, &s.aux);
+    for (uint32_t i = 0; i < 4; ++i) ok = ok && MemRead::SafeReadU32(vb, i * 4u, &s.build[i]);
+    return ok;
+}
+
+// POD-only SEH scope, same convention as map_query.cpp's engine-call shims.
+int CallPushOut(Pfn_VolumePushOut fn, void* ctx, float* outPush, short* outPrim, float* shapeMat,
+                float* pos, uint32_t flags, int dyn, void* body, int* faulted) {
+    __try { return fn(ctx, outPush, outPrim, shapeMat, pos, flags, dyn, body); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { *faulted = 1; return 0; }
+}
+
+void DumpDynObstacleProbe(const FVec3& p) {
+    void* fn  = Hooks::ResolveRva(NavRva::MAP_VOLUME_PUSHOUT);
+    void* ctx = MapQuery::DebugCollisionCtx();
+    char m[288];
+    if (!fn || !ctx) {
+        Log::Write(kTag, "   dynprobe: FUN_00231690/ctx unresolved -- skipped");
+        return;
+    }
+    ScratchSnap before{}, after{};
+    const bool sb = SnapScratch(before);
+
+    // Everything caller-owned. Shape = 3x4 sphere matrix diag(0.27), the sweep's own idiom; body =
+    // a zeroed block with ONLY the ellipse semi-axes (+0x80/+0x84) and the party class (+0x50) set
+    // -- the safe-path condition is those axes <= 2.0, and we hold them at 0.27.
+    float outPush[4] = {};
+    short outPrim[8]; for (short& s : outPrim) s = -1;
+    float shape[12] = {};
+    shape[0] = shape[5] = shape[10] = 0.27f;
+    float pos4[4] = { p.x, p.y + 0.9f, p.z, 1.0f };
+    alignas(16) unsigned char body[0x100] = {};
+    *reinterpret_cast<float*>(body + 0x80) = 0.27f;
+    *reinterpret_cast<float*>(body + 0x84) = 0.27f;
+    *reinterpret_cast<uint16_t*>(body + 0x50) = 4;   // party movement class
+
+    int faulted = 0;
+    const int r = CallPushOut(reinterpret_cast<Pfn_VolumePushOut>(fn), ctx, outPush, outPrim,
+                              shape, pos4, 0x13u, /*enableDyn=*/1, body, &faulted);
+    const bool sa = SnapScratch(after);
+
+    snprintf(m, sizeof(m),
+             "   dynprobe: ret=%d faulted=%d prim[0]=%d push=(%.3f,%.3f,%.3f) at=(%.1f,%.2f,%.1f)"
+             "%s",
+             r, faulted, static_cast<int>(outPrim[0]), outPush[0], outPush[1], outPush[2],
+             pos4[0], pos4[1], pos4[2],
+             (outPrim[0] >= 0x5000) ? "  <== DYNAMIC OBSTACLE PRIM" : "");
+    Log::Write(kTag, m);
+
+    if (!sb || !sa) {
+        Log::Write(kTag, "   dynprobe: scratch UNREADABLE -- write-freedom NOT ANSWERED this press");
+        return;
+    }
+    int deltas = 0;
+    for (int i = 0; i < 8; ++i)
+        if (before.visit[i] != after.visit[i] && deltas < 8) {
+            snprintf(m, sizeof(m), "   dynprobe: DELTA visit[%d] 0x%08X -> 0x%08X",
+                     i, before.visit[i], after.visit[i]);
+            Log::Write(kTag, m);
+            ++deltas;
+        }
+    if (before.count != after.count) {
+        snprintf(m, sizeof(m), "   dynprobe: DELTA visitCount %u -> %u", before.count, after.count);
+        Log::Write(kTag, m); ++deltas;
+    }
+    if (before.aux != after.aux) {
+        snprintf(m, sizeof(m), "   dynprobe: DELTA visitAux 0x%08X -> 0x%08X", before.aux, after.aux);
+        Log::Write(kTag, m); ++deltas;
+    }
+    for (int i = 0; i < 4; ++i)
+        if (before.build[i] != after.build[i]) {
+            snprintf(m, sizeof(m), "   dynprobe: DELTA buildScratch[%d] 0x%08X -> 0x%08X",
+                     i, before.build[i], after.build[i]);
+            Log::Write(kTag, m); ++deltas;
+        }
+    snprintf(m, sizeof(m),
+             "   dynprobe: scratch deltas=%d -- %s", deltas,
+             deltas == 0 ? "SAFE-PATH CALL WROTE NOTHING WE WATCH (one data point toward >=0.98)"
+                         : "writes observed; record them, do NOT promote");
+    Log::Write(kTag, m);
+}
+
 void RunProbe() {
     STALL_SCOPE("NavProbe::RunProbe");
     FVec3 p{};
@@ -251,6 +366,7 @@ void RunProbe() {
 
     DumpInteractReach();
     if (haveP) DumpExitAim(p, mapId);
+    if (haveP && MapQuery::HasWorld()) DumpDynObstacleProbe(p);
 
     // The RAW handle-table walk -- every object the game registered, including the ones the scan
     // REJECTED. Re-keyed here in Session 77: it lost its only caller when the `'` dump was stripped

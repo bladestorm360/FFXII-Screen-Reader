@@ -398,5 +398,8 @@ bool WasRecentInput(uint64_t windowMs) {
 
 bool MovementHeld() { return g_moveHeld.load(std::memory_order_relaxed); }
 
+// The tracker's own dispatch gate, exposed (Session 100) -- see the header.
+bool GameForeground() { return GameIsForeground(); }
+
 
 } // namespace InputTracker

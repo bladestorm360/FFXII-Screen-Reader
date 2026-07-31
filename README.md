@@ -94,7 +94,7 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * \-: previous object category.
 * =: next object category.
 * /: describe the selected object — name, direction, distance, and whether anything blocks the way.
-* \\: turn-by-turn directions to the selected object, and start the audio beacon — see below.
+* \\: turn-by-turn directions to the selected object, and start the audio beacon — see below. With Auto-walk switched on in the mod menu, this key also walks you there.
 * P: turn-by-turn directions to the target the game currently has selected.
 * F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
@@ -171,6 +171,7 @@ One setting so far:
 
 * Combat verbosity — Normal or Verbose. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose speaks everything Normal does, and also tells you when an enemy is readying an ability or beginning to cast a spell, which is your window to interrupt or move. Normal is the default.
 * Audio beacon — On or Off. The repeating sound that leads you along the route, described under Navigation above. On is the default.
+* Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
 
 F4 switches Combat verbosity and F9 switches the Audio beacon, both without opening the menu, so you can change either in the middle of a fight. Your choices are remembered between sessions.
 

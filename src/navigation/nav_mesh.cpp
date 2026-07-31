@@ -133,6 +133,27 @@ PolyId Neighbor(PolyId p, int e) {
     return ValidPoly(n) ? static_cast<PolyId>(n) : kNoPoly;
 }
 
+bool NeighborChecked(PolyId p, int e, PolyId& n) {
+    // `Neighbor` conflates "the read failed" with "there is genuinely no neighbour", and for most
+    // callers that is fine -- both mean "do not cross". The adjacency MARCH cannot afford it: a torn
+    // read reported as a boundary would turn into a breach verdict, i.e. an invented wall. The march
+    // must fail OPEN, so it needs the two cases separated.
+    n = kNoPoly;
+    MapQuery::WalkGridInfo* g = nullptr;
+    if (!Grid(g) || !ValidPoly(p) || e < 0 || e > 2) return false;
+    int16_t raw = -1;
+    const uint32_t off = NavRva::WALK_POLY_NEIGHBOR0 + static_cast<uint32_t>(e) * 2u;
+    if (!MemRead::SafeReadS16(g->polyArr, PolyBase(p) + off, &raw)) return false;
+    n = ValidPoly(raw) ? static_cast<PolyId>(raw) : kNoPoly;
+    return true;
+}
+
+bool PolyContains(PolyId p, float x, float z) {
+    MapQuery::WalkGridInfo* g = nullptr;
+    if (!Grid(g) || !ValidPoly(p)) return false;
+    return MapQuery::PolyContainsXZ(*g, PolyBase(p), x, z);
+}
+
 bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective) {
     MapQuery::WalkGridInfo* g = nullptr;
     if (!Grid(g) || !ValidPoly(p)) return false;

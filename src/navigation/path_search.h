@@ -68,25 +68,20 @@ struct Stats {
 // `rawPoly` is the portal path the spoken legs are measured from; `outPoly` is currently the same
 // polyline (PathDirections does its own simplification).
 // `seamPolys` (optional): the walkmap polys of a map-jump SURFACE, when the target is a walk-onto
-// transition. It is consulted ONLY on the failure path -- after the ordinary single-point search has
-// already failed and the alternative is the suppressed frontier, i.e. "No path". A request that
-// routes today never reaches it, which is the property that makes it safe.
+// transition. PLUMBED BUT UNREAD -- the Session 98 consumer was REMOVED in Session 100.
 //
-// WHY IT EXISTS (Session 98). `to` for a transition is ONE VERTEX of that surface: the tagged vertex
-// nearest the player in a straight line (`exit_scan.cpp` -> `MapQuery::NearestPointOnSurface`). Two
-// things are wrong with it as a route endpoint, and both were invisible until a seam got big:
+// S98's failure-path re-run aimed at the seam member nearest the banked proven prefix's end. On the
+// map it was built for, the prefix already ended on a seam poly, so the aim point WAS the reference
+// (`0.0m from ref` x18 in the S99 log): the re-run validated the prefix it was derived from and
+// spoke a confident route to a dead end. RULE (S99): a route may never be validated against a point
+// derived from that same route's own progress.
 //
-//   1. A triangle VERTEX lies ON the walkable boundary by construction, so the body can never quite
-//      stand there. `kArrivalTol` has been absorbing that everywhere.
-//   2. Straight-line nearest is not WALKING nearest. On map 315's 27 m seam the nearest vertex was
-//      the corner the walkable approach reaches LAST. The route validated 21 of its 22 legs, drove
-//      20 m ALONG the exit surface to get to that corner, breached, and was spoken as "No path"
-//      16.4 m short -- while the frontier it discarded ended ON the surface, i.e. it arrived.
-//
-// A transition fires when you walk onto ANY part of the surface (S64), so the honest goal is the
-// SET. Only the search knows which member is reachable, which is why this cannot be fixed by picking
-// a better point up front. `MapJumpSurface` has stored the poly list for exactly this since S64 --
-// its own comment says "a route to this exit is a search whose goal set is exactly these".
+// The DIAGNOSIS behind the parameter still stands and is why it stays plumbed: a transition fires
+// when you walk onto ANY part of the surface (S64), a boundary VERTEX picked by straight-line
+// distance is the wrong endpoint (straight-line nearest is not WALKING nearest; kArrivalTol has
+// been absorbing the vertex problem everywhere since S75), and only the SEARCH knows which member
+// is reachable. The correct future fix makes the seam set an A* GOAL SET inside the search -- with
+// a reference the current attempt did not produce -- never a post-failure re-run.
 Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
          float bandLo, float bandHi, float reachRadius,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats,

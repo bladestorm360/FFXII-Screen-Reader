@@ -1,4 +1,4 @@
-# FFXII-Screen-Reader — Session Log (Sessions 51–current)
+﻿# FFXII-Screen-Reader — Session Log (Sessions 51–100)
 
 Continues `sessions_001_050.md`, which is closed at **Session 50** (release 0.1-shotgun-build).
 
@@ -5349,3 +5349,76 @@ into a confidently wrong one. Full accounting in `debug.md`'s ORIGIN column and 
 end and reports `nearDist=0.0m` is worse. That is the regression to undo first.
 
 **BUILT `b4533886`, PLAY-TESTED, FAILED. Committed as the record of the failure, not as a fix.**
+
+## Session 100 — 2026-07-31 — [navigation] The sweep never read adjacency: the march, long-leg confirmation, auto-walk
+
+KEYWORDS: adjacency march MarchLeg path_march sweep blind adjacency walls FUN_00230c10 anatomy zero
+radius centre ray destination sphere FUN_0022f9b0 neighbour demotion S98 seam pass REVERTED circular
+validation long leg confirmation kLongLegResweep 12m kMaxSubSteps 256 coverage not accuracy
+position-based stuck detection motion accumulator gamepad auto-walk input injection GetDeviceState
+DIK WASD camera-relative octant steering mod menu toggle combat disengage FUN_00231690 dynprobe
+dynamic obstacles type-4 polarity party-only barriers map 315 x=45.5 measurement
+
+**The research session that reframed four failed sessions.** An exhaustive decompile sweep (three
+parallel agents over all 33,105 functions) found the structural fact S96-S99 were missing:
+`FUN_00230c10` — the body sweep every leg is validated with — is ONE zero-radius centre ray plus a
+0.27 m sphere at the DESTINATION only (±30° side rays fire only when that sphere hits), and it
+NEVER reads walkmap adjacency. The engine's real refusal (`FUN_0022f9b0`) is PURELY adjacency-based
+— edge is a wall iff neighbour < 0 or the neighbour fails the class-4 walkable test — with no
+geometry prims involved. Cliff lips, mesh-boundary jogs and unwalkable neighbours stop the party
+and are invisible to the sweep at ANY length and ANY step size. Only two functions in the whole
+binary read the adjacency array: the mover and the boundary check. The engine has NO route planner
+(one steering routine, straight at the target; NPC routes are scripted coordinate lists; planmap =
+display strings). Full findings in `GameArchitecture.md` S100 section.
+
+**Shipped, one build (each with its own log signature):**
+
+1. **S98 seam pass REVERTED** (`path_search.cpp` seam block deleted; `seamPolys` stays plumbed but
+   unread, with the S99 circularity rule in the header). `pass=seam` can never appear again; map
+   315 transitions fall to the honest frontier ("No path") unless repair genuinely routes.
+2. **The adjacency march** (`path_march.{h,cpp}`, `MarchLeg`): every leg is marched poly-to-poly
+   across the mod's own navmesh applying the mover's accept rule at each edge crossing. Memory-only,
+   FREE (no probe budget), fail-OPEN (every ambiguity = NoVerdict = behaviour byte-identical to
+   before; vertex grazes never breach; a 1.0 m graze-scan rescues chords that kiss the boundary —
+   `marchGraze` on the validate: line is the falsifier). A march breach is a breach REGARDLESS of
+   the sweep (`why=march` + `| march: from=poly:edge nbr= nbrEff=` detail), enters the existing
+   repair ladder / re-cost / frontier machinery unchanged; on a march breach the re-cost portal is
+   picked nearest `badStopAt` (the measurement) instead of the leg midpoint. `WalkLeg` moved here
+   too (shared helpers; one definition).
+3. **Long-leg confirmation**: the missing length branch — a one-shot CLEAR on a leg longer than
+   `kLongLegResweep=12.0 m` (largest data-proven-safe bound; 43.4 m disproven S99) now runs the
+   0.5 m sub-step walk anyway (`long=` counter; `resweep/rescued` keep their exact S95 meaning).
+   `kMaxSubSteps` 64→256 with a ROLE CHANGE: never a step-size divisor — a capped/starved walk
+   covers what it can at full accuracy and reports Budget/truncated (the pre-S100 walk-nothing
+   branch is gone). Cost: +0 probes on 311/321 (no legs > 12 m), ~+300 on a 211 m Giza route.
+4. **Position-based stuck detection** (`audio_beacon.cpp`): the keyboard-only `MovementHeld` gate
+   (which could never fire for the pad tester — S99 defect) replaced by evidence-of-trying:
+   movement key held OR auto-walk engaged OR ≥1.0 m of accumulated jitter without closing (an idle
+   player accumulates ~0 and can never read as stuck). Accepted blind spot recorded: a pad player
+   pushing perfectly head-on shows neither.
+5. **AUTO-WALK** (`auto_walk.{h,cpp}` + one injection call in `dinput8_proxy.cpp`) — the ONE
+   user-authorized exception to the read-only-input rule (CLAUDE.md amended in this commit; default
+   OFF, W/A/S/D bits only, one function, pre-injection observation preserved, real key wins the
+   same poll, combat/menus/route-loss/focus/field-stall/15 s-no-progress all disengage, combat
+   within one frame and re-engage is manual-only). `\` with the ModMenu toggle On walks the route
+   by camera-relative octant steering rendered from the SAME bearing the spoken legs use.
+   Per-engagement `AUTOWALK summary:` line + `AUTOWALK stuck:` ground-truth stop lines — the
+   x≈45.5 measurement instrument the map-315 saga never had.
+6. **`'` probe: `dynprobe`** — one safe-path SEH-wrapped call of `FUN_00231690` (the ONLY callable
+   query that sees ≥0x5000 dynamic-obstacle prims; conditionally write-free at 0.97, BELOW the
+   bar) with before/after snapshots of its conditional-write scratch. C++ diagnostic per user
+   directive (not Frida). Nothing routes on it; the census waits for the ≥0.98 record.
+
+**Canon corrections** (GameArchitecture.md): type-4 volume polarity was INVERTED — type 4 is solid
+ONLY for class 4, the party-only invisible walls (verified 0.99 by direct read of both segment
+callbacks); `FUN_00230c10` returns 0/1 (callers derive the fraction); `FUN_002315e0` is class-blind
+(hard-coded −1) — the class-aware ray is `FUN_00230b60`; sweep anatomy as above. OPEN, deliberately
+NOT in this build: the three-override-banks question (live code impact on `EffectiveFlags`).
+
+**ACCOUNTING RULE, written before the tester round:** no gain is claimed until the tester reports a
+behavioural change. The march's first run on 315 is the x≈45.5 measurement WHATEVER it shows:
+(A) `why=march` at ≈(45,114) → repair routes past it or an honest frontier; (B) march clean and the
+`long=` walk stops there `why=sweep` with the engine's own resolved stop; (C) both clean → dynamic
+prims rise in priority. Auto-walk on 315 produces the stop line either way.
+
+**BUILT AND DEPLOYED. NOT play-confirmed, NOT committed** (commit after the docs are complete).

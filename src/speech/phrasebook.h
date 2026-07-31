@@ -110,6 +110,11 @@ enum class Id {
     SettingBeaconVolume, BeaconVolumeDesc,
     SettingTargetBeacon, TargetBeaconDesc, TargetBeaconDescOff, TargetBeaconDescOn,
     SettingTargetVolume, TargetVolumeDesc,
+    // S100: auto-walk. The Off/On VALUES reuse BeaconOff/BeaconOn -- they are generic. Wording was
+    // included in the approved S100 plan; `AutoWalkStopped` is spoken ONLY on the no-progress cap
+    // and on route loss -- player-initiated stops and self-announcing ones (arrival cue, combat,
+    // map transition) stay silent per the silence-is-normal rule.
+    SettingAutoWalk, AutoWalkDesc, AutoWalkDescOff, AutoWalkDescOn, AutoWalkStopped,
 
     Count
 };

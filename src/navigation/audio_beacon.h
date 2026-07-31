@@ -48,8 +48,31 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch);
 // route seeded this frame starts pinging immediately rather than a frame later.
 void OnGameFrame();
 
-// Stop and forget the route. Safe from any thread.
-void Stop();
+// Why the route last stopped being active (Session 100, for AutoWalk). `External` is any Stop() a
+// caller did not label -- teardown, shutdown, a failed re-plan's empty Seed. `Reseeded` means a NEW
+// route replaced the old one (not a stop at all from the player's point of view).
+enum class StopReason { None, Arrived, MapChange, Reseeded, External };
+StopReason LastStopReason();
+
+// One consistent view of the route being followed (Session 100, for AutoWalk). GAME THREAD ONLY --
+// reads the same non-atomic leg state OnGameFrame owns; calling it from another thread is a race by
+// construction, exactly like Seed. Returns false when no route is active (fields then meaningless
+// beyond routeActive/engagedCombat/epoch). `routeLenM` is player -> current corner -> ... -> end.
+struct LegSnapshot {
+    bool     routeActive   = false;
+    bool     engagedCombat = false;   // the beacon's own PartyEngagement edge-latch
+    uint32_t epoch         = 0;
+    size_t   legIndex      = 0;       // 0-based index of the corner currently steered at
+    size_t   legCount      = 0;
+    FVec3    legTarget{};
+    FVec3    finalTarget{};
+    float    routeLenM     = 0.0f;
+};
+bool GetLegSnapshot(LegSnapshot& out);
+
+// Stop and forget the route. Safe from any thread. The reason defaults to External so an unlabelled
+// caller cannot leave a stale, more specific reason standing.
+void Stop(StopReason reason = StopReason::External);
 
 // True while a route is loaded and the beacon is running.
 bool Active();

@@ -78,6 +78,10 @@ namespace MapQuery {
 
 bool HasWorld() { return Ctx0() != nullptr; }
 
+// S100, DIAGNOSTIC ONLY -- the `'` probe's dynamic-obstacle diagnostic needs the raw ctx to hand to
+// FUN_00231690. Routing code never touches this; every routing entry point resolves it internally.
+void* DebugCollisionCtx() { return Ctx0(); }
+
 uint32_t EffectiveFlags(uint32_t raw) {
     Pfn_EffFlags fn = reinterpret_cast<Pfn_EffFlags>(Hooks::ResolveRva(NavRva::MAP_EFFECTIVE_FLAGS));
     if (!fn) return raw;

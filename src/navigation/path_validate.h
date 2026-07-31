@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include "navigation/nav_types.h"
+#include "navigation/path_march.h"   // StopCause, WalkLeg, MarchLeg -- the two leg-scale walkers
 
 // Leg validation for a finished polyline: can the party actually walk each leg of this route?
 //
@@ -26,20 +27,12 @@
 // and what it spent. The caller decides what to do about it.
 namespace PathValidate {
 
-// What ended the sub-step walk of a leg. A breach reads completely differently depending on which of
-// these it was, and until Session 96 all three printed identically.
-// `Wall` IS GONE, NOT RENAMED (Session 97). It meant "a `PointInVolume` sample landed inside
-// something", and that verdict refused 16 of 16 routes on map 315 while the body sweep objected to
-// none of them. Nothing can produce it any more, and this project has been bitten twice by counters and
-// enum values that are written by a comment and read by nothing -- so it is deleted rather than left
-// permanently zero. If the class-aware wall test ever lands (`FUN_0022d4b0` via `FUN_002315e0`), it
-// gets its own cause then.
-enum class StopCause {
-    None = 0,
-    Sweep,     // the engine's body sweep would not carry the body that far -- floor or depenetration
-    Budget,    // ran out of probes. NOT a breach: this sets `truncated`, never `ok = false`
-};
-const char* CauseName(StopCause c);
+// `StopCause` and `CauseName` MOVED to path_march.h in Session 100 -- the march and the walk are the
+// same kind of thing (a leg walked step by step; one asks the mesh, one asks the engine) and they
+// share the vocabulary. The using-declarations keep every existing `PathValidate::StopCause` caller
+// compiling unchanged.
+using PathMarch::StopCause;
+using PathMarch::CauseName;
 
 struct LegReport {
     bool   ok       = true;    // no breach found in the legs actually checked
@@ -60,6 +53,25 @@ struct LegReport {
     // `resweeps` with `rescued` 0 means the obstructions are real.
     int    resweeps = 0;
     int    rescued  = 0;
+    // LONG-LEG CONFIRMATION (Session 100). Legs whose one-shot sweep said CLEAR but whose length
+    // exceeds kLongLegResweep, so the sub-step walk ran anyway. Deliberately separate from
+    // `resweeps`/`rescued` -- those keep their exact S95 meaning (one-shot said BLOCKED) so the two
+    // instruments stay attributable in one log line.
+    int    longWalks = 0;
+    // THE ADJACENCY MARCH (Session 100). `march` counts legs the march gave a verdict on (Clear or
+    // Breach); `marchBlind` legs it declined to rule on (validation then proceeded exactly as
+    // before); `marchGraze` refused-then-recovered crossings across all legs -- the falsifier for
+    // near-miss chords: high grazes with zero march breaches on working maps is the design working.
+    int    march      = 0;
+    int    marchBlind = 0;
+    int    marchGraze = 0;
+    // Filled on a march breach: the exact crossing the mover's own accept rule refuses. `badMarchNbr`
+    // -1 means a true boundary (no neighbour); otherwise the neighbour whose effective flags refused
+    // the party, printed so a script-flipped group is readable at a glance.
+    int      badMarchPoly = -1;
+    int      badMarchEdge = -1;
+    int      badMarchNbr  = -1;
+    uint32_t badMarchNbrEff = 0;
     float  badLength  = 0.0f;  // breaching leg's length in metres  } printed together so a breach can
     float  badReached = 0.0f;  // how far along it the body got     } be read without a second session
     // WHERE it stopped, in world coordinates, ON THE GROUND -- pinned to the walkmap under the stop,
@@ -118,10 +130,18 @@ struct LegReport {
 // Measured, from the tester's log: 26.00 m leg -> fraction 0.38; 26.82 m -> 0.42; 16.24 m -> 0.19.
 // Fifteen of eighteen routes in that session ended up as Frontier because of it.
 //
-// So the one-shot sweep is kept as a FAST PATH -- when it says clear, the leg is clear and that costs
-// one probe -- and a leg it calls blocked is RE-ASKED by walking it in character-sized steps with Y
-// pinned to the walkmap under each step, carrying the engine's own resolved position forward so
-// depenetration slides the body along a wall exactly as it does in play. Only that verdict is final.
+// THE ONE-SHOT SWEEP IS A SCREEN, NOT A VERDICT, ABOVE SUB-STEP SCALE (Session 100; strikes the S95
+// wording "when it says clear, the leg is clear"). REFUTED IN PLAY: the S99 player stood stuck 25 m
+// into a 43.4 m leg whose one-shot verdict was CLEAR -- `resweep=2` of 22 legs, and leg 3 was not one
+// of them. Structurally the one-shot CANNOT certify a long leg: `FUN_00230c10` is one ZERO-RADIUS
+// centre ray plus a 0.27 m sphere at the DESTINATION only (the +/-30-degree side rays fire only when
+// that sphere hits), so a long leg's midsection is only ever tested by a zero-width line -- at ANY
+// length. And no sweep of any kind sees an ADJACENCY wall (a cliff lip, a mesh-boundary jog): the
+// engine's real refusal involves no geometry prims at all, which is what the march is for.
+//
+// So: a one-shot CLEAR is final only at sub-step scale. A leg it calls blocked is RE-ASKED by walking
+// it in character-sized steps (S95); a leg LONGER than kLongLegResweep is walked the same way even on
+// a CLEAR (S100, `longWalks`), and the walk's verdict is the verdict.
 //
 // AND THE TEST IS A DISTANCE, NOT A RATIO. A fraction penalises short legs: the depenetration
 // pull-back at the far end is a fixed ~one body radius, so a leg SHORTER than the radius can never
