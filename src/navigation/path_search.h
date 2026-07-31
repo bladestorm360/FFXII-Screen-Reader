@@ -68,20 +68,29 @@ struct Stats {
 // `rawPoly` is the portal path the spoken legs are measured from; `outPoly` is currently the same
 // polyline (PathDirections does its own simplification).
 // `seamPolys` (optional): the walkmap polys of a map-jump SURFACE, when the target is a walk-onto
-// transition. PLUMBED BUT UNREAD -- the Session 98 consumer was REMOVED in Session 100.
+// transition. READ since Session 101, and read in exactly one way.
 //
-// S98's failure-path re-run aimed at the seam member nearest the banked proven prefix's end. On the
-// map it was built for, the prefix already ended on a seam poly, so the aim point WAS the reference
-// (`0.0m from ref` x18 in the S99 log): the re-run validated the prefix it was derived from and
-// spoke a confident route to a dead end. RULE (S99): a route may never be validated against a point
-// derived from that same route's own progress.
+// WHY IT EXISTS. A transition fires when you walk onto ANY part of its surface (S64), but `to` is
+// ONE boundary VERTEX of that surface, picked by straight-line distance. That point answers "how
+// far away is this exit" correctly and "where should the route end" wrongly, twice over: a vertex
+// is on the walkable boundary by construction so the body can never finish on it (kArrivalTol has
+// been absorbing that on every map since S75), and straight-line nearest is not WALKING nearest --
+// on map 315's 27 m seam it is the corner the walkable approach reaches LAST, so the route drives
+// 20 m ALONG the surface and a mid-route replan from the bank comes back "No path" 16.4 m short.
 //
-// The DIAGNOSIS behind the parameter still stands and is why it stays plumbed: a transition fires
-// when you walk onto ANY part of the surface (S64), a boundary VERTEX picked by straight-line
-// distance is the wrong endpoint (straight-line nearest is not WALKING nearest; kArrivalTol has
-// been absorbing the vertex problem everywhere since S75), and only the SEARCH knows which member
-// is reachable. The correct future fix makes the seam set an A* GOAL SET inside the search -- with
-// a reference the current attempt did not produce -- never a post-failure re-run.
+// HOW IT IS READ. The set is tested on each pop only to remember the FIRST member the search
+// reaches; no A* decision changes and no `pass=mesh` route is affected. Then, ONLY when nothing
+// above was willing to be spoken as a Route, `PathSurfaceGoal::Route` rebuilds a corridor to that
+// member ending at the PORTAL the corridor crosses onto it, and proves it with the ordinary body
+// walk at the ordinary arrival tolerance.
+//
+// WHAT IT MUST NOT BECOME. Session 98 aimed at the seam member nearest the banked proven prefix's
+// end. The prefix already ended on a seam poly, so the aim point WAS the reference (`0.0m from ref`
+// x18 in the S99 log): the re-run validated the prefix it was derived from and spoke a confident
+// route to a dead end. Reverted in S100 -- `pass=seam` must never appear in a log again. RULE
+// (S99): a route may never be validated against a point derived from that same route's own
+// progress. A portal between two mesh triangles is not such a point, which is why it is the one
+// the endpoint is taken from.
 Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
          float bandLo, float bandHi, float reachRadius,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats,

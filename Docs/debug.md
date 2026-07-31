@@ -7,10 +7,31 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-## THE NORTHERN SLUICEWAY (map 315) — FOUR SESSIONS, FOUR FIXES, STILL BLOCKED
+## THE NORTHERN SLUICEWAY (map 315) — SOLVED IN S100, ROUND 4; ONE RESIDUAL FIXED IN S101
 
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
 player cannot cross".**
+
+> **STRUCK: this section's own title, "FOUR SESSIONS, FOUR FIXES, STILL BLOCKED", and every
+> "STILL BLOCKED" claim below it.** They were true through S99 and were left standing while the map
+> was unblocked in S100's fourth round (`319c0bb`): `inset=5`, attempt 1 validated 20/20, 357 steps,
+> **and the tester walked it through**. Rows 11-14 below are the anatomy. Everything above row 11
+> stays exactly as written — it is the record of how four sessions netted zero, and that lesson is
+> the most valuable thing on this page.
+
+### WHAT ACTUALLY UNBLOCKED IT — three defects, none of them the ones four sessions chased
+
+| # | Session | ORIGIN | Diagnosis | What shipped | Outcome |
+|---|---|---|---|---|---|
+| 11 | S100 r1 | **PRE-EXISTING** | **A class-aware terrain flag no instrument modelled.** Both gates closed at conf 0.99: `FUN_002681d0` writes leader floor class **0** to `walkObj+0x80`, `moveCtx = walkObj+0x30` so `moveCtx+0x50` IS that field, and `FUN_00230a40`'s class-0 branch requires **bit 23 CLEAR**. Poly 224 east of the player is `0x17A00000` — the flooded channel — so the walk stops at the exact poly-23\|224 flag boundary at x≈45.5. The sweep and the march both pass it CORRECTLY per their own definitions; neither models per-class terrain | A\* **prices** `TerrainRefused` neighbours (`terrain=`); the march's accept rule becomes `Walkable && !TerrainRefused`; A\* prices FOREIGN map-jump surfaces (`kForeignSeamPenalty`, closing row 10); auto-walk steers to the route LINE | **CONFIRMED.** The route climbed the clean south bank (`corridor pays terrain=0`), and the 311↔321 transition bounce stopped. `NavMesh::Walkable` UNTOUCHED — the S96 lever stays where S96 left it |
+| 12 | S100 r2 | **PRE-EXISTING** | A taut funnel corner can sit ON the walkable boundary (it is a portal endpoint), so depenetration forbids the body from ever standing within one radius of it. Measured exactly: stop 0.54 m short = radius 0.27 + \|margin\| 0.27, against tol 0.42 | Pinned-corner tangency acceptance (`pinned=`) — the S95 *depenetration is not impassability* lesson applied to the ARRIVAL test; auto-walk unstick sidestep | Fired (`pinned=2`) and moved the failure deeper, to an oblique pinned corner 0.98 m short |
+| 13 | S100 r3 | **PRE-EXISTING — and the real unblocker** | **`InsetCorners` WAS INERT BY GEOMETRY.** Its single candidate direction was the corner bisector, which on a wall-pinned corner slides ALONG the wall while the clearance gradient runs along the wall's NORMAL — so `after > before` never passed. **`inset=0` on every funnel line ever logged**, in a function three sessions had assumed was working | Candidates = bisector **+ both leg perpendiculars**, keep the measured best; every candidate must pass `TerrainRefused` (never inset onto flood) | **PLAY-CONFIRMED (r4): `inset=5`, 20/20, the tester walked 315 → North Spur.** A function that logs a counter nobody reads can be dead for three sessions — the counter WAS printed, and `inset=0` on every line was read as "no corners needed insetting" |
+| 14 | S101 | **PRE-EXISTING** (the S98 diagnosis, never fixed — only its circular fix was reverted) | **A transition's goal is a SURFACE, and the route was aimed at a boundary VERTEX.** Mid-route replans from mid-bank aim at the corner of a 27 m seam that walking reaches LAST, so the final leg runs 20 m ALONG the surface and returns `Frontier` 16.4 m short — suppressed, spoken as "No path", beacon stops until re-press (`ending at poly 324 (169.28,9.00,60.48), 16.4m short`) | `path_surface_goal.{h,cpp}`: the surface poly set is OBSERVED during A\* (first pop of any member; no search decision changes) and consumed ONLY below the validated-Route return. The corridor is rebuilt to that member and ends at **the PORTAL it crosses onto it**, stepped 0.5 m in and clamped by `ClosestPointOnPoly`. Validated by the SAME `CheckLegs` at the same `kArrivalTol`, with `InsetCorners` — accepted only on `ok && !truncated`. `pass=surface-goal` | **BUILT + DEPLOYED, not yet play-confirmed.** Satisfies the S99 circularity rule BY CONSTRUCTION: a portal between two mesh triangles is not a point this route produced. Blast radius is structural — `seamPolys` is null for every non-transition request, and a route that validates returns before the block is reached |
+
+**The saga's true anatomy: (1) a class-aware terrain flag no instrument modelled, (2) funnel corners
+pinned on walls by an inset that could never fire, (3) a vertex goal on a surface.** Not gates, not
+volumes, not adjacency, not the string-pull — all four of which were the leading theory at some point
+and all four of which were wrong.
 
 **BE HONEST ABOUT THE SCOREBOARD. Two drafts of this table were not, each less wrong than the last.**
 Draft one listed six defects found and fixed and read like six wins. Draft two admitted most were

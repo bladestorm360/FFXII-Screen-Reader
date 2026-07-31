@@ -126,6 +126,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/path_validate.cpp
     src/navigation/path_march.cpp
     src/navigation/path_corridor.cpp
+    src/navigation/path_surface_goal.cpp
     src/navigation/path_repair.cpp
     src/navigation/nav_blocked.cpp
     src/navigation/path_planner.cpp

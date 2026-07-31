@@ -6,6 +6,7 @@
 #include "navigation/path_funnel.h"
 #include "navigation/path_validate.h"
 #include "navigation/path_corridor.h"
+#include "navigation/path_surface_goal.h"
 #include "navigation/path_repair.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/player_state.h"
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace PathSearch {
@@ -202,6 +204,18 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // by construction.
     const int goalGroup = (!goalOffMesh) ? NavMesh::MapJumpGroup(goal) : 0;
 
+    // ---- THE GOAL SURFACE, observed but never obeyed ------------------------------------------
+    // `seamPolys` is the map-jump surface the target belongs to, or null for everything that is not
+    // a walk-onto transition. The search's behaviour does NOT change: this set is only tested on a
+    // pop, and only to remember the FIRST member A* reaches. What that fact is for lives below the
+    // validated-Route return, where it can only turn a "No path" into a route. See
+    // path_surface_goal.h for why the endpoint is a portal and not a distance.
+    std::unordered_set<PolyId> surfaceSet;
+    if (seamPolys && !seamPolys->empty()) {
+        surfaceSet.reserve(seamPolys->size() * 2);
+        for (const PolyId sp : *seamPolys) surfaceSet.insert(sp);
+    }
+
     std::vector<BannedEdge> banned;
     PassResult best{};                 // the last pass that produced a corridor at all
     std::vector<FVec3> bestPoly;
@@ -219,6 +233,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // rebuilds a corridor to a DIFFERENT end poly than the search aimed at; `best` is likewise always
     // the last pass, so the two always describe the same search.
     PathCorridor::CameMap came;
+    // The first member of the goal's map-jump surface the LAST pass popped. Hoisted for the same
+    // reason as `came` and RESET WITH IT, so the touch and the parent links that reach it can never
+    // come from different passes -- a corridor rebuilt from one pass's links to another pass's poly
+    // is the defect path_corridor.h records BuildFrontier being written to fix.
+    PolyId surfaceTouch = kNoPoly;
 
     // ---- attempt loop: validate, then ban the offending portal and search AGAIN -------------------
     // THE STRUCTURAL FIX (Session 93). Validation used to sit AFTER the search, where its only options
@@ -289,6 +308,7 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         gPenT[start]  = 0.0f;
         gPenO[start]  = 0.0f;
         came[start] = Came{};
+        surfaceTouch = kNoPoly;              // same lifetime as `came` -- see its declaration
         open.push(Node{ Dist3(startC, goalC), start });
 
         PolyId reached = kNoPoly;
@@ -301,6 +321,13 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             ++stats.expands;
 
             if (IsGoal(p)) { reached = p; break; }
+            // THE FIRST POP OF ANY SURFACE MEMBER is where walking reaches the transition soonest,
+            // because A* pops in cost order. Recorded, never acted on here: the search goes on
+            // exactly as it would have, and a route that validates never consults this.
+            // `p != start` guards the degenerate case of already standing on the seam -- the
+            // planner's kAtExitDist branch normally answers that before a search is ever run, and a
+            // zero-length corridor is not something to hand the funnel.
+            if (surfaceTouch == kNoPoly && p != start && surfaceSet.count(p) != 0) surfaceTouch = p;
             NoteFallback(p);
             if (goalOffMesh && fallbackPoly != kNoPoly) break;
 
@@ -708,22 +735,53 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         return rawPoly.size() >= 2 ? Plan::Route : Plan::NoPath;
     }
 
-    // ---- SEAM PASS REMOVED (Session 100) -----------------------------------------------------------
+    // ---- THE GOAL IS A SURFACE (Session 101) -------------------------------------------------------
+    //
+    // History, because two different things happened here and only one of them was wrong.
     //
     // Session 98's failure-path re-run ("aim at the seam member nearest the banked proven prefix's
     // end") was CIRCULAR on the map it was built for: the prefix already ended on a seam poly, so the
     // aim point WAS the reference (`0.0m from ref` on all 18 re-runs in the S99 log) and the re-run
     // validated the prefix it was derived from -- 253 confident steps to a dead end, spoken as a
-    // route. That re-created the exact S73/S74 failure Plan::Frontier exists to prevent.
+    // route. That re-created the exact S73/S74 failure Plan::Frontier exists to prevent, and it was
+    // REVERTED in Session 100. `pass=seam` must never appear in a log again.
     //
-    // RULE (S99): a route may never be validated against a point derived from that same route's own
-    // progress. Any "retry nearer" scheme needs a reference the CURRENT attempt did not produce.
+    // RULE (S99), still binding: a route may never be validated against a point derived from that
+    // same route's own progress.
     //
-    // The S98 DIAGNOSIS still stands: a transition's goal is a SURFACE, a boundary vertex picked by
-    // straight-line distance is the wrong point, and kArrivalTol has been absorbing that on every map
-    // since S75. A future fix must put the seam poly set into the SEARCH as a goal set -- not a
-    // post-failure re-run -- which is why `seamPolys` stays plumbed but unread.
-    (void)seamPolys;
+    // What survived is the DIAGNOSIS: a transition fires on ANY part of its surface (S64), the exit's
+    // `pos` is one boundary VERTEX chosen by straight-line distance, and on a 27 m seam that is the
+    // corner walking reaches LAST -- so the final leg runs along the surface and a replan from the
+    // bank comes back "No path" 16.4 m short.
+    //
+    // This is that fix, and it satisfies the S99 rule BY CONSTRUCTION: the endpoint is the PORTAL the
+    // corridor crosses to step onto the surface -- mesh geometry, not a distance to anything this
+    // route produced -- and the proof is the same body walk every other route gets, at the same
+    // arrival tolerance, with the same corner handling. Reached only when nothing above was willing
+    // to be spoken as a Route, so a working route cannot change. See path_surface_goal.h.
+    if (surfaceTouch != kNoPoly) {
+        const int budget = probesLeft > kFrontierMinProbes ? probesLeft : kFrontierMinProbes;
+        PathSurfaceGoal::Result sr;
+        const bool got = PathSurfaceGoal::Route(came, surfaceTouch, from, budget, kArrivalTol, sr);
+        probesLeft -= sr.probes;
+        stats.rays += sr.probes;             // spent whether or not it was accepted
+        if (got) {
+            rawPoly        = sr.poly;
+            outPoly        = rawPoly;
+            stats.endPoly  = sr.endPoly;
+            stats.nearDist = 0.0f;
+            stats.shortfall = 0.0f;
+            stats.pass     = "surface-goal";
+            char m[256];
+            snprintf(m, sizeof(m),
+                     "mesh: start=%d goal=%d end=%d corners=%zu expands=%d touched=%d probes=%d "
+                     "attempts=%d banned=%d pass=surface-goal (ended ON the transition surface)",
+                     stats.startPoly, stats.goalPoly, stats.endPoly, rawPoly.size(), stats.expands,
+                     stats.touched, stats.rays, stats.attempts, stats.bannedEdges);
+            Log::Write("NAV-ROUTE", m);
+            return rawPoly.size() >= 2 ? Plan::Route : Plan::NoPath;
+        }
+    }
 
     // ---- FRONTIER: never dead-end ------------------------------------------------------------------
     // Nothing above produced a route we are willing to speak as one. The defence is not to withhold a
