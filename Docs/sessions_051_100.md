@@ -5612,3 +5612,30 @@ invisible without it.
 
 Expected on 315: `inset > 0` for the first time, the pinned corners move off their walls, attempt
 1 validates -> plan=Route up the bank. NOT play-confirmed.
+
+### Session 100 addendum 7 — **MAP 315 ROUTES. PLAY-CONFIRMED BY THE TESTER.**
+
+`inset=5`, attempt 1 validates 20/20, `plan=Route`, "North 6, Northwest 24, ... 357 steps" -- the
+first route ever produced on the Northern Sluiceway, and the tester walked it through. The chain
+that did it, in one line each: the terrain price sent A* up the south bank; the class-aware march
+kept chords off the flood; the measured-direction inset finally pulled the funnel's corners off
+their walls so validation could pass them.
+
+**Why the path was "occasionally lost along the way" (tester report; obvious in the log):** the
+route is long (357 steps) and climbs a switchback, so mid-route stray replans fire -- correct
+behaviour -- but a replan from MID-BANK positions (measured at (42.7,11.5,85.9)) produces a
+corridor that arrives at the exit seam from a direction where the funnel's FINAL leg runs ALONG
+the 27 m surface toward the straight-line-nearest vertex (153,62), stops 16.4 m short, breaches,
+and the whole request collapses to a suppressed frontier -> silent "No path" -> the beacon stops
+until the player's next press. From the map entrance the same target validates because THAT
+approach direction reaches the vertex inside kArrivalTol. **This is exactly the S98 diagnosis --
+a transition's goal is a SURFACE, and straight-line-nearest is not walking-nearest -- whose
+correct fix (the in-search seam GOAL SET: accept the first seam-member poly reached, end the
+route where the search first touches the surface) is designed, queued, and is now the LAST open
+defect on this map.** The frontier line names it verbatim: "ending at poly 324 (169.28,9.00,
+60.48), 16.4m short" -- ON the surface, 16.4 m along it from the vertex.
+
+Scoreboard correction to the whole saga: the map was never gated, never volume-blocked, never
+adjacency-broken -- it was (1) a class-aware terrain flag no instrument modelled, (2) funnel
+corners pinned on walls by an inset that could never fire, and (3) a vertex goal on a surface.
+Two of three are fixed and play-confirmed today; (3) has a designed fix pending.
