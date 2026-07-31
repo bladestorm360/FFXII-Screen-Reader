@@ -422,6 +422,68 @@ lists exits), the group-claiming path does not need it.
 appended only AFTER that pairing has run, with no arrival of their own (`posOk` false). Appending them
 first would shift every existing exit onto the wrong doorway on every map.
 
+### The engine has FIVE script containers; the exit reader reads ONE — Session 104
+
+`MapScript::ReadExitDests` parses the blob pointed at by `DAT_02098e10 + 0x00`. That is **script
+container 0 of five** (conf 0.99, every link read):
+
+| fact | evidence |
+|---|---|
+| 5 containers, stride `0x288`, base `DAT_02098e10` (`NavRva::HANDLE_TABLE_BASE`, RVA `0x1F78E10`) | `FUN_00266d10` memsets `0x288` bytes five times from that base |
+| each stamped with its own index at `+0x28` | same loop: `*(int *)(p + 0x18) = i` walking from `&DAT_02098e20` |
+| `FUN_00263ff0(i)` → the i-th container | `return &DAT_02098e10 + i * 0x51` (0x51 qwords = 0x288) |
+| **`FUN_0026c8c0(i, blob, entry)` INSTALLS a blob into container i** | writes `(&DAT_02098e10)[i * 0x51] = blob`, sets the current-context global `DAT_02099d70 = &DAT_02098e10 + i*0x51`, and special-cases `i == 0` with the full map reset |
+| every container's blob shares the header layout the exit reader parses | `FUN_00264b90(idx, c)` reads `container[c]->blob + 0x54` for ANY `c` |
+| a field object knows which container it came from | `obj+0x15` indexes the same array (`FUN_00263880`, `FUN_002675c0`, `FUN_00263050`) |
+| natives act on whichever container is CURRENT | `FUN_002640c0()` returns `DAT_02099d70`; `setmapidmj` (`FUN_0034e5c0`) reads its index from `+0x28` |
+
+`MapScript::LogContainerCensus` (`map_script_census.cpp`) walks all five and is **log-only** — no
+consumer, no exit, no behaviour change. Its closing `MAP-JUMP GROUPS ARMED ANYWHERE:` line is what the
+`NO CONTROLLER CLAIMS THIS GROUP` line must be read against.
+
+### An event script NEVER arms a walk-onto transition — 0 of 346, Session 104
+
+Swept every extracted event script (`plan_master/us/event/<area>/<unit>/<unit>.ebp`, 346 files) for the
+two calls that make a transition:
+
+- **`setmapjumpgroup` (`4f K K 5d 1e 01`): ZERO files.**
+- `mapjump` (`4f/4f/4f 5d 8d 00`): 14 files, **13 of them `evt_t00NN`** — the developers' test-warp
+  events. The one real script is `mrm_f0100.ebp` → `mapjump(dest=612, entrance=2, flags=0)`, a
+  cutscene story move, not a surface anyone walks onto.
+
+So an event-fired transfer is real, but it is never the *walk-onto* kind: the WHERE half of S64's
+binding does not exist in the event domain. **Do not sweep event scripts for a walk-onto binding
+again.** (Offline `.mpk` map-script analysis is separately dead: the name pool is packed on disk.)
+
+Map 313's blob does name the event domain — routine `SAKIYOMI_grm_a0380`, "pre-read event
+grm_a0380" — and `event/grm_a/grm_a0380/grm_a0380.ebp` is a real 7,104-byte file. It contains neither
+call. Event `.ebp` headers also differ from `ctrl.ebp` (routine table is not at `+0x18`).
+
+### The `+0x70` field-sign table has MORE THAN ONE transition class — Session 104, OPEN
+
+`entity_postscan.cpp` treats **group 0** as "doorway" and discards every other group. Measured on two
+maps in one log, group 0's live records land 1:1 on the map's ordinary walk-onto seam surfaces — and
+map 313 has a live **group-1** record the reader never looks at:
+
+```
+315:  6 records, ALL group 0.  Live (10.99,4.29,116.00) / (180.00,9.21,54.26) = its two seams.
+313:  g0[0] (174.00, 9.20,54.97) areaId=65535         -> the 315 exit's surface x[174..189] z[52..62]
+      g1[5] ( 30.16,13.00, 4.25) areaId=32 destIdx=2  -> the UNCLAIMED staircase seam,
+                                                         x[30.0..34.0] z[-5.8..4.2], centroid Y=17
+```
+
+That group-1 record is **the only field-sign record in any log this project has taken whose `areaId`
+is not `0xFFFF`** — the game's own resolver (`FUN_002648f0` → `FUN_00264920`: `+0x8c` record `destIdx`,
+word[5]) answered for it and declines for every other.
+
+**NOT YET A CONCLUSION — the pairing is positional, and positional pairing is what every refuted exit
+model did.** What is established is only that a live record exists in a group the reader drops, on the
+one surface that has no destination. Two things must come from the field before it is acted on: the
+census line above, and whether `areaId = 32` names anything — it has **no `planmapname` entry** (its
+offset word is 0 in `planmapname.bin`), so either word[5] is not a planmapname map id for this record
+class, or the destination has no area name. The sign diagnostic now prints the resolved name beside
+the id and flags such a record `NOT GROUP 0 BUT CARRIES A DESTINATION`.
+
 ### The seam cache — ONE gated writer, pure readers (corrected Session 85)
 
 The sweep is ~15k guarded reads and its answer cannot change while a map is loaded, so it is cached.

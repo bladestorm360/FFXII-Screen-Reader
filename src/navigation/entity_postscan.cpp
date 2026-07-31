@@ -3,6 +3,7 @@
 #include "navigation/entity_list_internal.h"
 #include "speech/phrasebook.h"
 #include "navigation/nav_rva.h"
+#include "navigation/map_rva.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/nav_reach.h"
 #include "navigation/nav_common.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 using namespace MemRead;
@@ -256,19 +258,41 @@ static void LogSignTableOnce(const std::vector<Entity>& out,
             for (size_t k = 0; k < out[best].label.size() && k < 63; ++k)
                 n8[k] = (out[best].label[k] < 128) ? static_cast<char>(out[best].label[k]) : '?';
 
+        // A record with a resolved destination is the game telling us where a transition goes. Until
+        // Session 104 every record ever logged read `areaId=65535` ("the resolver declined"), so the
+        // field was inert and nobody looked at it. Map 313 broke that: its ONE live GROUP-1 record
+        // sits at (30.16,13.00,4.25) -- inside the x-range of the unclaimed map-jump seam at
+        // (32.0,17.0,-0.8) and 0.05 m off its z-edge, i.e. at the foot of the staircase into the
+        // dungeon -- and it is the only record in any log with `areaId != 0xFFFF`. Group 0's records
+        // line up 1:1 with the ordinary walk-onto transitions on both 313 and 315, so a live record
+        // in a HIGHER group is a second CLASS of transition placard, and the doorway test discards
+        // it by group before anything looks at what it says.
+        //
+        // So print the resolved NAME beside the id: that is the whole question -- whether area 32 is
+        // a place the mod could name, or an id in some other space. Nothing here consumes it.
+        char dn8[64] = {};
+        if (s.areaId != NavRva::AREAID_NONE) {
+            const std::wstring dn = MapNames::ResolveFullAreaName(static_cast<int>(s.areaId));
+            for (size_t k = 0; k < dn.size() && k < 63; ++k)
+                dn8[k] = (dn[k] < 128) ? static_cast<char>(dn[k]) : '?';
+        }
+
         const char* verdict = "-";
-        if (s.group != kSignDoorwayGroup) verdict = "skipped: not group 0";
+        if (s.group != kSignDoorwayGroup)
+            verdict = (!unused && s.areaId != NavRva::AREAID_NONE)
+                          ? "NOT GROUP 0 BUT CARRIES A DESTINATION -- a second transition class"
+                          : "skipped: not group 0";
         else if (unused)                  verdict = "skipped: unused slot (0,0,0)";
         else if (best < 0)                verdict = "no candidate object";
         else if (bestD > kSignMatchDist)  verdict = "TOO FAR, unclaimed";
         else                              verdict = "CLAIMED -> doorway";
 
-        char l[288];
+        char l[384];
         snprintf(l, sizeof(l),
-                 "  sign g%d[%d] pos=(%.2f,%.2f,%.2f) areaId=%u destIdx=%u usable=%d shown=%d "
-                 "| nearest \"%s\" %.2fm | %s",
+                 "  sign g%d[%d] pos=(%.2f,%.2f,%.2f) areaId=%u dest=\"%s\" destIdx=%u usable=%d "
+                 "shown=%d | nearest \"%s\" %.2fm | %s",
                  s.group, s.index, s.pos.x, s.pos.y, s.pos.z,
-                 static_cast<unsigned>(s.areaId), static_cast<unsigned>(s.destIdx),
+                 static_cast<unsigned>(s.areaId), dn8, static_cast<unsigned>(s.destIdx),
                  s.usable ? 1 : 0, s.shown ? 1 : 0,
                  best >= 0 ? n8 : "", best >= 0 ? bestD : 0.0f, verdict);
         Log::Write("NAV-DIAG", l);

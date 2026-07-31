@@ -227,3 +227,117 @@ read. That is B2 (`notes\EBP2_DBG_format.md`, `notes\ebp_routines_evctrl.csv`,
 `notes\dbg_symbols_evctrl.csv`; the event VM has its own `mapjump`, `setmapjumpmode`,
 `setposparty_mapjump`, `lockmapjump`; confirm window `FUN_002a6190`). **Prove B1 dead with the line
 above before spending a session on B2.**
+
+## Session 104 — 2026-07-31 — [exits] NOT the event script: five script containers, and a placard in a group nobody reads
+
+KEYWORDS: B2 refuted event ebp setmapjumpgroup zero of 346 evt_t debug warp mrm_f0100 five script
+containers DAT_02098e10 stride 0x288 FUN_0026c8c0 FUN_00263ff0 FUN_00266d10 DAT_02099d70 container
+census map_script_census field-sign group 1 areaId 32 destIdx 2 SAKIYOMI grm_a0380 map 313 staircase
+
+The instruction was to stop proving B1 dead and go straight at B2 — *"find whatever event fires that
+yes/no prompt or at least the dungeon transition; we're looking for a very different script."*
+**B2 as it was written is refuted, from the game's own shipped data, and the search moved twice.**
+
+### 1. An event script NEVER arms a walk-onto transition — 0 of 346, measured
+
+`plan_master\us\event\<area>\<unit>\<unit>.ebp` is extracted: **346 event scripts**. Swept for the two
+calls the exit reader already knows (`4f K K 5d 1e 01` = `setmapjumpgroup(K)`, `4f/4f/4f 5d 8d 00` =
+`mapjump`):
+
+- **`setmapjumpgroup`: 0 files.** Not one event script in the game arms a map-jump group.
+- **`mapjump`: 14 files — and 13 of them are `evt_t00NN`**, the developers' test-warp events (long
+  runs of `mapjump(dest, entrance=0, flags=0x0/0x4)` over unrelated maps). The single real one is
+  **`mrm_f0100.ebp` → `mapjump(dest=612, entrance=2, flags=0)`**: a story move fired by a cutscene,
+  which is exactly what an event transfer looks like and is NOT a surface you walk onto.
+
+So "the surface is a trigger and the jump lives in the event blob" cannot be the mechanism: the two
+halves of a walk-onto transition (S64) are `setmapjumpgroup` + `mapjump`, and **the first half never
+appears in an event script.** Map 313's own routine list did point at the event domain —
+`SAKIYOMI_grm_a0380` is "pre-read event grm_a0380", and `grm_a\grm_a0380\grm_a0380.ebp` is a real
+7,104-byte file — but that file contains **neither** call. (Event `.ebp` headers also differ from
+`ctrl.ebp`: routine table not at `+0x18`. Not pursued; it does not matter now.)
+
+### 2. The mod has been reading ONE of FIVE script containers (conf 0.99)
+
+Not the answer to 313, but a real architectural hole and it is now instrumented. `MapScript::
+ReadExitDests` reads the pointer at `DAT_02098e10 + 0x00`. That is **script container 0**, and there
+are five:
+
+| fact | evidence |
+|---|---|
+| 5 containers, stride `0x288`, base `DAT_02098e10` (= `NavRva::HANDLE_TABLE_BASE`) | `FUN_00266d10` memsets `0x288` bytes five times from that base |
+| each stamped with its own index at `+0x28` | same loop: `*(int*)(p+0x18) = i` on `&DAT_02098e20` |
+| `FUN_00263ff0(i)` → the i-th container | `return &DAT_02098e10 + i*0x51` (0x51 qwords = 0x288) |
+| `FUN_0026c8c0(i, blob, entry)` INSTALLS a blob into container i | writes `(&DAT_02098e10)[i*0x51] = blob` and sets the current-context global `DAT_02099d70` |
+| every container's blob shares the header layout the exit reader parses | `FUN_00264b90(idx, c)` reads `container[c]->blob + 0x54` for ANY `c` |
+| field objects carry their container index | `obj+0x15` indexes the same array (`FUN_00263880`, `FUN_002675c0`, `FUN_00263050`) |
+
+Container 0 is special-cased throughout (`FUN_0026c8c0`'s `param_1 == 0` branch does the full map
+reset), and the object-enable sweeps walk containers `0..2`.
+
+### 3. What shipped — `map_script_census.{h,cpp}`, ALWAYS-PRINTING, LOG-ONLY
+
+The falsifier Session 103 demanded, widened from one container to five. Per container, on every map,
+whether or not anything is found:
+
+- blob pointer, `routineTable=+0x…`/`namePool=+0x…` (`(ABSENT)` when the slot is empty), routine count;
+- the four map tables' counts (`+0x54` / `+0x84` / `+0x70` / `+0x8c`), so a container holding
+  something that is not a map blob is visible as that rather than as a silent zero;
+- **routines scanned / spans read / spans empty / spans unreadable** — the line whose absence made
+  S102 untestable;
+- every `setmapjumpgroup(K)` and every `mapjump(dest, entrance, flags)` with the routine index and
+  name that holds it (ALL occurrences, not the first), destination resolved to its area name;
+- routine names for containers 1-4 (container 0 already dumps them);
+- and the closing line **`MAP-JUMP GROUPS ARMED ANYWHERE: …`**.
+
+Caps are counted and printed, never silent. Its latch only sticks once a container actually held a
+readable blob, so the one printing is not spent on the frames where the map is still streaming in.
+
+**It changes no behaviour.** It returns nothing, nothing consumes it, it adds no exit to any list, and
+`ReadExitDests` is untouched — deliberately not refactored to share code with a diagnostic (S101: make
+the new path unreachable from the working one rather than testing your way to confidence). The blob
+format constants come from the shared `map_script_internal.h`, which is what stops the two drifting.
+
+### 4. THE LEAD THAT REPLACED B2 — it is not a script at all
+
+The `+0x70` field-sign table, which the mod has printed on every map for sessions and reads only
+**group 0** of:
+
+```
+map 315:  6 records, ALL group 0.  Live: (10.99,4.29,116.00) and (180.00,9.21,54.26)
+          -- the map's two seam surfaces, x[11.0..16.3] z[116.0..123.5] and x[153..180] z[52..62].
+map 313:  7 records.
+   g0[0]  (174.00, 9.20,54.97)  areaId=65535            -> the 315 exit's surface x[174..189] z[52..62]
+   g1[5]  ( 30.16,13.00, 4.25)  areaId=32  destIdx=2    -> the UNCLAIMED staircase seam,
+                                                           x[30.0..34.0] z[-5.8..4.2], centroid Y=17
+```
+
+Group 0's live records land 1:1 on the ordinary walk-onto transitions on both maps. Map 313's ONE live
+**group-1** record sits inside the unclaimed seam's x-range, 0.05 m off its z-edge, 4 m below its
+centroid — the foot of the staircase — and it is **the only field-sign record in any log this project
+has ever taken whose `areaId` is not `0xFFFF`**. A live record in a higher group is therefore a second
+CLASS of transition placard, and the doorway test throws it away by group before anything reads what
+it says.
+
+**Open, and printed rather than guessed:** `areaId = 32` has **no** `planmapname` name — its offset word
+is 0 in `planmapname.bin`, so `ResolveFullAreaName(32)` cannot name it. Either word[5] of a `+0x8c`
+record is not a planmapname map id for this record class, or this destination genuinely has no area
+name. `entity_postscan.cpp`'s sign line now prints the RESOLVED NAME beside the id and flags the record
+`NOT GROUP 0 BUT CARRIES A DESTINATION -- a second transition class`, so one log answers it.
+
+### 5. State and what to read in the next log
+
+**BUILT AND DEPLOYED on `combat-system`. Log-only; there is nothing to play-confirm and nothing that
+can regress** — no exit, name, route or announcement can move, because no consumer exists.
+
+On map 313, in order:
+
+1. `MAP-JUMP GROUPS ARMED ANYWHERE:` — if it lists `2` only, **B1 is dead**: the group-1 staircase is
+   armed by nothing in any loaded script container, and the binding is the field-sign record.
+   If it lists `1` as well, name the container and routine that armed it and the reader follows it.
+2. `container N:` lines for `N != 0` — the first time this project has seen what else is loaded.
+   A container with `routineTable=+0x0 (ABSENT)` holds something that is not a map blob.
+3. `sign g1[5] … dest="…"` — whether area 32 names anything.
+
+Do NOT re-attempt: sweeping event `.ebp` files for a walk-onto binding (0/346, above), and offline
+`.mpk` map-script analysis (the name pool is packed on disk — already recorded in `GameArchitecture.md`).

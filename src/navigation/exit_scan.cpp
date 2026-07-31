@@ -4,6 +4,7 @@
 #include "navigation/nav_mesh.h"
 #include "navigation/map_names.h"
 #include "navigation/map_script.h"
+#include "navigation/map_script_census.h"
 #include "navigation/map_query.h"
 #include "navigation/map_seams.h"
 #include "navigation/nav_common.h"
@@ -146,6 +147,13 @@ void ScanExits(std::vector<Entity>& out) {
     // `mapjump` literal — readable on the first frame of any map, no cross-map data, no cache.
     std::vector<MapScript::ExitDest> dests;
     MapScript::ReadExitDests(dests, logDetail);
+
+    // ALWAYS-PRINTING, LOG-ONLY: the same scan across ALL FIVE script containers, not just the map
+    // blob `ReadExitDests` reads. Nothing below consumes it. Its own latch decides when to print,
+    // and its `MAP-JUMP GROUPS ARMED ANYWHERE` line is what the `NO CONTROLLER CLAIMS THIS GROUP`
+    // line further down has to be read against -- a swept group that appears in the seams and in no
+    // container is bound outside every loaded script, which is the answer S103 could not get.
+    MapScript::LogContainerCensus();
 
     // WHERE: the map's transition seams, swept once per map on a nav-safe game frame. Before that
     // frame arrives this is legitimately empty, and an empty answer means WE LIST NO EXITS -- never

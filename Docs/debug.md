@@ -7,6 +7,30 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### REFUTED — "the dungeon transition's destination lives in the EVENT script" (Session 104)
+
+KEYWORDS: B2 event ebp setmapjumpgroup zero of 346 evt_t warp mrm_f0100 grm_a0380 SAKIYOMI map 313
+staircase yes/no prompt event transfer walk-onto binding event blob
+
+The staircase on map 313 (North Spur Sluiceway) transfers the party into a dungeon behind a yes/no
+prompt, its walkmap surface is tagged map-jump group 1, and no `__MJ_CTRL` routine claims it. S102/S103
+reasoned that the confirm prompt meant the surface was a TRIGGER and the jump lived in the map's EVENT
+script — a blob the mod has never read. Map 313's own routine list even names it: `SAKIYOMI_grm_a0380`
+= "pre-read event grm_a0380", and `plan_master/us/event/grm_a/grm_a0380/grm_a0380.ebp` is a real file.
+
+**Measured against all 346 extracted event scripts, not argued:**
+
+- `setmapjumpgroup` (`4f K K 5d 1e 01`) appears in **ZERO** of them. An event script never arms a
+  map-jump group, so it can never supply the WHERE half of S64's binding.
+- `mapjump` appears in 14, and **13 are `evt_t00NN`** — the developers' test-warp events. The one real
+  script is `mrm_f0100.ebp` → `mapjump(dest=612, entrance=2, flags=0)`: a cutscene story move.
+- `grm_a0380.ebp` itself contains **neither** call.
+
+An event-fired transfer exists; it is just never the walk-onto kind. **Do not sweep event scripts for a
+walk-onto transition binding again.** Offline `.mpk` map-script analysis is separately dead (the name
+pool is packed on disk). What replaced this line of attack: the five-container census and the `+0x70`
+field-sign GROUP-1 record — see `GameArchitecture.md`, Session 104.
+
 ## THE NORTHERN SLUICEWAY (map 315) — SOLVED IN S100, ROUND 4; ONE RESIDUAL FIXED IN S101
 
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the

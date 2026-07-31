@@ -101,6 +101,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/map_exits.cpp
     src/navigation/map_script.cpp
     src/navigation/map_script_diag.cpp
+    src/navigation/map_script_census.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp
