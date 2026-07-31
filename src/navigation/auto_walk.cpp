@@ -51,9 +51,16 @@ constexpr float    kWalkDeltaCapM  = 5.0f;   // per-frame delta above this = tel
 // the walker can be up to 2 m off the VALIDATED line; a beeline from there clips geometry the
 // route avoids (the 311 wall spur: head-on cancel, motion=0.0m, stuck, then a pathological
 // replan). Off the line by more than kRejoinDist, aim at the line's nearest point plus a forward
-// lead -- converge onto the corridor, then follow it.
-constexpr float    kRejoinDist     = 1.0f;
+// lead -- converge onto the corridor, then follow it. 0.35 not 1.0: the second 311 pin happened
+// 0.75 m off-line, inside the old threshold, so the walker beelined into the spur's wrong side.
+constexpr float    kRejoinDist     = 0.35f;
 constexpr float    kRejoinLeadM    = 2.0f;
+// UNSTICK (S100 round 2): a walker wedged in a concave corner cancels head-on and cannot slide
+// free while the command keeps pointing at the wall -- the tester had to take over by hand. After
+// each stuck fire, steer 90 degrees off the desired heading for a beat (alternating sides per
+// consecutive fire), then resume. Bounded, logged, and only ever active right after the stuck
+// detector has already proven no progress.
+constexpr uint64_t kUnstickMs      = 700;
 
 // ---- cross-thread state (the ONLY state the input-poll thread touches) ---------------------------
 std::atomic<bool>     g_engaged{false};
@@ -76,6 +83,8 @@ int      g_stuckFires    = 0;
 uint64_t g_engageMs      = 0;
 float    g_bestDestDist  = -1.0f;
 uint64_t g_lastImproveMs = 0;
+uint64_t g_unstickUntilMs = 0;
+bool     g_unstickRight   = true;   // alternates each stuck fire so a wedge is probed both ways
 
 enum class Reason {
     PlayerInput, Combat, Arrived, RouteLost, MapChange,
@@ -130,6 +139,7 @@ void Engage(const AudioBeacon::LegSnapshot& snap, uint64_t now) {
     g_engageMs      = now;
     g_bestDestDist  = -1.0f;
     g_lastImproveMs = now;
+    g_unstickUntilMs = 0;
     g_cancelReq.store(false, std::memory_order_relaxed);
     g_keyMask.store(0, std::memory_order_relaxed);
     g_maskStampMs.store(now, std::memory_order_relaxed);
@@ -192,6 +202,9 @@ void OnDevicePoll(unsigned char* dik) {
 void OnStuckFired(const FVec3& pos, size_t legIndex, size_t legCount, float distToCorner) {
     if (!g_engaged.load(std::memory_order_relaxed)) return;
     ++g_stuckFires;
+    // Sidestep for a beat before resuming -- see kUnstickMs. Alternate sides per fire.
+    g_unstickUntilMs = GetTickCount64() + kUnstickMs;
+    g_unstickRight   = !g_unstickRight;
     // The one line four sessions of map 315 never had: EXACTLY where the engine refused a commanded
     // walk, on which poly, steering which way.
     const NavMesh::PolyId poly = NavMesh::FindPolyAt(pos.x, pos.y, pos.z);
@@ -314,7 +327,12 @@ void OnGameFrame() {
     }
     if (desired != g_octant) { g_octant = desired; g_octantSinceMs = now; }
 
-    g_keyMask.store(kOctMask[g_octant & 7], std::memory_order_relaxed);
+    // The unstick beat: sidestep 90 degrees off the held heading so a concave wedge releases,
+    // bypassing hysteresis (this IS the exception), then normal steering resumes.
+    int commanded = g_octant;
+    if (now < g_unstickUntilMs) commanded = (g_octant + (g_unstickRight ? 2 : 6)) & 7;
+
+    g_keyMask.store(kOctMask[commanded & 7], std::memory_order_relaxed);
     g_maskStampMs.store(now, std::memory_order_relaxed);
 }
 

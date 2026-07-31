@@ -5559,3 +5559,31 @@ Four changes, each with its own log signature, all on the priced-never-cut doctr
 route wins; the march would breach any residual chord into the flood. Expected on 311: the
 Lowtown replan can no longer corner on the No. 10 seam. **NOT play-confirmed. No gain is claimed
 until the tester reports one.**
+
+### Session 100 addendum 5 — the terrain price WORKED; the pinned-corner acceptance + unstick
+
+Tester round on the fix set: 315 STILL "No path", auto-walk no longer crosses transitions
+(foreign-seam price CONFIRMED by absence) but wedged against the 311 spur and needed manual help.
+The log shows how close 315 came:
+
+**The terrain price did its job.** The route now climbs the SOUTH BANK -- corners
+(18,110) -> (26,94) y=10 -> (46,82) y=13.2 -> east along the ridge -- `corridor pays terrain=0`,
+`terrain=`/`foreignSeam=` counters live. What killed it: the funnel PINS corner (18.0,110.0)
+against a wall (`corner: clear=0 margin=-0.27`), depenetration forbids the body standing closer
+than one radius to it, the walk stops **0.54 m short = radius 0.27 + overlap 0.27 EXACTLY** against
+a 0.42 m tolerance, every repair rung re-aims at the same unstandable corner, four attempts, "No
+path". The S95 corner lesson re-manifested in the ARRIVAL test.
+
+**Shipped:**
+1. **Pinned-corner acceptance** (`path_validate.cpp`, validation-only, `pinned=` counter): a
+   sweep-stop short of an INTERIOR corner whose own footprint test FAILS is accepted when
+   `shortfall <= radius + min(|margin|, radius) + 0.25` -- the measured tangency bound. A genuine
+   mid-leg wall stops far shorter and still breaches; the beacon advances legs at 2.0 m anyway.
+   Also counted as a tight corner (it is one).
+2. **Auto-walk unstick**: after each stuck fire, sidestep 90 degrees off the held heading for
+   700 ms (alternating sides per fire) so a concave wedge releases instead of requiring the
+   player to take over. `kRejoinDist` 1.0 -> 0.35 (the second 311 pin was 0.75 m off-line, inside
+   the old threshold, so the walker beelined into the spur's wrong side).
+
+**Expected on 315:** attempt 1 validates with `pinned=1..2`, plan=Route up the bank. NOT
+play-confirmed; no gain claimed until the tester reports one.

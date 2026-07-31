@@ -522,11 +522,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             // `march=/marchBlind=/marchGraze=` are the S100 adjacency march -- see LegReport.
             snprintf(vm, sizeof(vm),
                      "validate: attempt %d legs checked=%zu/%zu probes=%d worstFrac=%.2f tight=%d@%zu "
-                     "resweep=%d rescued=%d long=%d swept=%d blind=%d volHit=%d volWalked=%d "
+                     "resweep=%d rescued=%d long=%d pinned=%d swept=%d blind=%d volHit=%d volWalked=%d "
                      "march=%d marchBlind=%d marchGraze=%d %s%s%s",
                      attempt, rep.checked, rep.total, rep.probes, rep.worstFraction,
                      rep.tightCorners, rep.firstTight, rep.resweeps, rep.rescued, rep.longWalks,
-                     rep.swept, rep.blind, rep.volHit, rep.volWalked,
+                     rep.pinned, rep.swept, rep.blind, rep.volHit, rep.volWalked,
                      rep.march, rep.marchBlind, rep.marchGraze,
                      rep.ok ? "OK" : "BREACH", bad,
                      rep.blind     ? "  <== BLIND: no collision world for some legs; NOT verified"

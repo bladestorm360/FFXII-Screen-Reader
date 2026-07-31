@@ -65,6 +65,14 @@ struct LegReport {
     int    march      = 0;
     int    marchBlind = 0;
     int    marchGraze = 0;
+    // WALL-PINNED CORNERS ACCEPTED AT TANGENCY (Session 100, the 315 bank route). A taut funnel
+    // corner can sit ON the walkable boundary (it is a portal endpoint); the engine's depenetration
+    // then forbids the body from ever standing closer than one radius to it, so the walk stops
+    // `radius + overlap` short BY PHYSICS, not by obstruction -- measured exactly on 315:
+    // shortfall 0.54 = radius 0.27 + |margin| 0.27. Such a stop is accepted when the corner's own
+    // footprint test FAILS and the shortfall is within the tangency bound; the player only ever
+    // needs to come within the beacon's 2.0 m leg-advance radius of a corner anyway.
+    int    pinned = 0;
     // Filled on a march breach: the exact crossing the mover's own accept rule refuses. `badMarchNbr`
     // -1 means a true boundary (no neighbour); otherwise the neighbour whose effective flags refused
     // the party, printed so a script-flipped group is readable at a glance.

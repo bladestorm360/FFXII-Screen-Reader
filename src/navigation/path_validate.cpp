@@ -213,6 +213,36 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
             const bool walkable =
                 PathMarch::WalkLeg(a, b, legTol, probeCap - r.probes, r.probes, reachedM, stopAt, cause);
             if (!walkable) {
+                // A WALL-PINNED CORNER IS REACHED AT TANGENCY, NOT MISSED (Session 100; the S95
+                // corner lesson applied to the ARRIVAL test). When the corner the leg aims at
+                // fails the footprint test, the engine's depenetration forbids the body from
+                // standing closer than one radius to it -- the walk stopping `radius + overlap`
+                // short is the PHYSICS of arriving, not an obstruction. Measured on 315's bank
+                // route: shortfall 0.54 = 0.27 radius + 0.27 overlap, and every repair rung
+                // re-aimed at the same unstandable corner and re-failed. Accept the stop when the
+                // measured bound covers it; the beacon advances legs at 2.0 m regardless, and a
+                // genuine wall mid-leg still stops the body FAR shorter than this bound reaches.
+                if (cause == StopCause::Sweep && !last) {
+                    const float legLen2   = LenXZ(a, b);
+                    const float shortfall = legLen2 - reachedM;
+                    const NavMesh::PolyId cp = NavMesh::FindPolyAt(b.x, b.y, b.z);
+                    float cornerMargin = 0.0f;
+                    const bool cornerClear =
+                        (cp != NavMesh::kNoPoly) && NavFootprint::Clears(b, cp, &cornerMargin);
+                    if (cp != NavMesh::kNoPoly && !cornerClear) {
+                        float overlap = (cornerMargin < 0.0f) ? -cornerMargin : 0.0f;
+                        if (overlap > radius) overlap = radius;
+                        constexpr float kPinnedSlack = 0.25f;   // sweep cone + step rounding
+                        if (shortfall <= radius + overlap + kPinnedSlack) {
+                            ++r.pinned;
+                            if (i + 1 < path.size()) {
+                                ++r.tightCorners;               // it IS a tight corner; count it
+                                if (r.firstTight == 0) r.firstTight = i;
+                            }
+                            continue;                           // reached at tangency -- next leg
+                        }
+                    }
+                }
                 r.firstBad   = i;
                 r.badLength  = LenXZ(a, b);
                 r.badReached = reachedM;
