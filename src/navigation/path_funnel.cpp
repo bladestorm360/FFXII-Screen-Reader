@@ -281,28 +281,47 @@ int InsetCorners(std::vector<FVec3>& poly) {
         const PolyId home = NavMesh::FindPolyAt(cur.x, cur.y, cur.z);
         if (home == NavMesh::kNoPoly) continue;            // off-mesh corner: not ours to move
 
-        float before = 0.0f, after = 0.0f;
+        float before = 0.0f;
         NavFootprint::Clears(cur, home, &before);
-        const FVec3 cand{ cur.x + sx * r, cur.y, cur.z + sz * r };
-        const PolyId candPoly = NavMesh::FindPolyAt(cand.x, cand.y, cand.z);
-        if (candPoly == NavMesh::kNoPoly) continue;        // inset walked off the mesh -- worse, not better
-        // ...AND IT MUST BE GROUND THE PARTY CAN ACTUALLY STAND ON (Session 96).
-        //
-        // FindPolyAt answers "is there a floor polygon here", on RAW flags, and never asks whether the
-        // party may walk it -- so on its own it happily accepts WATER. This moved route corners onto
-        // surfaces the party cannot stand on, and the leg into such a corner then swept into the
-        // channel and stopped: the measured case was an 8.52 m leg the body got 4.57 m along, on a
-        // route with `inset=3`, while the route beside it with `inset=0` validated clean.
-        //
-        // The corner is a place the player is told to walk to. It has to be walkable.
-        if (!NavMesh::Walkable(candPoly)) continue;
-        NavFootprint::Clears(cand, candPoly, &after);
 
-        // ONLY IF IT HELPS. An unconditional nudge would be a heuristic; this is a measurement. A corner
-        // already clear of every boundary keeps its exact position, which matters because the spoken
-        // legs are computed from these points and moving them for nothing would change the words.
-        if (after > before) {
-            poly[i] = cand;
+        // THE DIRECTION IS MEASURED, NOT ASSUMED (Session 100). The bisector is the right move for
+        // a corner pinched between its own two legs -- and the WRONG one for the pinned class that
+        // killed 315's bank route: a portal-endpoint corner whose wall runs PARALLEL to one leg.
+        // There the clearance gradient is the wall's NORMAL; a bisector step slides along the wall,
+        // gains nothing, `after > before` never passes, and this mechanism sat inert (`inset=0` on
+        // every funnel line of the whole saga) while validation died 0.5-1.0 m short of corner
+        // after corner. So: try the bisector AND both perpendiculars of each leg, keep whichever
+        // the footprint MEASURES best. Still a measurement, never a nudge.
+        //
+        // Every candidate must land on a floor poly, be walkable, and -- since S100 -- be ground
+        // the LEADER'S class can stand on: FindPolyAt answers on RAW flags and happily accepts
+        // water (S96 measured that failure: `inset=3` moved corners into the channel and an
+        // 8.52 m leg died 4.57 m along), and TerrainRefused now closes the class half of it.
+        const float dirs[5][2] = {
+            { sx, sz },          // interior-angle bisector (the original candidate)
+            { -az, ax },         // perpendiculars of the incoming leg...
+            { az, -ax },
+            { -bz, bx },         // ...and of the outgoing leg
+            { bz, -bx },
+        };
+        float bestAfter = before;
+        FVec3 bestCand{};
+        bool  haveBest = false;
+        for (const auto& d : dirs) {
+            const FVec3 cand{ cur.x + d[0] * r, cur.y, cur.z + d[1] * r };
+            const PolyId candPoly = NavMesh::FindPolyAt(cand.x, cand.y, cand.z);
+            if (candPoly == NavMesh::kNoPoly) continue;    // walked off the mesh -- worse, not better
+            if (!NavMesh::Walkable(candPoly)) continue;
+            if (NavMesh::TerrainRefused(candPoly)) continue;
+            float after = 0.0f;
+            NavFootprint::Clears(cand, candPoly, &after);
+            // ONLY IF IT HELPS -- strictly better than the corner's own measured clearance. A corner
+            // already clear keeps its exact position: the spoken legs are computed from these points
+            // and moving them for nothing would change the words.
+            if (after > bestAfter) { bestAfter = after; bestCand = cand; haveBest = true; }
+        }
+        if (haveBest) {
+            poly[i] = bestCand;
             ++moved;
         }
     }

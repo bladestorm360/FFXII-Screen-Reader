@@ -165,10 +165,12 @@ void Disengage(Reason why) {
              ReasonName(why), legsDone, g_lastLegCount, g_walkedM, g_routeLenM, g_stuckFires,
              (now - g_engageMs) / 1000.0f, g_lastPos.x, g_lastPos.y, g_lastPos.z);
     Log::Write("AUTOWALK", m);
-    // Speech ONLY where nothing else announces the stop: the no-progress cap and a lost route.
-    // Player-initiated stops (own keys, toggle, menus) and self-announcing ones (the arrival cue,
-    // combat's own announcements, the map transition) stay silent -- silence is the mod's normal.
-    if (why == Reason::NoProgress || why == Reason::RouteLost)
+    // Speech on: the no-progress cap, a lost route, and -- tester request, this conversation --
+    // ARRIVAL. A route to a transition deliberately stops SHORT (the player steps through the
+    // seam themselves), and without the announcement the hand-off is invisible: "it's as if
+    // autowalk doesn't understand that it stopped short". Player-initiated stops (own keys,
+    // toggle, menus) and combat stay silent -- those announce themselves.
+    if (why == Reason::NoProgress || why == Reason::RouteLost || why == Reason::Arrived)
         Speech::Output(Phrase::Get(Phrase::Id::AutoWalkStopped));
 }
 

@@ -5587,3 +5587,28 @@ path". The S95 corner lesson re-manifested in the ARRIVAL test.
 
 **Expected on 315:** attempt 1 validates with `pinned=1..2`, plan=Route up the bank. NOT
 play-confirmed; no gain claimed until the tester reports one.
+
+### Session 100 addendum 6 — InsetCorners was inert by geometry; measured-direction inset
+
+Round 3 on 315: `pinned=2` (the acceptance fired, two corners passed) and validation died deeper
+up the bank on the same physics with worse geometry -- leg 3 stopped 0.98 m short of corner
+(42,90) (`clear=0 margin=-0.14`; an OBLIQUE wall projects the tangency stop further along the leg
+than the perpendicular bound), and an alternate attempt missed its bound by 7 cm.
+
+**The root mechanism was already in the tree and inert: `InsetCorners` tries exactly ONE
+direction -- the interior-angle bisector -- and moves only when measured clearance improves.**
+Right for a corner pinched between its own legs; wrong for the pinned class (portal-endpoint
+corner whose wall runs PARALLEL to a leg -- the clearance gradient is the wall NORMAL, the
+bisector slides along the wall, `after > before` never passes). `inset=0` on every funnel line of
+the entire saga is that condition never passing.
+
+**Shipped:** (1) InsetCorners now tries the bisector AND both perpendiculars of each leg, keeps
+the candidate the footprint MEASURES best (still a measurement, never a nudge); candidates must
+also pass `TerrainRefused` (never inset onto flooded ground -- closes the class half of the S96
+`inset=3` water-corner failure). (2) Pinned-acceptance slack 0.25 -> 0.35 (obliquity backstop).
+(3) Auto-walk announces "Auto-walk stopped." on ARRIVAL (tester request, this conversation): a
+route to a transition deliberately stops short for the manual step-through, and the hand-off was
+invisible without it.
+
+Expected on 315: `inset > 0` for the first time, the pinned corners move off their walls, attempt
+1 validates -> plan=Route up the bank. NOT play-confirmed.

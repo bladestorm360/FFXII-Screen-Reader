@@ -232,7 +232,11 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
                     if (cp != NavMesh::kNoPoly && !cornerClear) {
                         float overlap = (cornerMargin < 0.0f) ? -cornerMargin : 0.0f;
                         if (overlap > radius) overlap = radius;
-                        constexpr float kPinnedSlack = 0.25f;   // sweep cone + step rounding
+                        // 0.35 not 0.25: an OBLIQUE wall projects the tangency stop further along
+                        // the leg than the perpendicular bound (315 measured 0.86 against a 0.79
+                        // bound -- refused by 7 cm). The inset fix removes most pinning at the
+                        // geometry level; this is the backstop.
+                        constexpr float kPinnedSlack = 0.35f;   // sweep cone + step rounding + obliquity
                         if (shortfall <= radius + overlap + kPinnedSlack) {
                             ++r.pinned;
                             if (i + 1 < path.size()) {
