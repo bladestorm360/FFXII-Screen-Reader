@@ -37,7 +37,27 @@ namespace MapScript {
 // south doorway) at the far west — the reported "Southern Plaza loads the Bazaar". It survives only as
 // the fallback when the `+0x84` shape is unexpected, so an odd map degrades instead of emitting garbage.
 struct ExitDest {
-    int          ctrlIndex = -1;   // NNN parsed from the `__MJ_CTRL<NNN>` routine name
+    int          ctrlIndex = -1;   // NNN parsed from the `__MJ_CTRL<NNN>` routine name; -1 when the
+                                   // binding came from a routine that is not a controller
+    // WHICH ROUTINE BOUND THIS GROUP, and whether it was a door controller.
+    //
+    // A transition's two halves are `setmapjumpgroup(K)` -- the walkmap tag that says WHERE -- and
+    // the same routine's `mapjump` literal, which says WHERE TO (S64). That rule is about the CALLS
+    // a routine makes; the `__MJ_CTRL<NNN>` NAME was only ever how they were found. A map's stairway
+    // into a dungeon is bound by its EVENT routine instead (map 313's group 1: a real 2-poly surface
+    // at Y=17 that the seam sweep finds and no controller claimed, so it was dropped as "leads
+    // nowhere" and the staircase was invisible to a blind player).
+    //
+    // `routineIndex` is the identity for those -- stable within a map, and distinct from ctrlIndex,
+    // which is -1 for them. Callers keying a cursor on the exit must use whichever applies.
+    int          routineIndex  = -1;
+    bool         viaController = true;
+    std::string  routineName;      // sanitised, for the log only (most are Shift-JIS)
+    // The `mapjump` call's third literal. NOT a transition kind: the decompile chain
+    // FUN_00355350 -> FUN_00314440 -> FUN_003145e0 uses it as a PRESENTATION bitfield (bit 0 picks
+    // the no-fade path, bit 1 feeds FUN_002efa70). `0x0A` is the world-map teleport menu's
+    // combination and is the one value excluded. Recorded so the log can show what real maps use.
+    uint16_t     jumpFlags = 0;
     int          slot      = -1;   // authoring-order id (== ctrlIndex + 1; also the routine's 0x011E arg)
     FVec3        pos{};            // the doorway's ARRIVAL point: walkable, a couple of steps inside the map
     bool         posOk     = false;

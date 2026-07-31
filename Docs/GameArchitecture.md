@@ -353,9 +353,14 @@ calling `+0x54` vs `+0x84` "unresolved" — it is resolved, as stated here.
 ## MAP TRANSITIONS — SOLVED, Session 64: the walkmap tags its own map-jump surfaces
 
 > **A walkmap floor poly whose flags carry a non-zero value above the 3 type bits is a MAP-JUMP
-> SURFACE. `group = (flags >> 3) & 0x1F` is the map-jump GROUP id. The `__MJ_CTRL` routine that calls
+> SURFACE. `group = (flags >> 3) & 0x1F` is the map-jump GROUP id. The routine that calls
 > `setmapjumpgroup(K)` with `K == group` owns that surface, and that routine's own
-> `mapjump(dest, entrance, 0)` literal is the destination.**
+> `mapjump(dest, entrance, flags)` literal is the destination.**
+
+> **CORRECTED, Session 102 — the word `__MJ_CTRL` has been removed from the rule above, and the
+> `, 0)` has become `, flags)`.** The rule was always about the CALLS a routine makes; the name and
+> the zero were how the reader FOUND them, and both quietly hardened into the rule itself. See
+> "Not every transition is a door controller" below for the map that proves it.
 
 One routine supplies BOTH halves of a transition — the geometry you walk onto and where it goes — so
 they can no longer be mismatched. Local, first frame, no cross-map data, no cache, nothing learned by
@@ -377,6 +382,45 @@ which own other bit fields further up the same word.
 Observed low-byte values `08/10/18/20/28/30` = groups 1–6 at bit 3. Readers additionally reject any id
 no controller on the map claims, so the exact field width cannot matter. Implemented as
 `MapQuery::ReadMapJumpSurfaces` + `MapScript::ExitDest::group`, consumed by `exit_scan.cpp`.
+
+### Not every transition is a door controller — Session 102
+
+**Map 313 (North Spur Sluiceway) has a staircase into a dungeon that the mod could not see, and the
+mod's own log had been naming the defect all along:**
+
+```
+exits: controllers=1 surfaces=2 listed=1 | dropped: nogroup=0 notused=0 unreachable=0
+surface g1: 2 polys at (32.0,17.0,-0.8) box x[30.0..34.0] z[-5.8..4.2]
+                                       <== NO CONTROLLER CLAIMS THIS GROUP -- unreachable exit
+surface g2: 22 polys at (182.7,9.3,56.1)          (the 315 exit -- listed, routed, walked)
+```
+
+It is an **ordinary walk-onto map-jump surface** — `setmapidmj` group 1, 2 polys, at Y=17 while the
+rest of the map sits at Y≈9, i.e. up a flight of stairs — and the seam sweep **already found it**.
+What was missing was the destination, because `MapScript::ReadExitDests` rejected every routine whose
+NAME did not parse as `__MJ_CTRL<NNN>` **before its code was ever scanned**. Map 313's routine table
+holds 31 entries and exactly one controller (the way back to 315); the rest include a routine whose
+Shift-JIS name begins **イベント** ("event"). A transfer fired from an event — with a yes/no confirm
+prompt — is precisely the case the name filter excluded.
+
+**So the reader now scans EVERY routine's code span for the `setmapjumpgroup(K)` + `mapjump` pair.**
+Admission for a non-controller routine requires `setmapjumpgroup` — a routine that arms no group
+claims no surface, which keeps the Director's world-map teleport list and every story-move `mapjump`
+out. Both S64 drop rules are untouched: no swept surface ⇒ dropped, destination that does not resolve
+to a real area name ⇒ "NOT USED".
+
+**`mapjump`'s third literal is PRESENTATION, not kind** (conf 0.99, every link read):
+`mapjump` native = `FUN_00355350`, whose arg block is `[1]=dest [2]=entrance [3]=flags`, calling
+`FUN_00314440(dest, entrance, flags, 1)` → `FUN_003145e0`. In `FUN_00314440`, `flags & 1` selects the
+no-fade path and `(flags >> 1) & 1` is passed to `FUN_002efa70`. `0x0A` is the world-map teleport
+MENU's combination (S64) and is the only value excluded. The old `flags == 0` test therefore filtered
+on how a jump LOOKS, not on what it is; door controllers keep it (play-confirmed on every map that
+lists exits), the group-claiming path does not need it.
+
+**Structural note for anyone touching `ReadExitDests`:** `ResolveControllerArrivals` binds controller
+*i* to arrival *i* **by position**. Event-bound entries are therefore held in a second vector and
+appended only AFTER that pairing has run, with no arrival of their own (`posOk` false). Appending them
+first would shift every existing exit onto the wrong doorway on every map.
 
 ### The seam cache — ONE gated writer, pure readers (corrected Session 85)
 

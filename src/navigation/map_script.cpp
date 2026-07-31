@@ -249,12 +249,23 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
         Log::Write("NAV-DIAG", m);
     }
 
-    std::vector<uint8_t> code;   // per-controller code span, reused
+    std::vector<uint8_t> code;   // per-routine code span, reused
     std::vector<std::string> names(count);
+
+    // BINDINGS FOUND OUTSIDE A `__MJ_CTRL` ROUTINE, held apart until after the arrival pairing below.
+    //
+    // `ResolveControllerArrivals` binds controller i to arrival i BY POSITION -- it takes `out.size()`
+    // and hands back that many arrivals in order. Appending anything to `out` before it runs would
+    // shift every existing exit onto the wrong doorway, on every map, which is the one outcome this
+    // change must not have. So these ride in a second vector and are appended afterwards, with no
+    // arrival of their own (`posOk` stays false; nothing but the `'` diagnostic reads that field, and
+    // it already guards on it).
+    std::vector<ExitDest> eventBound;
+
     for (uint32_t i = 0; i < count; ++i) {
         names[i] = PoolName(blob, poolOff, U32(tbl, static_cast<size_t>(i) * ROUTINE_STRIDE + REC_NAME_OFF));
-        const int idx = ParseCtrlIndex(names[i]);
-        if (idx < 0) continue;
+        const int  idx     = ParseCtrlIndex(names[i]);
+        const bool isCtrl  = (idx >= 0);
 
         const uint32_t start = codeOffs[i];
         auto nx = std::upper_bound(sorted.begin(), sorted.end(), start);
@@ -262,7 +273,9 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
         if (end <= start) {
             // A routine whose span computes to nothing is DROPPED, i.e. one exit fewer on this map,
             // and until now it happened in silence. Every abandonment of a controller is now logged.
-            if (logDetail) {
+            // Controllers only: a non-controller routine with an empty span is the ordinary case on
+            // every map, and logging it would bury the line that matters.
+            if (logDetail && isCtrl) {
                 char m[176];
                 snprintf(m, sizeof(m),
                          "  __MJ_CTRL%03d SPAN EMPTY: codeOff=+0x%X next=+0x%X -- routine dropped, "
@@ -282,7 +295,7 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             code.assign(span, 0);
         }
         if (span < 0x40) {
-            if (logDetail) {
+            if (logDetail && isCtrl) {
                 char m[176];
                 snprintf(m, sizeof(m),
                          "  __MJ_CTRL%03d SPAN UNREADABLE: codeOff=+0x%X wanted=0x%zX shrank to 0x%zX "
@@ -308,22 +321,65 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             break;
         }
 
+        // A ROUTINE THAT DOES NOT CLAIM A GROUP CLAIMS NOTHING.
+        //
+        // This is the whole admission rule for the non-controller class, and it is the S64 binding
+        // rule unchanged: the routine calling `setmapjumpgroup(K)` OWNS group K, and its own
+        // `mapjump` literal is where K goes. Every map is full of `mapjump` calls that are not
+        // transitions -- the Director's world-map teleport list, story moves -- and none of them arm
+        // a group. Without this gate they would all become phantom exits with no surface to stand
+        // on, which is the failure S83/S84 spent two sessions deleting.
+        //
+        // Controllers keep their exact previous behaviour, group or no group: one with no group is
+        // still recorded and still dropped downstream as `nogroup`, and that count is printed.
+        if (!isCtrl && group <= 0) continue;
+
         // First field-door mapjump inside the routine is its destination. (Templates emit the same
         // call twice — e.g. a faded and an unfaded path — with identical operands, so first wins.)
         for (size_t o = 0; o + 12 <= b.size(); ++o) {
             if (b[o] != OP_PUSH_U16 || b[o + 3] != OP_PUSH_U16 || b[o + 6] != OP_PUSH_U16) continue;
             if (b[o + 9] != OP_CALLACTPOPA || b[o + 10] != NATIVE_MAPJUMP || b[o + 11] != 0) continue;
-            if (U16(b, o + 7) != MAPJUMP_FLAGS_FIELD_DOOR) continue;
+            const uint16_t jumpFlags = U16(b, o + 7);
+            // THE FLAGS LITERAL IS PRESENTATION, NOT KIND (FUN_00355350 -> FUN_00314440 ->
+            // FUN_003145e0: bit 0 picks the no-fade path, bit 1 feeds FUN_002efa70). Controllers
+            // keep the exact `== 0` test they have always had -- every listed exit on every map
+            // depends on it and it is play-confirmed. A routine that reached here WITHOUT being a
+            // controller has already proved itself by arming a group, so it is admitted on any
+            // value except the world-map teleport menu's, of which every map holds a long run.
+            if (isCtrl ? (jumpFlags != MAPJUMP_FLAGS_FIELD_DOOR)
+                       : (jumpFlags == MAPJUMP_FLAGS_WORLDMAP_MENU))
+                continue;
 
             ExitDest d;
-            d.ctrlIndex = idx;
-            d.slot      = idx + 1;          // authoring-order id; diagnostics only
+            d.ctrlIndex     = idx;                     // -1 for a non-controller
+            d.routineIndex  = static_cast<int>(i);
+            d.viaController = isCtrl;
+            d.routineName   = AsciiSafe(names[i]);
+            d.jumpFlags     = jumpFlags;
+            d.slot      = isCtrl ? (idx + 1) : -1;     // authoring-order id; diagnostics only
             d.group     = group;            // the walkmap tag that locates this transition
             d.destMapId = U16(b, o + 1);
             d.entrance  = U16(b, o + 4);    // arrival slot on the DESTINATION map, not a local index
             d.codeOff   = start;
             d.destName  = MapNames::ResolveFullAreaName(d.destMapId);
-            out.push_back(d);
+            if (isCtrl) out.push_back(d); else eventBound.push_back(d);
+
+            if (!isCtrl) {
+                // ALWAYS logged, not gated on logDetail. A transition the mod could not see is a
+                // progress block for a blind player, and this line is the record that one was found
+                // -- or, by its absence next to an unclaimed surface, that the binding is somewhere
+                // this reader still cannot look.
+                char n8[96] = {};
+                for (size_t k = 0; k < d.destName.size() && k < 95; ++k)
+                    n8[k] = (d.destName[k] < 128) ? static_cast<char>(d.destName[k]) : '?';
+                char m[320];
+                snprintf(m, sizeof(m),
+                         "  routine[%u] \"%s\" claims group %d -> dest=%u (\"%s\") entrance=%u "
+                         "flags=0x%X -- an EVENT-BOUND transition, not a __MJ_CTRL door",
+                         i, d.routineName.c_str(), group, d.destMapId, n8, d.entrance, jumpFlags);
+                Log::Write("NAV-DIAG", m);
+                break;
+            }
 
             // SPAN BLEED IS THE ONLY WAY THESE TWO LITERALS CAN BELONG TO DIFFERENT ROUTINES.
             //
@@ -375,6 +431,25 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
         char m[128];
         snprintf(m, sizeof(m), "door binding: %s (%zu controllers)",
                  bound ? "+0x84 edge-pairing" : "FALLBACK +0x54[N+1]", out.size());
+        Log::Write("NAV-DIAG", m);
+    }
+
+    // ONLY NOW do the event-bound transitions join the list -- after the pairing above has consumed
+    // exactly the controller count it has always seen, so not one existing exit moves.
+    //
+    // They get NO arrival: `pos`/`edge` stay unset and `posOk` false. That costs them nothing, because
+    // an exit's spoken position and its route target both come from the SEAM SURFACE (exit_scan.cpp),
+    // never from this arrival point -- the arrival is where you land coming the OTHER way, and the
+    // only reader of it is the `'` capture, which already guards on `posOk`.
+    if (!eventBound.empty()) {
+        std::sort(eventBound.begin(), eventBound.end(),
+                  [](const ExitDest& a, const ExitDest& c) { return a.routineIndex < c.routineIndex; });
+        out.insert(out.end(), eventBound.begin(), eventBound.end());
+        char m[176];
+        snprintf(m, sizeof(m),
+                 "  %zu event-bound transition(s) appended after %zu controller(s) -- these arm a "
+                 "map-jump group from a routine the __MJ_CTRL name filter used to skip",
+                 eventBound.size(), out.size() - eventBound.size());
         Log::Write("NAV-DIAG", m);
     }
 
