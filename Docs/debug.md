@@ -12,24 +12,61 @@ grep. Check this FIRST to avoid repeating failed approaches.
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
 player cannot cross".**
 
-**BE HONEST ABOUT THE SCOREBOARD, because the first draft of this table was not.** It listed six real
-defects found and fixed and read like six wins. **Most of them were defects THESE SESSIONS
-INTRODUCED while trying to fix this map** — see the ORIGIN column. Undoing your own damage is not
-progress; it is getting back to where you started. The tester's own summary, and it is the accurate
-one:
+**BE HONEST ABOUT THE SCOREBOARD. Two drafts of this table were not, each less wrong than the last.**
+Draft one listed six defects found and fixed and read like six wins. Draft two admitted most were
+self-inflicted but still claimed "two real gains". **Both were wrong, and the tester corrected each
+in turn. The final accounting is theirs, and it is net zero:**
 
-> *"technically to be fair, you fixed defects that you introduced trying to fix this map, so now our
-> pathfinder is restored to full functionality on the maps it already worked on, but still broken in
-> the case we need it to work in."*
+> *"when we started work 4 or 5 sessions ago, this is exactly where the pathfinder landed. We had 'no
+> path' on the northern sluiceway map after some of your changes, but before it worked exactly as it
+> does now. I'm being very serious, we have returned to exactly the functionality we had before. To
+> the letter. No change at all — except that the path invalidation on final leg and in tight corners
+> is still untested, so we may actually be in a worse state than when we started."*
 
-Net position against pre-S96, stated plainly:
+**THE MOD HAS NEVER ROUTED MAP 315.** Before this work it produced a confident route to a dead end;
+the middle sessions turned that into "No path"; it now produces a confident route to a dead end
+again. The arc is a circle.
 
-- **GAINED** (real, kept, helps maps that already worked): refusals are prices rather than cuts, the
-  portal ban is gone, and the repair ladder exists and can reach a final-leg breach.
-- **LOST, AND STILL LIVE IN THE COMMITTED BUILD**: the S98 seam pass (row 6). It is not reverted.
+**WHY THE "TWO REAL GAINS" CLAIM WAS WRONG, because the error is instructive.** Pricing-instead-of-
+cutting, the portal-ban removal and the repair ladder were all justified by reading the CODE and the
+log's own internal counters. **Not one of them has an observable behavioural improvement attributable
+to it in any play session.** `debug.md` already carries the rule that covers this — *an abstract
+"yes" is not play-confirmation* (S82) — and it was broken by the person writing this table.
+
+The ladder's "17 of 17 repairs", cited as the strongest evidence of gain, deserves particular
+suspicion: those repairs happen on maps that **routed fine before the ladder existed**. The breaches
+it repairs are therefore most likely breaches these same sessions' validation changes introduced.
+**Repairing a breach you created is not a gain.** (Stated as the likely reading, not as proven — but
+it is the reading that fits the evidence, and no session has produced evidence against it.)
+
+Net position against pre-S96, corrected:
+
+- **GAINED, observably, by the tester's account: NOTHING.**
 - **NET ZERO**: rows 1 and 4 — a terrain veto and a volume veto, both introduced here, both removed
   here.
+- **UNVERIFIED, and it can only make things worse**: rows 3 and 5 — see "the asymmetry" below.
+- **LOST, AND STILL LIVE IN THE COMMITTED BUILD**: the S98 seam pass (row 6). Not reverted.
 - **STILL BLOCKED**: the map this was all for.
+
+### The asymmetry — why "no change" may actually be "worse"
+
+Three code paths were added across these sessions that **have never once run successfully anywhere**:
+
+- **The S97 final-leg repair rungs.** In the S99 log they fired **54 times — 18 each of
+  `unpull-departure`, `retreat` and `full-corridor` — and failed 54 times.** Every one of those was
+  on map 315. **They have never fired on a map that works, and they have never succeeded on any map.**
+  Their entire observed record is 0 for 54.
+- **Tight-corner handling.** The S99 log detects corners on nearly every route (`tight=1@17`,
+  `@18`, `@19`, `@20`) and **nothing acts on any of them** — the footprint test was demoted from
+  fatal to counted, and no play session has verified that demotion is safe. It is a live change in
+  what the validator will let through, with no confirmation attached.
+- **The S98 seam pass**, which took 18 of the 22 routes in the S99 log (`pass=seam` 18,
+  `pass=mesh` 4) and is the regression described below.
+
+Every one of these can only fire where a route was previously about to fail. **So the risk is
+one-directional: they cannot improve a working route, and they can spoil a failing one into a
+confident wrong one — which is exactly what row 6 does.** That is why "no change at all" is the
+optimistic reading and "worse than when we started" is the realistic one.
 
 **⚠ THE BUILD AS COMMITTED (`b21d0e8`) IS NOT SAFE TO TRUST ON TRANSITIONS.** The S98 seam pass will
 turn "No path" into a confident full route ending wherever the previous attempt happened to stop, on
@@ -130,12 +167,13 @@ exactly this situation is untested code that has never run in a tester log.
 
 ### The shape to carry forward
 
-Four sessions, and **the honest tally is two real gains, two self-inflicted wounds healed, one
-self-inflicted wound still open, and the target map still blocked** — because **no session has
-measured the place the player actually stops.** Each fix was aimed at the last thing the log
-complained about, and the log complains about the END of the route while the player is stopped a
-quarter of the way along it. **Start from where the player's feet stop, not from where the route's
-arithmetic fails.**
+Four sessions, and **the honest tally is a circle**: the mod produced a confident route to a dead end
+before this work, produced "No path" in the middle of it, and produces a confident route to a dead
+end now. **No observable gain, three never-successful code paths added, and one live regression** —
+because **no session has measured the place the player actually stops.** Each fix was aimed at the
+last thing the log complained about, and the log complains about the END of the route while the
+player is stopped a quarter of the way along it. **Start from where the player's feet stop, not from
+where the route's arithmetic fails.**
 
 **And beware the shape that produced rows 1, 4 and 6.** All three were new instruments added on a
 plausible story about why the map was blocked, each shipped without a measurement at the place the

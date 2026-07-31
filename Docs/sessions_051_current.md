@@ -5317,19 +5317,32 @@ of them was what stops the player at x = 45.5**, because no session has ever mea
 one instrument that would have — a sub-step walk of the long legs — was proposed in S97 and deferred
 on an argument that this log refutes.
 
-**AND BE ACCURATE ABOUT WHOSE DEFECTS THOSE WERE.** The tester's correction, which is the right
-framing and was missing from the first draft of this entry:
+**AND BE ACCURATE ABOUT WHOSE DEFECTS THOSE WERE, AND ABOUT WHAT WAS GAINED — WHICH IS NOTHING.**
+This entry needed correcting twice. The tester's final accounting:
 
-> *"technically to be fair, you fixed defects that you introduced trying to fix this map, so now our
-> pathfinder is restored to full functionality on the maps it already worked on, but still broken in
-> the case we need it to work in."*
+> *"when we started work 4 or 5 sessions ago, this is exactly where the pathfinder landed. We had 'no
+> path' on the northern sluiceway map after some of your changes, but before it worked exactly as it
+> does now. I'm being very serious, we have returned to exactly the functionality we had before. To
+> the letter. No change at all — except that the path invalidation on final leg and in tight corners
+> is still untested, so we may actually be in a worse state than when we started."*
 
-The terrain veto (S96) and the volume veto (S97 removed, S96 added) were **both introduced by this
-line of work**. Removing them is not four wins; it is getting back to where we started. The genuine
-gains against pre-S96 are narrow and worth naming exactly: refusals are prices rather than cuts, the
-portal ban is gone, and the repair ladder exists and can reach a final-leg breach. **Set against
-that, the S98 seam pass is still in the tree and still turns "No path" into a confident dead-end
-route.** Full accounting in `debug.md`'s ORIGIN column.
+**The mod has never routed map 315.** Confident dead-end route → "No path" → confident dead-end
+route. A circle.
+
+The terrain veto (S96) and the volume veto (S96, removed S97) were **both introduced by this line of
+work**; removing them restored the starting point. And the "real gains" this entry claimed in its
+second draft — pricing instead of cutting, the ban removal, the repair ladder — were **inferred from
+code and internal counters, never demonstrated in play.** `debug.md` has carried the rule since S82:
+*an abstract "yes" is not play-confirmation.* The ladder's "17 of 17" is the weakest of them: those
+repairs land on maps that routed fine **before the ladder existed**, so the breaches it fixes are
+most likely ones these sessions' own validation changes created.
+
+**And the untested surface is one-directional.** In this very log the S97 final-leg rungs fired
+**54 times and failed 54 times** (18 each of `unpull-departure`, `retreat`, `full-corridor`), all on
+map 315 — they have never fired on a working map and have never succeeded anywhere. Tight corners
+are detected on nearly every route (`tight=1@17..20`) and nothing acts on them. The S98 seam pass
+took 18 of 22 routes. None of these can improve a working route; all of them can turn a failing route
+into a confidently wrong one. Full accounting in `debug.md`'s ORIGIN column and "the asymmetry".
 
 **And S98 made the diagnosis harder, not easier**, by turning the honest "No path" into a confident
 253-step route. A mod that says "No path" is annoying; a mod that walks a blind player into a dead
