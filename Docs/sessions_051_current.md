@@ -5317,6 +5317,20 @@ of them was what stops the player at x = 45.5**, because no session has ever mea
 one instrument that would have — a sub-step walk of the long legs — was proposed in S97 and deferred
 on an argument that this log refutes.
 
+**AND BE ACCURATE ABOUT WHOSE DEFECTS THOSE WERE.** The tester's correction, which is the right
+framing and was missing from the first draft of this entry:
+
+> *"technically to be fair, you fixed defects that you introduced trying to fix this map, so now our
+> pathfinder is restored to full functionality on the maps it already worked on, but still broken in
+> the case we need it to work in."*
+
+The terrain veto (S96) and the volume veto (S97 removed, S96 added) were **both introduced by this
+line of work**. Removing them is not four wins; it is getting back to where we started. The genuine
+gains against pre-S96 are narrow and worth naming exactly: refusals are prices rather than cuts, the
+portal ban is gone, and the repair ladder exists and can reach a final-leg breach. **Set against
+that, the S98 seam pass is still in the tree and still turns "No path" into a confident dead-end
+route.** Full accounting in `debug.md`'s ORIGIN column.
+
 **And S98 made the diagnosis harder, not easier**, by turning the honest "No path" into a confident
 253-step route. A mod that says "No path" is annoying; a mod that walks a blind player into a dead
 end and reports `nearDist=0.0m` is worse. That is the regression to undo first.

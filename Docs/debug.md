@@ -10,9 +10,31 @@ grep. Check this FIRST to avoid repeating failed approaches.
 ## THE NORTHERN SLUICEWAY (map 315) — FOUR SESSIONS, FOUR FIXES, STILL BLOCKED
 
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
-player cannot cross".** Every row below is a real defect that was found, fixed, and shipped. **None
-of them unblocked the map.** The point of the table is not the fixes; it is that four sessions in a
-row diagnosed a defect that was genuinely there and was not the one in the way.
+player cannot cross".**
+
+**BE HONEST ABOUT THE SCOREBOARD, because the first draft of this table was not.** It listed six real
+defects found and fixed and read like six wins. **Most of them were defects THESE SESSIONS
+INTRODUCED while trying to fix this map** — see the ORIGIN column. Undoing your own damage is not
+progress; it is getting back to where you started. The tester's own summary, and it is the accurate
+one:
+
+> *"technically to be fair, you fixed defects that you introduced trying to fix this map, so now our
+> pathfinder is restored to full functionality on the maps it already worked on, but still broken in
+> the case we need it to work in."*
+
+Net position against pre-S96, stated plainly:
+
+- **GAINED** (real, kept, helps maps that already worked): refusals are prices rather than cuts, the
+  portal ban is gone, and the repair ladder exists and can reach a final-leg breach.
+- **LOST, AND STILL LIVE IN THE COMMITTED BUILD**: the S98 seam pass (row 6). It is not reverted.
+- **NET ZERO**: rows 1 and 4 — a terrain veto and a volume veto, both introduced here, both removed
+  here.
+- **STILL BLOCKED**: the map this was all for.
+
+**⚠ THE BUILD AS COMMITTED (`b21d0e8`) IS NOT SAFE TO TRUST ON TRANSITIONS.** The S98 seam pass will
+turn "No path" into a confident full route ending wherever the previous attempt happened to stop, on
+ANY map where a transition's single-point goal fails — not just 315. For a blind player that is worse
+than the "No path" it replaced. **Revert or fix row 6 before anything else.**
 
 ### The complaint, unchanged since Session 96
 
@@ -22,14 +44,17 @@ and the mod routes them there confidently.
 
 ### What has been tried
 
-| # | Session | Diagnosis | What shipped | Outcome |
-|---|---|---|---|---|
-| 1 | S96 | Terrain type: `NavMesh::Walkable` should use the engine's per-class floor test (`FUN_00230a40`, bit 23 = water/lava/bog) | `Walkable` → `FloorWalkable(poly, class)` | **REVERTED SAME SESSION.** Refused 399 of 690 floor prims on map 311, took a working map from 3 exits to 2 and map 315 to zero. The party wades that water. The class came from the WRITER, not the CALL SITE |
-| 2 | S96 | Everything difficult is being CUT from the graph | Every refusal became a price in metres; the portal ban deleted | Correct and kept. Did not unblock 315 |
-| 3 | S96 | A breach is a verdict on the CHORD, not the corridor | Repair ladder: un-pull → retreat → full corridor | Correct and kept (17/17 on the maps that work). Did not unblock 315 |
-| 4 | S97 | The volume probe `FUN_00232490` was vetoing routes | Veto deleted; kept as `volHit`/`volWalked` counters | **Correct, and PROVEN by the next log**: `why=wall` 16 → 0, and `volHit=2 volWalked=2` — the probe flagged two legs and the body walked both. Did not unblock 315 |
-| 5 | S97 | The repair ladder could not touch a FINAL-leg breach | `UnpullDeparture`; `retreat` inserts on a final leg; `full-corridor` ungated | Rungs all ran on 315 and all still breached. Untested elsewhere — the case they were built for has not recurred |
-| 6 | S98 | The route target was a seam VERTEX picked by straight-line distance | `Entity::seamGroup` plumbed; `PathSearch::Run` takes the seam poly set; a failure-path re-run aims at the seam | **MADE THINGS WORSE — see below.** The diagnosis (a vertex is on the boundary; straight-line ≠ walking-nearest) still stands and is still real |
+`ORIGIN` is the column that matters: **PRE-EXISTING** = a defect that was there before this line of
+work started. **SELF-INFLICTED** = introduced by one of these sessions trying to fix this map.
+
+| # | Session | ORIGIN | Diagnosis | What shipped | Outcome |
+|---|---|---|---|---|---|
+| 1 | S96 | **SELF-INFLICTED** (introduced and reverted in S96) | Terrain type: `NavMesh::Walkable` should use the engine's per-class floor test (`FUN_00230a40`, bit 23 = water/lava/bog) | `Walkable` → `FloorWalkable(poly, class)` | **REVERTED SAME SESSION. NET ZERO.** Refused 399 of 690 floor prims on map 311, took a working map from 3 exits to 2 and map 315 to zero. The party wades that water. The class came from the WRITER, not the CALL SITE |
+| 2 | S96 | **PRE-EXISTING** (the portal ban dates from S93/S95) | Everything difficult is being CUT from the graph | Every refusal became a price in metres; the portal ban deleted | **A REAL GAIN, kept.** Did not unblock 315. Note it was partly forced by the damage row 1 had just done |
+| 3 | S96 | **PRE-EXISTING** (taut-chord breaches predate all of this) | A breach is a verdict on the CHORD, not the corridor | Repair ladder: un-pull → retreat → full corridor | **A REAL GAIN, kept** (17/17 on the maps that work). Did not unblock 315 |
+| 4 | S97 | **SELF-INFLICTED** (`WallAcross` was added in S96) | The volume probe `FUN_00232490` was vetoing routes | Veto deleted; kept as `volHit`/`volWalked` counters | **NET ZERO — it restored pre-S96 behaviour.** The removal is PROVEN correct by the next log (`why=wall` 16 → 0, `volHit=2 volWalked=2`), but the thing it removed was ours |
+| 5 | S97 | **SELF-INFLICTED** (a gap in S96's own ladder) | The repair ladder could not touch a FINAL-leg breach | `UnpullDeparture`; `retreat` inserts on a final leg; `full-corridor` ungated | Completes row 3, so the ladder-plus-reach is a gain overall. Rungs all ran on 315 and all still breached. **Untested elsewhere** — the case they were built for has not recurred |
+| 6 | S98 | **SELF-INFLICTED, AND STILL LIVE** | The route target was a seam VERTEX picked by straight-line distance | `Entity::seamGroup` plumbed; `PathSearch::Run` takes the seam poly set; a failure-path re-run aims at the seam | **MADE THINGS WORSE AND IS STILL IN THE TREE — see below.** The diagnosis (a vertex is on the boundary; straight-line ≠ walking-nearest) still stands and is still real; the fix does not |
 
 ### What Session 98 actually did, and why it is a regression
 
@@ -105,11 +130,18 @@ exactly this situation is untested code that has never run in a tester log.
 
 ### The shape to carry forward
 
-Four sessions, four real defects found and fixed, map still blocked — because **no session has
+Four sessions, and **the honest tally is two real gains, two self-inflicted wounds healed, one
+self-inflicted wound still open, and the target map still blocked** — because **no session has
 measured the place the player actually stops.** Each fix was aimed at the last thing the log
 complained about, and the log complains about the END of the route while the player is stopped a
 quarter of the way along it. **Start from where the player's feet stop, not from where the route's
 arithmetic fails.**
+
+**And beware the shape that produced rows 1, 4 and 6.** All three were new instruments added on a
+plausible story about why the map was blocked, each shipped without a measurement at the place the
+player actually stops, and each broke something that worked. Rows 2, 3 and 5 — the ones that were
+real gains — all came from reading the log's own numbers rather than from a new theory. **On this
+map, prefer counting what the instruments already print over adding another one.**
 
 ### Session 92 — ~~OPEN~~ **SOLVED in Session 93**: `PartyEngaged` only detected being ATTACKED
 
