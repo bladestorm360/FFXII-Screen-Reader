@@ -5497,3 +5497,37 @@ exists; price, never cut) + march/validation treat a leader-refused crossing as 
 back honestly through repair/re-cost/frontier — the S96-safe level). With the flood priced, the
 clean south-bank route wins immediately and 315 routes around — globally, no per-map anything.
 The S98 surface-vs-vertex goal fix stays on the list (EXIT-AIM still shows 17.4 m overshoot).
+
+### Session 100 addendum 3 — BOTH VERIFICATION GATES CLOSED: the leader's floor class is 0, and bit 23 refuses it
+
+**Gate 2 (play):** the tester pressed `'` standing IN the shallow water they wade (No. 10 Channel):
+poly 524, raw=eff=0x00300000 — **bit 23 CLEAR**. The S96 "party wades that water" refutation and
+the bit-23 predicate were never in conflict: the waded water is not bit-23 ground. (Also: dynprobe
+clean point #4, and the 321 census caught the override bank LIVE — raw=0x00202000 -> eff=0x07A02000,
+the flood state adding bit 23 at runtime, which effective-flag reads already track.)
+
+**Gate 1 (decompile, every link read directly, conf 0.99):**
+1. `FUN_002681d0` — leader class = **0** (followers 1, mounted 5), written to `walkObj+0x80` and
+   `holder+0x153`.
+2. `FUN_003db140(walkObj)` -> `FUN_00380c40(walkObj+0x30)` — **moveCtx = walkObj+0x30**, so
+   `moveCtx+0x50` (the class every floor-test caller reads) IS `walkObj+0x80`. `FUN_00380b80`
+   merely pre-inits it to 0xffff.
+3. `FUN_002327d0:267` -> `FUN_00230a40(poly, *(moveCtx+0x50))` = class 0 for the leader.
+4. `FUN_00230a40` (read whole): after the type test, **class 0 requires bit 23 CLEAR**; classes
+   1/2/3/5 test bits 25/26/27/24; class 4 tests nothing extra.
+5. Poly 224 (0x17A00000, bit 23 set) -> refused -> edge demoted to a wall -> the leader stops at
+   the poly 23|224 boundary = x≈45.5, where the crumb trail ends.
+
+**The "class 4" record reconciled, not overruled:** `FUN_0032bcc0` hard-codes 4 (0xffff unstick)
+into the SWEEP's query class — a different question, correctly recorded, wrongly generalized to
+walkability. ONE NAME, TWO FACTS: the SWEEP class is 4; the LEADER'S FLOOR class is 0.
+**Leader walkability = `(eff & 7) == 0 && bit23 clear`** — S75's "walkability is one line" holds
+only for the type half.
+
+**FIX SET, now >= 0.98 and ready to implement:** (a) A* prices `TerrainRefused` neighbours
+(kTerrainPenalty channel, PRICE never cut); (b) the march's accept rule gains the CLASS-AWARE
+floor test (call `FloorWalkable(poly, PartyMovementClass())` — the S100 march replicated the
+mover's rule with the sweep's class, the same conflation) so a refused crossing is a BREACH into
+the existing ladder/re-cost/frontier; (c) `NavMesh::Walkable` itself STAYS the permissive type
+test (S96 proved that lever over-refuses — it gates flood/goals/edges/GroundY). Then the S98
+surface-goal fix, then auto-walk steer-to-line + foreign-seam pricing.
