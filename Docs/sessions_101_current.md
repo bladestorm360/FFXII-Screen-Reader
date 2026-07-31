@@ -406,9 +406,50 @@ looked like the destination for exactly the surface that lacked one.
 `+0x8c` record is not this class's destination. It survived less than one map load — because the
 diagnostic printed the RESOLVED NAME rather than the id it was tempting to ship.
 
-### State
+### State — PLAY-CONFIRMED
 
-**BUILT AND DEPLOYED on `combat-system`.** NOT play-confirmed. On map 313 expect:
+The tester walked it, and the oracle confirmed the inferred binding without being asked to:
+
+```
+[NAV-DIAG] elimination binding: the ONE unclaimed surface (group 1) is routine[4] "?C?x???g????"'s
+           -> dest=567 ("Royal Palace: Cellar Stores") -- INFERRED, no script arms this group
+[NAV-DIAG] exits: controllers=2 surfaces=2 listed=2 | dropped: nogroup=0 notused=0 unreachable=0
+[NAV-TRACE] CROSSING ORACLE: left map 313 via seam g1 (3.5m from its near edge)
+            | mod claimed 567 ("Royal Palace: Cellar Stores")
+            | ACTUALLY ARRIVED 567 ("Royal Palace: Cellar Stores")  <== MATCH
+```
+
+`NO CONTROLLER CLAIMS THIS GROUP` is gone from 313. The next map on (567) also matched
+(`left 567 via g1 | claimed 568 "Royal Palace: Cellars" | ARRIVED 568`).
+
+### OPEN — the 2-against-2 case, and the trap not to fall into
+
+**Map 568 (Royal Palace: Cellars) has TWO event-bound transitions and TWO unclaimed surfaces**, so
+elimination correctly declines and the map lists nothing:
+
+```
+routine[12] "door1"        arms NO group -> dest=567 ("Royal Palace: Cellar Stores") entrance=2 flags=0x0
+routine[13] "door_gunbit"  arms NO group -> dest=569 ("Royal Palace: Lower Halls")   entrance=1 flags=0x0
+elimination binding: 2 unclaimed surface(s) vs 2 group-less destination(s) -- not 1:1, nothing bound
+surface g2: 4 polys at (43.7,-0.0,118.0)    <== NO CONTROLLER CLAIMS THIS GROUP
+surface g1: 10 polys at (12.6,-8.0,183.3)   <== NO CONTROLLER CLAIMS THIS GROUP
+```
+
+**No regression** — those two were dropped by the old `group <= 0` gate as well, so the map lists
+exactly what it always did. But two real doors are still invisible there, and the routine names
+(`door1`, `door_gunbit` — plain ASCII, plainly doors) say this class is COMMON, not exotic to 313.
+
+**DO NOT pair them by authoring order** (routine[12]→g1, routine[13]→g2). That is the S46/S58
+"`__MJ_CTRL<N>` owns slot `N+1`" rule wearing a new hat, and it was refuted twice. The discriminator
+has to come from the game's own data. Untried candidates, in order of promise: the `+0x70` doorway
+SCENE OBJECTS this map has two of (`Door` x2, one at `(17.42,-8.06,184.00)`, ~4.9 m from surface g1) —
+but that is proximity, which S92 caught wrong in both directions on one map; and the `entrance`
+literal read against the DESTINATION map's arrival table, which needs cross-map data the reader has
+always refused to depend on.
+
+### (superseded by the above) What to check on map 313
+
+On map 313 expect:
 `elimination binding: the ONE unclaimed surface (group 1) is routine[4] "…"'s -> dest=567 ("Royal
 Palace: Cellar Stores") -- INFERRED, no script arms this group`, then `exits: … listed=2`, the
 `NO CONTROLLER CLAIMS THIS GROUP` line **gone**, and a routable Exit at ~(32.0,17.0,-0.8).
