@@ -153,3 +153,77 @@ regression, not a win. Taking the staircase should then produce a `CROSSING ORAC
 If instead the log shows no routine claiming group 1, the binding is outside the map-control blob and
 the EVENT script domain is next (`notes\dbg_symbols_evctrl.csv` carries its own `mapjump`,
 `setmapjumpmode`, `setposparty_mapjump`, `lockmapjump`; confirm prompt is `FUN_002a6190`).
+
+## Session 103 — 2026-07-31 — [navigation] The remainder counts LEGS; and S102 found nothing on 313
+
+KEYWORDS: route wording then 14 more legs remainder step total dropped path_directions Describe
+ThenJoiner MoreSuffix StepsSuffix kMaxSpokenLegs S102 field result map 313 group 1 unclaimed
+orphaned diagnostic always-print summary event script blob evctrl
+
+### 1. The route sentence (tester request, both parts)
+
+`PathDirections::Describe` used to emit
+`"North 19, East 5, Southeast 22, South 28, Southeast 20, then 225 more. 319 steps"`. The `225` was
+the leftover STEP count and `319` the route total. **Every number before it is glued to a direction
+word**, so "225 more" reads as 225 more *legs* — which is exactly how the tester read it ("it sounds
+like it's counting legs of the route not steps"). The route was 19 legs / 239 m, 34% over the
+straight line; **the pathfinder was blameless and the sentence was the defect.**
+
+Two changes, both the tester's wording:
+
+- the remainder now counts **unspoken legs** (`legs.size() - kMaxSpokenLegs`), which is what its
+  position in the sentence already promised;
+- the **route total is dropped entirely** — per-leg counts are what you act on, and the total was the
+  least actionable number in the line while landing last, where it sticks.
+
+New form: `"North 19, East 5, Southeast 22, South 28, Southeast 20, then 14 more."`
+No new phrasebook string — `ThenJoiner` (`", then "`) and `MoreSuffix` (`" more"`) are reused
+verbatim. `StepsSuffix` is no longer used by this function but stays live in `nav_common`'s
+crow-flies phrases and in `NextInstruction`; do not delete it.
+
+Settled and **closed — do not re-propose**: `NavCommon::g_unitsPerStep = 0.75 m` stays. It measures
+*steps to walk*, which is what the tester wants; a recalibration would move every spoken distance in
+the mod on every map.
+
+### 2. Session 102 was tested and found NOTHING — and my instrumentation cannot say why
+
+Map 313, on the merged build (deployed DLL verified as the build containing the change):
+
+```
+exits: controllers=1 surfaces=2 listed=1 | dropped: nogroup=0 notused=0 unreachable=0
+surface g1: 2 polys at (32.0,17.0,-0.8)  <== NO CONTROLLER CLAIMS THIS GROUP -- unreachable exit
+```
+
+Byte-identical to before. **No `EVENT-BOUND transition` line on any map in the log.**
+
+**NO REGRESSION** (the gate that mattered): 315 still lists 2 of 2 surfaces, 313 still lists its 1
+real exit. No map gained or lost an exit.
+
+**THE CONCLUSION IS NOT AVAILABLE, ONLY THE ABSENCE OF ONE.** The scan's only output is a POSITIVE
+finding, and S102 made the span-empty / span-unreadable logs controller-only — so *"no routine
+outside `__MJ_CTRL` arms a group"* and *"the scan silently skipped those routines"* print the
+identical nothing. **This is the S77 orphaned-diagnostic failure, repeated by the person who wrote
+the S77 entry.** B1 is not refuted; it is untested.
+
+### 3. THE DIAGNOSTIC NEEDED (next session, first item)
+
+One **always-printing** line from `ReadExitDests`, log-only, no behaviour change:
+
+- routines scanned / spans read / spans skipped, with the skip reason counted;
+- **every `setmapjumpgroup(K)` value found and which routine armed it** — this is the line that says
+  whether anything claims group 1;
+- every `mapjump` found: routine name, dest, entrance, flags.
+
+One load of map 313 then settles B1 vs B2 outright. It is the falsifier S102 should have shipped
+with, and it costs ~15 lines.
+
+### 4. Where the evidence now points
+
+**The yes/no prompt was the tell and S102 under-weighted it.** A confirm prompt means walking onto
+the surface fires an EVENT and only "yes" performs the jump — so S64's one-routine-holds-both-halves
+model does not describe this shape at all. The 2-poly surface at (32.0,17.0,-0.8) is most likely a
+**trigger volume**, with the destination in the EVENT script: a different blob the mod has never
+read. That is B2 (`notes\EBP2_DBG_format.md`, `notes\ebp_routines_evctrl.csv`,
+`notes\dbg_symbols_evctrl.csv`; the event VM has its own `mapjump`, `setmapjumpmode`,
+`setposparty_mapjump`, `lockmapjump`; confirm window `FUN_002a6190`). **Prove B1 dead with the line
+above before spending a session on B2.**

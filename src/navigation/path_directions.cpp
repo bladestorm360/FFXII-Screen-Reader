@@ -323,29 +323,40 @@ std::wstring Describe(const std::vector<FVec3>& poly, float facingRad,
         }
     }
 
-    int total = 0;
-    for (const Leg& l : legs) total += l.steps;      // total == what we actually told them to walk
-
-    // Speak at most kMaxSpokenLegs, then summarise the remainder. A 19-leg readout (measured in
-    // play before the simplify pass) cannot be held in your head, so the tail is more useful as a
-    // distance: walk the legs you were given and press the route key again.
+    // Speak at most kMaxSpokenLegs, then say HOW MANY LEGS REMAIN. A 19-leg readout (measured in
+    // play before the simplify pass) cannot be held in your head, so the tail is a count of what is
+    // left to hear: walk the legs you were given and press the route key again.
+    //
+    // THE REMAINDER COUNTS LEGS, AND THE TOTAL IS GONE (Session 103, both from the tester).
+    //
+    // It used to read "North 19, East 5, Southeast 22, South 28, Southeast 20, then 225 more. 319
+    // steps" -- where 225 was the leftover STEP count and 319 the route total. **Every number before
+    // it in that sentence is glued to a direction word**, so "225 more" reads as 225 more of the
+    // things being listed, i.e. legs; the unit only arrives in the next clause, and 225 against 319
+    // does not reconcile unless you were summing the spoken legs as they went past. The tester read
+    // it as "the pathfinder found 300+ legs" -- a fair reading of the sentence, and the pathfinder
+    // was blameless (that route was 19 legs, 239 m, 34% over the straight line).
+    //
+    // So the remainder is now the count of UNSPOKEN LEGS, which is what the position in the sentence
+    // was already promising, and the route total is dropped entirely: per-leg counts are what you
+    // act on, and the total was the least actionable number in the line while landing last, where it
+    // sticks. No new phrasebook string -- `ThenJoiner` and `MoreSuffix` are reused verbatim.
+    //
+    // `StepsSuffix` is deliberately NOT used here any more. It is still live in nav_common's
+    // crow-flies phrases and in NextInstruction below; do not delete it.
     std::wstring out;
-    int spoken = 0;
     for (size_t i = 0; i < legs.size() && i < kMaxSpokenLegs; ++i) {
         if (!out.empty()) out += L", ";
         out += legs[i].word;
         out += L" ";
         out += std::to_wstring(legs[i].steps);
-        spoken += legs[i].steps;
     }
     if (legs.size() > kMaxSpokenLegs) {
         out += Phrase::Get(Phrase::Id::ThenJoiner);
-        out += std::to_wstring(total - spoken);
+        out += std::to_wstring(legs.size() - kMaxSpokenLegs);
         out += Phrase::Get(Phrase::Id::MoreSuffix);
     }
-    out += L". ";
-    out += std::to_wstring(total);
-    out += Phrase::Get(Phrase::Id::StepsSuffix);
+    out += L".";
     return out;
 }
 
