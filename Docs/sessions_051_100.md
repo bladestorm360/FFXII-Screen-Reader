@@ -5422,3 +5422,42 @@ behavioural change. The march's first run on 315 is the x≈45.5 measurement WHA
 prims rise in priority. Auto-walk on 315 produces the stop line either way.
 
 **BUILT AND DEPLOYED. NOT play-confirmed, NOT committed** (commit after the docs are complete).
+
+### Session 100 addendum — the same-day tester round, log analysed
+
+**"Autowalk works in most cases"** — the first play-confirmed navigation gain since S92. All five
+S100 instruments functioned in play: 4 clean auto-walk engagements (`reason=Arrived`, walked≈route),
+PlayerInput cancel worked, perf negligible (2.52 ms across 1,266 frames); the march produced its
+first real catch (`why=march | march: from=94:1 nbr=-1` — a true mesh boundary on map 311); the
+stuck detector fired under auto-walk with `motion=0.0m` (pure head-on cancel — exactly the case the
+old keyboard gate could see and the new evidence-OR still sees); `pass=seam` is absent everywhere.
+
+**Defect 1 — the transition loop (311 ↔ 321), reproduced twice, root-caused.** Arriving on Central
+Spur Stairs from No. 10 Channel puts the player at (49,127), beside the No. 10 seam ((47..49,132)).
+Routing to Lowtown North Sprawl: the player ends ~1.7 m off the route line (leg-advance radius 2.0),
+west from there is a wall spur (replan sweep: 0.35 m of 5.74; march: poly 94 edge 1, no neighbour),
+auto-walk pushes head-on → stuck → replan — ALL AS DESIGNED. But the replanned route's first corner
+is **(49,132) — ON the No. 10 Channel seam** (the corridor detours down into the channel via the
+seam's own doorstep), auto-walk walks it faithfully, the transition fires, map flips to 321. Twice,
+identically. **ROOT DEFECT: the pathfinder treats FOREIGN map-jump surfaces as ordinary floor.** A
+manual walker wobbles off lines and rarely triggers it; auto-walk walks the line exactly and
+triggers it reliably. Fix direction (next build): PRICE polys whose `MapJumpGroup` != 0 and != the
+request''s own `seamGroup` (a price, never a cut — doctrine) — the S98 `seamGroup` plumbing finally
+gets its reader. Secondary: the teardown stop reached auto-walk as `RouteLost` (spoke "Auto-walk
+stopped" during a map change — should be silent): the planner''s teardown `AudioBeacon::Stop()`
+should pass `StopReason::MapChange`.
+
+**Defect 2 — map 315, the x≈45.5 measurement is IN, and it is outcome C.**
+`march=22 marchBlind=0 marchGraze=14 long=5` and NO breach anywhere mid-route: the march finds NO
+adjacency break, and the engine''s own 0.5 m body-walk (leg 3 confirm-walked under `long=`)
+TRAVERSES x≈45.5. The ONLY breach is the FINAL leg — 5.59 m of 19.99 along the exit surface toward
+the vertex goal (153,62), goal corner ON the boundary (`margin=-0.27`), spoken honestly as "No path"
+(frontier suppressed, 16.4 m short). **That is the S98 DIAGNOSIS — a transition''s goal is a
+SURFACE, and the straight-line-nearest vertex is the corner the walking approach reaches LAST —
+still real, still unfixed** (only its circular fix was reverted). The remaining 315 suspects for the
+S99 physical stop at x=45.5 narrow to: dynamic obstacle (`dynprobe` never ran — tester did not press
+`''` this round), footprint-vs-boundary on a narrow strip (ellipse ~0.5 vs sweep 0.27), or an
+off-line stop against the channel side. **Fastest path to closure: implement the in-search seam
+GOAL SET (endpoint = wherever the search first reaches the surface — no self-derived reference, so
+the S99 circularity rule is satisfied by construction), get a full Route on 315, and let auto-walk
+walk it — its stuck line then gives the exact ground truth.**
