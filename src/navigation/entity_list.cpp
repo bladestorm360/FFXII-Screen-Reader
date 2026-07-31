@@ -416,9 +416,10 @@ void CmdRescan() {
 
 // Shared body for Next/Prev: refresh, build the nearest-first view, move focus.
 bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition,
-                      void** outSceneObj) {
+                      void** outSceneObj, int* outSeamGroup) {
     if (outIsTransition) *outIsTransition = false;
     if (outSceneObj) *outSceneObj = nullptr;
+    if (outSeamGroup) *outSeamGroup = 0;
     if (!PlayerState::IsFieldActive()) return false;
     std::lock_guard<std::mutex> lk(g_mutex);
     RescanLocked();
@@ -432,6 +433,7 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransiti
         outLabel = e.label;
         if (outIsTransition) *outIsTransition = e.isTransition;
         if (outSceneObj) *outSceneObj = e.sceneObj;
+        if (outSeamGroup) *outSeamGroup = e.seamGroup;
     };
     // Prefer the focused object (by stable identity: exact, else re-lock); else the nearest in
     // the active filter. Read-only query (drives `\`) — does not mutate the cursor.

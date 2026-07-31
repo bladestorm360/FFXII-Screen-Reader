@@ -89,8 +89,11 @@ void CmdLabelFromClipboard(); // F6 name the focused entity with whatever is on 
 // read the target's INTERACTION BAND (InteractTarget::ReadBandFor) -- routing has to know where you
 // could STAND to interact, not just where the object is. Null for entries with no scene object
 // (exits, combatant-pool entries).
+// `outSeamGroup` (optional) returns the target's map-jump group, 0 when it is not a walk-onto
+// surface. It is the handle the planner needs to ask for the WHOLE seam rather than the single
+// vertex `outPos` names -- see EntityScan::Entity::seamGroup for why a point is not enough.
 bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition = nullptr,
-                      void** outSceneObj = nullptr);
+                      void** outSceneObj = nullptr, int* outSeamGroup = nullptr);
 
 // Dump the raw handle table (tag NAV-DIAG): every named/interactive scene object per
 // container with its category byte, interaction flags, npcdic key, name, and world

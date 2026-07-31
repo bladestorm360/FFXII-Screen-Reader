@@ -7,6 +7,110 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+## THE NORTHERN SLUICEWAY (map 315) — FOUR SESSIONS, FOUR FIXES, STILL BLOCKED
+
+**READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
+player cannot cross".** Every row below is a real defect that was found, fixed, and shipped. **None
+of them unblocked the map.** The point of the table is not the fixes; it is that four sessions in a
+row diagnosed a defect that was genuinely there and was not the one in the way.
+
+### The complaint, unchanged since Session 96
+
+The party cannot be routed from the Northern Sluiceway to the North Spur Sluiceway. Guides describe
+the map as one straight branchless run. **As of Session 99 the player physically stops at x ≈ 45.5**
+and the mod routes them there confidently.
+
+### What has been tried
+
+| # | Session | Diagnosis | What shipped | Outcome |
+|---|---|---|---|---|
+| 1 | S96 | Terrain type: `NavMesh::Walkable` should use the engine's per-class floor test (`FUN_00230a40`, bit 23 = water/lava/bog) | `Walkable` → `FloorWalkable(poly, class)` | **REVERTED SAME SESSION.** Refused 399 of 690 floor prims on map 311, took a working map from 3 exits to 2 and map 315 to zero. The party wades that water. The class came from the WRITER, not the CALL SITE |
+| 2 | S96 | Everything difficult is being CUT from the graph | Every refusal became a price in metres; the portal ban deleted | Correct and kept. Did not unblock 315 |
+| 3 | S96 | A breach is a verdict on the CHORD, not the corridor | Repair ladder: un-pull → retreat → full corridor | Correct and kept (17/17 on the maps that work). Did not unblock 315 |
+| 4 | S97 | The volume probe `FUN_00232490` was vetoing routes | Veto deleted; kept as `volHit`/`volWalked` counters | **Correct, and PROVEN by the next log**: `why=wall` 16 → 0, and `volHit=2 volWalked=2` — the probe flagged two legs and the body walked both. Did not unblock 315 |
+| 5 | S97 | The repair ladder could not touch a FINAL-leg breach | `UnpullDeparture`; `retreat` inserts on a final leg; `full-corridor` ungated | Rungs all ran on 315 and all still breached. Untested elsewhere — the case they were built for has not recurred |
+| 6 | S98 | The route target was a seam VERTEX picked by straight-line distance | `Entity::seamGroup` plumbed; `PathSearch::Run` takes the seam poly set; a failure-path re-run aims at the seam | **MADE THINGS WORSE — see below.** The diagnosis (a vertex is on the boundary; straight-line ≠ walking-nearest) still stands and is still real |
+
+### What Session 98 actually did, and why it is a regression
+
+The seam pass aims at the seam member nearest a "proven reachable" reference, and that reference is
+**the banked proven prefix's end**. On map 315 the prefix already ends on a seam poly, so the aim
+point is the reference itself — the log says `0.0m from ref` on all eighteen re-runs.
+
+**The re-run therefore validates the prefix it was derived from.** `21/21 OK` is not evidence of
+reaching the exit; it is the previous attempt's own prefix with the failing leg removed. **Circular
+validation, and the number that proves it was printed on every line and not read.**
+
+Result: `plan=Route`, `nearDist=0.0m`, 253 confident steps to a place that is not the destination.
+**This re-creates the exact S73/S74 failure `Plan::Frontier` was invented to prevent** — a near-goal
+fallback spoken as a normal route. A suppressed frontier said "No path"; this says "arrived".
+
+> **RULE: a route may never be validated against a point derived from that same route's own
+> progress.** If the aim point comes from where the last attempt got to, the validation is a
+> tautology. Any "retry nearer" scheme needs a reference the CURRENT attempt did not produce.
+
+### What is actually stopping the player — and has never been measured
+
+The player walks east along the corridor and stops at **x ≈ 45.5**, which is **58% of the way along
+leg 3**: `(20.2,3.83,114.6) → (63.6,3.90,114.4)`, **43.4 m long**.
+
+That leg was certified by **a single one-shot body sweep**. The route's validate line reads
+`legs checked=22/22 resweep=2 rescued=1 worstFrac=0.19` — only two of twenty-two legs were ever
+re-asked in 0.5 m steps, and leg 3 was not one of them.
+
+**Nothing in four sessions has ever probed x ≈ 45.5.** The breach diagnostics (`vol@stop`,
+`corner:`, `stopPoly`) are only filled when a leg breaches, and leg 3 never breaches — which is
+precisely the problem.
+
+### STRUCK — "a long one-shot sweep's CLEAR verdict is trustworthy" (S97 plan, refuted S99)
+
+S97 considered capping the one-shot fast path by leg length and deliberately did not, reasoning:
+
+> *"S95 proved a long blocked verdict is meaningless; a long clear verdict rests on the segment
+> march, which is a real class-aware cast over the whole displacement. The residual risk is an
+> obstacle within 0.27 m of the line."*
+
+**Refuted in play.** The player is stuck 25 m into a 43.4 m leg that verdict passed. Whether the
+mechanism is the zero-width march threading past an obstacle the 0.27 m body hits, the ±30° probes
+diverging to ±10 m at that range, or both, **the one-shot fast path certifies ground the player
+cannot cross.** `MapQuery::BodySweep` remains the right instrument; 43 m remains the wrong argument
+— the same domain error S95 named, still live in the other direction.
+
+**The obvious next move, and the one thing never tried: sub-step the long legs and find out what is
+at x = 45.5.** Cost is bounded (~2 probes/m; a 211 m route ≈ 420 probes against a 1600 budget) and
+S97 measured that the longest leg ever re-asked was 12.14 m, so nothing has stressed it.
+
+### The stuck detector has never fired, and cannot for this player
+
+`NavBlocked` — the entire S96 "remember where the player physically failed" mechanism, priced at
+2000 in A\* — has **exactly one call site**: `audio_beacon.cpp:332`, gated on
+`InputTracker::MovementHeld()`. The mod's own INIT line documents that tracker as **"Keyboard only;
+gamepad does not update the timestamp."**
+
+In S99's log the player oscillated at x = 45.5 for ~40 s across eleven route requests with the beacon
+running, and **not one `stuck -> blocked spot recorded` line appears**. The mechanism built for
+exactly this situation is untested code that has never run in a tester log.
+
+### Ruled out, with evidence — do not re-open these
+
+- **Sluice-gate / flood state.** The tester walked 315 → North Spur by hand (S96). The map routes
+  with the gates as they stand.
+- **Water / bit-23 / terrain type.** Refuted in play; the party wades it.
+- **Collision volumes.** `volHit=2 volWalked=2` — the probe's hits are ground the body walks.
+  `FUN_00232490` tests one bit (31) with no class filter, and `FUN_00230c10` already iterates the
+  volume layers with the party's own class.
+- **The string-pull / taut chord.** The full corridor (75 points, the least-taut polyline that
+  exists) breaches identically.
+- **The repair ladder's reach.** All three rungs run on 315 and all three still breach.
+
+### The shape to carry forward
+
+Four sessions, four real defects found and fixed, map still blocked — because **no session has
+measured the place the player actually stops.** Each fix was aimed at the last thing the log
+complained about, and the log complains about the END of the route while the player is stopped a
+quarter of the way along it. **Start from where the player's feet stop, not from where the route's
+arithmetic fails.**
+
 ### Session 92 — ~~OPEN~~ **SOLVED in Session 93**: `PartyEngaged` only detected being ATTACKED
 
 **Fixed.** `PartyEngagement()` now returns the OR of both directions plus the target it resolved, so the
@@ -2869,7 +2973,11 @@ The struck `">= 0x5000 => empty/sentinel"` comment in `nav_rva.h` was wrong; tha
   blob, and stopped being correct in Session 64 when an exit became a walkmap FLOOR POLYGON. Without
   it, Upper Apartments announced "At the exit" for a seam 7.8 m overhead.
 - **Exits aim at the seam's nearest vertex**, with the seam's own vertex Y — not the centroid with a
-  `GroundAt` height.
+  `GroundAt` height. **AMENDED Session 98: that is the right PROXIMITY answer and the wrong ROUTE
+  answer.** It stands for `/`, the `[`/`]` listing distance and the "At the exit" check. It does NOT
+  stand as a route endpoint — a vertex is on the walkable boundary by construction, and
+  straight-line-nearest is not walking-nearest. Routing falls back to the seam's POLY SET on the
+  failure path; see the Session 98 entry below.
 - `NavReach` floods the mesh (memory reads, no raycasts) instead of the grid.
 
 ### OPEN — the only thing unmeasured
@@ -4025,6 +4133,145 @@ Repair is now a ladder, **entirely on the failure path**: taut chord -> un-pull 
 the corner it aimed at -> retreat to `badStopAt` (the engine's own resolved position, reachable
 whatever is in the way) -> full corridor with no string-pull. A route that validates on the chord runs
 none of it and cannot be changed by any of it.
+
+### SOLVED — the ladder's REACH was the bug: a final-leg breach had no rung at all (Session 97)
+
+**The ladder repaired 17 of 17 breaches it was offered. All 7 "No path" results on the maps that
+otherwise route were breaches all three rungs declined by their own guards** — `firstBad == total`
+every time. `Unpull`'s corner replacement is gated on `interior`; `retreat` on
+`bad + 1 < poly.size()`; `full-corridor` on `bad == 1`. Then the re-cost is correctly refused for a
+final-approach breach, and it falls to the frontier, which is suppressed. "No path" 5.2 m short of a
+10 m route.
+
+**It is the same bad corner either side of a leg, and the log proves it inside one map.** Map 321,
+target `(47.0,-0.00,150.75)`, corner `(47.0,-0.00,156.0)` in every route: from `(44.60,157.01)` the
+breach lands on leg 1, `Unpull` replaces that corner, route spoken; from `(43.17,159.42)` it lands on
+leg 2 with the same corner as the DEPARTURE point, no rung, "No path". Pass and fail on identical
+geometry, decided by which side of the corner the player stands. That alternation is what "the
+pathfinder abruptly cuts out as I walk" looks like from the outside.
+
+Why that corner is unwalkable, from the log alone: `reached=0.27m` of a 5.25 m leg with the engine
+resolving the body **+0.3 m in z, away from the target** — depenetration, nothing else. The corner is a
+raw portal endpoint (`EdgeClearSpan` hands back the full edge when all 7 samples pass, and `SampleT`
+never samples an endpoint), and `InsetCorners` is inert here because its improvement test is
+`NavFootprint::Clears`, a *mesh-boundary* test, on maps where the walls are volumes: it printed
+`margin=4.73m` and `margin=1e9` at points the body cannot move off. `inset=0` on all 16.
+
+Fixed by **reach, not by changing any rung**: new `PathFunnel::UnpullDeparture` replaces the corner the
+leg departs FROM with that portal's measured span midpoint; `retreat` serves a final leg by *inserting*
+`badStopAt` before the destination rather than replacing it (the destination never moves — S76);
+`full-corridor` loses its `bad == 1` gate, since the corridor is walkable by construction on every leg
+and it is the last rung anyway.
+
+**Strictly additive, deliberately.** A draft ordered the two un-pull rungs by `badReached`, which is a
+sound measurement — a body that never left its corner cannot be helped by waypoints further down the
+leg — and it would have re-ordered two routes that already repair (`reached=0.17m`, map 311). Dropped:
+after Session 96, a change that can alter a working route buys its way in with evidence or it stays
+out. Every currently-succeeding repair takes the identical path; the only new behaviour is on breaches
+that had no rung at all.
+
+### SOLVED — a transition's destination is a SURFACE, not a point (Session 98)
+
+Map 315's "No path" was never a pathfinding failure. **21 of the route's 22 legs validated**; the
+body ended ON the goal polygon (`stopPoly=324` == `goalPoly=324`); and all three repair rungs failed
+*including the full corridor*, 75 points, the least-taut polyline that exists. **When the corridor
+itself cannot reach a point, the point is the problem.**
+
+The exit's route target is written in exactly one place, `exit_scan.cpp:234` →
+`MapQuery::NearestPointOnSurface` — a brute-force scan for the **nearest tagged triangle VERTEX in
+XZ**. Two independent defects in that one line:
+
+1. **A vertex is not a place to stand.** Every triangle vertex lies ON the walkable boundary by
+   construction — which is exactly what the breach diagnostic reported: `margin=-0.27m`, i.e.
+   distance to a hard border of 0.00 m. `kArrivalTol = 3.0` has been absorbing this on every map
+   since S75.
+2. **Straight-line nearest is not WALKING nearest.** On map 315's 27 m, 16-poly seam the
+   crow-flies-nearest vertex was the corner the walkable approach reaches LAST.
+
+The consequence: **the route drove 20 m ALONG the exit surface.** Leg 22 ran from ~`(173, 61.7)` to
+`(153, 62)` and the surface is `x[153..180] z[52..62]`, so its START was already inside it. The
+discarded frontier ended at `(169.28, 60.48)` — also on the surface. *The route arrived; the
+arithmetic said it had not.*
+
+Systemic, not map-specific: map 321 has seven surface groups of 5-7 polys spanning 10-17 m, several
+with corner-to-centre distances of 9-11 m. A 4-poly seam hides it inside the 3 m tolerance.
+
+**S75 was right about the near edge and wrong about "near".** It moved exits off the centroid onto
+the nearest vertex because Southern Plaza's 28-poly seam "overstates the walk and the route drives
+through the transition instead of to it". Correct diagnosis, ruler-based implementation — and it
+reintroduced that exact failure from the opposite direction the moment a seam was approached from
+its far side. Reverting to the centroid re-breaks Southern Plaza; that is not the fix.
+
+**Fix**: only the search knows which part of a seam is reachable. `Entity::seamGroup` carries the
+map-jump group to the planner, which resolves it to `surf.polys` (stored since S64 under a comment
+that already said "a route to this exit is a search whose goal set is exactly these", read until now
+by one diagnostic). `PathSearch::Run` consults it **only** where it would otherwise fall through to
+the suppressed frontier, picks the member whose closest point to a PROVEN-REACHABLE position is
+nearest, and re-runs the ordinary search there. Depth-1 recursion; the re-run passes no seam set.
+
+**Strictly additive, checkably.** The block sits below the `return Plan::Route` a validated route
+takes, so a working route never reaches it. Every touched signature is additive with a default, so
+`p` and the `'` probe are untouched. `CachedMapJumpSurfaces` returning false = NOT SWEPT leaves the
+set empty and the behaviour identical.
+
+### Two guards that would have been wrong — keep them as written
+
+- **Never guard the seam re-run on `pick != goal`.** On map 315 the failed search's goal poly IS a
+  seam member (the huge triangle the body ended up standing on), so `pick == goal` — while its
+  centroid is 14 m from the vertex `to` names. **A poly is not a position.** The guard compares
+  POINTS.
+- **Never aim at the member's centroid.** A seam triangle here can be 16 m long, so its centre can
+  sit on the far side of whatever stopped the route. Aim at `ClosestPointOnPoly(member, ref)`, where
+  `ref` is a position the search proved it reached.
+
+### `e.pos` is a PROXIMITY measure, not a route target — do not "fix" it globally
+
+It is recomputed every scan from the live player position, so `/`, the `[`/`]` listing distance and
+the `kAtExitDist` "At the exit" check all read correctly as the player approaches from any side.
+Making it interior, or picking it by walking distance, would change the last leg of every transition
+route in the game including the ones that work. One value, two questions; only the route's question
+needed a different answer.
+
+### Do not reverse-derive a seam group from a poly's EFFECTIVE flags
+
+The seam sweep reads RAW flags (`map_seams.cpp:45-55`). Bits 3-6 are simultaneously the map-jump
+group AND the index into `FUN_00232020`'s group override bank (`C = ((flags >> 3) & 0xF) + 0x40`), so
+an override can rewrite the very bits the group would be read from. A group taken from `eff` is not
+the group the sweep bucketed by. Plumb it.
+
+### SOLVED — the Northern Sluiceway: a coarser duplicate of a test the sweep already does (Session 97)
+
+Map 315 could not be routed at all. **All 16 breaches on it were `why=wall`, and `MapQuery::BodySweep`
+objected to not one leg.** The only thing refusing every route was `PathValidate::WallAcross`: one
+`MapQuery::PointInVolume` sample at the midpoint of a leg, taken before the sweep ran, and decisive.
+
+Both halves of the premise it was built on (Session 96: "walls are volume primitives in CSR layers 1-2
+... so a wall standing inside a floor triangle passed every check the router had") are **STRUCK**:
+
+- **`FUN_00230c10` iterates layers 0, 1 AND 2** (mask 7, callback `FUN_0022de60`, same `0x4000`-tagged
+  `0x90`-stride array). The sweep has always collided with volumes. Conf 0.97.
+- **`FUN_00232490` tests exactly one bit (31) and has no class filter**, where the engine's own movement
+  collision reads `merged_flags & 7` against the mover's query class — and **class 4 is solid only when
+  `queryClass != 4`, which is precisely what the party's movers pass.** It also hard-excludes the
+  `>= 0x5000` range, i.e. doors and moving platforms. Full field map in `GameArchitecture.md`.
+
+A point test also cannot answer a question about a line, and the log caught it contradicting itself
+inside one request (`seq=41`): leg 2 of attempt 1, `(15.7,114.1)->(20.2,114.6)`, midpoint `(17.95,114.35)`
+-> WALL; leg 2 of attempt 2, `(16.5,115.0)->(63.6,114.4)`, passing within 0.6 m of that same point,
+midpoint `(40.05,114.7)` -> clear and swept at fraction 0.97. Which verdict a leg got depended on where
+its midpoint landed. *When a new instrument fires on everything, suspect the instrument first.*
+
+**Safe to delete where routing works, and that was measured before it was done**: `walls=0` on all 35
+validation runs on maps 311 and 321, `walls=1` on all 16 on map 315. The veto could not change any
+outcome on the maps that route. It is now `WallSuspect`, ground-pinned, counted as
+`volHit`/`volWalked` on the `validate:` line — the pair that either retires the volume theory or
+revives it with coordinates.
+
+**Two traps it left behind, both now closed.** The wall branch `return`ed *before* `Diagnose`, so every
+`why=wall` line printed `corner: poly=-1 clear=0 margin=0.00m vol@stop=0 vol@+0.3m=0` — defaults, not
+measurements: the same shape as the `tight=0@0` trap below, in a second branch of the same file. And a
+wall verdict set `badReached = 0`, which disabled the `retreat` rung, so it was **unrepairable by
+construction**.
 
 ### OPEN — the Northern Sluiceway is NOT a control-room / gate-state problem (Session 96)
 

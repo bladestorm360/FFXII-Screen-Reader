@@ -171,3 +171,28 @@ else is comfortably inside the limits.
 
 `path_validate.cpp` (307), `path_funnel.cpp` (283) and `nav_mesh.cpp` (478) are inside the limit;
 `nav_mesh.cpp` is close enough to watch.
+
+## Session 97 — file-size debt (PARTLY PAID)
+
+**`path_search.cpp` 749 → 805 → 711**, split on the seam Session 96 named. The repair ladder came out
+whole as `path_repair.{h,cpp}` (112 + 76 lines), and it is a real seam rather than a line-count trick:
+it answers one question — *"the chord across this corridor did not walk; is there another polyline
+through the SAME corridor that does?"* — and needs **none** of `Run`'s search state to answer it. No
+A*, no ban list, no centroid cache, no frontier. Its whole input is the corridor, the polyline drawn
+across it, and the validator's verdict on that polyline.
+
+The extraction is behaviour-identical by construction: same rungs in the same order, same guards, same
+`InsetCorners` call, same log format, and the probe budget still decrements between rungs (a local that
+the caller subtracts once). `Run` keeps only what is its business — spending the budget and adopting
+the result.
+
+| file | lines | limit | note |
+|---|---|---|---|
+| `src\navigation\path_search.cpp` | **711** (was 749) | 500 (hard), 400 (plan a split) | Still over, and **the next cut is not a good one yet.** What remains is essentially one 600-line function, and its bulk is the A* pass: the edge loop and its lambdas (`Centroid`, `IsGoal`, `NoteFallback`, the refusal tally) close over a dozen of `Run`'s locals, so lifting them means inventing a context struct — moving code for line count rather than on a seam. Two candidates, both weaker than the one just taken: the FRONTIER + outcome tail (~100 lines, but it needs `PassResult` promoted to a header for 13 inputs) and the refusal DIAGNOSTICS (`refNoPoly`/`refUnwalkable`/`refEdge`/`refBanned`/`refBlocked` + the `costed:` histogram) into a `Refusals` struct with `Note`/`Format` — cohesive and matching the project's `*_diag.cpp` pattern, but only ~45 lines. Take the diagnostics one next time this file is open for a reason. |
+| `src\navigation\path_validate.h` | **173** (was 144) | 150 (header rule) | Newly over. All of the growth is the struck-premise note on the volume test and the `volHit`/`volWalked` contract — load-bearing prose, not declarations. Pay it off with `path_search.cpp`: the S96 premise note belongs in `GameArchitecture.md` (where it now also lives) and can be cut to a pointer once the finding has been play-confirmed. |
+| `src\navigation\nav_rva.h` | **~555** | 150 (header rule) | Unchanged debt from Session 81. Still wants a split by subsystem. |
+
+`path_validate.cpp` (333), `path_funnel.cpp` (312), `path_funnel.h` (135) and `nav_mesh.cpp` (495) are
+inside their limits. **`nav_mesh.cpp` is now 5 lines from the hard cap** — it was "close enough to
+watch" last session and is now the next one to trip. Watch it, or take the `BodyFitsAt`/`EdgePassable`/
+`EdgeClearSpan` block out to `nav_edges.cpp` at the next opportunity that is not a regression fix.

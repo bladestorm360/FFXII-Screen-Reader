@@ -33,7 +33,10 @@ void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     bool isTransition = false;   // exits only: the target is the map-jump surface itself
     void* sceneObj = nullptr;    // needed for the interaction band -- see below
-    if (!EntityList::GetCurrentTarget(pos, label, &isTransition, &sceneObj)) {
+    // The map-jump group, 0 unless this is a walk-onto surface. `pos` is one vertex of that surface;
+    // this is the handle to the rest of it, for the failure path in PathSearch. See Entity::seamGroup.
+    int seamGroup = 0;
+    if (!EntityList::GetCurrentTarget(pos, label, &isTransition, &sceneObj, &seamGroup)) {
         // Front-of-pipeline diagnostic: distinguishes "\\ produced no target" from
         // "\\ never reached us" (no NAV-ROUTE line at all) when tracing the route failure.
         Log::Write("NAV-ROUTE", "'\\' (route) pressed: GetCurrentTarget returned no target -> \"No target\"");
@@ -79,8 +82,8 @@ void RouteToCurrent() {
     // interactable from whatever angle the route happens to arrive at.
     const float reachRadius = reach.valid ? reach.radiusMin : 0.0f;
     // seedBeacon=true: `\` is the "lead me there" key, so its route arms the audio beacon.
-    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true);
-    else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true);
+    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true, seamGroup);
+    else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true, seamGroup);
 }
 
 // `p` — request a turn-by-turn route to the game's LOCKED/SELECTED battle target (bypasses the

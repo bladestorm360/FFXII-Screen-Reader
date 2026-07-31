@@ -69,6 +69,23 @@ struct Entity {
     // (It replaces a `crossRad` heading that was spoken as "walk east" in S59 and refuted in play. There
     // is no crossing direction to derive any more: the route ends ON the trigger.)
     bool         isTransition = false;
+    // THE SEAM'S MAP-JUMP GROUP, or 0 when this is not a walk-onto surface (Session 98).
+    //
+    // `pos` above is ONE POINT on a surface that can be 27 m across, chosen as the nearest tagged
+    // VERTEX to the player. That is the right answer for "how far away is this exit" and the wrong
+    // one for "where should the route end": straight-line-nearest is not walking-nearest, and on map
+    // 315 the nearest vertex was the corner of the strip that the walkable approach reaches last.
+    // The route validated 21 of 22 legs, drove 20 m ALONG the exit surface to get to that corner,
+    // and was reported as "No path" 16.4 m short.
+    //
+    // The group is the handle back to the whole surface: `MapQuery::CachedMapJumpSurfaces` turns it
+    // into the poly set that IS the destination. Carried here rather than re-derived from the goal
+    // poly's flags, because bits 3-6 are both the map-jump group and the index into `FUN_00232020`'s
+    // group override bank -- an override can rewrite the very bits the group would be read from, so
+    // a group taken from EFFECTIVE flags is not the group the seam sweep bucketed by.
+    //
+    // 0 for everything that is not a transition, which keeps every other route on its old path.
+    int          seamGroup = 0;
     // The actor pool ANSWERED for this object this scan, i.e. BuildLocked found its scene object in
     // s_poolObjs and called FactionOf on the matching actor. Distinguishes "the pool said not a foe"
     // from "the pool said nothing", which the category alone cannot express.

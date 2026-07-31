@@ -181,6 +181,35 @@ int Unpull(const std::vector<FVec3>& poly, const std::vector<int>& idx,
     return added;
 }
 
+int UnpullDeparture(const std::vector<FVec3>& poly, const std::vector<int>& idx,
+                    const std::vector<Portal>& portals, size_t badLeg, std::vector<FVec3>& out) {
+    out.clear();
+    // Same integrity bar as Unpull: the mapping has to describe THIS polyline or we would be splicing
+    // against indices that belong to another one.
+    if (badLeg == 0 || badLeg >= poly.size() || idx.size() != poly.size()) return 0;
+
+    // The departure corner must be a real corner. `badLeg - 1 == 0` is the player's own position, which
+    // is not on any portal (`idx[0] == -1`) and is not ours to move -- the route has to start where the
+    // player is standing.
+    const size_t at = badLeg - 1;
+    if (at == 0) return 0;
+
+    const int pi = idx[at];
+    if (pi < 0 || pi >= static_cast<int>(portals.size())) return 0;
+
+    const FVec3 m = SpanMid(portals[pi]);
+    // A replacement that lands on either neighbour would collapse a leg to zero length, which
+    // `DropPassedWaypoints` and the direction pass both have guards for and neither should have to use.
+    if (SameXZ(m, poly[at - 1]) || SameXZ(m, poly[at + 1])) return 0;
+    // And if it IS where the corner already is, this rung has nothing to offer -- say so rather than
+    // spending a full re-validation on an identical polyline.
+    if (SameXZ(m, poly[at])) return 0;
+
+    out = poly;
+    out[at] = m;
+    return 1;
+}
+
 int FullCorridor(const FVec3& from, const FVec3& to, const std::vector<Portal>& portals,
                  std::vector<FVec3>& out) {
     out.clear();

@@ -221,6 +221,9 @@ void ScanExits(std::vector<Entity>& out) {
         e.nameIdx   = static_cast<int16_t>(-(1000 + d.ctrlIndex));   // stable cursor id, one per controller
         e.category  = Category::Exit;
         e.isTransition = true;                                       // the target IS the trigger surface
+        // The handle back to the WHOLE surface, for a route that needs to end on any part of it
+        // rather than on the one vertex `pos` names below. See Entity::seamGroup.
+        e.seamGroup = d.group;
         e.label     = std::wstring(CategoryWord(Category::Exit)) + L", " + d.destName;
 
         // AIM AT THE NEAR EDGE, not the middle of the seam. A seam is a strip -- Southern Plaza's is

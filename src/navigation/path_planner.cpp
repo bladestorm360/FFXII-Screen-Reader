@@ -51,6 +51,9 @@ int                   g_framesLeft = 0;     // retry countdown while not yet saf
 uint64_t              g_notSafeLoggedSeq = 0; // game-thread only: dedupe the per-frame not-safe log to once/request
 // Arm the audio beacon when this route lands. Set by `\`, clear for `p` -- see the header.
 bool                  g_seedBeacon = false;
+// The target's map-jump group, 0 when it is not a walk-onto surface. Read ONLY on the failure path,
+// to turn `target` -- one vertex of a seam -- into the whole seam. See PathSearch::Run's seam pass.
+int                   g_seamGroup = 0;
 // Suppress ALL speech for this request, whatever the outcome. Only RequestReplan sets it: the
 // beacon re-aiming itself is not something the player asked to hear, and "No path" spoken out of
 // nowhere because they walked round a corner would be worse than the stale beacon it replaced.
@@ -71,6 +74,7 @@ std::wstring          g_objLabel;
 bool                  g_objIsTransition = false;
 float                 g_objBandLo = 1.0f, g_objBandHi = -1.0f;
 float                 g_objReach = 0.0f;
+int                   g_objSeamGroup = 0;
 bool                  g_haveObjective = false;
 
 // ~1.5 s: keep retrying a request while the map is still fading in, then give up out loud.
@@ -135,6 +139,7 @@ bool RequestReplan() {
     g_bandLo       = g_objBandLo;
     g_bandHi       = g_objBandHi;
     g_reach        = g_objReach;
+    g_seamGroup    = g_objSeamGroup;
     g_silent       = true;
     g_seedBeacon   = true;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
@@ -151,7 +156,7 @@ bool RequestReplan() {
 }
 
 void Request(const FVec3& target, const std::wstring& label, bool isTransition,
-             float bandLo, float bandHi, float reachRadius, bool seedBeacon) {
+             float bandLo, float bandHi, float reachRadius, bool seedBeacon, int seamGroup) {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_target       = target;
     g_label        = label;
@@ -160,6 +165,7 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
     g_bandHi       = bandHi;
     g_reach        = reachRadius;
     g_seedBeacon   = seedBeacon;
+    g_seamGroup    = seamGroup;
     g_silent       = false;
     // ONLY A REQUEST THAT ARMS THE BEACON BECOMES ITS OBJECTIVE. `p` passes seedBeacon=false because it
     // has no business steering the beacon; that same flag is what stops it redirecting one that is
@@ -171,6 +177,7 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
         g_objBandLo       = bandLo;
         g_objBandHi       = bandHi;
         g_objReach        = reachRadius;
+        g_objSeamGroup    = seamGroup;
         g_haveObjective   = true;
     }
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
@@ -261,14 +268,14 @@ void OnGameFrame() {
     if (!g_hasRequest.load(std::memory_order_acquire)) return;   // O(1) common case
 
     FVec3 target; std::wstring label; uint32_t reqEpoch; uint64_t seq;
-    bool isTransition; float bandLo, bandHi, reach; bool silent, seedBeacon;
+    bool isTransition; float bandLo, bandHi, reach; bool silent, seedBeacon; int seamGroup;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_hasRequest.load(std::memory_order_relaxed)) return;
         target = g_target; label = g_label; reqEpoch = g_reqEpoch; seq = g_reqSeq;
         isTransition = g_isTransition;
         bandLo = g_bandLo; bandHi = g_bandHi; reach = g_reach;
-        silent = g_silent; seedBeacon = g_seedBeacon;
+        silent = g_silent; seedBeacon = g_seedBeacon; seamGroup = g_seamGroup;
     }
 
     // Map changed since the request was made -> un-revivably stale; drop silently.
@@ -360,9 +367,36 @@ void OnGameFrame() {
         return;
     }
 
+    // THE WHOLE SEAM, for the search's failure path only (Session 98).
+    //
+    // `target` is ONE VERTEX of a map-jump surface -- the nearest to the player when the scan ran.
+    // That is the right point to measure a distance to and the wrong one to end a route on: on map
+    // 315 the nearest vertex of a 27 m seam was the corner the walkable approach reaches LAST, and
+    // the route validated 21 of 22 legs, drove 20 m along the surface, and was called "No path".
+    // `PathSearch::Run` consults this only after the ordinary single-point search has already
+    // failed, so a route that works today never sees it.
+    //
+    // A `false` here means NOT SWEPT YET, not "no seams" (map_seams.h) -- so the vector stays empty
+    // and the search behaves exactly as it does today. Never invent a fallback from a blind read.
+    std::vector<NavMesh::PolyId> seamPolys;
+    if (seamGroup != 0) {
+        std::vector<MapQuery::MapJumpSurface> surfaces;
+        // The SAME map id the seam sweep is primed with two hundred lines above, so the cache's
+        // read guard (`g_seamMap != mapId`) can only agree with the writer's.
+        if (MapQuery::CachedMapJumpSurfaces(MapNames::CurrentMapId(), surfaces)) {
+            for (const MapQuery::MapJumpSurface& s : surfaces) {
+                if (s.group != seamGroup) continue;
+                seamPolys.reserve(s.polys.size());
+                for (int p : s.polys) seamPolys.push_back(static_cast<NavMesh::PolyId>(p));
+                break;
+            }
+        }
+    }
+
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
-    PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st);
+    PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st,
+                                         seamPolys.empty() ? nullptr : &seamPolys);
 
     const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
                          : (r == PathSearch::Plan::Frontier) ? "Frontier"

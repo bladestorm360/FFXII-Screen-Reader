@@ -45,9 +45,13 @@ void Shutdown();
 // asked to be led along); FALSE for `p`, whose target is a moving enemy -- static leg corners would
 // be pointing at where it used to be within a second. In combat the beacon tracks the active target
 // on its own (see audio_beacon.cpp), so `p` needs no beacon wiring.
+// `seamGroup`: the target's map-jump group, or 0 when it is not a walk-onto surface. `target` is one
+// VERTEX of that surface (the nearest to the player); this is the handle to the whole of it. Used on
+// the FAILURE PATH only -- see PathSearch::Run's seam pass -- so a request that routes today never
+// consults it.
 void Request(const FVec3& target, const std::wstring& label, bool isTransition = false,
              float bandLo = 1.0f, float bandHi = -1.0f, float reachRadius = 0.0f,
-             bool seedBeacon = false);
+             bool seedBeacon = false, int seamGroup = 0);
 
 // GAME THREAD. Re-run the BEACON'S OBJECTIVE, silently -- no speech on any outcome, including failure.
 // This is the audio beacon's off-route recovery: the player has wandered, so the leg corners it is

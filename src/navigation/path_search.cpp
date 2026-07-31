@@ -6,6 +6,7 @@
 #include "navigation/path_funnel.h"
 #include "navigation/path_validate.h"
 #include "navigation/path_corridor.h"
+#include "navigation/path_repair.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/player_state.h"
 #include "core/logger.h"
@@ -111,7 +112,8 @@ struct PassResult {
 
 Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
          float bandLo, float bandHi, float reachRadius,
-         std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats) {
+         std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats,
+         const std::vector<NavMesh::PolyId>* seamPolys) {
     rawPoly.clear();
     outPoly.clear();
     if (!MapQuery::HasWorld()) return Plan::NoPath;
@@ -447,23 +449,34 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             char bad[352] = "";
             if (rep.firstBad)
                 snprintf(bad, sizeof(bad),
+                         // The trailing " WALL" flag is GONE with the veto that set it (Session 97). It
+                         // was `rep.walls`, and on a wall verdict the branch returned BEFORE `Diagnose`
+                         // ran -- so the two volume fields beside it printed their defaults, not
+                         // measurements, on exactly the routes that flag appeared on. Every breach now
+                         // comes from the body walk and every breach runs `Diagnose`, so `vol@stop` and
+                         // `vol@+0.3m` mean what they say and a redundant flag would only re-open the
+                         // habit of reading an unmeasured zero as an answer.
                          " bad=%zu len=%.2fm reached=%.2fm stop=(%.1f,%.2f,%.1f) why=%s "
                          "stopPoly=%d walk=%d eff=0x%08X | corner: poly=%d clear=%d margin=%.2fm  "
-                         "vol@stop=%d vol@+0.3m=%d%s",
+                         "vol@stop=%d vol@+0.3m=%d",
                          rep.firstBad, rep.badLength, rep.badReached,
                          rep.badStopAt.x, rep.badStopAt.y, rep.badStopAt.z,
                          PathValidate::CauseName(rep.badCause),
                          rep.badStopPoly, rep.badStopWalk ? 1 : 0, rep.badStopFlags,
                          rep.badCornerPoly, rep.badCornerClear ? 1 : 0, rep.badCornerMargin,
-                         rep.badStopInVolume ? 1 : 0, rep.badAheadInVolume ? 1 : 0,
-                         rep.walls ? " WALL" : "");
+                         rep.badStopInVolume ? 1 : 0, rep.badAheadInVolume ? 1 : 0);
             char vm[672];
+            // `volHit`/`volWalked` REPLACE `walls` (Session 97). `walls` was the count of legs the
+            // volume probe VETOED -- 16 of 16 routes on map 315, against zero objections from the body
+            // sweep. The probe now decides nothing, so the pair reads: how many legs it flagged, and how
+            // many of those the body then walked anyway. `volWalked == volHit` on routes the tester
+            // walks means the probe was measuring something the party does not collide with.
             snprintf(vm, sizeof(vm),
                      "validate: attempt %d legs checked=%zu/%zu probes=%d worstFrac=%.2f tight=%d@%zu "
-                     "resweep=%d rescued=%d swept=%d blind=%d walls=%d %s%s%s",
+                     "resweep=%d rescued=%d swept=%d blind=%d volHit=%d volWalked=%d %s%s%s",
                      attempt, rep.checked, rep.total, rep.probes, rep.worstFraction,
                      rep.tightCorners, rep.firstTight, rep.resweeps, rep.rescued,
-                     rep.swept, rep.blind, rep.walls,
+                     rep.swept, rep.blind, rep.volHit, rep.volWalked,
                      rep.ok ? "OK" : "BREACH", bad,
                      rep.blind     ? "  <== BLIND: no collision world for some legs; NOT verified"
                      : rep.truncated ? "  <== TRUNCATED: budget ran out, remaining legs NOT tested" : "");
@@ -488,74 +501,24 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         }
 
         // ---- REPAIR BEFORE RE-SEARCHING -------------------------------------------------------------
-        // A breach is a verdict on the CHORD, not on the corridor. The corridor was measured edge by
-        // edge with the body's own footprint before A* ever expanded through it; the taut line the
-        // funnel drew across it was an optimisation, and on this mesh -- where one triangle is often an
-        // entire room -- that line can leave the walkable strip while every portal it skipped stays
-        // perfectly crossable. Map 311 proved it both ways in one request: the chord's leg 3 stopped the
-        // body at 6.23 m of 9.00 m on four consecutive attempts, and the frontier's less-taut polyline
-        // walked the same ground with `cutByValidation=0`.
-        //
-        // So undo the pull on the ONE leg that failed and re-validate. Re-searching the whole graph
-        // answers a local question globally, and it was costing the route: every attempt came back with
-        // the same chord and the same breach until the attempts ran out.
-        // THE LADDER: taut chord -> un-pulled leg -> retreat to where the body got -> full corridor.
-        // Shortest thing that works is what gets spoken, and every rung runs ONLY after a breach, so a
-        // route that validates on the chord executes none of it and cannot be changed by any of it.
-        if (!rep.ok && rep.firstBad > 0 && !plain.empty() && probesLeft > 0) {
-            const size_t bad = rep.firstBad;
-            bool mendedOk = false;
-
-            auto tryPoly = [&](std::vector<FVec3>& cand, const char* how, int detail) -> bool {
-                if (cand.size() < 2 || probesLeft <= 0) return false;
-                PathFunnel::InsetCorners(cand);
-                const PathValidate::LegReport r2 =
-                    PathValidate::CheckLegs(cand, probesLeft, kArrivalTol);
-                probesLeft -= r2.probes;
-                stats.rays += r2.probes;
-                const bool good = r2.ok && !r2.truncated;
-                char rm[288];
-                snprintf(rm, sizeof(rm),
-                         "repair[%s]: leg %zu, %d -- %zu->%zu points, probes=%d -> %s",
-                         how, bad, detail, poly.size(), cand.size(), r2.probes,
-                         good ? "OK" : "still breaching");
-                Log::Write("NAV-ROUTE", rm);
-                if (!good) return false;
-                best = pr; bestPoly = cand; bestReport = r2; rawPoly = cand;
-                stats.repaired = detail;
-                return true;
-            };
-
-            // 1. Un-pull the failing leg (and, when it is interior, the corner it aimed at).
-            {
-                std::vector<FVec3> mended;
-                const int spliced = PathFunnel::Unpull(poly, polyIdx, plain, bad, mended);
-                if (spliced > 0) mendedOk = tryPoly(mended, "unpull", spliced);
+        // The ladder itself lives in `path_repair.{h,cpp}` -- it needs none of this function's search
+        // state, and the reasoning behind each rung is long enough to belong beside the code it governs.
+        // What stays here is the only part that is `Run`'s business: spending the budget and adopting
+        // the result. A route that validates on the chord never enters `Mend` at all.
+        {
+            const PathRepair::Result mend =
+                PathRepair::Mend(poly, polyIdx, plain, rep, from, to, probesLeft, kArrivalTol);
+            // Probes are spent whether or not a rung won, so they come off the budget either way.
+            probesLeft -= mend.probes;
+            stats.rays += mend.probes;
+            if (mend.ok) {
+                best       = pr;
+                bestPoly   = mend.poly;
+                bestReport = mend.report;
+                rawPoly    = mend.poly;
+                stats.repaired = mend.detail;
+                break;                      // the corridor walks; only the shortcut across it did not
             }
-
-            // 2. RETREAT TO WHERE THE BODY ACTUALLY GOT. `badStopAt` is the engine's own resolved
-            //    position, so it is reachable whatever is in the way -- floor border, wall volume, or
-            //    something we have not thought of. That is the point: this rung needs no theory. Only
-            //    for an INTERIOR corner; the final point is the destination and is not ours to move.
-            if (!mendedOk && bad + 1 < poly.size() &&
-                rep.badReached > NavFootprint::BodyRadius()) {
-                std::vector<FVec3> pulled(poly.begin(), poly.begin() + static_cast<ptrdiff_t>(bad));
-                pulled.push_back(rep.badStopAt);
-                pulled.insert(pulled.end(), poly.begin() + static_cast<ptrdiff_t>(bad) + 1, poly.end());
-                mendedOk = tryPoly(pulled, "retreat", static_cast<int>(rep.badReached * 100.0f));
-            }
-
-            // 3. LAST RUNG: the whole corridor, un-pulled. Reserved for the case that has no other
-            //    move at all -- a breach on leg 1, where re-costing is refused because the portal is
-            //    the start poly's own and the frontier's proven prefix is a single point. Measured:
-            //    that combination spoke "No path" from 3 m away from a reachable exit, nine times.
-            if (!mendedOk && bad == 1) {
-                std::vector<FVec3> full;
-                const int pts = PathFunnel::FullCorridor(from, to, plain, full);
-                if (pts > 0) mendedOk = tryPoly(full, "full-corridor", pts);
-            }
-
-            if (mendedOk) break;            // the corridor walks; only the shortcut across it did not
         }
 
         best       = pr;
@@ -684,6 +647,92 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                  stats.attempts, stats.bannedEdges);
         Log::Write("NAV-ROUTE", m);
         return rawPoly.size() >= 2 ? Plan::Route : Plan::NoPath;
+    }
+
+    // ---- THE SEAM IS THE DESTINATION, NOT THE POINT (Session 98) -----------------------------------
+    //
+    // Everything above has failed and the only thing left is the frontier, which is suppressed and
+    // spoken as "No path". THIS BLOCK IS UNREACHABLE ON A ROUTE THAT WORKS -- it sits below the
+    // `return Plan::Route` a validated route takes -- and that is deliberate: a target selector that
+    // ran on every request would change the last leg of every transition route in the game, including
+    // the ones that already work.
+    //
+    // WHAT WENT WRONG. `to` for a transition is ONE VERTEX of a map-jump surface: the tagged vertex
+    // nearest the player in a STRAIGHT LINE. On map 315's 27 m seam that was the corner the walkable
+    // approach reaches LAST. The route validated 21 of its 22 legs, drove 20 m ALONG the exit surface
+    // to get to that corner, breached, and was spoken as "No path" 16.4 m short -- while the frontier
+    // it then discarded ended ON the surface. The route arrived; the arithmetic said it had not.
+    //
+    // A transition fires when you walk onto ANY part of the surface (S64), so aim at the part the
+    // route can actually reach. **The reference point is a place the search PROVED reachable** -- the
+    // banked validated prefix's end, else the nearest poly A* actually expanded -- never the player's
+    // own position, because straight-line-from-the-player is the selector that failed in the first
+    // place. Then re-run the ordinary search at that member's CENTROID, which is interior to a
+    // triangle by construction and therefore a place the body can stand, unlike a vertex.
+    //
+    // Recursion is bounded at depth 1: the re-run passes no seam set, so it cannot come back here.
+    if (seamPolys && !seamPolys->empty()) {
+        FVec3 ref{};
+        const char* refKind = nullptr;
+        if (bestPrefix.size() >= 2) { ref = bestPrefix.back(); refKind = "proven-prefix"; }
+        else if (best.bestNear != kNoPoly && NavMesh::PolyCentroid(best.bestNear, ref)) {
+            refKind = "nearest-expanded";
+        }
+
+        // THE CLOSEST POINT ON THE MEMBER, NOT ITS CENTROID. A seam triangle here can be 16 m long --
+        // poly 324 on map 315 runs from the vertex the old target named all the way to where the body
+        // actually stopped -- so its centroid can sit on the far side of whatever stopped the route,
+        // and aiming there would fail for the same reason the vertex did. The closest point to a
+        // position the search PROVED it reached is, by construction, right next to ground the body has
+        // already walked; the final leg's arrival tolerance then covers the last stride.
+        PolyId pick = kNoPoly;
+        FVec3  pickC{};
+        float  bestD2 = -1.0f;
+        if (refKind) {
+            for (PolyId sp : *seamPolys) {
+                if (!NavMesh::ValidPolyId(sp) || !NavMesh::Walkable(sp)) continue;
+                FVec3 c{};
+                if (!NavMesh::ClosestPointOnPoly(sp, ref.x, ref.z, c) &&
+                    !NavMesh::PolyCentroid(sp, c)) continue;
+                const float dx = c.x - ref.x, dz = c.z - ref.z;
+                const float d2 = dx * dx + dz * dz;
+                if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; pick = sp; pickC = c; }
+            }
+        }
+
+        // SKIP ONLY IF THE NEW TARGET IS THE OLD TARGET, and that is a question about POINTS, not
+        // polys. An earlier draft guarded on `pick != goal` and would have made this block a no-op on
+        // the very case it exists for: on map 315 the failed search's goal poly IS a seam member (it
+        // is the huge triangle the body ended up standing on), so `pick == goal` -- yet its CENTROID
+        // is 14 m from the vertex `to` names, which is the whole point. A poly is not a position.
+        const float mdx = pickC.x - to.x, mdz = pickC.z - to.z;
+        const bool  moved = (mdx * mdx + mdz * mdz) > (NavFootprint::BodyRadius() * NavFootprint::BodyRadius());
+        if (pick != kNoPoly && moved) {
+            char sm[288];
+            snprintf(sm, sizeof(sm),
+                     "seam: single-point goal failed; %zu-poly surface, ref=%s (%.1f,%.2f,%.1f) -> "
+                     "member poly %d at (%.1f,%.2f,%.1f), %.1fm from ref -- re-running",
+                     seamPolys->size(), refKind, ref.x, ref.y, ref.z,
+                     pick, pickC.x, pickC.y, pickC.z, std::sqrt(bestD2));
+            Log::Write("NAV-ROUTE", sm);
+
+            std::vector<FVec3> seamRaw, seamOut;
+            Stats seamStats;
+            const Plan sr = Run(from, pickC, epoch, bandLo, bandHi, reachRadius,
+                                seamRaw, seamOut, seamStats, nullptr);
+            // ONLY A FULL ROUTE COUNTS. A frontier from the seam pass is not better evidence than the
+            // frontier we already have below, and shipping it would mean speaking a shortfall measured
+            // to a point the player never asked for.
+            if (sr == Plan::Route && seamRaw.size() >= 2) {
+                rawPoly = seamRaw;
+                outPoly = seamOut;
+                stats   = seamStats;
+                stats.pass = "seam";
+                Log::Write("NAV-ROUTE", "seam: re-run VALIDATED -- routing to the surface, not the vertex");
+                return Plan::Route;
+            }
+            Log::Write("NAV-ROUTE", "seam: re-run did not validate either -- falling through to the frontier");
+        }
     }
 
     // ---- FRONTIER: never dead-end ------------------------------------------------------------------

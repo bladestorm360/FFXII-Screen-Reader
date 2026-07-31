@@ -26,6 +26,15 @@ constexpr float kSubStep     = 0.50f;
 // Bound on one leg's re-ask, so a 200 m leg cannot eat the whole request's budget. A leg longer than
 // this simply walks in coarser steps; the alternative -- refusing to answer -- would put us straight
 // back to guessing.
+//
+// MEASURED AND DELIBERATELY LEFT AT 64 (Session 97). Past ~32 m this bound stops bounding the WORK and
+// starts changing the STEP: `ceil(total / kSubStep)` clamped to 64 walks a 47 m leg in 0.73 m steps,
+// beyond the ~0.54 m limit at which the sweep's +/-30-degree probes leave the body -- the same domain
+// error S95 built the re-ask to undo. Real, and NOT fixed here: **the longest leg re-asked in the whole
+// failing session was 12.14 m (25 steps), so 64 was never once the binding constraint**, and raising it
+// only moves the constraint onto `probeBudget`, where a starved re-ask returns `Budget` -> `truncated`
+// -> frontier -> "No path" on a route that used to walk coarsely and pass. A change that fixes nothing
+// observed and can only refuse more does not belong in a build repairing two over-refusals.
 constexpr int   kMaxSubSteps = 64;
 
 FVec3 Lift(const FVec3& p) { return FVec3{ p.x, p.y + kBodyPad, p.z }; }
@@ -55,24 +64,50 @@ bool Arrived(const MapQuery::BodyMove& mv, float tol) {
     return (mv.requested - mv.achieved) <= tol;
 }
 
-// Is there a WALL across this span? The sweep sees volumes only where its own probes happen to fall;
-// this asks the engine directly at both ends and at the midpoint, which is what catches a blocker
-// standing inside a floor triangle. Cheap: three point tests, no sweep.
-// TESTED AT BODY HEIGHT, NOT AT THE FEET. A wall volume stands ON the floor, so a point at exactly
-// floor level sits on its boundary and can read as inside it -- which would block ordinary ground.
-// What we actually care about is whether the BODY is in the wall, and the body is the metre above
-// the floor. Same lift the sweep and the edge straddle already use.
-// `testEnd` is false on the FINAL leg. THE TARGET IS ALLOWED TO BE INSIDE A VOLUME (Session 96) --
-// exits are archways and map-jump surfaces, and shops, notice boards and chests stand against
-// architecture, so the destination point sits inside a collision volume as a matter of course. Testing
-// it made the target's own position veto every route to it: measured on map 311, a route that reached
-// (47.0,-0.00,124.0) failed its last leg with `reached=0.00m why=wall` on the exit at (47.0,-0.00,132.0),
-// and the same request logged `volXing=109` -- that area is full of volumes and the player walks it.
-// The midpoint is still tested, so a wall ACROSS the final approach is still caught.
-bool WallAcross(const FVec3& a, const FVec3& b, bool testEnd) {
-    const FVec3 mid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
-    if (MapQuery::PointInVolume(Lift(mid))) return true;
-    return testEnd && MapQuery::PointInVolume(Lift(b));
+// IS A COLLISION VOLUME ON THIS LINE? **A MEASUREMENT, NOT A VERDICT** (Session 97).
+//
+// This was `WallAcross` and it FAILED THE ROUTE. It refused 16 of 16 routes on map 315 -- every single
+// breach on that map was `why=wall` -- while `MapQuery::BodySweep`, the instrument this file's own
+// header calls authoritative, objected to not one leg. It is now counted and nothing more.
+//
+// THE PREMISE IT WAS BUILT ON IS FALSE, and the decompile says so plainly. It was added on the reading
+// that "walls are volume primitives in CSR layers 1-2 ... so a wall standing inside a floor triangle
+// passed every check the router had". `FUN_00230c10`'s ellipsoid push-out passes iterate with layer
+// mask **7** -- layers 0, 1 AND 2 -- through `FUN_0022de60`, over the same `0x4000`-tagged, `0x90`-stride
+// volume array. The sweep has always collided with these. Conf 0.97.
+//
+// AND IT IS THE COARSER OF THE TWO INSTRUMENTS, NOT THE SHARPER ONE. `FUN_00232490` installs
+// `FUN_0022f8b0`, which tests **exactly one bit (31)** of the merged flags word -- no class test, no
+// query class, no material. The engine's own movement collision reads `merged_flags & 7` against the
+// mover's class: 0 always solid, 1 conditional on bit 30, **4 solid only when queryClass != 4 -- and the
+// party's movers pass 4** -- 2/3/5/6/7 never collide at all, and bit 23 marks a hit that is recorded
+// and does not block. It also hard-excludes the `>= 0x5000` range, which is the doors and the moving
+// platforms. So it counts as walls a whole class of volume the party walks straight through, and misses
+// the ones that actually shut.
+//
+// A point test also cannot answer a question about a LINE. One sample decided a 12 m leg, and the log
+// caught it contradicting itself inside one request (`seq=41`): leg 2 of attempt 1,
+// (15.7,114.1)->(20.2,114.6), midpoint ~(17.95,114.35) -> WALL; leg 2 of attempt 2,
+// (16.5,115.0)->(63.6,114.4), passing within ~0.6 m of that same point, midpoint ~(40.05,114.7) ->
+// clear, and swept at fraction 0.97. Which verdict a leg got depended on where its midpoint landed.
+//
+// SAFE TO REMOVE WHERE ROUTING WORKS, and that is measured rather than argued: across the whole failing
+// session this test fired on map 315 and nowhere else -- `walls=0` on all 35 validation runs on maps
+// 311 and 321. Deleting the veto cannot change any outcome there.
+//
+// The probe is KEPT, ground-pinned, so `volHit`/`volWalked` can retire the theory for good (or produce
+// the coordinates that revive it). If a real wall test is ever needed, it is the class-aware
+// `FUN_0022d4b0`, reachable via `FUN_002315e0(ctx, from, to)` -- not this one.
+//
+// Y COMES FROM THE WALKMAP, NOT FROM THE CORNERS. The old test lifted `(a.y + b.y) / 2`, which on a leg
+// between corners at 3.74 and 10.25 (map 315) is an arbitrary altitude with no relation to the floor
+// under the probe. `WalkLeg` pins each sub-step with `GroundY` before testing; the leg-level probe never
+// did. The lift itself is right and stays: a wall volume stands ON the floor, so a point at exactly
+// floor level sits on its boundary and can read as inside it.
+bool WallSuspect(const FVec3& a, const FVec3& b) {
+    FVec3 mid{ (a.x + b.x) * 0.5f, 0.0f, (a.z + b.z) * 0.5f };
+    mid.y = GroundY(mid.x, mid.z, (a.y + b.y) * 0.5f);
+    return MapQuery::PointInVolume(Lift(mid));
 }
 
 // Walk the leg the way the CHARACTER does: short displacements, Y pinned to the walkmap under each
@@ -81,7 +116,7 @@ bool WallAcross(const FVec3& a, const FVec3& b, bool testEnd) {
 //
 // Returns true when the body reached the far end. `reachedM` receives how far along it actually got,
 // which is what turns "BREACH" in the log from a verdict into a measurement, and `cause` says which
-// of the three ways it ended -- see StopCause.
+// of the two ways it ended -- see StopCause.
 //
 // THE STEP LENGTH IS FIXED AND IS NOT NEGOTIABLE AGAINST THE BUDGET (Session 96). This used to read
 // `if (steps > probeBudget) steps = probeBudget;`, which keeps the leg and spends fewer probes on it
@@ -90,7 +125,7 @@ bool WallAcross(const FVec3& a, const FVec3& b, bool testEnd) {
 // wall in any corridor narrower than the cone. A short budget must cost us COVERAGE, which is
 // honestly reportable as `truncated`, never ACCURACY, which is silently a false wall.
 bool WalkLeg(const FVec3& from, const FVec3& to, float tol, int probeBudget,
-             int& probesUsed, float& reachedM, FVec3& stopAt, StopCause& cause, bool testEnd) {
+             int& probesUsed, float& reachedM, FVec3& stopAt, StopCause& cause) {
     reachedM = 0.0f;
     cause    = StopCause::None;
     const float total = LenXZ(from, to);
@@ -113,16 +148,11 @@ bool WalkLeg(const FVec3& from, const FVec3& to, float tol, int probeBudget,
                     from.z + (to.z - from.z) * t };
         want.y = GroundY(want.x, want.z, want.y);
 
-        // The volume test rides along on every sub-step, so a wall inside a floor triangle stops the
-        // walk at the step that meets it rather than being swept straight through.
-        if (WallAcross(cur, want, testEnd || s < steps)) {
-            reachedM = LenXZ(from, cur);
-            stopAt   = cur;
-            cause    = StopCause::Wall;
-            ++probesUsed;
-            return false;
-        }
-
+        // NO VOLUME TEST HERE ANY MORE (Session 97). It used to stop the walk at the sub-step that met
+        // a `PointInVolume` hit, "rather than being swept straight through" -- but the sweep does not
+        // sweep through them: it iterates the volume layers itself, with the party's own query class,
+        // which this one never had. See WallSuspect above. Sub-stepping it would only have made the
+        // same wrong answer finer-grained.
         MapQuery::BodyMove mv;
         MapQuery::BodySweep(Lift(cur), Lift(want), mv);
         ++probesUsed;
@@ -188,7 +218,6 @@ void Diagnose(const FVec3& a, const FVec3& b, const FVec3& stop, LegReport& r) {
 
 const char* CauseName(StopCause c) {
     switch (c) {
-        case StopCause::Wall:   return "wall";
         case StopCause::Sweep:  return "sweep";
         case StopCause::Budget: return "budget";
         default:                return "none";
@@ -215,20 +244,12 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
         const bool  last    = (i + 1 == path.size());
         const float legTol  = (last && arrivalTol > tol) ? arrivalTol : tol;
 
-        // WALLS FIRST. A volume across this leg is decisive and costs three point tests, where the
-        // sweep below would sail through it whenever its own probes miss.
-        if (WallAcross(a, b, !last)) {
-            ++r.probes;
-            ++r.checked;
-            ++r.walls;
-            r.ok         = false;
-            r.firstBad   = i;
-            r.badLength  = LenXZ(a, b);
-            r.badReached = 0.0f;
-            r.badStopAt  = a;
-            r.badCause   = StopCause::Wall;
-            return r;
-        }
+        // THE VOLUME PROBE IS ASKED AND DECIDES NOTHING (Session 97). It used to run first and be
+        // decisive -- "a volume across this leg is decisive ... where the sweep below would sail through
+        // it". The sweep does not sail through them, and this probe cannot tell a wall from a region the
+        // party walks; see WallSuspect. Both counters are printed, so the next log settles it.
+        const bool volSuspect = WallSuspect(a, b);
+        if (volSuspect) { ++r.probes; ++r.volHit; }
 
         // FAST PATH: one sweep over the whole leg. A `clear` verdict here is trustworthy -- the probe
         // cone only ever makes the test STRICTER, so nothing it passes can be blocked.
@@ -246,7 +267,7 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
             FVec3 stopAt{};
             StopCause cause = StopCause::None;
             const bool walkable =
-                WalkLeg(a, b, legTol, probeCap - r.probes, r.probes, reachedM, stopAt, cause, !last);
+                WalkLeg(a, b, legTol, probeCap - r.probes, r.probes, reachedM, stopAt, cause);
             if (!walkable) {
                 r.firstBad   = i;
                 r.badLength  = LenXZ(a, b);
@@ -275,6 +296,11 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
             }
             ++r.rescued;
         }
+
+        // THE LEG WALKED. If the volume probe flagged it, that flag is now MEASURED to be wrong about
+        // this leg: the body went the whole way with the party's own query class. This is the counter
+        // that either retires the volume theory or, by staying well below `volHit`, revives it.
+        if (volSuspect) ++r.volWalked;
 
         // The corner the leg ARRIVES at, when it is an interior corner. A leg can be perfectly sweepable
         // and still end on a point the engine pushes the body off -- that is the whole reason the corner

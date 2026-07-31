@@ -345,24 +345,45 @@ int g_volumeCrossings = 0;
 
 void ResetCrossingCounters() { g_tightCrossings = 0; g_volumeCrossings = 0; }
 
-// Does the party's BODY fit across this edge at parameter `t`? Three questions now:
-//   1. IS THERE A WALL IN THE WAY (MapQuery::PointInVolume -- the engine's own volume test).
-//   2. can the body move from one side to the other (MapQuery::BodySweep -- the engine's own 0.27 m
-//      radius sweep with depenetration, which sees obstacles a zero-width line passes beside);
-//   3. does the body FIT at the crossing point without overlapping a boundary of the walkable region
+// Does the party's BODY fit across this edge at parameter `t`? TWO questions decide it, and one is
+// merely counted:
+//   1. can the body move from one side to the other (MapQuery::BodySweep -- the engine's own 0.27 m
+//      radius sweep with depenetration, which sees obstacles a zero-width line passes beside, AND
+//      which iterates the volume layers itself -- see below);
+//   2. does the body FIT at the crossing point without overlapping a boundary of the walkable region
 //      (NavFootprint::Clears -- the replica of the engine's own refusal).
+//   -- counted only: MapQuery::PointInVolume, which decides nothing here and no longer decides
+//      anything anywhere (Session 97).
 //
-// TEST 1 IS NEW AND IT IS THE ONE THAT MATTERED (Session 96). Tests 2 and 3 both reason about the
-// FLOOR: a swept line and a distance to triangle edges. Walls are not floor geometry -- they are
-// volume primitives in CSR layers 1-2, skipped one line at a time in FindPolyAt above -- so a wall
-// standing inside a floor triangle passed every check the router had. On a mesh whose triangles are
-// often an entire corridor that is the normal case. The tester walked into exactly such a wall and
-// the route neither went round it nor stopped offering it.
+// ~~STRUCK (Session 97): "TEST 1 IS NEW AND IT IS THE ONE THAT MATTERED (Session 96). Tests 2 and 3
+// both reason about the FLOOR ... so a wall standing inside a floor triangle passed every check the
+// router had."~~
+//
+// **TEST 2 ALREADY SEES VOLUMES, AND ALWAYS DID.** `FUN_00230c10`'s two ellipsoid push-out passes
+// iterate with CSR layer mask **7** -- layers 0, 1 AND 2 -- through `FUN_0022de60`, over the same
+// `0x4000`-tagged, `0x90`-stride volume primitives `FUN_00232490` reads. Conf 0.97. The body sweep is
+// not a floor-only instrument; the premise above simply was not checked against the decompile.
+//
+// And test 1 is the COARSER of the two. `FUN_00232490` installs `FUN_0022f8b0`, which tests exactly one
+// bit (31) of the merged flags word -- no class, no query class -- where the engine's own movement
+// collision reads `merged_flags & 7` against the mover's class: 0 always solid, 1 conditional on bit 30,
+// **4 solid only when queryClass != 4, and the party's movers pass 4**, 2/3/5/6/7 never colliding, bit
+// 23 a hit that is recorded and does not block. It also hard-excludes the `>= 0x5000` range -- the doors
+// and moving platforms. So it counts volumes the party walks through and misses ones that shut.
+//
+// It stayed a COUNTER here, which is why this file was never the problem. The same predicate was fatal
+// in `path_validate.cpp` and refused 16 of 16 routes on map 315 while the sweep objected to none. That
+// veto is gone; see WallSuspect there. Keep this one a counter.
 bool BodyFitsAt(PolyId p, int e, PolyId neighbor, float t) {
     FVec3 a{}, b{};
     if (!StraddleAt(p, e, neighbor, t, a, b)) return true;      // unreadable -> never invent a block
-    // The crossing point itself, at the surface rather than at body height: both the volume test and
-    // Clears work in the ground plane, so the pad StraddleAt added would only mislead a reader.
+    // The crossing point itself. **THIS Y IS AT BODY HEIGHT, NOT AT THE SURFACE** -- `StraddleAt` adds
+    // `kBodyPad` to both endpoints, so their mean carries it too. The comment here used to claim the
+    // opposite ("at the surface rather than at body height ... the pad would only mislead a reader"),
+    // which is a statement about code that was never written. Corrected, not changed: `Clears` ignores Y
+    // outright (SegDist2XZ is XZ-only), so the only consumer of this Y is the volume counter, and body
+    // height is the height that counter WANTS. Noted because `volXing = 0` on map 311 was read as
+    // evidence about a probe taken at a different height (Session 96).
     const FVec3 mid{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
     // THE VOLUME TEST IS COUNTED, NOT FATAL (Session 96). It was added earlier this session on the
     // premise that walls were the routing problem; the tester then established that walls were never

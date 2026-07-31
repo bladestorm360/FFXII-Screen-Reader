@@ -28,9 +28,14 @@ namespace PathValidate {
 
 // What ended the sub-step walk of a leg. A breach reads completely differently depending on which of
 // these it was, and until Session 96 all three printed identically.
+// `Wall` IS GONE, NOT RENAMED (Session 97). It meant "a `PointInVolume` sample landed inside
+// something", and that verdict refused 16 of 16 routes on map 315 while the body sweep objected to
+// none of them. Nothing can produce it any more, and this project has been bitten twice by counters and
+// enum values that are written by a comment and read by nothing -- so it is deleted rather than left
+// permanently zero. If the class-aware wall test ever lands (`FUN_0022d4b0` via `FUN_002315e0`), it
+// gets its own cause then.
 enum class StopCause {
     None = 0,
-    Wall,      // a collision volume across a sub-step -- a real obstacle, route around it
     Sweep,     // the engine's body sweep would not carry the body that far -- floor or depenetration
     Budget,    // ran out of probes. NOT a breach: this sets `truncated`, never `ok = false`
 };
@@ -86,7 +91,16 @@ struct LegReport {
     // like a genuinely clear one. `blind` counts legs whose sweep never reached the engine.
     int    swept = 0;
     int    blind = 0;
-    int    walls = 0;          // legs rejected by the volume test rather than by the sweep
+    // WHAT THE VOLUME PROBE WOULD HAVE REFUSED (Session 97). `volHit` counts legs whose midpoint sits
+    // inside a `PointInVolume` hit; `volWalked` how many of those the body then walked anyway. Until
+    // this session a single `volHit` WAS the verdict, and on map 315 that refused 16 of 16 routes while
+    // the body sweep objected to none of them. The pair is that test's own falsifier: `volWalked` equal
+    // to `volHit` on routes the tester then walks means the probe was measuring nothing the party
+    // collides with. **These two are READ AND PRINTED on the `validate:` line** -- if a later change
+    // stops printing them, delete them; a counter nothing reads is a defect this project has shipped
+    // twice. See WallSuspect in the .cpp for why it cannot answer the question it was asked.
+    int    volHit    = 0;
+    int    volWalked = 0;
 };
 
 // Walk the polyline and test each leg with the engine's own body sweep, plus a footprint test at each
@@ -123,6 +137,22 @@ struct LegReport {
 // body back to TANGENCY, so a corner that fails it is a place the player gets nudged, not a place they
 // cannot walk through. `MapQuery::BodySweep` -- which returns the engine's own achieved/requested
 // fraction, depenetration included -- is the authoritative answer to "did the body get there".
+//
+// AND THAT NOW INCLUDES THE VOLUME PROBE (Session 97). A whole-leg `MapQuery::PointInVolume` test was
+// added in S96 on the premise that "walls are not floor geometry ... so a wall standing inside a floor
+// triangle passed every check the router had". **The premise is false and the decompile says so.**
+// `FUN_00230c10` -- the body sweep -- runs its ellipsoid push-out passes with CSR layer mask **7**
+// (layers 0, 1 AND 2) through `FUN_0022de60`, over the same `0x4000`-tagged, `0x90`-stride volume
+// primitives. It has always seen them. Conf 0.97.
+//
+// Worse, the two do not ask the same question. `FUN_00232490` installs `FUN_0022f8b0`, which tests
+// **exactly one bit (31)** of the merged flags word and has no class filter at all. The engine's own
+// movement collision reads `merged_flags & 7` against the mover's query class: class 0 always solid,
+// class 1 conditional, **class 4 solid only when queryClass != 4** -- and the party's movers pass 4 --
+// classes 2/3/5/6/7 never collide, bit 23 a "soft" hit that is recorded and does not block. It also
+// hard-excludes the `>= 0x5000` range, i.e. doors and moving platforms. So it counts walls the party
+// walks through and misses ones it cannot. Measured on map 315: 16 of 16 routes refused, every one
+// `why=wall`, and the sweep never objected to a single leg.
 //
 // The consequence of conflating them was not cosmetic. A corner failure banned the portal on a leg that
 // had swept fine, so each retry detoured around a good opening and the route got LONGER every attempt

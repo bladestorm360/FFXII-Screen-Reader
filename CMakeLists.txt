@@ -125,6 +125,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/path_funnel.cpp
     src/navigation/path_validate.cpp
     src/navigation/path_corridor.cpp
+    src/navigation/path_repair.cpp
     src/navigation/nav_blocked.cpp
     src/navigation/path_planner.cpp
     src/navigation/audio_beacon.cpp

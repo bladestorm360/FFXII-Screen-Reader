@@ -420,6 +420,31 @@ frame after a map load (`EntityList::OnFieldFrame` runs before `PathPlanner::OnG
 | fires when | you **walk onto it** | you **press Enter** on it |
 | named by | the owning `__MJ_CTRL`'s `mapjump` literal | a `+0x70` field sign (`setfieldsignlocationjumpinfo`) |
 | read by | `exit_scan.cpp` | `entity_scan.cpp` |
+| **routed to as** | its **POLY SET** (`MapJumpSurface::polys`) — see below | its single interaction point |
+
+**A TRANSITION'S ROUTE GOAL IS THE WHOLE SURFACE (Session 98).** A transition can be 27 m across
+(map 315's is 16 polys, `x[153..180] z[52..62]`; Southern Plaza's is 28), and it fires wherever you
+step on it — so no single point is its destination. The exit's `pos` is the nearest tagged VERTEX to
+the player, which is the right answer for **how far away is this exit** (`/`, the `[`/`]` listing,
+the `kAtExitDist` check, all recomputed per scan from the live player position) and the wrong answer
+for **where should the route end**, twice over:
+
+- a triangle vertex lies ON the walkable boundary by construction, so the body can never quite stand
+  there — the breach diagnostic reads `margin=-0.27m`, i.e. distance-to-border 0.00;
+- straight-line nearest is not WALKING nearest. Measured on map 315: the crow-flies-nearest vertex
+  was the corner the walkable approach reaches last, so the route validated 21 of 22 legs, drove
+  **20 m along the exit surface** to reach it, and was spoken as "No path" 16.4 m short — while the
+  frontier it discarded ended ON the surface.
+
+Only the search can say which member is reachable, so `PathSearch::Run` takes the poly set and uses
+it on the FAILURE PATH only (a route that validates today never consults it). Pick the member whose
+`ClosestPointOnPoly` to a **proven-reachable** position is nearest — never the member's centroid, a
+seam triangle can be 16 m long — and re-run the ordinary search there.
+
+**Do not reverse-derive the group from a poly's EFFECTIVE flags.** The seam sweep reads RAW flags,
+and bits 3-6 are simultaneously the map-jump group AND the index into `FUN_00232020`'s group override
+bank (`C = ((flags >> 3) & 0xF) + 0x40`), so an override can rewrite the very bits the group would be
+read from. `Entity::seamGroup` plumbs it explicitly and depends on no flag encoding.
 
 **Every refuted exit model looked for transitions in door-shaped places** (`+0x54[N+1]`, the
 `+0x54` ∪ `+0x70` union, field-sign pairing, the `+0x84` edge bearing, blob table order, the boundary
@@ -3249,9 +3274,52 @@ cliff or a steep slope, and there is none — the record is exhausted, `+0x1C` h
 |---|---|---|---|
 | `FUN_0022f9b0` border clearance | `0x10F9B0` | 0.99 | The refusal itself. Replicated in `nav_footprint.cpp`. |
 | `FUN_0022ef20` footprint transform | `0x10EF20` | 0.99 | Builds the ellipse matrices from `moveCtx+0x80`/`+0x84`. **Writes globals — this is why the border test cannot be called.** |
-| `FUN_00230c10` body sweep | `0x110C10` | 0.98 | (start,to) → achieved position + blocked. **PURE**: 29-function closure, zero game-memory writes. Wrapped as `MapQuery::BodySweep`. |
-| `FUN_00231400` can-stand-here | `0x111400` | 0.98 | Class-walkable floor AND not inside a volume. Pure; 11-function closure. Not yet used. |
-| `FUN_00232490` point-in-volume | `0x112490` | 0.98 | CSR layers 1,2. Pure. Not yet used. |
+| `FUN_00230c10` body sweep | `0x110C10` | 0.98 | (start,to) → achieved position + blocked. **PURE**: 29-function closure, zero game-memory writes. Wrapped as `MapQuery::BodySweep`. **Iterates CSR layers 0,1,2 — it sees volumes; see below.** |
+| `FUN_00231400` can-stand-here | `0x111400` | 0.98 | Class-walkable floor AND not inside a volume. Pure; 11-function closure. Volume half is byte-identical to `FUN_00232490` and inherits its coarseness. **Still unused, and should stay that way for routing.** |
+| `FUN_00232490` point-in-volume | `0x112490` | 0.98 | CSR layers 1,2. Pure. Wrapped as `MapQuery::PointInVolume` (Session 96). **COUNTER ONLY — never a verdict; see the section below for why.** |
+
+### `FUN_00232490` IS THE COARSEST VOLUME TEST IN THE ENGINE (Session 97)
+
+It was wired in during Session 96 as the router's wall predicate, and in `path_validate.cpp` it was
+**fatal**. It refused **16 of 16 routes on map 315** — every breach on that map `why=wall` — while
+`MapQuery::BodySweep` objected to not one leg. Both halves of the premise behind it were wrong.
+
+**1. The body sweep already sees volumes.** `FUN_00230c10` runs two ellipsoid push-out passes through
+`FUN_0022f830` with **layer mask 7 — layers 0, 1 AND 2** — and callback `FUN_0022de60`, over the same
+`0x4000`-tagged, `0x90`-stride volume array `FUN_00232490` reads. Conf **0.97** (the mask is written by
+a `CONCAT16` byte placement into the overlaid struct at `+0x16`, unambiguous but decompiler-shaped). Its
+segment-march halves use `FUN_0022f430` + `FUN_0022cc50`, whose layer list lives in `DAT_00908df8` — data
+with no other code reference, so **that half's layers are not recoverable from the decompile**; the
+mask-7 passes alone carry the conclusion.
+
+**2. `FUN_00232490` cannot tell a wall from a region.** It installs `FUN_0022f8b0`, whose entire
+per-primitive filter is a tag-range check plus **one bit — bit 31 — of the merged flags word.** No class
+test, no query class, no material. The engine's own movement collision (`FUN_0022cc50`, and the
+class-aware cast `FUN_0022d4b0`) reads `merged_flags & 7` against the mover's query class at `+0x46`:
+
+| `flags & 7` | behaviour | conf |
+|---|---|---|
+| 0 | always solid | 0.95 |
+| 1 | solid if bit 31 clear; if bit 30 set, only when `queryClass == 4` | 0.92 |
+| 4 | **solid only when `queryClass != 4`** | 0.95 |
+| 2, 3, 5, 6, 7 | fall through every arm — **never collide** | 0.95 |
+
+plus **bit 23** = a "soft" hit, recorded as result code 1 instead of 2 with no hit point written, i.e.
+detected and not blocking (0.90); **bit 26** gated on `ctx+0x3c` (0.90); **bit 31** = disabled/passable
+(0.97); **bits 13-17** a 5-bit group id indexing the runtime override table at `DAT_0209a3e0`
+(`{mask,value}` pairs, writer `FUN_0026e880`) — the same bank mechanism as `FUN_00232020` (0.96).
+
+**The party's movers pass class 4** (0.97, traced through the call sites above), so a class-4 volume is
+one the party walks through and `FUN_00232490` calls a wall. It also **hard-excludes the `>= 0x5000`
+range — the doors and moving platforms** (0.95) — which are the volumes that genuinely do shut. Wrong in
+both directions.
+
+**No pseudocode anywhere names these categories.** There is no string, enum or table mapping class 0/1/4
+or bit 23 to water / trigger / camera blocker / door. Do not label them; the numbers are what is known.
+
+> **If a class-aware wall test is ever needed, it is `FUN_0022d4b0`, reached via
+> `FUN_002315e0(ctx, from, to)` — not `FUN_00232490`.** But ask first whether the body sweep has not
+> already answered: it is the same collision, with the party's own class, over the whole displacement.
 | `FUN_00380c40` the resolver | `0x260C40` | 0.99 | `(ctrl, delta)` → resolved position. **Writes 14 globals; do NOT call.** |
 
 **The mechanism.** For each of the current triangle's three edges, `FUN_0022f9b0` takes the neighbour

@@ -62,6 +62,38 @@ void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal
 int Unpull(const std::vector<FVec3>& poly, const std::vector<int>& idx,
            const std::vector<Portal>& portals, size_t badLeg, std::vector<FVec3>& out);
 
+// REPLACE THE CORNER THE FAILING LEG DEPARTS FROM (Session 97).
+//
+// `Unpull` above can only ever move the corner a leg is aiming AT. That leaves the exact mirror image
+// unrepairable, and it was 7 of the 11 "No path" results in the tester's session.
+//
+// Be precise about when `Unpull` bows out, because it is NOT "every final leg": its corner replacement
+// is gated on `interior`, but its SPLICE still fires on a last leg whenever portals sit strictly
+// between the two corners -- map 311 `seq=7` breached on leg 2 of 2 and `Unpull` repaired it 3 -> 4
+// points. What it cannot do is anything at all when `idx[badLeg-1] + 1 > idx[badLeg] - 1`, i.e. the two
+// corners come off adjacent portals. Then it returns 0 without even logging, and before this function
+// existed that was the end of the route.
+//
+// The two cases are the SAME BAD CORNER seen from either side, and the log proves it inside one map.
+// Map 321, target (47.0,-0.00,150.75), corner (47.0,-0.00,156.0) in every route:
+//   from (44.60,157.01): breach on leg 1 -> `Unpull` replaces that corner -> OK, route spoken.
+//   from (43.17,159.42): breach on leg 2, same corner now the DEPARTURE point -> no rung -> "No path",
+//   5.2 m short of a 10 m route.
+// Pass and fail on the same geometry, decided by which side of the corner the player is standing.
+//
+// WHEN TO PREFER IT: `badReached` near zero. That is the measured signature of a body that never left
+// the corner it started on -- (47.0,156.0) gave `reached=0.27m` of a 5.25 m leg with the engine
+// resolving the body 0.3 m BACKWARDS, which is depenetration and nothing else. Splicing waypoints
+// further down such a leg cannot help; the first point is the one the body cannot stand on.
+//
+// The replacement is the portal's own span midpoint -- a point `EdgeClearSpan` MEASURED the body
+// through -- exactly as `Unpull` uses for the aimed-at corner. Index 0 is never touched: that is the
+// player's live position, not a corner, and it carries `idx == -1`.
+//
+// Returns 1 if the corner was replaced, 0 if there was nothing to replace it with.
+int UnpullDeparture(const std::vector<FVec3>& poly, const std::vector<int>& idx,
+                    const std::vector<Portal>& portals, size_t badLeg, std::vector<FVec3>& out);
+
 // The corridor with NO string-pull at all: start, every portal's span midpoint in order, target.
 //
 // The last rung of the repair ladder, for when a breach on the FIRST leg leaves nothing else -- the
