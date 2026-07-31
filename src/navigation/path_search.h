@@ -4,6 +4,7 @@
 #include <vector>
 #include "navigation/nav_types.h"
 #include "navigation/nav_mesh.h"   // NavMesh::PolyId, for the optional seam goal set below
+#include "navigation/path_danger.h" // PathDanger::Disc, for the optional penalty zones below
 
 // The route SEARCH: A* over the GAME'S OWN NAVMESH (NavMesh), not over a grid of our own invention.
 //
@@ -91,9 +92,14 @@ struct Stats {
 // (S99): a route may never be validated against a point derived from that same route's own
 // progress. A portal between two mesh triangles is not such a point, which is why it is the one
 // the endpoint is taken from.
+// `danger` (optional): soft penalty zones for THIS request -- see path_danger.h. Null for every
+// request the planner did not arm (which is every request except the table-named door), so the
+// pricing block below is unreachable, not merely skipped, on all other routes. Crossings inside a
+// disc pay the disc's weight; nothing is cut and validation is untouched.
 Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
          float bandLo, float bandHi, float reachRadius,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats,
-         const std::vector<NavMesh::PolyId>* seamPolys = nullptr);
+         const std::vector<NavMesh::PolyId>* seamPolys = nullptr,
+         const std::vector<PathDanger::Disc>* danger = nullptr);
 
 } // namespace PathSearch

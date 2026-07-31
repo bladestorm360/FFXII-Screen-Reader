@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include "navigation/nav_types.h"
 
 // Proactive interactive-object list, built by walking the game's own scene-object
@@ -99,5 +100,12 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransiti
 // container with its category byte, interaction flags, npcdic key, name, and world
 // position — the data that confirms where a given object (e.g. the tutorial gate) lives.
 void LogDiagnostic();
+
+// LIVE positions of every listed entity whose npcdic name index equals `nameIdx` (fresh transform
+// read per call; falls back to the last known position when a single read fails, matching
+// RefreshPositionsLocked's streaming-noise rule). Returns the match count. GAME THREAD callers
+// only — added for PathDanger's per-request zone build (Session 106), where the danger actors move
+// during the very window the route must avoid them in.
+int CollectPositionsByNameIdx(int16_t nameIdx, std::vector<FVec3>& out);
 
 } // namespace EntityList

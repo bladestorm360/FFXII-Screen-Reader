@@ -449,6 +449,22 @@ bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransiti
     take(g_entities[view[0]]);
     return true;
 }
+int CollectPositionsByNameIdx(int16_t nameIdx, std::vector<FVec3>& out) {
+    out.clear();
+    if (!PlayerState::IsFieldActive()) return 0;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (const EntityScan::Entity& e : g_entities) {
+        if (e.nameIdx != nameIdx || e.fixed) continue;
+        // Fresh transform, same streaming-noise rule as RefreshPositionsLocked: one failed read
+        // keeps the last known position rather than dropping a live actor mid-request.
+        FVec3 p = e.pos;
+        FVec3 live{};
+        if (e.sceneObj && PlayerState::ReadSceneObjectPos(e.sceneObj, live)) p = live;
+        out.push_back(p);
+    }
+    return static_cast<int>(out.size());
+}
+
 // `` ` `` object dump. The walk itself is in entity_diag.cpp; the lock stays here, with the list it
 // protects, because the dump reads live game tables and must not race a rescan.
 void LogDiagnostic() {

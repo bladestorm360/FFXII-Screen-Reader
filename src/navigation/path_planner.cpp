@@ -4,6 +4,7 @@
 #include "navigation/map_seams.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/path_search.h"
+#include "navigation/path_danger.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/nav_reach.h"
 #include "navigation/nav_trace.h"
@@ -213,6 +214,10 @@ void OnMapTeardown() {
 }
 
 void OnGameFrame() {
+    // Capture-distance diagnostic (Session 106, log-only). One int compare per frame on maps without
+    // a danger-table row; on table maps it logs the pre-gap player position and actor distances when
+    // a scripted scene (a catch, among others) hands control back. See path_danger.h.
+    PathDanger::NoteFieldFrame();
     // Advance the per-map reachability fill BEFORE the pending-request check: it is bounded work that has
     // to make progress whether or not anyone asked for a route, because the exit list filters on it. Once
     // the component is closed this is a couple of atomic loads.
@@ -393,10 +398,19 @@ void OnGameFrame() {
         }
     }
 
+    // DANGER ZONES (Session 106): map-specific, user-authorized, and ARMED PER TARGET -- ActiveZones
+    // matches (map, target) against its table and returns nothing for every other request, expressly
+    // including routes to the Palace Servant who stands beside the very guards the table names. Only
+    // a non-empty set is ever passed, so an unarmed search is byte-identical to a build without this.
+    // Rebuilt on every drain, so the discs track the guards as the distraction moves them.
+    std::vector<PathDanger::Disc> danger;
+    PathDanger::ActiveZones(static_cast<uint32_t>(MapNames::CurrentMapId()), target, danger);
+
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
     PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st,
-                                         seamPolys.empty() ? nullptr : &seamPolys);
+                                         seamPolys.empty() ? nullptr : &seamPolys,
+                                         danger.empty() ? nullptr : &danger);
 
     const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
                          : (r == PathSearch::Plan::Frontier) ? "Frontier"

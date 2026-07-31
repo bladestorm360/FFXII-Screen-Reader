@@ -119,7 +119,8 @@ struct PassResult {
 Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
          float bandLo, float bandHi, float reachRadius,
          std::vector<FVec3>& rawPoly, std::vector<FVec3>& outPoly, Stats& stats,
-         const std::vector<NavMesh::PolyId>* seamPolys) {
+         const std::vector<NavMesh::PolyId>* seamPolys,
+         const std::vector<PathDanger::Disc>* danger) {
     rawPoly.clear();
     outPoly.clear();
     if (!MapQuery::HasWorld()) return Plan::NoPath;
@@ -185,7 +186,9 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // S100: crossings priced because the LEADER'S OWN FLOOR CLASS refuses the ground (bit 23 for
     // class 0 -- the flooded channels), and crossings priced because the poly belongs to a FOREIGN
     // map-jump surface (walking onto one fires a transition the route did not ask for).
-    int refTerrain = 0, refForeignSeam = 0;
+    // S106: crossings priced because they enter a danger disc (path_danger.h) -- only ever non-zero
+    // on the one request the planner armed.
+    int refTerrain = 0, refForeignSeam = 0, refDanger = 0;
     uint32_t refFlags[6] = {};
     int      refFlagN[6] = {};
     int      refFlagCount = 0;
@@ -362,9 +365,9 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 // corridor, so centroid-to-centroid optimises a quantity that is not the distance
                 // walked. The heuristic stays plain Euclidean, so the search is still admissible.
                 FVec3 mid{};
-                const float step = NavMesh::EdgeMidpoint(p, e, mid)
-                                       ? Dist3(pc, mid) + Dist3(mid, nc)
-                                       : Dist3(pc, nc);
+                const bool haveMid = NavMesh::EdgeMidpoint(p, e, mid);
+                const float step = haveMid ? Dist3(pc, mid) + Dist3(mid, nc)
+                                           : Dist3(pc, nc);
 
                 // ---- price the crossing -------------------------------------------------------------
                 float penT = 0.0f, penO = 0.0f;
@@ -393,6 +396,15 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 {
                     const int njg = NavMesh::MapJumpGroup(n);
                     if (njg != 0 && njg != goalGroup) { ++refForeignSeam; penO += kForeignSeamPenalty; }
+                }
+                // A DANGER DISC IS A PRICE, NOT A WALL (Session 106, path_danger.h). The script's
+                // notice radius around a guard is invisible to the mesh and to the sweep, so it is
+                // priced here exactly like a measured block: A* takes any detour up to the weight's
+                // worth, and when the disc covers the only way through, the route still exists and
+                // simply pays. `danger` is null on every request the planner did not arm.
+                if (danger) {
+                    const float dw = PathDanger::PenaltyAt(*danger, haveMid ? mid : nc);
+                    if (dw > 0.0f) { ++refDanger; penO += dw; }
                 }
                 const float bp = BanPenalty(p, e);
                 if (bp > 0.0f) { ++refBanned; penO += bp; }
@@ -695,7 +707,7 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // just as it started to matter. It now also prints whenever the corridor had to PAY for something,
     // because that is the same information arriving one step earlier.
     if (!best.reachedGoal || best.penTerrain > 0.0f || best.penOther > 0.0f ||
-        refTerrain > 0 || refForeignSeam > 0) {
+        refTerrain > 0 || refForeignSeam > 0 || refDanger > 0) {
         char fl[160]; int q = 0;
         for (int i = 0; i < refFlagCount && q < static_cast<int>(sizeof(fl)) - 24; ++i)
             q += snprintf(fl + q, sizeof(fl) - static_cast<size_t>(q), "%s0x%08X x%d",
@@ -707,10 +719,10 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // map where walls were the leading theory, which is what retired that theory.
         char m[448];
         snprintf(m, sizeof(m),
-                 "costed: noPoly=%d(cut) unwalkable=%d terrain=%d foreignSeam=%d edge=%d "
+                 "costed: noPoly=%d(cut) unwalkable=%d terrain=%d foreignSeam=%d danger=%d edge=%d "
                  "rePriced=%d measuredBlock=%d tightXing=%d volXing=%d "
                  "| corridor paid terrain=%.0f other=%.0f | refused eff-flags: %s",
-                 refNoPoly, refUnwalkable, refTerrain, refForeignSeam, refEdge, refBanned,
+                 refNoPoly, refUnwalkable, refTerrain, refForeignSeam, refDanger, refEdge, refBanned,
                  refBlocked, NavMesh::g_tightCrossings, NavMesh::g_volumeCrossings,
                  best.penTerrain, best.penOther, fl);
         Log::Write("NAV-ROUTE", m);
