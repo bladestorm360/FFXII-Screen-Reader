@@ -328,6 +328,12 @@ void LogPairings(const std::vector<MapExits::ExitRec>& jumps,
                  const std::vector<MapExits::SignRec>& signs) {
     Log::Write("NAV-DIAG", "==== exit pairing: rule A (+0x54 slot N+1) vs rule B (field-sign destIdx N+1) ====");
     for (const auto& d : ctrls) {
+        // BOTH RULES ARE ABOUT DOOR CONTROLLERS. An event-bound transition has no controller index,
+        // so rule B's `destIdx == ctrlIndex + 1` would compare against 0 and could pair it with an
+        // unrelated group-0 sign. It has no arrival and no authoring slot either; there is nothing
+        // here for it to be measured against.
+        if (!d.viaController) continue;
+
         // Rule A door: what the shipping code already resolved.
         char abuf[80] = "no slot";
         if (d.posOk) snprintf(abuf, sizeof(abuf), "slot %d (%.1f,%.1f,%.1f)", d.slot, d.pos.x, d.pos.y, d.pos.z);

@@ -177,6 +177,14 @@ void ScanExits(std::vector<Entity>& out) {
 
     std::vector<Entity> candidates;
     for (const auto& d : dests) {
+        // WHO BOUND THIS GROUP, for every log line below. A door controller is named by its index; an
+        // event-bound transition has no controller index at all and is named by its routine, which is
+        // the only thing that identifies it (Session 102).
+        char who[64];
+        if (d.viaController) snprintf(who, sizeof(who), "__MJ_CTRL%03d", d.ctrlIndex);
+        else                 snprintf(who, sizeof(who), "routine[%d] \"%s\"", d.routineIndex,
+                                      d.routineName.c_str());
+
         // WHERE: the walkmap surface tagged with this routine's map-jump group.
         const MapQuery::MapJumpSurface* surf = nullptr;
         if (d.group > 0)
@@ -194,9 +202,9 @@ void ScanExits(std::vector<Entity>& out) {
             if (haveSurfaces) {
                 char m[192];
                 snprintf(m, sizeof(m),
-                         "  __MJ_CTRL%03d group=%d dest=%u -> no map-jump surface on this map, dropped "
+                         "  %s group=%d dest=%u -> no map-jump surface on this map, dropped "
                          "(map has %zu surface(s))",
-                         d.ctrlIndex, d.group, d.destMapId, surfaces.size());
+                         who, d.group, d.destMapId, surfaces.size());
                 Log::Write("NAV-DIAG", m);
             }
             continue;
@@ -207,8 +215,8 @@ void ScanExits(std::vector<Entity>& out) {
             ++dropNotUsed;
             char m[192];
             snprintf(m, sizeof(m),
-                     "  __MJ_CTRL%03d group=%d surface at (%.1f,%.1f,%.1f) -> dest=%u is NOT USED, dropped",
-                     d.ctrlIndex, d.group, surf->centroid.x, surf->centroid.y, surf->centroid.z,
+                     "  %s group=%d surface at (%.1f,%.1f,%.1f) -> dest=%u is NOT USED, dropped",
+                     who, d.group, surf->centroid.x, surf->centroid.y, surf->centroid.z,
                      d.destMapId);
             Log::Write("NAV-DIAG", m);
             continue;
@@ -218,7 +226,11 @@ void ScanExits(std::vector<Entity>& out) {
         e.sceneObj  = nullptr;
         e.fixed     = true;                                          // fixed world pos, no scene node
         e.flags     = 0;
-        e.nameIdx   = static_cast<int16_t>(-(1000 + d.ctrlIndex));   // stable cursor id, one per controller
+        // Stable cursor id, one per BINDING. Controllers keep the exact ids they have always had;
+        // event-bound transitions have no controller index (-1, which would collide the moment a map
+        // had two of them) and take a disjoint band keyed on their routine slot instead.
+        e.nameIdx   = static_cast<int16_t>(d.viaController ? -(1000 + d.ctrlIndex)
+                                                           : -(2000 + d.routineIndex));
         e.category  = Category::Exit;
         e.isTransition = true;                                       // the target IS the trigger surface
         // The handle back to the WHOLE surface, for a route that needs to end on any part of it
@@ -252,8 +264,8 @@ void ScanExits(std::vector<Entity>& out) {
                 n8[k] = (d.destName[k] < 128) ? static_cast<char>(d.destName[k]) : '?';
             char m[288];
             snprintf(m, sizeof(m),
-                     "  __MJ_CTRL%03d group=%d -> \"%s\" (%u) at (%.1f,%.1f,%.1f) | %d polys, box x[%.1f..%.1f] z[%.1f..%.1f]",
-                     d.ctrlIndex, d.group, n8, d.destMapId, e.pos.x, e.pos.y, e.pos.z,
+                     "  %s group=%d -> \"%s\" (%u) at (%.1f,%.1f,%.1f) | %d polys, box x[%.1f..%.1f] z[%.1f..%.1f]",
+                     who, d.group, n8, d.destMapId, e.pos.x, e.pos.y, e.pos.z,
                      surf->polyCount, surf->min.x, surf->max.x, surf->min.z, surf->max.z);
             Log::Write("NAV-DIAG", m);
         }

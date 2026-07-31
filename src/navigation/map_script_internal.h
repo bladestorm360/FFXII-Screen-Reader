@@ -70,6 +70,16 @@ constexpr uint8_t  OP_PUSH_U16     = 0x4F;
 constexpr uint8_t  OP_CALLACTPOPA  = 0x5D;
 constexpr uint8_t  NATIVE_MAPJUMP  = 0x8D;
 constexpr uint16_t MAPJUMP_FLAGS_FIELD_DOOR = 0;
+// The one flags value that is never a walk-to transition. Every map's Director routine holds a long
+// run of these -- the world-map teleport MENU (S64) -- and admitting them would fill the exit list
+// with places you cannot walk to.
+//
+// The rest of the value space is NOT a kind. `mapjump` = FUN_00355350 calls
+// FUN_00314440(dest, entrance, flags, 1) -> FUN_003145e0, where `flags & 1` selects the no-fade path
+// and `(flags >> 1) & 1` feeds FUN_002efa70: a PRESENTATION bitfield. `== 0` is therefore a filter on
+// how a jump looks, not on what it is, which is why the controller path keeps it (play-confirmed on
+// every map that lists exits today) and the group-claiming path does not need it.
+constexpr uint16_t MAPJUMP_FLAGS_WORLDMAP_MENU = 0x0A;
 
 // `setmapjumpgroup(K)` — native 0x011E, compiled as `4f <K:u16> 5d 1e 01`. It is the FIRST
 // distinguishing call in every `__MJ_CTRL` routine, and K is the routine's MAP-JUMP GROUP: the same
