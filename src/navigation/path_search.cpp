@@ -69,9 +69,13 @@ struct Node {
 // The heuristic stays plain Euclidean and therefore stays admissible: penalties only ever ADD to the
 // true cost, so a straight-line estimate can never overshoot it.
 constexpr float kTightPenalty   = 500.0f;    // body does not fit anywhere along this edge
-constexpr float kTerrainPenalty = 2000.0f;   // the party's floor class may not stand on the neighbour
+constexpr float kTerrainPenalty = 2000.0f;   // the LEADER's floor class may not stand on the neighbour
 constexpr float kBlockedPenalty = 2000.0f;   // the player PHYSICALLY failed to get past here
 constexpr float kBreachPenalty  = 500.0f;    // a validated leg through this portal did not walk
+// Crossing a transition surface that is not the route's own goal fires a map jump the player did
+// not ask for (S100: the 311<->321 auto-walk bounce). Same tier as a physical block: avoided
+// whenever any alternative exists, still crossable when it is genuinely the only way.
+constexpr float kForeignSeamPenalty = 2000.0f;
 
 // A portal a later attempt should avoid, because the taut path through it turned out not to be
 // walkable. Scoped to ONE request -- never cached across presses, because the obstacle may be a door
@@ -176,6 +180,10 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // WHY, and for the walkability refusals they keep the distinct effective-flags words -- so the log
     // names the exact terrain class that walled the search in, against the census from the ' key.
     int refNoPoly = 0, refUnwalkable = 0, refEdge = 0, refBanned = 0, refBlocked = 0;
+    // S100: crossings priced because the LEADER'S OWN FLOOR CLASS refuses the ground (bit 23 for
+    // class 0 -- the flooded channels), and crossings priced because the poly belongs to a FOREIGN
+    // map-jump surface (walking onto one fires a transition the route did not ask for).
+    int refTerrain = 0, refForeignSeam = 0;
     uint32_t refFlags[6] = {};
     int      refFlagN[6] = {};
     int      refFlagCount = 0;
@@ -188,6 +196,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // Read once per request, not per edge.
     const uint64_t nowMs = GetTickCount64();
     const bool blockedActive = NavBlocked::Any();
+    // The GOAL's own map-jump group (0 for every non-transition target). Any OTHER group's polys
+    // are a foreign transition surface: walking onto one teleports the player mid-route -- the
+    // S100 tester round's 311<->321 bounce. Priced, never cut, and the goal's own seam is exempt
+    // by construction.
+    const int goalGroup = (!goalOffMesh) ? NavMesh::MapJumpGroup(goal) : 0;
 
     std::vector<BannedEdge> banned;
     PassResult best{};                 // the last pass that produced a corridor at all
@@ -295,8 +308,13 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             if (!Centroid(p, pc)) continue;
             // ...and the same for the frontier. `bestNear` is where a shortfall route ENDS, so it is a
             // place the player gets told to stand; a priced-but-expanded water poly must never win it.
+            // Since S100 that is enforced with the LEADER'S OWN floor test, not just the type test --
+            // a frontier must never end the player in the flooded channel their class cannot enter.
             const float dGoal = Dist3(pc, goalC);
-            if (dGoal < pr.bestNearD && NavMesh::Walkable(p)) { pr.bestNearD = dGoal; pr.bestNear = p; }
+            if (dGoal < pr.bestNearD && NavMesh::Walkable(p) && !NavMesh::TerrainRefused(p)) {
+                pr.bestNearD = dGoal;
+                pr.bestNear  = p;
+            }
 
             const auto gIt = gScore.find(p);
             if (gIt == gScore.end()) continue;
@@ -328,6 +346,26 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                     uint32_t nr = 0, ne = 0;
                     if (NavMesh::PolyFlags(n, nr, ne)) NoteRefusedFlags(ne);
                     penT += kTerrainPenalty;
+                } else if (NavMesh::TerrainRefused(n)) {
+                    // THE LEADER'S OWN FLOOR CLASS REFUSES THIS GROUND (Session 100, both gates
+                    // closed). The mover hands FUN_00230a40 the class FUN_002681d0 wrote -- 0 for
+                    // the player-controlled character, whose branch requires bit 23 CLEAR -- so a
+                    // bit-23 poly (the flooded channels) is a WALL to the leader in play: the 315
+                    // walk stops at the exact poly-23|224 flag boundary, and STANDING-ON-REFUSED
+                    // has never once fired. A PRICE, never a cut (the S96 lesson): a goal whose
+                    // every approach is flooded still resolves, it just pays.
+                    ++refTerrain;
+                    uint32_t nr = 0, ne = 0;
+                    if (NavMesh::PolyFlags(n, nr, ne)) NoteRefusedFlags(ne);
+                    penT += kTerrainPenalty;
+                }
+                // A FOREIGN TRANSITION SURFACE IS A TELEPORT, NOT A FLOOR (Session 100 tester
+                // round: the replanned Lowtown route cornered ON the No. 10 Channel seam and
+                // auto-walk bounced 311<->321 twice). Any seam group other than the goal's own is
+                // priced so routes steer around it whenever an alternative exists.
+                {
+                    const int njg = NavMesh::MapJumpGroup(n);
+                    if (njg != 0 && njg != goalGroup) { ++refForeignSeam; penO += kForeignSeamPenalty; }
                 }
                 const float bp = BanPenalty(p, e);
                 if (bp > 0.0f) { ++refBanned; penO += bp; }
@@ -629,7 +667,8 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // nothing severs the graph, is exactly the case that has become rare, so it would have gone quiet
     // just as it started to matter. It now also prints whenever the corridor had to PAY for something,
     // because that is the same information arriving one step earlier.
-    if (!best.reachedGoal || best.penTerrain > 0.0f || best.penOther > 0.0f) {
+    if (!best.reachedGoal || best.penTerrain > 0.0f || best.penOther > 0.0f ||
+        refTerrain > 0 || refForeignSeam > 0) {
         char fl[160]; int q = 0;
         for (int i = 0; i < refFlagCount && q < static_cast<int>(sizeof(fl)) - 24; ++i)
             q += snprintf(fl + q, sizeof(fl) - static_cast<size_t>(q), "%s0x%08X x%d",
@@ -641,11 +680,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // map where walls were the leading theory, which is what retired that theory.
         char m[448];
         snprintf(m, sizeof(m),
-                 "costed: noPoly=%d(cut) unwalkable=%d edge=%d rePriced=%d measuredBlock=%d "
-                 "tightXing=%d volXing=%d | corridor paid terrain=%.0f other=%.0f "
-                 "| unwalkable eff-flags: %s",
-                 refNoPoly, refUnwalkable, refEdge, refBanned, refBlocked,
-                 NavMesh::g_tightCrossings, NavMesh::g_volumeCrossings,
+                 "costed: noPoly=%d(cut) unwalkable=%d terrain=%d foreignSeam=%d edge=%d "
+                 "rePriced=%d measuredBlock=%d tightXing=%d volXing=%d "
+                 "| corridor paid terrain=%.0f other=%.0f | refused eff-flags: %s",
+                 refNoPoly, refUnwalkable, refTerrain, refForeignSeam, refEdge, refBanned,
+                 refBlocked, NavMesh::g_tightCrossings, NavMesh::g_volumeCrossings,
                  best.penTerrain, best.penOther, fl);
         Log::Write("NAV-ROUTE", m);
     }

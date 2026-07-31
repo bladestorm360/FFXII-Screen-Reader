@@ -192,10 +192,18 @@ bool Walkable(PolyId p) {
     return (eff & NavRva::WALK_POLY_TYPE_MASK) == 0;
 }
 
-// The engine's per-class floor test, ASKED BUT NEVER OBEYED (Session 96). Nothing routes on this; it
-// exists so `PlayerState::NoteStandingPoly` can check it against the one fact that cannot be argued
-// with -- where the player is actually standing. Until it stops disagreeing with that, it is not fit to
-// refuse anything.
+// The engine's per-class floor test -- PROMOTED in Session 100 from hypothesis to validated
+// predicate, with both gates closed:
+//   * the class chain is proven in the decompile (FUN_002681d0 writes the LEADER class 0 to
+//     walkObj+0x80, which IS moveCtx+0x50 via FUN_003db140's +0x30, and FUN_00230a40's class-0
+//     branch requires bit 23 CLEAR);
+//   * play agrees everywhere it has been asked: the 315 walk stops at the exact poly-23|224 flag
+//     boundary, the waded 321 shallows are bit-23-clear, and the NavTrace STANDING-ON-REFUSED
+//     tripwire has never fired once.
+// CONSUMERS: A*'s terrain PRICE (never a cut -- the S96 lesson stands), the march's accept rule,
+// and the frontier's bestNear guard. `NavMesh::Walkable` deliberately stays the permissive TYPE
+// test: wiring the class test into it is the over-refusal lever S96 pulled (it gates flood, goal
+// acceptance, EdgePassable and GroundY at once) and must never be pulled again.
 bool TerrainRefused(PolyId p) {
     if (!ValidPoly(p)) return false;
     return !MapQuery::FloorWalkable(p, PlayerState::PartyMovementClass());

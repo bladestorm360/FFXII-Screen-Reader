@@ -94,12 +94,14 @@ bool PolyFlags(PolyId p, uint32_t& raw, uint32_t& effective);
 // it. Anything that makes this function stricter than FUN_00230a40 is a bug.
 bool Walkable(PolyId p);
 
-// The engine's own per-class floor test, inverted: "would FloorWalkable refuse the party here?"
+// The engine's own per-class floor test, inverted: "would FloorWalkable refuse the LEADER here?"
 //
-// NOTHING ROUTES ON THIS. It is a hypothesis under observation, not a predicate -- Session 96 wired it
-// into `Walkable` and it refused 399 of 690 prims on map 311, including the shallow water the tester
-// walks through. `NavTrace` checks it against where the player is ACTUALLY standing; until that check
-// stops firing, the answer is not trustworthy enough to refuse anything.
+// PROMOTED Session 100 (was "nothing routes on this"): the class chain is decompile-proven (leader
+// floor class = 0; class 0 requires bit 23 clear) and play agrees everywhere asked -- the 315 stop
+// sits on the exact flag boundary, the waded shallows are bit-23-clear, and the NavTrace tripwire
+// has never fired. Consumers: A*'s terrain PRICE, the march's accept rule, the frontier's bestNear
+// guard. It is a PRICE/BREACH input, NEVER a graph cut, and never wired into `Walkable` -- S96
+// proved that lever over-refuses (399/690 prims priced out of existence on map 311).
 bool TerrainRefused(PolyId p);
 
 // Is `p` a legitimate floor-poly index? A poly index is an s16 in the engine and the prim encoding

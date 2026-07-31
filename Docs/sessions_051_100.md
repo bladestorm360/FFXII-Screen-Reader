@@ -5531,3 +5531,31 @@ mover's rule with the sweep's class, the same conflation) so a refused crossing 
 the existing ladder/re-cost/frontier; (c) `NavMesh::Walkable` itself STAYS the permissive type
 test (S96 proved that lever over-refuses — it gates flood/goals/edges/GroundY). Then the S98
 surface-goal fix, then auto-walk steer-to-line + foreign-seam pricing.
+
+### Session 100 addendum 4 — the class-aware fix set BUILT AND DEPLOYED
+
+Four changes, each with its own log signature, all on the priced-never-cut doctrine:
+
+1. **A* prices leader-refused terrain** (`path_search.cpp`): a type-walkable neighbour failing
+   `TerrainRefused` (the engine's own per-class floor test, leader class 0, bit 23) pays
+   kTerrainPenalty. Counter `terrain=` on the `costed:` line; refused eff-flags named. The
+   frontier's `bestNear` also excludes refused polys -- a shortfall route may never end the
+   player in the flooded channel.
+2. **A* prices FOREIGN transition surfaces**: any poly whose map-jump group != the goal's own
+   group pays kForeignSeamPenalty=2000 (the 311<->321 auto-walk bounce). Counter `foreignSeam=`.
+   The goal's group is derived from the goal poly -- no new plumbing.
+3. **The march's accept rule gains the mover's CLASS** (`path_march.cpp`): step-in now requires
+   `Walkable && !TerrainRefused`, and a graze rescue must land on class-standable ground. The
+   S100 march had replicated the accept rule with the sweep's class 4 -- the same conflation the
+   verification unwound -- which is why it passed 315's leg 3. A refused crossing now breaches
+   (`why=march`, nbrEff shows bit 23) into the existing ladder/re-cost/frontier.
+4. **Auto-walk steers to the route LINE, not at the corner** (`auto_walk.cpp` + `LegSnapshot.
+   legStart`): off the validated line by > 1.0 m, aim at the line's nearest point + 2.0 m lead.
+   Kills the off-line beeline that hit the 311 wall spur head-on (motion=0.0m) and triggered the
+   pathological replan. `TerrainRefused` promoted from hypothesis to consumer-bearing predicate
+   (nav_mesh docs updated); `NavMesh::Walkable` itself deliberately untouched.
+
+**Expected on 315:** A* pays 2000/crossing through ~2,545 flooded polys, so the clean south-bank
+route wins; the march would breach any residual chord into the flood. Expected on 311: the
+Lowtown replan can no longer corner on the No. 10 seam. **NOT play-confirmed. No gain is claimed
+until the tester reports one.**

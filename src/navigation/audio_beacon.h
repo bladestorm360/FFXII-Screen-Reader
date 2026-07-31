@@ -64,6 +64,9 @@ struct LegSnapshot {
     uint32_t epoch         = 0;
     size_t   legIndex      = 0;       // 0-based index of the corner currently steered at
     size_t   legCount      = 0;
+    FVec3    legStart{};              // where the current leg begins (the previous corner) -- the
+                                      // route LINE is legStart -> legTarget, and auto-walk steers
+                                      // to rejoin that line, not to beeline at the corner (S100)
     FVec3    legTarget{};
     FVec3    finalTarget{};
     float    routeLenM     = 0.0f;

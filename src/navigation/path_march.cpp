@@ -163,7 +163,10 @@ bool GrazeScan(const FVec3& a, const FVec3& b, float legLen, float tFrom, float 
         const float px = a.x + (b.x - a.x) * t2;
         const float pz = a.z + (b.z - a.z) * t2;
         const NavMesh::PolyId q = NavMesh::FindPolyAt(px, seedY, pz);
-        if (q != NavMesh::kNoPoly && NavMesh::Walkable(q)) {
+        // A rescue must land on ground the LEADER can actually stand on (S100): rescuing onto a
+        // type-walkable but class-refused poly would march the route across a flag wall the mover
+        // refuses in play.
+        if (q != NavMesh::kNoPoly && NavMesh::Walkable(q) && !NavMesh::TerrainRefused(q)) {
             P    = q;
             tCur = t2;
             ++grazes;
@@ -248,15 +251,20 @@ MarchResult MarchLeg(const FVec3& a, const FVec3& b, float endTol) {
         if (!NavMesh::NeighborChecked(P, bestE, n)) { r.why = "neighbor-unreadable"; return r; }
 
         uint32_t nbrRaw = 0, nbrEff = 0;
-        bool nbrWalkable = false;
+        bool nbrAccepted = false;
         if (n != NavMesh::kNoPoly) {
             if (!NavMesh::PolyFlags(n, nbrRaw, nbrEff)) { r.why = "flags-unreadable"; return r; }
-            nbrWalkable = NavMesh::Walkable(n);
+            // THE MOVER'S ACCEPT RULE, WITH THE MOVER'S CLASS (Session 100 correction). The rule
+            // is `neighbour exists && FUN_00230a40(neighbour, moveCtx+0x50)` -- and moveCtx+0x50
+            // holds FUN_002681d0's per-character class (0 for the leader, whose branch requires
+            // bit 23 CLEAR), NOT the sweep's query class 4. The S100 march shipped with the type
+            // test alone (the class-4 reduction), which is why it passed 315's leg 3: poly 224 is
+            // type-walkable and bit-23 refused. `TerrainRefused` is the engine's own per-class
+            // test, called not replicated, validated by NavTrace never once contradicting play.
+            nbrAccepted = NavMesh::Walkable(n) && !NavMesh::TerrainRefused(n);
         }
 
-        if (n != NavMesh::kNoPoly && nbrWalkable) {
-            // The mover's accept rule (FUN_0022f9b0 / FUN_002327d0, conf 0.99 since S75): the
-            // neighbour exists and the party's floor class may stand on it. Step in.
+        if (n != NavMesh::kNoPoly && nbrAccepted) {
             P    = n;
             tCur = bestT;
             continue;

@@ -147,10 +147,11 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
         const bool  last    = (i + 1 == path.size());
         const float legTol  = (last && arrivalTol > tol) ? arrivalTol : tol;
 
-        // THE ADJACENCY MARCH RUNS FIRST (Session 100) AND IT IS FREE -- memory reads only, so it
-        // spends no probes. `probeCap` prices ENGINE calls; charging free reads would starve the
-        // WalkLeg re-asks into truncated -> frontier, an over-refusal. Its breach is applied AFTER
-        // the sweep below so swept/blind/worstFrac keep their meaning on every leg.
+        // THE ADJACENCY MARCH RUNS FIRST (Session 100) AND SPENDS NO PROBES -- `probeCap` prices
+        // SWEEPS, and the march makes none (mesh reads plus, since the class-aware correction, one
+        // cheap pure floor-test call per crossing). Charging it would starve the WalkLeg re-asks
+        // into truncated -> frontier, an over-refusal. Its breach is applied AFTER the sweep below
+        // so swept/blind/worstFrac keep their meaning on every leg.
         const PathMarch::MarchResult march = PathMarch::MarchLeg(a, b, legTol);
         r.marchGraze += march.grazes;
         if (march.verdict == PathMarch::MarchVerdict::NoVerdict) ++r.marchBlind; else ++r.march;

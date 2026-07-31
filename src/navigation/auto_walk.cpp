@@ -47,6 +47,13 @@ constexpr uint64_t kFieldGapMs     = 600;
 constexpr uint64_t kNoProgressMs   = 15000;
 constexpr float    kProgressM      = 1.0f;
 constexpr float    kWalkDeltaCapM  = 5.0f;   // per-frame delta above this = teleport, not walking
+// STEER TO THE LINE, NOT AT THE CORNER (S100 tester round). A leg advances on a 2.0 m radius, so
+// the walker can be up to 2 m off the VALIDATED line; a beeline from there clips geometry the
+// route avoids (the 311 wall spur: head-on cancel, motion=0.0m, stuck, then a pathological
+// replan). Off the line by more than kRejoinDist, aim at the line's nearest point plus a forward
+// lead -- converge onto the corridor, then follow it.
+constexpr float    kRejoinDist     = 1.0f;
+constexpr float    kRejoinLeadM    = 2.0f;
 
 // ---- cross-thread state (the ONLY state the input-poll thread touches) ---------------------------
 std::atomic<bool>     g_engaged{false};
@@ -271,10 +278,31 @@ void OnGameFrame() {
         return;
     }
 
-    // ---- steering: render the SAME bearing the spoken legs and the pan render (S92 rule) --------
-    int desired = NavCommon::RelativeOctant(me, snap.legTarget, facingRad);
+    // ---- steering: render the SAME bearing math the spoken legs use (S92 rule), aimed at the
+    // route LINE when off it (S100) -----------------------------------------------------------
+    FVec3 steer = snap.legTarget;
+    {
+        const float vx = snap.legTarget.x - snap.legStart.x;
+        const float vz = snap.legTarget.z - snap.legStart.z;
+        const float len2 = vx * vx + vz * vz;
+        if (len2 > 1e-4f) {
+            float t = ((me.x - snap.legStart.x) * vx + (me.z - snap.legStart.z) * vz) / len2;
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+            const float fx = snap.legStart.x + vx * t;
+            const float fz = snap.legStart.z + vz * t;
+            const float dx = me.x - fx, dz = me.z - fz;
+            if (dx * dx + dz * dz > kRejoinDist * kRejoinDist) {
+                const float len   = std::sqrt(len2);
+                float       tLead = t + kRejoinLeadM / len;
+                if (tLead > 1.0f) tLead = 1.0f;
+                steer.x = snap.legStart.x + vx * tLead;
+                steer.z = snap.legStart.z + vz * tLead;
+            }
+        }
+    }
+    int desired = NavCommon::RelativeOctant(me, steer, facingRad);
     if (g_octant >= 0 && desired != g_octant) {
-        const float rel = NavCommon::RelativeBearingDeg(me, snap.legTarget, facingRad);
+        const float rel = NavCommon::RelativeBearingDeg(me, steer, facingRad);
         float d = rel - static_cast<float>(g_octant) * 45.0f;
         while (d > 180.0f)  d -= 360.0f;
         while (d < -180.0f) d += 360.0f;

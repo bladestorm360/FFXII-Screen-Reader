@@ -219,6 +219,7 @@ bool GetLegSnapshot(LegSnapshot& out) {
     if (!out.routeActive || g_current >= g_legs.size()) return false;
     out.legIndex    = g_current;
     out.legCount    = g_legs.size();
+    out.legStart    = g_legStart;
     out.legTarget   = g_legs[g_current];
     out.finalTarget = g_legs.back();
     FVec3 me;

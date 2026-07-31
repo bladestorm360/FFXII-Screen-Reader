@@ -9,7 +9,9 @@
 // instrument:
 //
 //   * `MarchLeg` asks the MESH: it walks the chord poly-to-poly across the walkmap's own adjacency,
-//     applying the engine mover's accept rule at every edge crossing. Memory-only, no engine calls.
+//     applying the engine mover's accept rule at every edge crossing -- SINCE S100 WITH THE MOVER'S
+//     OWN CLASS (the leader's, via `TerrainRefused`), which adds one cheap pure engine floor-test
+//     call per crossing. Still no probe budget: probes price SWEEPS, and this makes none.
 //   * `WalkLeg` asks the ENGINE: it walks the chord in body-sized steps with `MapQuery::BodySweep`,
 //     carrying the engine's own resolved position forward so depenetration slides exactly as in play.
 //
