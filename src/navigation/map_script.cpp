@@ -321,18 +321,30 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             break;
         }
 
-        // A ROUTINE THAT DOES NOT CLAIM A GROUP CLAIMS NOTHING.
+        // A GROUP IS NO LONGER REQUIRED OF A NON-CONTROLLER -- Session 105, and this is the fix.
         //
-        // This is the whole admission rule for the non-controller class, and it is the S64 binding
-        // rule unchanged: the routine calling `setmapjumpgroup(K)` OWNS group K, and its own
-        // `mapjump` literal is where K goes. Every map is full of `mapjump` calls that are not
-        // transitions -- the Director's world-map teleport list, story moves -- and none of them arm
-        // a group. Without this gate they would all become phantom exits with no surface to stand
-        // on, which is the failure S83/S84 spent two sessions deleting.
+        // S102 replaced the `__MJ_CTRL` NAME filter with a `setmapjumpgroup` filter, on the reasoning
+        // that the routine arming group K owns the surface tagged K. That is true of every DOOR. It
+        // is not true of map 313's dungeon staircase: the container census showed routine[4] -- the
+        // `イベント…` ("event") routine -- holding
+        // `mapjump(dest=567 "Royal Palace: Cellar Stores", entrance=1, flags=0x1)` while arming NO
+        // group, and `MAP-JUMP GROUPS ARMED ANYWHERE: 2` proved that NOTHING in any of the five
+        // script containers arms group 1. The walkmap carries the group-1 tag as static map data; an
+        // event-fired transition never needs to arm it, because the EVENT decides whether the party
+        // moves, not the map-jump group system. So the exit was never listed in ANY build -- the old
+        // name filter rejected routine[4] on its name and the new group filter rejected it again.
+        //
+        // What replaces the gate, since S83/S84's phantom exits are the real danger here:
+        //   1. `flags == 0x0A` (the world-map teleport MENU) is still excluded, below;
+        //   2. a group-less candidate must resolve to a REAL AREA NAME -- see the test below. The
+        //      walkmap tag used to vouch for these routines; with no tag, the destination must;
+        //   3. and it is still bound to nothing until `exit_scan.cpp` can pair it with a swept
+        //      surface UNAMBIGUOUSLY -- exactly one unclaimed surface and exactly one candidate.
+        //      Two of either and it binds nothing at all.
+        // A map that is correct today has zero unclaimed surfaces, so rule 3 cannot fire on it.
         //
         // Controllers keep their exact previous behaviour, group or no group: one with no group is
         // still recorded and still dropped downstream as `nogroup`, and that count is printed.
-        if (!isCtrl && group <= 0) continue;
 
         // First field-door mapjump inside the routine is its destination. (Templates emit the same
         // call twice — e.g. a faded and an unfaded path — with identical operands, so first wins.)
@@ -348,6 +360,15 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             // value except the world-map teleport menu's, of which every map holds a long run.
             if (isCtrl ? (jumpFlags != MAPJUMP_FLAGS_FIELD_DOOR)
                        : (jumpFlags == MAPJUMP_FLAGS_WORLDMAP_MENU))
+                continue;
+
+            // RULE 2 of the gate above: with no `setmapjumpgroup` vouching for it, the DESTINATION
+            // has to. A story move to a map the name tables call "NOT USED" is not a place the
+            // player can walk to, and admitting one would put a phantom exit on the map with nothing
+            // to stand on. Keep scanning rather than admitting -- a later `mapjump` in the same
+            // routine may be the real one.
+            if (!isCtrl && group <= 0 &&
+                !MapNames::HasRealAreaName(static_cast<int>(U16(b, o + 1))))
                 continue;
 
             ExitDest d;
@@ -372,11 +393,14 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
                 char n8[96] = {};
                 for (size_t k = 0; k < d.destName.size() && k < 95; ++k)
                     n8[k] = (d.destName[k] < 128) ? static_cast<char>(d.destName[k]) : '?';
-                char m[320];
+                char grp[64];
+                if (group > 0) snprintf(grp, sizeof(grp), "claims group %d", group);
+                else           snprintf(grp, sizeof(grp), "arms NO group (needs a surface paired to it)");
+                char m[352];
                 snprintf(m, sizeof(m),
-                         "  routine[%u] \"%s\" claims group %d -> dest=%u (\"%s\") entrance=%u "
+                         "  routine[%u] \"%s\" %s -> dest=%u (\"%s\") entrance=%u "
                          "flags=0x%X -- an EVENT-BOUND transition, not a __MJ_CTRL door",
-                         i, d.routineName.c_str(), group, d.destMapId, n8, d.entrance, jumpFlags);
+                         i, d.routineName.c_str(), grp, d.destMapId, n8, d.entrance, jumpFlags);
                 Log::Write("NAV-DIAG", m);
                 break;
             }

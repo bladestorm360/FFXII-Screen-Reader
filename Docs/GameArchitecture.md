@@ -459,7 +459,53 @@ Map 313's blob does name the event domain — routine `SAKIYOMI_grm_a0380`, "pre
 grm_a0380" — and `event/grm_a/grm_a0380/grm_a0380.ebp` is a real 7,104-byte file. It contains neither
 call. Event `.ebp` headers also differ from `ctrl.ebp` (routine table is not at `+0x18`).
 
-### The `+0x70` field-sign table has MORE THAN ONE transition class — Session 104, OPEN
+### AN EVENT-FIRED TRANSITION ARMS NO GROUP — Session 105, the answer to map 313
+
+**Measured by the container census on one load of map 313:**
+
+```
+c0 routine[1] "__MJ_CTRL000": setmapjumpgroup(2) @+0x6
+c0 routine[1] "__MJ_CTRL000": mapjump(dest=315 "Garamsythe Waterway: Northern Sluiceway", entrance=2, flags=0x0)
+c0 routine[4] "?C?x???g????": mapjump(dest=567 "Royal Palace: Cellar Stores", entrance=1, flags=0x1)
+CENSUS: 1/5 container(s) hold a blob | MAP-JUMP GROUPS ARMED ANYWHERE: 2
+```
+
+Routine 4 is the **`イベント…`** ("event") routine. It holds the staircase's destination — **map 567,
+Royal Palace: Cellar Stores** — and **arms no group at all**, and `MAP-JUMP GROUPS ARMED ANYWHERE: 2`
+proves nothing in any of the five containers arms group 1. Containers 1-4 are empty on this map.
+
+> **The walkmap's map-jump group tag is STATIC map data. `setmapjumpgroup(K)` is what a DOOR
+> CONTROLLER does at runtime; an event-fired transition never calls it, because the EVENT decides
+> whether the party moves, not the map-jump group system.** So S64's "one routine, both halves" holds
+> for doors and **does not** hold for this class: the surface and the destination are authored in the
+> same blob but nothing joins them.
+
+That is why the exit was never listed in **any** build: the pre-S102 `__MJ_CTRL` NAME filter rejected
+routine 4, and S102's replacement `setmapjumpgroup` filter rejected it again. S102 did not delete an
+exit — it failed to add one, twice over.
+
+**The join is made by ELIMINATION** (`BindUnclaimedSurface`, `exit_scan.cpp`): exactly one swept
+surface no routine's group claims, AND exactly one group-less candidate whose destination resolves to
+a real area name ⇒ they are each other's. Any other count binds nothing and says so. It is arithmetic
+over the game's own two lists — no proximity, no invented geometry — and it is *unreachable* on a map
+that is already correct, because such a map has zero unclaimed surfaces. `flags = 0x1` here is bit 0 =
+the no-fade path, consistent with an event doing its own presentation. The binding is published to
+`g_claims`, so NavTrace's `CROSSING ORACLE` checks it the moment the player walks through.
+
+### STRUCK — "the `+0x70` field-sign table's group 1 carries the destination" (Session 104, killed Session 105)
+
+Map 313's one live group-1 field-sign record sits at `(30.16,13.00,4.25)` — inside the staircase
+seam's x-range, 0.05 m off its z-edge — and carried the only non-`0xFFFF` `areaId` in any log this
+project had taken (`areaId=32, destIdx=2`). It looked like the destination for exactly the surface
+that had none.
+
+**It is not. `areaId = 32` resolves to "Pharos at Ridorana"; the script says 567, Royal Palace: Cellar
+Stores.** Word[5] of a `+0x8c` record is not the destination for this record class (or `destIdx` is
+not its key). The positional agreement was a coincidence — the same failure mode as every refuted exit
+model, caught in one log only because the diagnostic printed the RESOLVED NAME instead of the id.
+**Do not revive the field-sign table as a destination source.**
+
+### (superseded, kept for the reasoning trail) The `+0x70` field-sign table has MORE THAN ONE transition class — Session 104
 
 `entity_postscan.cpp` treats **group 0** as "doorway" and discards every other group. Measured on two
 maps in one log, group 0's live records land 1:1 on the map's ordinary walk-onto seam surfaces — and

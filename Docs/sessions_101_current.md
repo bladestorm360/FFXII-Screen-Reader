@@ -341,3 +341,79 @@ On map 313, in order:
 
 Do NOT re-attempt: sweeping event `.ebp` files for a walk-onto binding (0/346, above), and offline
 `.mpk` map-script analysis (the name pool is packed on disk — already recorded in `GameArchitecture.md`).
+
+## Session 105 — 2026-07-31 — [exits] An event-fired transition arms NO group: the staircase is bound by elimination
+
+KEYWORDS: map 313 staircase Royal Palace Cellar Stores 567 routine 4 event routine mapjump flags 0x1
+setmapjumpgroup absent group 1 unclaimed elimination binding BindUnclaimedSurface groupInferred
+field-sign group 1 areaId 32 Pharos at Ridorana STRUCK container census
+
+### The census answered it on the first load
+
+```
+c0 routine[1] "__MJ_CTRL000": setmapjumpgroup(2) @+0x6
+c0 routine[1] "__MJ_CTRL000": mapjump(dest=315 "Garamsythe Waterway: Northern Sluiceway", entrance=2, flags=0x0)
+c0 routine[4] "?C?x???g????": mapjump(dest=567 "Royal Palace: Cellar Stores", entrance=1, flags=0x1)
+container 1..4: NO BLOB INSTALLED
+CENSUS: 1/5 container(s) hold a blob | 25 routine span(s) read | MAP-JUMP GROUPS ARMED ANYWHERE: 2
+```
+
+Routine 4 is the `イベント…` ("event") routine S102 named and discarded. **Its span was read, its
+`mapjump` was found, and the destination resolves: map 567, Royal Palace: Cellar Stores.** It arms no
+group, and nothing anywhere arms group 1.
+
+> **An event-fired transition supplies only HALF of S64's binding.** The walkmap's group tag is static
+> map data; `setmapjumpgroup(K)` is what a DOOR CONTROLLER does at runtime. An event never calls it,
+> because the event decides whether the party moves. The surface and the destination are authored in
+> the same blob and nothing joins them.
+
+**The exit was never listed in any build**, and the tester said so before the log did: the pre-S102
+`__MJ_CTRL` name filter rejected routine 4, and S102's replacement group filter rejected it again.
+S102 did not delete an exit; it failed to add one, twice. *"It wasn't in builds going back before
+session 90"* — correct, and the earlier draft of this entry blamed S102 for a deletion that never
+happened.
+
+### The join: elimination, not proximity
+
+`BindUnclaimedSurface` (`exit_scan.cpp`), run before `PublishClaims`:
+
+> exactly ONE swept surface that no routine's group claims **and** exactly ONE group-less candidate
+> whose destination resolves to a real area name ⇒ they are each other's. **Any other count binds
+> nothing** and logs the counts.
+
+Arithmetic over the game's own two lists. No proximity test, no invented geometry — the failure mode
+of every refuted exit model, and of this session's own first hypothesis (below). It is **unreachable
+on a map that is already correct**: such a map has zero unclaimed surfaces, so the first count is 0 and
+the function returns before deciding anything. `ExitDest::groupInferred` carries the provenance so no
+log line can present an inference as a reading (`routine[4] "…" [group INFERRED]`).
+
+The gate in `map_script.cpp` that replaced "must arm a group", since S83/S84's phantom exits are the
+real risk: `flags == 0x0A` still excluded; a group-less candidate **must resolve to a real area name**
+(with no walkmap tag vouching for it, the destination must); and it is bound to nothing until the 1:1
+test above passes.
+
+**Falsifier, already shipped:** the binding is published to `g_claims`, so walking the staircase makes
+NavTrace's `CROSSING ORACLE` compare mod-claimed against actually-arrived and print `MATCH`/`MISMATCH`
+by itself.
+
+### STRUCK, same day it was raised — the field-sign group-1 destination (S104)
+
+313's live group-1 `+0x70` record sits at `(30.16,13.00,4.25)`, inside the staircase seam's x-range,
+0.05 m off its z-edge, and carried the only non-`0xFFFF` `areaId` this project had ever logged. It
+looked like the destination for exactly the surface that lacked one.
+
+**`areaId = 32` resolves to "Pharos at Ridorana". The script says 567, Royal Palace.** Word[5] of a
+`+0x8c` record is not this class's destination. It survived less than one map load — because the
+diagnostic printed the RESOLVED NAME rather than the id it was tempting to ship.
+
+### State
+
+**BUILT AND DEPLOYED on `combat-system`.** NOT play-confirmed. On map 313 expect:
+`elimination binding: the ONE unclaimed surface (group 1) is routine[4] "…"'s -> dest=567 ("Royal
+Palace: Cellar Stores") -- INFERRED, no script arms this group`, then `exits: … listed=2`, the
+`NO CONTROLLER CLAIMS THIS GROUP` line **gone**, and a routable Exit at ~(32.0,17.0,-0.8).
+**On every other map the listed count must not move** — a new exit on a map that was already correct
+is a regression, not a win. Then walk it for the `CROSSING ORACLE … MATCH`.
+
+Also this session: 6 of 313's 31 routine spans read as UNREADABLE (routine 4 was not among them) — a
+real gap in the scan, unexplained, not yet chased.

@@ -52,6 +52,15 @@ struct ExitDest {
     // which is -1 for them. Callers keying a cursor on the exit must use whichever applies.
     int          routineIndex  = -1;
     bool         viaController = true;
+    // TRUE when `group` was not read from the script at all but INFERRED downstream, by the
+    // elimination rule in exit_scan.cpp: exactly one swept map-jump surface that no routine claims,
+    // and exactly one group-less candidate with a real destination, so there is only one way to pair
+    // them. Map 313's dungeon staircase is that case -- routine[4] (the `イベント…` routine) holds
+    // `mapjump(567 "Royal Palace: Cellar Stores", entrance=1, flags=0x1)` and arms NO group, and the
+    // container census proves NOTHING on that map arms group 1. The walkmap carries the tag; no
+    // runtime call ever sets it, because an event-fired transition does not use the group system to
+    // decide -- the event does. Recorded so a log line can never present an inference as a reading.
+    bool         groupInferred = false;
     std::string  routineName;      // sanitised, for the log only (most are Shift-JIS)
     // The `mapjump` call's third literal. NOT a transition kind: the decompile chain
     // FUN_00355350 -> FUN_00314440 -> FUN_003145e0 uses it as a PRESENTATION bitfield (bit 0 picks

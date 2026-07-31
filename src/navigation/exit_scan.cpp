@@ -94,6 +94,84 @@ void PublishClaims(int mapId, const std::vector<MapScript::ExitDest>& dests) {
         if (d.group > 0) g_claims.push_back(ClaimRow{ mapId, d.group, static_cast<uint16_t>(d.destMapId) });
 }
 
+// PAIR THE ONE UNCLAIMED SURFACE WITH THE ONE UNBOUND DESTINATION — Session 105.
+//
+// An event-fired transition supplies only half of S64's binding. Map 313's staircase into the Royal
+// Palace Cellar Stores is a real walkmap surface tagged map-jump group 1 that the seam sweep has
+// always found, and routine[4] (the `イベント…` routine) holds its `mapjump(567, 1, flags=0x1)` — but
+// NOTHING arms group 1. The container census proved that across all five script containers, so there
+// is no call anywhere that says "group 1 is this routine's". The two halves exist; the join does not.
+//
+// So the join is made by ELIMINATION, and only when elimination is the whole answer:
+//
+//   exactly ONE swept surface that no routine's group claims
+//   AND exactly ONE group-less candidate with a real destination
+//   => that surface is that candidate's. Any other count binds NOTHING.
+//
+// This is not a proximity match and it invents no geometry — the failure mode of every refuted exit
+// model (S57-S64), and of the field-sign group-1 record this session tested and threw away when its
+// `areaId` resolved to "Pharos at Ridorana" while the script said Royal Palace. It is arithmetic over
+// the game's own two lists, and it is *unreachable* on a map that is already correct: such a map has
+// zero unclaimed surfaces, so the first count is 0 and the function returns before deciding anything.
+//
+// The falsifier is already shipped and needs no new code: the binding is published to `g_claims`, so
+// walking through it makes NavTrace's `CROSSING ORACLE` compare what the mod claimed against where
+// the party actually arrived, and print `MATCH` or `MISMATCH` by itself.
+//
+// Caller holds g_mutex. Mutates `dests` — that is the point; the loop below then treats the pair
+// exactly like any other group, with `groupInferred` carrying the provenance into the log.
+void BindUnclaimedSurface(std::vector<MapScript::ExitDest>& dests,
+                          const std::vector<MapQuery::MapJumpSurface>& surfaces, bool haveSurfaces) {
+    if (!haveSurfaces) return;   // nothing swept yet; this is not the frame to decide on
+
+    int unclaimedGroup = -1, unclaimedCount = 0;
+    for (const auto& sf : surfaces) {
+        bool claimed = false;
+        for (const auto& d : dests) if (d.group > 0 && d.group == sf.group) { claimed = true; break; }
+        if (!claimed) { ++unclaimedCount; unclaimedGroup = sf.group; }
+    }
+
+    int candIdx = -1, candCount = 0;
+    for (size_t i = 0; i < dests.size(); ++i) {
+        const MapScript::ExitDest& d = dests[i];
+        if (d.viaController || d.group > 0) continue;
+        if (!MapNames::HasRealAreaName(static_cast<int>(d.destMapId))) continue;
+        ++candCount;
+        candIdx = static_cast<int>(i);
+    }
+
+    // The ordinary map: every surface claimed, no group-less candidate. Say nothing.
+    if (unclaimedCount == 0 && candCount == 0) return;
+
+    // ALWAYS logged, never gated on logDetail. Both outcomes are about an exit the player either
+    // gains or does not, and "we declined to bind" must be as visible as "we bound".
+    if (unclaimedCount != 1 || candCount != 1) {
+        char m[256];
+        snprintf(m, sizeof(m),
+                 "  elimination binding: %d unclaimed surface(s) vs %d group-less destination(s) -- "
+                 "not 1:1, nothing bound%s",
+                 unclaimedCount, candCount,
+                 (unclaimedCount > 0 && candCount == 0) ? " (surface with no destination anywhere)"
+                                                        : "");
+        Log::Write("NAV-DIAG", m);
+        return;
+    }
+
+    dests[candIdx].group         = unclaimedGroup;
+    dests[candIdx].groupInferred = true;
+
+    char n8[96] = {};
+    for (size_t k = 0; k < dests[candIdx].destName.size() && k < 95; ++k)
+        n8[k] = (dests[candIdx].destName[k] < 128) ? static_cast<char>(dests[candIdx].destName[k]) : '?';
+    char m[288];
+    snprintf(m, sizeof(m),
+             "  elimination binding: the ONE unclaimed surface (group %d) is routine[%d] \"%s\"'s "
+             "-> dest=%u (\"%s\") -- INFERRED, no script arms this group",
+             unclaimedGroup, dests[candIdx].routineIndex, dests[candIdx].routineName.c_str(),
+             dests[candIdx].destMapId, n8);
+    Log::Write("NAV-DIAG", m);
+}
+
 } // namespace
 
 bool ClaimedDestForGroup(int mapId, int group, uint16_t& destMapId) {
@@ -161,6 +239,12 @@ void ScanExits(std::vector<Entity>& out) {
     // wearing the previous map's geometry.
     std::vector<MapQuery::MapJumpSurface> surfaces;
     const bool haveSurfaces = MapQuery::CachedMapJumpSurfaces(mapId, surfaces);
+
+    // BEFORE the claims are published, so the inferred pair is published with the rest and the
+    // crossing oracle can check it, and so the "NO CONTROLLER CLAIMS THIS GROUP" seam line stops
+    // firing for a surface that now has an owner.
+    BindUnclaimedSurface(dests, surfaces, haveSurfaces);
+
     PublishClaims(mapId, dests);
 
     // One line, not one per controller: on the first frames of every map the seams are simply not
@@ -188,10 +272,11 @@ void ScanExits(std::vector<Entity>& out) {
         // WHO BOUND THIS GROUP, for every log line below. A door controller is named by its index; an
         // event-bound transition has no controller index at all and is named by its routine, which is
         // the only thing that identifies it (Session 102).
-        char who[64];
+        char who[96];
         if (d.viaController) snprintf(who, sizeof(who), "__MJ_CTRL%03d", d.ctrlIndex);
-        else                 snprintf(who, sizeof(who), "routine[%d] \"%s\"", d.routineIndex,
-                                      d.routineName.c_str());
+        else                 snprintf(who, sizeof(who), "routine[%d] \"%s\"%s", d.routineIndex,
+                                      d.routineName.c_str(),
+                                      d.groupInferred ? " [group INFERRED]" : "");
 
         // WHERE: the walkmap surface tagged with this routine's map-jump group.
         const MapQuery::MapJumpSurface* surf = nullptr;
