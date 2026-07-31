@@ -5639,3 +5639,19 @@ Scoreboard correction to the whole saga: the map was never gated, never volume-b
 adjacency-broken -- it was (1) a class-aware terrain flag no instrument modelled, (2) funnel
 corners pinned on walls by an inset that could never fire, and (3) a vertex goal on a surface.
 Two of three are fixed and play-confirmed today; (3) has a designed fix pending.
+
+### Session 100 addendum 8 — NEXT SESSION PICK-UP: a THIRD transition kind observed
+
+On the map the tester landed in after the 315 breakthrough (North Spur Sluiceway -- the arrival
+relation named dest=313 for the seam walked), **there is a transition the exit scanner cannot
+see: an EVENT that transfers the party into a dungeon, with a yes/no PROMPT attached.** The
+taxonomy so far was two kinds (S64): TRANSITIONS (walk-onto map-jump surfaces) and DOORS (press
+Enter). This is a third: an interactive EVENT TRANSFER -- almost certainly a scene object whose
+interaction runs script that opens the field choice window (FUN_002a6190, already partially read
+by choice_reader) and then performs the map move. It will not appear in the seam sweep (no
+map-jump polys) and may or may not classify as a Door today.
+
+Next session: stand at it, press `'` (entity dump + handle table), identify the object's
+kind/category/flags, and design detection for the CLASS (event-transfer objects with confirm
+prompts), never for this one map -- the taxonomy entry is the deliverable, the observed instance
+is on 313. The choice window plumbing already exists (S93 deferred work records its read points).
