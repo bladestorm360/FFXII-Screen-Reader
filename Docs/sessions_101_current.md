@@ -456,5 +456,35 @@ Palace: Cellar Stores") -- INFERRED, no script arms this group`, then `exits: �
 **On every other map the listed count must not move** — a new exit on a map that was already correct
 is a regression, not a win. Then walk it for the `CROSSING ORACLE … MATCH`.
 
-Also this session: 6 of 313's 31 routine spans read as UNREADABLE (routine 4 was not among them) — a
-real gap in the scan, unexplained, not yet chased.
+### The scan hole, diagnosed: a routine under 0x40 bytes is DROPPED WITHOUT BEING READ
+
+313 reported `spans read=25, empty=0, unreadable=6`. Those six were never read. In `map_script.cpp`
+(and the census, which copies it):
+
+```cpp
+size_t span = spanWanted;                 // = min(end - start, CODE_SPAN_MAX)
+while (span >= 0x40 && !BlobBytes(blob, start, code.data(), span)) { span /= 2; ... }
+if (span < 0x40) { /* dropped as SPAN UNREADABLE */ }
+```
+
+When `spanWanted < 0x40` the loop body **never runs** — no read is attempted — and the routine is then
+dropped by the `< 0x40` test as "unreadable". **The 0x40 floor was written for the LAST routine
+only**, whose span is an unbounded guess that must be halved until it lands in mapped memory. It
+became a minimum routine size for every routine on every map.
+
+- A `setmapjumpgroup(K)` is 6 bytes and a `mapjump` is 12, so a 40-byte routine can hold either.
+  **This is in the shipped reader, not only the diagnostic.**
+- `spansUnreadable` conflates "too short to attempt" with "the read faulted" — the S103
+  orphaned-diagnostic shape again, in the very code written to end it.
+
+**Fix, deliberately NOT made this session** (it changes the shipped reader on every map and the
+tester's build is confirmed working): read whatever the span says however short, halve **only** after
+a read has actually failed, and count the two causes separately. Do not just lower the floor — the
+floor is not the mechanism, the missing read attempt is. Full entry in `debug.md`.
+
+### NEXT SESSION, FIRST ITEM
+
+The 2-against-2 maps above. Map 568 is the worked example and its two doors are real and currently
+invisible. Whatever discriminator is chosen must come from the game's own data, and **the scan hole
+must be fixed first or measured around** — a routine the reader never read cannot be counted, and both
+of this problem's counts (unclaimed surfaces, group-less candidates) are counts.

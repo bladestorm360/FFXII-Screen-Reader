@@ -7,6 +7,38 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### OPEN DEFECT — a routine shorter than 0x40 bytes is DROPPED WITHOUT EVER BEING READ (found Session 105)
+
+KEYWORDS: span unreadable 0x40 floor CODE_SPAN_MAX ReadExitDests map_script spansUnreadable short
+routine never read halving loop last routine guess map 313 6 of 31 census conflated counter
+
+Map 313's container census reported `scanned 31 routine(s) -- spans read=25, empty=0, unreadable=6`.
+**Those six were never read.** `map_script.cpp` (and the census, which copies it):
+
+```cpp
+size_t span = spanWanted;                 // = min(end - start, CODE_SPAN_MAX)
+code.assign(span, 0);
+while (span >= 0x40 && !BlobBytes(blob, start, code.data(), span)) { span /= 2; code.assign(span,0); }
+if (span < 0x40) { /* dropped as SPAN UNREADABLE */ }
+```
+
+If `spanWanted < 0x40` the `while` body **never executes** — no read is attempted — and the routine is
+then dropped by the `span < 0x40` test as "unreadable". **The 0x40 floor was written for the LAST
+routine only**, whose span is an unbounded guess that has to be halved until it lands inside mapped
+memory. It silently became a MINIMUM ROUTINE SIZE for every routine on every map.
+
+Two separate faults, and the second is the one that hid the first:
+
+1. **Routines under 64 bytes are invisible to the exit reader.** A `setmapjumpgroup(K)` call is 6
+   bytes and a `mapjump` is 12; a 40-byte routine can hold either. This is in the SHIPPED reader, not
+   just the diagnostic.
+2. **`spansUnreadable` conflates "too short to attempt" with "the read genuinely faulted"** — the two
+   print the identical number, which is the S103 orphaned-diagnostic shape all over again.
+
+Fix (not yet made): read whatever the span says however short it is, halve **only** after a read has
+actually failed, and count the two causes separately. Do not simply lower the floor — the floor is not
+the mechanism, the missing read attempt is.
+
 ### REFUTED — "the dungeon transition's destination lives in the EVENT script" (Session 104)
 
 KEYWORDS: B2 event ebp setmapjumpgroup zero of 346 evt_t warp mrm_f0100 grm_a0380 SAKIYOMI map 313
