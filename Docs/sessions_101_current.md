@@ -553,7 +553,7 @@ RVA 0x2248F0 off-by-one name table 0x028f FUN_0026b4c0 return slot ctx+0xA8 ctx+
 tag 3 FUN_004686d0 sqrtf horizontal distance actor +0xB8 write-category exception danger table
 MapHasRow map 568 capture Vaan captured mod menu sneak_assist phrasebook Controls.md README**
 
-Commit: `<this session's commit>`. Built, NOT play-confirmed. **Second write-category exception in
+Commit: `309e5ce`. Built, NOT play-confirmed. **Second write-category exception in
 the project, after auto-walk — USER-AUTHORIZED explicitly this conversation.**
 
 **The user's idea, corrected by the data.** Proposal was "set the guards to *let him pass* once the
