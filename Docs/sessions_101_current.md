@@ -708,3 +708,59 @@ to say so in the tester's terms.
 `F10 ignored: this map has no guarded sequence`; on map 568 it speaks On/Off as before; walking
 through any transition while it is on logs `map change: sneak assist forced OFF` and the next `F10`
 press on the new map is a no-op unless that map is covered.
+
+## Session 111 — 2026-08-01 — [navigation] The search gave up after ONE attempt while a route existed
+
+**KEYWORDS: Door 2 map 568 No path attempts=1 banned=0 final approach leg index vs distance
+kFinalApproachDist two-corner route re-cost start poly edge re-attribution sweep stop restored
+S106 01b7746 reverted on contaminated evidence positional not temporal 0x07A01000 search breadth**
+
+**The tester rejected the previous diagnosis and was right to.** I had claimed a barrier appeared
+when the guard was called. It does not exist. The `refused eff-flags: 0x07A01000 x305` I built that
+on is a count over a search that expanded **363** polys; the SUCCESSFUL route in the same minute
+(seq 44, `expands=22`) shows the identical flag **x1**. **That number measures how far the search
+wandered, not what blocked it** — a symptom read as a cause, which is the S93 lesson ("a report
+about BEHAVIOUR is not a report about DATA") in a new costume.
+
+### What the log actually says
+
+The failure is **POSITIONAL, not temporal**. The ramp mouth is at ~(16,-8,120.4):
+
+| start x | outcome |
+|---|---|
+| ≤ 16.1 (seq 32-35, 44, 45) | `plan=Route legs=4` — including AFTER the guard returned |
+| ≥ 17.4 (seq 40-43, 46-52)  | `NoPath` |
+
+Calling the guard coincided with the tester walking northeast, out of the working region — which is
+what made it look like the call caused it. **And a route from the failing region demonstrably
+exists**: seq 38 returned `plan=Route legs=18` from (20.73,-8.00,127.99), the exact coordinate that
+answers `NoPath` four seconds later.
+
+**Every single failure carries `attempts=1 banned=0`** — the attempt loop broke before re-costing
+anything. Two guards did it, and both are now keyed on measurements instead of indices:
+
+1. **The final-approach rule was an INDEX test.** `firstBad >= poly.size() - 1` makes leg 1 of a
+   TWO-corner route simultaneously the first and the last, so *any* breach broke the loop. seq 51:
+   `bad=1 len=19.22m reached=1.79m stop=(21.5,-8.00,121.3)` with the target at (38.6,117.9) — the
+   walk died **17 m** from the goal and was treated as an arrival problem. Now the test is the
+   STOP's distance to the target against `kFinalApproachDist = 2 * kArrivalTol`, so the 2.55 m stop
+   its evidence came from is still protected and a corridor problem is not.
+2. **Start-poly re-attribution RESTORED** (S106's `01b7746`, reverted in S108). The revert's stated
+   reason — "it never fires" — was measured on a log whose routes the danger zones had already
+   deformed, so the branch never got the chance. In the clean log it fires: seq 40 is
+   `len=8.00m reached=7.04m` with the midpoint on the seed's protected edge. **A revert justified by
+   absence needs a log in which the change COULD have fired.**
+
+### Blast radius — why other maps cannot move
+
+Both edits live **after** `rep.ok` has already failed AND all three `PathRepair` rungs have failed,
+on the path to `break`. Every request reaching them is one that today ends as `No path` or a
+suppressed frontier, so **a route that validates never executes a line of this**. Work stays bounded
+by the existing `kMaxAttempts=4` / `kMaxTotalExpand`. `path_funnel`, `path_validate`, `path_corridor`,
+`path_repair`, `path_march`, `nav_mesh`, `nav_footprint`, `map_query`, `path_surface_goal` remain
+**byte-identical to pre-S106** — verified by diff, not by assertion.
+
+**Verify next play:** from the east side of 568, `\` produces a route (expect the long way round,
+`legs≈18`) instead of "No path"; the log shows `attempts` > 1 with a `replan:` line naming the
+re-costed portal, and where applicable `re-attributed by the sweep stop`. Regression gate unchanged:
+315 still `pass=mesh`, no `pass=seam`, and no new `attempts>1` on routes that already validated.

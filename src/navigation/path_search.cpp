@@ -49,6 +49,12 @@ constexpr int kFrontierMinProbes = 128;
 // Final-leg arrival tolerance -- see PathValidate::CheckLegs. Not a tuning knob: it is path_planner's
 // kAtExitDist, the distance at which the planner already says "At the exit", so the two agree.
 constexpr float kArrivalTol = 3.0f;
+// How near the GOAL a breach's stop point has to be for the re-cost step to treat it as a
+// final-approach breach and refuse to price the portal (Session 111). Twice the arrival tolerance:
+// generous enough to cover the 2.55 m stop the protection was written for, tight enough that a walk
+// dying 17 m from the target -- which is a corridor problem, not an arrival problem -- still earns a
+// retry. Not a tuning knob; it is kArrivalTol restated, so the two move together.
+constexpr float kFinalApproachDist = 2.0f * kArrivalTol;
 
 struct Node {
     float  f;
@@ -637,10 +643,24 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // RE-COST the portal the breaching leg crosses. Which one is a geometric question: the leg that
         // failed runs between two taut corners, and the portal it crosses is the one whose span sits
         // closest to that leg's midpoint. Make that (poly, edge) dearer and search again.
+        //
         // NEVER RE-COST A FINAL-APPROACH BREACH: the portal nearest the last leg is the one that gets
         // you TO the target, and banning it is how a route within 2.55 m of an exit became "goal
         // unreachable" and a frontier 15.2 m short. The banked prefix already carries the honest answer.
-        if (rep.firstBad == 0 || rep.firstBad >= poly.size() - 1 || plain.empty()) break;
+        //
+        // BUT "FINAL APPROACH" IS A DISTANCE, NOT A LEG INDEX (Session 111). The old test was
+        // `firstBad >= poly.size() - 1`, which on a TWO-corner route makes leg 1 both the first and
+        // the last leg -- so any breach at all broke the attempt loop with `attempts=1 banned=0` and
+        // no retry, even when the body stopped at the very start of a long leg. Map 568 measured it:
+        // `bad=1 len=19.22m reached=1.79m stop=(21.5,-8.00,121.3)` against a target at (38.6,117.9)
+        // -- the walk died 17 m from the goal and the search gave up, while a route from that exact
+        // spot had validated seconds earlier. The protection is now keyed on what it was always
+        // about: how close the BODY STOPPED to the target, at twice the arrival tolerance, so every
+        // case its evidence came from (a stop 2.55 m out) is still protected.
+        const bool onLastLeg  = (rep.firstBad >= poly.size() - 1);
+        const bool stopIsNearTarget =
+            NavCommon::Distance2D(rep.badStopAt, to) <= kFinalApproachDist;
+        if (rep.firstBad == 0 || plain.empty() || (onLastLeg && stopIsNearTarget)) break;
         const FVec3 a = poly[rep.firstBad - 1], b = poly[rep.firstBad];
         // ON A MARCH BREACH, AIM AT THE MEASUREMENT (Session 100, failure-path-only). A 43 m leg's
         // midpoint can sit 20 m from the refused crossing; `badStopAt` is where the mover's own rule
@@ -659,14 +679,45 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             const float d2 = dx * dx + dz * dz;
             if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bestIdx = k; }
         }
-        const PortalRef& kill = pr.portals[bestIdx];
+        PortalRef kill = pr.portals[bestIdx];
         // The START poly's own edges are left alone: pricing one can push the search off its own seed
         // and reproduce S76's `expands=1 touched=0` (the search never ran).
+        //
+        // BUT A LONG FIRST LEG'S MIDPOINT LIES ABOUT WHERE THE OBSTRUCTION IS (Session 111; first
+        // built in S106, reverted in S108 on evidence that turned out to be contaminated -- the
+        // danger zones had already deformed every route in that log, so this branch never ran and
+        // was wrongly recorded as "never fires"). On this mesh the start triangle is often a whole
+        // room, so leg 1 can be 8 m long with its midpoint nearest the seed's own edge while the
+        // sweep stopped at the far end: map 568 measured `len=8.00m reached=7.04m
+        // stop=(23.4,-8.00,121.5)` and then broke out with `attempts=1 banned=0`.
+        //
+        // Before conceding, re-attribute by the STOP POINT -- where the body was actually refused.
+        // A portal there is a real candidate that the seed rule was never written to protect; only
+        // when THAT portal is also the seed's own edge is the breach genuinely on the seed.
         if (kill.poly == start) {
-            Log::Write("NAV-ROUTE",
-                       "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
-                       "(that would strand the seed); going to the frontier instead");
-            break;
+            size_t stopIdx = 0;
+            float  stopD2  = -1.0f;
+            for (size_t k = 0; k < pr.portals.size(); ++k) {
+                const Portal& q = pr.portals[k].p;
+                const float mx = (q.left.x + q.right.x) * 0.5f, mz = (q.left.z + q.right.z) * 0.5f;
+                const float dx = mx - rep.badStopAt.x, dz = mz - rep.badStopAt.z;
+                const float d2 = dx * dx + dz * dz;
+                if (stopD2 < 0.0f || d2 < stopD2) { stopD2 = d2; stopIdx = k; }
+            }
+            if (pr.portals[stopIdx].poly != start) {
+                kill = pr.portals[stopIdx];
+                char am[224];
+                snprintf(am, sizeof(am),
+                         "replan: midpoint attribution landed on the START poly's own edge; "
+                         "re-attributed by the sweep stop (%.1f,%.1f) -> portal (poly %d, edge %d)",
+                         rep.badStopAt.x, rep.badStopAt.z, kill.poly, kill.edge);
+                Log::Write("NAV-ROUTE", am);
+            } else {
+                Log::Write("NAV-ROUTE",
+                           "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
+                           "(that would strand the seed); going to the frontier instead");
+                break;
+            }
         }
         float newPen = kBreachPenalty;
         bool  seen   = false;
