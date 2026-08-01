@@ -1785,3 +1785,46 @@ guard touch suppression) and nothing newer. The only residue is inert: the scope
 
 Verify: on 568 — zero `trigger census` / `SKIPPED` / `event fire` lines; `clamp ACTIVE` and
 `touch SUPPRESSED … "Imperial"` exactly as S116's confirmed play. On 569 — everything S120 listed.
+
+### PLAY RESULTS (2026-08-01, same day) — 569 IS CLEARED; and map 572 has an exit with no surface
+
+**KEYWORDS ADDENDUM: 569 PLAY-CONFIRMED all seven catch rects skipped progressed 570 571 572
+template-door confirmed Door=2 map 572 Garden Stairs exits missing controllers=1 surfaces=0 listed=0
+nogroup=1 movie start rect event transition flags=0x1 dest=314 East Spur Stairs entrance=4 zero
+map-jump surfaces elimination rule has nothing to pair**
+
+**THE SNEAK TRACK IS DONE — the player made it through.** All seven catch rects logged
+`trigger update SKIPPED … a talkless WAKE rect within 8m of a guard` at 00:59:47, no capture, and
+the census trail reads 569 → 570 → 571 → 572. Five rounds, and the S119 census was the turn: the
+rule that held is the one built from a measured catcher, not a model. 568 was not visited this play;
+its row is script-native (S121), so its verification stands as scheduled.
+
+**The template-door rule is PLAY-CONFIRMED too:** `template-door: obj [0:57] … container 0, 6
+events … -> Category::Door`, and 569's rescan reads `Door=2 Shop=0`. (Note the template lives in
+container 0 on this map — the fieldsign names are in the map's own pool; the anchor rule did not
+care either way.)
+
+#### NEW, FOR NEXT SESSION — map 572 (Royal Palace: The Garden Stairs) lists NO exits
+
+```
+exits: controllers=1 surfaces=0 listed=0 | dropped: nogroup=1 notused=0 unreachable=0
+routine[7] "ムービー開始位置" arms NO group -> dest=314 ("Garamsythe Waterway: East Spur Stairs")
+                                              entrance=4 flags=0x1 -- EVENT-BOUND
+seams: swept 0 group(s) for map 572 in epoch 5
+```
+
+The map's ONE way out is an event transition (a "movie start" rect — walk to the stairs, cutscene,
+arrive in the Waterway; `flags=0x1`, the same presentation bits as 313's staircase) and **the
+walkmap carries ZERO map-jump surfaces**, so S105's elimination rule has nothing to pair — that rule
+needed exactly one unclaimed surface, and here there are none. The tester's read is right: this is
+the surface-goal / event-transfer class of work (S101/S102, the Sluiceway-era track; worktrees
+`nav/surface-goal` and `nav/event-transfer` are still parked).
+
+What next session has that S101 did not: **the S119/S120 event-table join.** The trigger RECT that
+fires routine[7] carries that routine in its own event table (`object+0x48` ↔ `ExitDest::nameOff`,
+`ObjectEventNameOffsets`) — so the transition can be bound to its trigger VOLUME by the map's own
+data and the volume's position becomes the route target, no surface required. Also on the map: the
+door object `[0:8]` "Door" at (84.0, 0.0, 40.4), `door=1 cat=2` — the +0x70 record claimed it, so
+the map DOES have a field-sign door; whether the movie rect and that door are the same place is the
+first thing to measure. `Exit=0` is the defect; the Door listing is the workaround the tester has
+meanwhile.
