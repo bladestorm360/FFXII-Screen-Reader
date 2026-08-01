@@ -109,6 +109,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/entity_scan.cpp
     src/navigation/entity_postscan.cpp
     src/navigation/exit_scan.cpp
+    src/navigation/exit_event_bind.cpp
     src/navigation/item_scan.cpp
     src/navigation/entity_classify.cpp
     src/navigation/entity_labels.cpp

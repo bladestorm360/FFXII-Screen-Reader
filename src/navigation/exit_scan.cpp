@@ -364,6 +364,16 @@ void ScanExits(std::vector<Entity>& out) {
         }
     }
 
+    // ---- EVENT-BOUND EXITS WITH NO SURFACE (Session 122, exit_event_bind.cpp) ------------------
+    // Map 572's class: the map's one transition is an event routine and the walkmap has ZERO
+    // map-jump surfaces, so the loop above dropped everything and `candidates` is empty -- which is
+    // this pass's admission gate. It joins each dropped group-less dest to the trigger RECT whose
+    // event table names its routine (`nameOff`, the S119 join) and lists the rect's position as the
+    // exit. A map that listed even one exit above never runs it: unreachable, not skipped. Runs
+    // BEFORE the reachability filter and the routability table so its entries face both, same as
+    // every other exit.
+    AppendEventBoundExits(dests, out, haveSurfaces, candidates, dropNoGroup);
+
     // ---- Drop exits with no valid path ---------------------------------------------------------
     // An exit the party cannot walk to is not an exit. Reachability comes from the per-map flood fill
     // (NavReach), never from an A* per exit: a failed search costs ~45,000 raycasts and rescans run

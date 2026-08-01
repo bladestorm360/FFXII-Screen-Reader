@@ -1828,3 +1828,72 @@ door object `[0:8]` "Door" at (84.0, 0.0, 40.4), `door=1 cat=2` — the +0x70 re
 the map DOES have a field-sign door; whether the movie rect and that door are the same place is the
 first thing to measure. `Exit=0` is the defect; the Door listing is the workaround the tester has
 meanwhile.
+
+## Session 122 — 2026-08-01 — [navigation] Map 572's exit has no surface: the event-table join binds it to its trigger rect
+
+**KEYWORDS: map 572 Garden Stairs zero exits event transition movie start rect ムービー開始位置
+dest 314 East Spur Stairs no map-jump surfaces exit_event_bind AppendEventBoundExits nameOff join
+object event table container 0 handle table walk 1:1 or nothing candidates empty gate never widen
+route to rect isTransition seamGroup 0 wake flag logged not gated nearest door measurement 569
+backlog same family**
+
+The S121 play ended on map 572 (Royal Palace: The Garden Stairs) reading `exits: controllers=1
+surfaces=0 listed=0 | nogroup=1`: the map's ONE way out is routine[7] "ムービー開始位置" (mapjump →
+314 "Garamsythe Waterway: East Spur Stairs", entrance=4, flags=0x1), an EVENT transition. It arms
+no group, so S64's binding has no first half — and the walkmap carries ZERO map-jump surfaces, so
+S105's elimination has nothing to pair either. `Exit=0` for the player; the `[0:8]` "Door" listing
+was the tester's interim workaround.
+
+### The fix — `exit_event_bind.cpp`, the S119 join object-side, route target = the RECT
+
+The trigger rect that fires routine[7] carries that routine in its OWN event table
+(`object+0x48`, entries are name-pool offsets), and `ExitDest::nameOff` is the same routine's
+offset in the same pool — the join S119 shipped for door categorisation, now consumed by the exit
+scan. `AppendEventBoundExits` (called from `ScanExits` between the candidate loop and the
+reachability filter, so its entries face the routability table and the fail-open filter like every
+other exit) walks the handle table for container-0 objects with event tables and binds each
+DROPPED group-less event dest to the ONE object whose table names it. The rect's position becomes
+the exit entry: `fixed`, `isTransition=true` (arriving IS crossing), `seamGroup=0` (no surface —
+the seam machinery stays out), label = "Exit, <destName>", id band `-(2000+routineIndex)` as the
+surface path already used for event-bound dests.
+
+**The never-widen guarantee is structural, not promised (the S101 shape):**
+1. gate `!candidates.empty() → return` — a map that lists ANY exit never reaches the join;
+2. only dests the surface path already dropped qualify (`!viaController && group <= 0`);
+3. **1:1 or nothing** (S105's honesty): zero or multiple matching objects bind NOTHING and log
+   both counts plus each match's identity and position;
+4. `haveSurfaces` gate — before this map's seam sweep lands, every map's candidates are empty and
+   deciding then would open the pass map-wide on first frames.
+No map id anywhere in the file; the gate is the mechanism. **Map 569's backlog
+(`controllers=3 surfaces=3 listed=0 | nogroup=3`) is the same family and passes the same gate** —
+expect three join attempts there; its three unclaimed-surface lines keep printing, honestly, since
+this pass never touches surfaces.
+
+**Deliberately NOT gated: the wake flag** (`+0xC` bit 5, S120's ENTER-scene handoff bit).
+Requiring it would be a model of what a movie rect must look like — five rounds on 569 died to
+models. It is LOGGED (`f8/fB/fC wake=`) so a bound rect that never fires carries its own diagnosis.
+
+**The tester's open measurement ships in the log:** each bound rect prints its distance to the
+nearest Door/Shop object the scan admitted — on 572 that answers "is the movie rect the same place
+as door [0:8] at (84.0, 0.0, 40.4)?" from the first scan, before any design leans on the answer.
+`dropNoGroup` is decremented on a successful bind so the exit inventory reports outcomes
+(`listed=1 | nogroup=0`), not intermediate states.
+
+There is no CROSSING ORACLE line for this class (the oracle keys on map-jump groups; this exit has
+none) — the play is the oracle.
+
+### Verify next play (572)
+
+- `event-exit: routine[7] "…" -> dest=314 … bound to trigger obj [c:s] at (x,y,z) via event-table
+  join` + the rect's flag line (`wake=` is the number to read) + the nearest-Door line.
+- Exits list shows **Exit, Garamsythe Waterway: East Spur Stairs**; inventory reads
+  `controllers=1 surfaces=0 listed=1 | nogroup=0`.
+- `routable? "Exit, Garamsythe …"` line: `walk=`/`reach=` say whether the rect's centre sits on
+  the walkmap; if `reach=0` the fail-open rule (would-drop > half) keeps it listed and says so.
+- Route `\` to it: the route should end ON the rect and the cutscene fire → arrive 314. **Falsifier:
+  arriving at the rect with no cutscene — then read the logged `f8/fB/fC` flags; a dormant rect
+  (event-gated) is the first suspect and the flags are the evidence.**
+- 569 (if visited): three `event-exit:` lines, bound or refused with counts — either way the
+  backlog item gains its first measurement.
+- Any OTHER map: **zero `event-exit:` lines** — one on a map that lists exits is the never-widen
+  gate failing and is a bug regardless of what it says.
