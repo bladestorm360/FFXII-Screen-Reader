@@ -4808,3 +4808,34 @@ the next one is `CheckLegs`' own body sweep.
 S115's field-tick latch did not work (the tick has already run for the new map when teardown fires).
 The latch is now **write-once per map and consumed by the print**: the tick fills it only when empty,
 teardown prints and clears it. No ordering assumption survives in it.
+
+## The fired event index is OBJECT-LOCAL — S117's resolver read the wrong table (Session 118, 2026-08-01)
+
+**KEYWORDS: capture survived 569 object-local event index object+0x48 name-pool offset FUN_00263e40
+FiredRoutineName verdict cache removed NoteFireOnce object key dedup deleted evidence**
+
+### TRIED & FAILED — resolving a fire's routine through the blob routine table by index
+
+S117's `RoutineNameAt(routineIdx)` assumed `FUN_003dbcf0`'s bound (`**(u32**)(object+0x48) <= idx`)
+was against the blob's routine count. It is against the object's OWN event table: `[count:u32]`
+[8-byte records] at `object+0x48`, entries = NAME-POOL offsets (`FUN_00263e40(blob,x) = blob + x +
+*(u32*)(blob+0x4C)`), blob per object via `FUN_00263ff0(obj[0x15])`. Result on the play test: every
+fired name resolved to an early global routine (`setup`, the resident director), the capture rect's
+routine never matched `捕獲`, the fail-open path passed it through, and the player was caught.
+
+The tell in the log, visible BEFORE any decompile work: objects fired **consecutive small indices**
+(1,2,3 / 2,3,4 / 3,4,5) and "names" no trigger volume could start. **When resolved names are
+semantically impossible, the index space is wrong — stop and re-derive the indirection.**
+
+### SOLVED — `MapScript::FiredRoutineName(object, eventIdx)`
+
+Walks object event table -> name-pool offset -> object's own container blob. SEH-guarded, fail-open,
+container id read from `obj+0x15` (not assumed 0). Replaces `RoutineNameAt` (no other caller).
+
+Two secondary defects fixed with it:
+- **The per-index verdict cache was wrong within a single map** (same index, different object =>
+  different routine) — removed, not repaired. Fires are event-driven; per-fire resolution is cheap.
+- **`NoteFireOnce` keyed on (kind, index) without the object** — object-local indices collide by
+  design, so different objects' fires were deduplicated into one line. That is exactly how the
+  capture's own fire went unlogged during the failed play. **A dedup key that omits part of the
+  identity deletes evidence.** Now (object, kind, index), 96 slots.

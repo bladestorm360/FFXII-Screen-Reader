@@ -2244,9 +2244,18 @@ trusting anything below it.**
 - **`FUN_003dbb60(object, kind, routineIdx, mode, flag) -> int` (RVA `0x2BBB60`) — START A SCRIPT
   ROUTINE ON AN OBJECT (Session 117).** Confidence 0.98. Builds an 8-byte event record
   `{mode, 1, kind, routineIdx:u16, 0x8000, flags}` and hands it to `FUN_003dbcf0(object, &rec, 1)`.
-  **`FUN_003dbcf0` REJECTS the record when `**(u32**)(object+0x48) <= routineIdx`** — it bounds the
-  index against the object's script container's ROUTINE COUNT, which is what establishes that
-  `routineIdx` indexes the same routine table `MapScript` reads (`hdr+0x18` / name pool `hdr+0x4C`).
+  ~~`FUN_003dbcf0` bounds the index against the container's ROUTINE COUNT, which establishes that
+  `routineIdx` indexes the routine table.~~
+  > **STRUCK (Session 118) — the S117 half-sentence above cost a play session. THE INDEX IS
+  > OBJECT-LOCAL.** The bound `**(u32**)(object+0x48) <= idx` is against the count of the object's
+  > OWN EVENT TABLE at `object+0x48`: `[count:u32][8-byte records]`, whose entry
+  > `*(u32*)(tbl+4+idx*8)` is a **NAME-POOL OFFSET** — fed to `FUN_00263e40(blob, x) =
+  > blob + x + *(u32*)(blob+0x4C)`, with the blob resolved per object via `FUN_00263ff0(obj[0x15])`
+  > = `HANDLE_TABLE_BASE + id*0x288`. The dispatch (`FUN_003db7a0`) matches the fired index against
+  > the object's active-slot table at `+0xA0`, same index space. Play evidence: objects fired
+  > CONSECUTIVE SMALL indices (1,2,3 / 2,3,4 / 3,4,5) whose routine-table "names" were `setup` and
+  > the map's resident director — impossible for trigger volumes. Resolve a fire's name ONLY via
+  > `MapScript::FiredRoutineName`.
   Returns 1 when the caller should continue (`FUN_0025c830` bails on anything else); **2** is the
   engine's own "no event slot free". **~20 call sites and they are NOT all trigger volumes:**
   `FUN_00269640` / `FUN_00269860` start conversation events, and `FUN_00269a90` / `FUN_00269ba0` /

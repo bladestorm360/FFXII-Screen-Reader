@@ -1548,3 +1548,67 @@ must still list as Shops: that pairing is 6-15 m with exactly two objects per na
 
 **Routing gate, unchanged and non-negotiable:** map 315 still `pass=mesh`, `pass=seam` grep-dead,
 working routes still `attempts=1`, and every `repair[...]` line now carries its `inset`/`LEFT` counts.
+
+## Session 118 — 2026-08-01 — [navigation] The fired index is OBJECT-LOCAL: S117's falsifier fired, and the name was one indirection away
+
+**KEYWORDS: sneak assist 569 capture survived falsifier fired object-local event index object+0x48
+event table name-pool offset FUN_00263e40 blob+0x4C FUN_00263ff0 HANDLE_TABLE_BASE 0x288 obj+0x15
+FiredRoutineName RoutineNameAt removed verdict cache removed NoteFireOnce object key dedup hid the
+capture fire consecutive indices setup resident director impossible names**
+
+Tester: the guard still detected them on 569 (568 untested). **The log answered before any theory
+did, exactly as S117 built it to** — every fire printed, and the fires were impossible:
+
+```
+obj=2CFD9C80 kind=3 routine=1 src=trigger-volume name="setup"            -- passed through
+obj=2CFD9C80 kind=4 routine=2 src=trigger-volume name="常駐ディレクター"   -- passed through
+obj=2CFD4050 kind=3 routine=2 ... obj=2CFD7F00 kind=3 routine=3 ...
+```
+
+A trigger volume does not start `setup`, and no volume's ENTER is the map's resident director. And
+every object fired **consecutive small indices** — 1,2,3 on one object, 2,3,4 on the next, 3,4,5 on a
+third. That is not what routine-table indices look like; it is what **object-local slots** look like.
+
+### The corrected model — each step a verbatim decompile read
+
+S117 claimed `FUN_003dbcf0`'s bound `**(u32**)(object+0x48) <= idx` proved the index addressed the
+blob's routine table. **Wrong table.** `object+0x48` is the object's OWN EVENT TABLE:
+
+```
+tbl   = *(u64*)(object + 0x48)         [count:u32][8-byte records]
+entry = *(u32*)(tbl + 4 + idx*8)       a NAME-POOL OFFSET, not a routine index:
+                                       FUN_00263e40(blob, x) = blob + x + *(u32*)(blob + 0x4C)
+                                       and +0x4C is HDR_NAME_POOL
+blob  = *(u64*)(HANDLE_TABLE_BASE + obj[0x15]*0x288)     FUN_00263ff0 -- the object's own container
+```
+
+The dispatch (`FUN_003db7a0`) compares the fired index against the object's active-slot table at
+`+0xA0` at the same index — object-local throughout. So S117's resolver looked index 2 up in the
+routine table and got `常駐ディレクター`, while the object's event table's entry 2 named something
+else entirely — on a capture rect, one of the `捕獲` routines. **The name never matched, the fail-open
+path passed the fire through, and the player was caught.** Fail-open did its job: vanilla behaviour,
+plus the log that named the defect.
+
+### What shipped
+
+- **`MapScript::FiredRoutineName(object, eventIdx)`** replaces `RoutineNameAt(index)` (no other
+  caller ever existed). Walks the chain above, SEH-guarded at every read, container id read from the
+  object rather than assumed 0.
+- **The per-index verdict cache is GONE, not fixed** — an object-local index makes "is routine N a
+  capture" unanswerable without the object, so a cache keyed on the bare index was wrong within a
+  single map. Fires are event-driven; resolving per fire is a handful of guarded reads.
+- **`NoteFireOnce` now keys on (object, kind, index), 96 slots** — S117's object-less key
+  deduplicated DIFFERENT objects' fires into one line, which is precisely how the capture rect's own
+  fire went unlogged while the player was being caught. **A dedup key that omits part of the identity
+  does not reduce volume, it deletes evidence.**
+- Suppression rule unchanged: decline a trigger-volume fire whose resolved name contains `捕獲`.
+  Scope marker, danger-table gate, fail-open — all unchanged.
+
+### Verify next play (569)
+
+Fires now print the name the OBJECT's table holds. Walking into a capture rect must produce
+`event fire on map 569: ... src=trigger-volume name="\x95\xDF\x8A\x6C..." -- CAPTURE, SUPPRESSED`
+and no capture. The falsifier is unchanged: a capture with no `CAPTURE, SUPPRESSED` line, with the
+per-object log now naming what actually fired. The impossible names (`setup` as a volume's kind-3)
+must be gone — if they persist, the chain is still wrong and the log says where. 568: unchanged
+expectations (`clamp ACTIVE`, `touch SUPPRESSED`), zero `event fire` lines off 568/569.

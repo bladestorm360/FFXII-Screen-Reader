@@ -103,18 +103,19 @@ struct ExitDest {
 // the map has actually changed.
 bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail);
 
-// The NAME of routine `index` in the currently loaded map's field script, raw from the name pool.
+// The NAME of the routine an event fire on `object` would start, raw from the name pool.
 //
-// Same table `ReadExitDests` walks -- extended rather than duplicated, so a caller that needs one
-// name does not stand up a second parser beside it. Names are mostly Shift-JIS, so the bytes are
-// returned untranscoded and callers compare bytes; nothing here is user-facing text.
+// `eventIdx` is the index `FUN_003dbb60` carries -- and it is OBJECT-LOCAL: `FUN_003dbcf0` bounds it
+// against the object's own event table at `object+0x48` ([count:u32][8-byte records]) whose entries
+// hold NAME-POOL OFFSETS, resolved against the object's own container's blob. It is NOT a routine-
+// table index. (S117 shipped `RoutineNameAt(index)` on that wrong reading; the S118 play log refuted
+// it -- objects fired consecutive small indices resolving to `setup` and the map director, names no
+// trigger volume could be starting -- and this replaced it. No other caller ever existed.)
 //
-// WHY A SINGLE-INDEX LOOKUP EXISTS: the engine's trigger volumes name the routine they will start by
-// INDEX (`FUN_003dbcf0` rejects one that is `>=` the container's routine count, which is what proves
-// the index space is this table's). `sneak_assist.cpp` resolves that index to a name at fire time.
-// False on a torn/absent blob or an out-of-range index -- callers must treat that as "unknown", never
-// as "not a match".
-bool RoutineNameAt(uint32_t index, std::string& out);
+// Names are mostly Shift-JIS, so the bytes are returned untranscoded and callers compare bytes;
+// nothing here is user-facing text. False on a torn/absent blob, table, or an out-of-range index --
+// callers must treat that as "unknown", never as "not a match".
+bool FiredRoutineName(void* object, uint32_t eventIdx, std::string& out);
 
 // Session 57 capture (file-only, `'`-triggered): dumps BOTH parallel position tables (+0x54 and +0x84)
 // raw + un-deduped, and every `__MJ_CTRL` routine's full bytecode with its CALLACTPOPA native calls

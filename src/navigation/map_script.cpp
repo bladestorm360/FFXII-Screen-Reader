@@ -206,24 +206,47 @@ std::string AsciiSafe(const std::string& s) {
 
 namespace MapScript {
 
-bool RoutineNameAt(uint32_t index, std::string& out) {
+bool FiredRoutineName(void* object, uint32_t eventIdx, std::string& out) {
     out.clear();
+    if (!object) return false;
 
-    void* blob = BlobBase();
+    // THE FIRED INDEX IS OBJECT-LOCAL, NOT A ROUTINE-TABLE INDEX. Session 117 shipped a resolver that
+    // looked `eventIdx` up in the routine table directly, and the S118 play log refuted it in the
+    // plainest way possible: objects fired CONSECUTIVE SMALL indices (one object 1,2,3; another
+    // 2,3,4) whose "names" resolved to `setup` and the map's resident director -- routines no trigger
+    // volume could be starting -- while the real capture routine never matched and the player was
+    // caught. The actual chain, from `FUN_003dbcf0`:
+    //
+    //     tbl   = *(u64*)(object + 0x48)            per-object EVENT TABLE: [count:u32][8-byte recs]
+    //     bound = *(u32*)tbl                        the count the engine itself checks the fire against
+    //     entry = *(u32*)(tbl + 4 + idx*8)          a NAME-POOL OFFSET -- FUN_00263e40(blob, entry)
+    //                                               computes blob + entry + *(u32*)(blob + 0x4C),
+    //                                               and +0x4C is HDR_NAME_POOL
+    //     blob  = *(u64*)(HANDLE_TABLE_BASE + obj[0x15]*0x288)   the object's OWN container's blob
+    //
+    // So the routine's name is one indirection away, in the map author's own string pool, and no
+    // routine-table walk is involved at all.
+    void* tbl = MemRead::PtrAt(object, 0x48);
+    if (!tbl) return false;
+    uint32_t count = 0;
+    if (!MemRead::SafeReadU32(tbl, 0, &count) || count == 0 || count > MAX_ROUTINES) return false;
+    if (eventIdx >= count) return false;
+    uint32_t nameOff = 0;
+    if (!MemRead::SafeReadU32(tbl, 4 + eventIdx * 8, &nameOff) || nameOff >= OFFSET_MAX) return false;
+
+    // The object's container, resolved exactly as FUN_00263ff0 does (`&DAT_02098e10 + id*0x51`
+    // qwords = HANDLE_TABLE_BASE + id*0x288, blob at +0x0 -- the same walk the container census
+    // does). Almost always container 0, but the id byte is right there; read it rather than assume.
+    uint8_t containerId = 0;
+    if (!MemRead::SafeReadU8(object, 0x15, &containerId)) return false;
+    void* containerBase = Hooks::ResolveRva(NavRva::HANDLE_TABLE_BASE);
+    if (!containerBase) return false;
+    void* blob = MemRead::PtrAt(containerBase,
+                                static_cast<uint32_t>(containerId) * 0x288u + NavRva::TBL_GUARD_OFF);
     if (!blob) return false;
 
-    uint32_t rtOff = 0, poolOff = 0;
-    if (!BlobU32(blob, HDR_ROUTINE_TABLE, &rtOff) || rtOff == 0 || rtOff >= OFFSET_MAX) return false;
+    uint32_t poolOff = 0;
     if (!BlobU32(blob, HDR_NAME_POOL, &poolOff) || poolOff == 0 || poolOff >= OFFSET_MAX) return false;
-
-    // Word 0 of the routine table is the ENTRY COUNT (the same word `FUN_003dbcf0` bounds the fired
-    // index against before it starts anything). An index at or past it is not a routine.
-    uint32_t count = 0;
-    if (!BlobU32(blob, rtOff, &count) || count == 0 || count > MAX_ROUTINES) return false;
-    if (index >= count) return false;
-
-    uint32_t nameOff = 0;
-    if (!BlobU32(blob, rtOff + 4 + index * ROUTINE_STRIDE + REC_NAME_OFF, &nameOff)) return false;
 
     out = PoolName(blob, poolOff, nameOff);
     return !out.empty();

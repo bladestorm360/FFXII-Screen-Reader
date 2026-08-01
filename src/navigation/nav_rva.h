@@ -713,11 +713,17 @@ constexpr uint32_t TOUCH_TEST        = 0x1477F0;  // FUN_002677f0 (ABS 0x2677f0)
 // script-native hook could ever have reached (`rrp_a03` calls ZERO of the touch natives).
 //
 // It builds an 8-byte event record {mode, 1, kind, routineIdx:u16, 0x8000, flags} and hands it to
-// `FUN_003dbcf0(object, &rec, 1)`. **`FUN_003dbcf0` REJECTS the record when
-// `**(u32**)(object+0x48) <= routineIdx` -- it bounds the index against the object's script
-// container's ROUTINE COUNT.** That comparison is what establishes the index space: `routineIdx` is
-// an index into the same routine table `MapScript` already reads, so a fire can be resolved to the
-// routine's NAME. Confidence 0.98 (the bound is read straight from the container, not inferred).
+// `FUN_003dbcf0(object, &rec, 1)`.
+//
+// **THE INDEX IS OBJECT-LOCAL (corrected Session 118; S117 read it as a routine-table index and the
+// play log refuted that -- consecutive small indices per object resolving to `setup` / the map
+// director).** `FUN_003dbcf0` bounds it against `**(u32**)(object+0x48)`: the count of the object's
+// OWN EVENT TABLE, [count:u32][8-byte records], whose entry u32 at `tbl+4+idx*8` is a NAME-POOL
+// OFFSET -- it is fed to `FUN_00263e40(blob, x) = blob + x + *(u32*)(blob+0x4C)`, and `+0x4C` is
+// HDR_NAME_POOL. The blob is the object's own container's (`FUN_00263ff0(obj[0x15])` =
+// HANDLE_TABLE_BASE + id*0x288, blob at +0). `MapScript::FiredRoutineName` walks this chain.
+// Confidence 0.98: every step is a read the decompile shows verbatim, and the corrected model
+// predicted the play log's per-object consecutive indices where the old one could not.
 //
 // WHO CALLS IT with a trigger volume: `FUN_0025c830(container, object)` -- the per-object trigger
 // update. It zeroes the object's inside-mask, walks the FOUR party actors at `DAT_0209a1f0`, tests

@@ -258,9 +258,15 @@ bool __fastcall HookedTouchTest(void* object, int mode) {
 //
 // **THE SUPPRESSION IS KEYED ON THE ROUTINE THE FIRE WOULD START, NOT ON THE OBJECT.** That is the
 // only identity available: the volumes are rect actors with no npcdic name, so the entity scan cannot
-// see them and `IsGuardObject` can never match them. The routine, by contrast, names itself -- and
-// the index is resolvable because `FUN_003dbcf0` bounds it against the object's script container's
-// routine count, i.e. against the very table `MapScript::RoutineNameAt` reads.
+// see them and `IsGuardObject` can never match them. The routine, by contrast, names itself.
+//
+// **THE FIRED INDEX IS OBJECT-LOCAL (Session 118).** S117 read it as a routine-table index and the
+// play log refuted that in one screen: objects fired CONSECUTIVE SMALL indices (1,2,3 on one object,
+// 2,3,4 on the next) whose "names" resolved to `setup` and the map's resident director -- routines no
+// trigger volume could be starting -- while the real capture never matched and the player was caught.
+// `FUN_003dbcf0` bounds the index against the object's OWN event table at `object+0x48`, whose
+// entries are NAME-POOL OFFSETS. `MapScript::FiredRoutineName` walks that chain; the name it returns
+// is the map author's own string for the routine that would actually run.
 //
 // It is also the GLOBAL rule the per-map table never was: "do not start a routine the map's own
 // author named a capture" holds on both palace maps (568's single `ヴァン捕獲` and 569's twelve) with
@@ -304,25 +310,32 @@ constexpr size_t kCaptureMarkerLen = 4;
 // takes over, and its LEAVE branch runs the cleanup it runs whenever an event could not start.
 constexpr int kFireDeclined = 2;
 
-// Per-map cache of "is routine N a capture routine?", so a fire costs an array read rather than a
-// blob parse. 0 = not looked up yet, 1 = no, 2 = yes. Cleared on map teardown; a routine index is
-// bounded by the container's own count, which real maps run in the tens.
-constexpr uint32_t kMaxRoutineIdx = 512;
-std::atomic<uint8_t> s_routineVerdict[kMaxRoutineIdx] = {};
+// NO VERDICT CACHE ANY MORE (Session 118). S117 cached "is routine N a capture?" keyed on the bare
+// index -- which the corrected model makes an identity error: the index is object-LOCAL, so the same
+// number names different routines on different objects, and a cached verdict for one object would be
+// replayed for another. Fires are event-driven (a crossing, not a frame), so resolving the name per
+// fire is a handful of guarded reads and costs nothing that matters.
 
 // Log latch: fires are event-driven, not per-frame, but a volume the player paces in and out of
-// would still repeat. One line per (routine index, kind) pair per map.
-std::atomic<uint32_t> s_firesSeen[32] = {};
-std::atomic<int>      s_firesSeenN{0};
+// would still repeat. One line per (object, kind, index) triple per map -- THE OBJECT IS PART OF THE
+// KEY (Session 118): object-local indices collide across objects by design, and S117's object-less
+// key deduplicated DIFFERENT objects' fires into one line. That is precisely how the capture rect's
+// own fire went unlogged on the play test that refuted S117: an earlier object had already used its
+// (kind, index) pair. 96 slots, not 32 -- map 569 carries seventy rects, and on the two danger maps
+// a fuller file log is the point.
+struct FireSeen { void* obj; uint32_t key; };
+constexpr int kMaxFiresSeen = 96;
+FireSeen         s_firesSeen[kMaxFiresSeen] = {};
+std::atomic<int> s_firesSeenN{0};
 
-bool NoteFireOnce(uint32_t kind, uint32_t routineIdx) {
+bool NoteFireOnce(void* object, uint32_t kind, uint32_t routineIdx) {
     const uint32_t key = (kind << 24) | (routineIdx & 0xFFFFFFu);
-    const int n = s_firesSeenN.load(std::memory_order_relaxed);
-    for (int i = 0; i < n && i < 32; ++i)
-        if (s_firesSeen[i].load(std::memory_order_relaxed) == key) return false;
-    if (n >= 32) return false;
-    s_firesSeen[n].store(key, std::memory_order_relaxed);
-    s_firesSeenN.store(n + 1, std::memory_order_relaxed);
+    const int n = s_firesSeenN.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < kMaxFiresSeen; ++i)
+        if (s_firesSeen[i].obj == object && s_firesSeen[i].key == key) return false;
+    if (n >= kMaxFiresSeen) return false;
+    s_firesSeen[n] = { object, key };
+    s_firesSeenN.store(n + 1, std::memory_order_release);   // publish after the record is written
     return true;
 }
 
@@ -341,22 +354,16 @@ std::string NameForLog(const std::string& raw) {
     return o;
 }
 
-// True when the map's own script names routine `idx` a capture.
+// True when the routine THIS fire would start is one the map's own script names a capture.
 //
-// `name` is filled whenever the pool could be read, matched or not -- an unmatched fire has to stay
-// evidence rather than become a silent pass, because "the index space is not this table's" and "this
-// volume is not a capture" would otherwise print identically. That distinction is the whole falsifier.
-bool IsCaptureRoutine(uint32_t idx, std::string& name) {
-    if (idx >= kMaxRoutineIdx) return false;
-    const bool named = MapScript::RoutineNameAt(idx, name);
-    if (!named) {
-        // Unreadable this instant (a torn blob mid-load) -- fall back to the verdict this map already
-        // reached for the index, and to "not a capture" if it never reached one. Fail open, always.
-        return s_routineVerdict[idx].load(std::memory_order_relaxed) == 2;
-    }
-    const bool hit = name.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos;
-    s_routineVerdict[idx].store(hit ? uint8_t{2} : uint8_t{1}, std::memory_order_relaxed);
-    return hit;
+// `name` is filled whenever the chain could be read, matched or not -- an unmatched fire has to stay
+// evidence rather than become a silent pass, because "the resolution chain is wrong" and "this
+// volume is not a capture" would otherwise print identically. That distinction is the whole
+// falsifier, and it is exactly how S117's wrong index model was caught in one play session.
+// Unreadable => false: fail open, always.
+bool IsCaptureRoutine(void* object, uint32_t idx, std::string& name) {
+    if (!MapScript::FiredRoutineName(object, idx, name)) return false;
+    return name.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos;
 }
 
 int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx, int mode, int flag) {
@@ -369,13 +376,13 @@ int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx,
 
     std::string name;
     const bool fromVolume = t_inTriggerUpdate;
-    const bool capture    = IsCaptureRoutine(routineIdx, name);
+    const bool capture    = IsCaptureRoutine(object, routineIdx, name);
     const bool suppress   = capture && fromVolume;
 
     // EVERY fire on a table map is logged, matched or not, suppressed or not -- that is the falsifier.
-    // "the index space is not the routine table's" and "this volume is not a capture" would otherwise
-    // print identically, and so would "the capture came from somewhere other than a trigger volume".
-    if (NoteFireOnce(kind, routineIdx)) {
+    // "the resolution chain is wrong" and "this volume is not a capture" would otherwise print
+    // identically, and so would "the capture came from somewhere other than a trigger volume".
+    if (NoteFireOnce(object, kind, routineIdx)) {
         char m[320];
         snprintf(m, sizeof(m),
                  "event fire on map %d: obj=%p kind=%u routine=%u src=%s name=\"%s\" -- %s",
@@ -464,11 +471,10 @@ void OnMapTeardown() {
     s_loggedSuppress.store(false, std::memory_order_relaxed);
     s_loggedThisMap.store(false, std::memory_order_relaxed);
 
-    // The routine-name cache is indexed by a number that means something DIFFERENT on the next map --
-    // routine 47 is a capture rect here and a door there -- so it must not survive the change. Same
-    // reason the guard snapshot is cleared: an identity is only valid inside the map it was read on.
-    for (uint32_t i = 0; i < kMaxRoutineIdx; ++i)
-        s_routineVerdict[i].store(0, std::memory_order_relaxed);
+    // The fires-seen latch holds scene-object pointers that die with the map -- cleared for the same
+    // reason the guard snapshot is: an identity is only valid inside the map it was read on. (The
+    // S117 per-index verdict cache is GONE, not merely cleared -- the index is object-local, so a
+    // cached verdict keyed on the bare index was wrong within a single map, not just across two.)
     s_firesSeenN.store(0, std::memory_order_relaxed);
 }
 

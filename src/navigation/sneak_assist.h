@@ -29,10 +29,12 @@
 //
 //   * IT IS KEYED ON THE ROUTINE'S NAME, WHICH IS THE MAP'S OWN AUTHORING. The volumes are rect
 //     actors with no npcdic name -- invisible to the entity scan -- so per-object identity was never
-//     available for them; the routine index the fire carries is, and `FUN_003dbcf0` bounds that index
-//     against the script container's routine count, which is what proves it indexes the table
-//     `MapScript::RoutineNameAt` reads. "Do not start a routine the author named `捕獲`" is a GLOBAL
-//     rule: it matches 568's one capture routine and 569's twelve with no map id in it.
+//     available for them; the routine the fire would start is. **The fire's index is OBJECT-LOCAL
+//     (S118): it indexes the object's own event table at `object+0x48`, whose entries are name-pool
+//     offsets** -- `MapScript::FiredRoutineName` walks that chain. (S117 read it as a routine-table
+//     index; the play log refuted that and the capture passed through unmatched -- the fail-open path
+//     doing its job.) "Do not start a routine the author named `捕獲`" is a GLOBAL rule: it matches
+//     568's one capture routine and 569's twelve with no map id in it.
 //   * ONLY A TRIGGER VOLUME'S FIRE MAY BE DECLINED. `FUN_003dbb60` also starts conversation events
 //     and script-side event calls, and its `kind` byte does not separate them, so `FUN_0025c830` is
 //     hooked as a pure SCOPE MARKER (two thread-local stores around a passthrough) and only fires
