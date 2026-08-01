@@ -21,16 +21,30 @@ namespace {
 // own: `mapId` from planmapname, `nameIdx` the npcdic name index of the watching actors (568's two
 // guards both carry 694 -- the log's dup-label "Imperial" pair).
 //
-// Map 569 (Lower Halls -- capture RECTS and eight soldiers, a different mechanism) is known and
-// deliberately absent: sneak assist clamps a distance native, which is not what 569 checks, so
-// listing it would promise a player something F10 cannot deliver there.
+// THE TABLE IS COMPLETE FOR THE ROYAL PALACE, and that is a MEASUREMENT (Session 115). The palace is
+// maps 567-572 (`rrp_a01`..`rrp_a06`); each map's own `.ebp` was scanned for capture-routine names
+// and for the detection natives' CALLACT sites, and the two signals agree:
+//
+//     567 rrp_a01   0 capture routines                                   -- nothing to do
+//     568 rrp_a02   1 (`ヴァン捕獲`)   distance x8, touch x4, wait x21
+//     569 rrp_a03  12 (`捕獲レクトＡ/Ｂ/Ｃ`, `捕獲レクト兵士０１..０７`,
+//                      `捕獲監視監督`)  distance x4
+//     570 rrp_a04   0 |  571 rrp_a05   0 |  572 rrp_a06   0             -- nothing to do
+//
+// So ONLY 568 and 569 run a capture sequence at all, and the palace needs no further rows. This
+// replaces the older note that 569 was "deliberately absent because it uses capture RECTS": the
+// distance native fires there too (the log's `native FIRED on map 569`), and the touch suppression
+// is keyed on the guards' npcdic identity, which 569's fourteen "Imperial" actors share with 568's
+// two. If a capture DOES still happen on 569 it is the rect actors, and the falsifier in
+// sneak_assist.cpp names the object rather than leaving it to another guessing round.
 struct Row {
     uint32_t mapId;
     int16_t  nameIdx;    // npcdic id of the watching actor(s)
 };
 
 constexpr Row kRows[] = {
-    { 568u, 694 },   // Royal Palace: Cellars -- the guarded stair to 569
+    { 568u, 694 },   // Royal Palace: Cellars     -- the guarded stair to 569 (2 "Imperial" actors)
+    { 569u, 694 },   // Royal Palace: Lower Halls -- 14 "Imperial" actors, the SAME npcdic id
 };
 
 const Row* RowForMap(uint32_t mapId) {

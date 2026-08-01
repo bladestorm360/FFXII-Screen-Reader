@@ -105,7 +105,9 @@ constexpr int DIK_W = 0x11, DIK_A = 0x1E, DIK_S = 0x1F, DIK_D = 0x20;
 // 127 records, zero of them named.
 // F7 is deliberately ABSENT: it is reserved for autodetail and must not be bound to anything else.
 // F8: open/close the mod's own settings menu.
-// F10: sneak assist on/off.
+// F10 is NOT bound (Session 115). It carried the sneak-assist toggle from S107 to S114; that feature
+// now acts automatically on the maps `path_danger.cpp` names and has no setting, so the key went back
+// to the game.
 //
 // ⚠ "THE GAME BINDS ONLY F1/F2/F3" IS FALSE, and this comment used to repeat it (Session 112).
 // That came from the game's Controls CONFIGURATION screen, which lists only REBINDABLE actions --
@@ -114,8 +116,7 @@ constexpr int DIK_W = 0x11, DIK_A = 0x1E, DIK_S = 0x1F, DIK_D = 0x20;
 // Keyboard` / `Space Close`). The mod cannot swallow keys, so while the audio beacon sat on F9 every
 // toggle also flipped that full-screen panel. The beacon moved to **F11**; DIK_F9 is now unused by
 // the mod and left to the game. Absence from a rebinding UI is not evidence a key is free.
-constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F8 = 0x42,
-              DIK_F10 = 0x44, DIK_F11 = 0x57;
+constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F8 = 0x42, DIK_F11 = 0x57;
 // Ctrl/Alt scan codes for the BARE-KEY guard below. (DIK_LSHIFT / DIK_RSHIFT are already declared
 // with the movement keys above.)
 constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0xB8;
@@ -127,7 +128,7 @@ constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0x
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[24]{};   // 0-15 + 20-23 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[23]{};   // 0-15 + 20-22 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -381,7 +382,6 @@ void FeedDInputKeyboard(const unsigned char* dik) {
         DInputEdge(VK_F11,    g_extraDown[22],
                    !modifierHeld && (dik[DIK_F11] & 0x80) != 0, true);  // F11 audio beacon on/off
     }
-    DInputEdge(VK_F10,        g_extraDown[23],(dik[DIK_F10]        & 0x80) != 0, true);  // F10 sneak assist on/off
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

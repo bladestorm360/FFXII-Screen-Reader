@@ -167,7 +167,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
 | `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY (S112):** with Shift, Ctrl or Alt held it does nothing, because **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys. **Moved off `F9`, which belongs to the game** | free |
 | `F9` | **NOT A MOD KEY — the GAME uses it** for *Hide On-Screen Keyboard* (S112). Left alone deliberately | game-owned |
-| `F10` | **Sneak assist — On ⇄ Off (Sessions 107/109).** Speaks the new setting. Same setting the mod menu holds. **Default OFF**, forced off at startup AND on every map change, and **the key is a NO-OP (silent, log-only) on any map without a `path_danger.cpp` row** (map 568 today) — so it can only ever be armed deliberately, this session, while standing on the guarded map it acts on. There it stops the guards' proximity check from catching you. It writes no game state: switching it off restores the game's own behaviour on the very next check. See `sneak_assist.h` | free — game binds F1/F2/F3 only |
+| `F10` | ~~**Sneak assist — On ⇄ Off (Sessions 107/109).**~~ **STRUCK, Session 115: the mod no longer binds `F10`.** Sneak assist is now **automatic** on the maps `path_danger.cpp` lists (the Royal Palace Cellars and Lower Halls) and has no setting, no menu row and no key — see the Sneak assist note below. Before re-binding this key for anything, check the game's **on-screen-keyboard overlay**, not its Controls screen (S112) | unbound by the mod |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |
 | `]` | Nav: next object | free |
@@ -269,9 +269,20 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > Neither volume goes to zero on purpose — each beacon has its own Off, so a switched-on beacon is
 > never silent for a reason you cannot hear.
 >
-> `F4` toggles Combat verbosity and `F9` toggles the Audio beacon, both from anywhere without opening
-> the menu. Each route changes the same stored value and speaks the same confirmation. **`F9` is the
-> route beacon only** — the target beacon has no shortcut key and is changed from the menu.
+> `F4` toggles Combat verbosity and `F11` toggles the Audio beacon, both from anywhere without
+> opening the menu. Each route changes the same stored value and speaks the same confirmation.
+> **`F11` is the route beacon only** — the target beacon has no shortcut key and is changed from the
+> menu. (~~`F9`~~ is **STRUCK**: the game owns it — see the `F9` row above, S112. This paragraph said
+> `F9` in two places until Session 115.)
+>
+> **Sneak assist is NOT in this menu, and has no key (Session 115).** A few points in the story make
+> you sneak past guards who put you back to the start of the sequence if they notice you. The mod
+> handles those **automatically**, on the two maps that have one — the Royal Palace Cellars and Lower
+> Halls — and does nothing anywhere else. There is nothing to switch on and nothing to remember. It
+> writes no game state; every other trigger on those maps (doors, conversations, the story rects)
+> keeps working exactly as the game wrote it. It had a toggle on `F10` from Session 107 to Session
+> 114; play confirmed it silences only the guards' catch, so the toggle went and `F10` went back to
+> the game. See `src\navigation\sneak_assist.h`.
 >
 > Settings persist to `%LOCALAPPDATA%\FFXII-Screen-Reader\mod_settings.txt`. The game folder is never
 > written to. If `%LOCALAPPDATA%` is unavailable the menu still works; the choice just resets on

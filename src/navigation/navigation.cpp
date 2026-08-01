@@ -17,8 +17,8 @@ bool Init() {
     bool ok = NavHooks::Init();
     // Ground-loot hooks — must init BEFORE the entity list, which scans the pool they feed.
     ok &= ItemScan::Init();
-    // Sneak assist (S106). Non-fatal by design: a failed install just means the toggle can never
-    // do anything, which is the same as its default state.
+    // Sneak assist (S106; always-on for the danger-table maps since S115). Non-fatal by design: a
+    // failed install just means the guards behave exactly as the game wrote them.
     SneakAssist::Init();
     // Field-object list (walks the game's actor pool on demand).
     EntityList::Init();

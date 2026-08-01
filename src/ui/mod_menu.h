@@ -51,9 +51,12 @@ enum class SettingId : int {
     TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
-    SneakAssist,          // S106: neutralise stealth-minigame catches. Default Off; see sneak_assist.h
     Count
 };
+// REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
+// play-confirmed the tester made it automatic on the two maps `path_danger.cpp` names -- so there is
+// nothing left for a player to choose. A settings file still carrying `sneak_assist=1` is harmless:
+// `Load()` ignores keys it does not know, by design.
 
 // Loads the persisted settings and registers the input callbacks. Safe to call before Speech is up.
 bool Init();
@@ -70,9 +73,6 @@ Verbosity CombatVerbosity();
 bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
-// S106: whether the sneak-assist clamp may fire. Read from the SCRIPT VM's thread inside a native
-// call, so it must stay a lock-free relaxed load like the rest of this family.
-bool SneakAssistOn();
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get
@@ -96,10 +96,10 @@ void CycleSetting(SettingId id);
 // surprise and the repeated spoken value is how the player hears they are at the end.
 void Adjust(SettingId id, int delta);
 
-// Set a setting WITHOUT speaking, persisting and logging it like any other change. For automatic
-// changes the player did not ask for — announcing those would be filler on a path that runs on
-// every map load. Sole caller today: sneak assist's auto-off on a map change (see sneak_assist.h).
-void SetSilently(SettingId id, int value);
+// (`SetSilently` was removed in Session 115 along with the sneak-assist toggle, its only caller. It
+// set a value without speaking it, for automatic changes the player did not ask for. If that need
+// comes back, `git show` this session -- but do not re-add it speculatively: with no caller it is a
+// second way to change a setting, which is exactly what `Adjust` exists to be the only one of.)
 
 bool IsOpen();
 

@@ -7,17 +7,32 @@
 // ⚠ THIS IS THE MOD'S SECOND WRITE-CATEGORY EXCEPTION, after auto-walk (CLAUDE.md: the mod is
 // strictly read-only on input and game memory). USER-AUTHORIZED 2026-07-31, explicitly, as an
 // accessibility skip for a hard progress block. Boundaries, all non-negotiable:
-//   1. DEFAULT OFF, gated on the ModMenu "Sneak assist" toggle (F10 is the shortcut). It is forced
-//      off at STARTUP and on EVERY MAP CHANGE (S109), and `F10` is a NO-OP on any map without a
-//      PathDanger row -- so the only way it can be on is that the player deliberately armed it,
-//      this session, while standing on the guarded map it acts on;
-//   2. with the toggle off the hook's FIRST branch tail-calls the original and returns — the write
-//      is unreachable, not merely skipped, so an unarmed build is byte-identical in behaviour;
-//   3. effective ONLY on maps PathDanger has a row for (`PathDanger::MapHasRow`) — everywhere else
-//      the hook is a pass-through even with the toggle on;
+//   1. THE MAP TABLE IS THE ONLY GATE (Session 115, user-authorized in that conversation). There is
+//      no toggle, no mod-menu row and no hotkey: on a map `PathDanger` names, the overrides are
+//      always live; on every other map they are unreachable. This REPLACES the S107/S109 arming
+//      rule (default off, F10, forced off at startup and on every map change) -- see below for what
+//      the play evidence was and why the arming stopped buying anything;
+//   2. off a table map the hooks' FIRST branch tail-calls the original and returns — the write is
+//      unreachable, not merely skipped, so on every map but the table's the build is byte-identical
+//      in behaviour to the read-only mod;
+//   3. the table is `PathDanger::MapHasRow`, today maps 568 and 569 only, and that pair is a
+//      MEASUREMENT of the palace's own scripts, not a guess (path_danger.cpp holds the census);
 //   4. NO PERSISTENT GAME STATE IS EVER WRITTEN. The only write is to the script VM's own return
-//      slot for the call being serviced, inside that call. Toggling off restores vanilla behaviour
-//      on the very next call; nothing is left behind for a save to capture.
+//      slot for the call being serviced, inside that call. Walking off the map restores vanilla
+//      behaviour on the very next call; nothing is left behind for a save to capture.
+//
+// WHY THE TOGGLE WENT (Session 115, tester's decision). S113 shipped armed and PLAY-CONFIRMED: the
+// tester crossed 568 with it on for three minutes and the servant chain, the shout and the
+// transition all worked, with the falsifier silent throughout. The arming existed to contain a risk
+// that the suppression might silence the map's EVENTS as well as the guards' catch; play showed it
+// silences only the catch. What the arming was left doing was making a blind player re-arm a fix
+// for a puzzle they cannot see, on every entry to the map that needs it. So the table became the
+// gate outright.
+//
+// WHAT THAT COSTS, stated rather than buried: the accepted limit below -- `distance` is a GENERIC
+// native, so every call on a table map is clamped -- no longer has a player-side escape hatch. On
+// 568 that risk is retired by play. On 569 it is not yet, so the `clamp ACTIVE` line and the
+// non-guard falsifier both still print: if a 569 gate ever stalls, the fix is to drop 569's row.
 //
 // WHAT IT DOES, and why it is not a flag write. Map 568's sneak sequence has NO "guards let him
 // pass" flag: `とおしてあげる` ("let him pass") is a ROUTINE, and the fail condition is a watcher
@@ -36,35 +51,30 @@
 //     body agree with each other and outrank the name table — this is the standing "resolve natives
 //     by BEHAVIOUR, never by index arithmetic" rule paying for itself again.
 //
-// KNOWN LIMIT, accepted by the user: `distance` is a GENERIC native, so v1 clamps every call on a
-// table map while armed. If a map ever gates progression on the party APPROACHING something, that
-// gate would stall while this is on — hence default-off, the instant toggle, and a log line for
-// every clamp so a stall is diagnosable in one grep. Map 569's catch is capture RECTS, not
-// distance, so this does nothing there until 569 gets its own mechanism.
+// KNOWN LIMIT, accepted by the user: `distance` is a GENERIC native, so this clamps every call on a
+// table map. If a map ever gates progression on the party APPROACHING something, that gate would
+// stall — hence the table being as small as the evidence allows, and a log line for every clamp so
+// a stall is diagnosable in one grep. Map 569's catch is documented as capture RECTS as well as the
+// distance native; the rects carry no npcdic name, so if one ever catches the player the falsifier
+// below names the object and it becomes one more table entry.
 namespace SneakAssist {
 
-// Installs the native hook. Non-fatal on failure: the feature simply never arms.
+// Installs the native hooks. Non-fatal on failure: the feature simply never acts.
+//
+// There is no `Shutdown()` (removed Session 115). It only ever cleared an "are the hooks installed"
+// flag whose sole reader was `ArmedHere()`, which the toggle's removal deleted, and
+// `Navigation::Shutdown` never called it -- so it was a lifecycle stub that recorded nothing and
+// ran never. The hooks themselves are torn down with the rest by `Hooks::`.
 bool Init();
-void Shutdown();
-
-// Does the CURRENT map have a stealth sequence this feature covers? **`F10` is a NO-OP when this is
-// false** (S109, user instruction): the key does not toggle, does not speak, and only logs. The
-// setting is for getting past guards, so it can only be armed while standing on a map that has
-// them — a player cannot leave it switched on somewhere it was never meant to act.
-bool AvailableHere();
-
-// True when the toggle is on AND the current map is covered — i.e. the clamp would actually fire.
-bool ArmedHere();
 
 // GAME THREAD, once per field tick. Refreshes the snapshot of WHICH scene objects are this map's
 // guards, which is what lets the touch-test override answer per OBJECT instead of per map. Costs a
-// table lookup and one store while the toggle is off or the map has no row — i.e. almost always.
+// table lookup and one store on any map with no row — i.e. almost always.
 void OnFieldFrame();
 
-// GAME THREAD, from the field-teardown hook. **Forces the toggle OFF on every map change** (S109,
-// user instruction), silently and persistently, so the feature can never carry into a map it was
-// not authorized for because a player forgot to switch it off. Arming is therefore always a
-// deliberate act on the map it applies to.
+// GAME THREAD, from the field-teardown hook. Prints the leaving map's native census and clears the
+// guard snapshot and the log latches, so a stale scene-object pointer can never be matched against
+// an object on the next map.
 void OnMapTeardown();
 
 } // namespace SneakAssist

@@ -69,12 +69,6 @@ const Setting kSettings[] = {
       { Id::BeaconOff,       Id::BeaconOn },
       { Id::AutoWalkDescOff, Id::AutoWalkDescOn },
       Id::AutoWalkDesc, "auto_walk", 0 },
-    // Default OFF for the same reason as auto-walk, and more so: this one overrides the GAME'S OWN
-    // rules on the maps it covers, so it must never be something an install turned on for somebody.
-    { Id::SettingSneakAssist, Kind::Named, 2,
-      { Id::BeaconOff,          Id::BeaconOn },
-      { Id::SneakAssistDescOff, Id::SneakAssistDescOn },
-      Id::SneakAssistDesc, "sneak_assist", 0 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -265,11 +259,6 @@ bool AutoWalkOn() {
            == static_cast<int>(Beacon::On);
 }
 
-bool SneakAssistOn() {
-    return g_values[static_cast<int>(SettingId::SneakAssist)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
-}
-
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }
 
@@ -316,23 +305,9 @@ void Adjust(SettingId id, int delta) {
     Speech::Output(ValueOf(i), true);
 }
 
-// Set WITHOUT speaking. The one caller is sneak assist's auto-off on a map change (S109), and the
-// silence is the point: the mod would otherwise announce a setting nobody touched, on every single
-// map transition, which is exactly the filler the standing rule forbids. It still persists and still
-// logs, so the change is neither invisible to the next session nor to the log.
-//
-// It routes through the SAME store + Save + LogState as Adjust rather than writing g_values from the
-// caller -- one place where a setting's value changes (CLAUDE.md's one-choke-point rule). GAME
-// THREAD safe: the store is a relaxed atomic and Save is a small synchronous file write on a path
-// that runs once per map load, not per frame.
-void SetSilently(SettingId id, int value) {
-    const int i = static_cast<int>(id);
-    if (i < 0 || i >= kCount) return;
-    if (value < 0 || value >= kSettings[i].count) return;
-    if (g_values[i].load(std::memory_order_relaxed) == value) return;
-    g_values[i].store(value, std::memory_order_relaxed);
-    Save();
-    LogState("auto", i);
-}
+// (`SetSilently` lived here until Session 115. It set a value without speaking it -- the one caller
+// was sneak assist's auto-off on a map change -- and went with the toggle that needed it. `Adjust`
+// is once again the ONLY place a setting's value changes, which is what CLAUDE.md's
+// one-choke-point-per-surface rule asks for.)
 
 } // namespace ModMenu

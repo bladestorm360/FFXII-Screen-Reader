@@ -14,8 +14,9 @@
 // it is just a bribe the search pays with the nearest wrong thing.
 //
 // The table itself survives because two things still need it, neither of which touches routing:
-//   * SNEAK ASSIST (`sneak_assist.h`) uses it as the MAP WHITELIST -- F10 is inert on any map with
-//     no row here;
+//   * SNEAK ASSIST (`sneak_assist.h`) uses it as the MAP WHITELIST -- and since Session 115 that
+//     whitelist is the feature's ONLY gate: sneak assist has no toggle and no menu row, so a map
+//     with no row here is a map on which every one of its overrides is unreachable;
 //   * the capture-distance diagnostic below, which is log-only and measures what the game's own
 //     script considers "too close" so the numbers come from play rather than from an estimate.
 //

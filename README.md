@@ -100,7 +100,6 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
 * F6: give the selected object your own name, taken from the clipboard.
 * F11: turn the audio beacon on or off. It only responds to F11 on its own — hold Shift, Ctrl or Alt and it does nothing, so Shift+F11 stays yours for your screen reader.
-* F10: turn sneak assist on or off — see the mod menu below.
 * F8: open or close the mod menu.
 
 #### The audio beacon
@@ -174,11 +173,15 @@ One setting so far:
 * Audio beacon — On or Off. The repeating sound that leads you along the route, described under Navigation above. On is the default.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
 
-* Sneak assist — Off or On. A few points in the story make you sneak past guards who catch you if you come too close, and being caught puts you back to the start of the sequence. With this On, the guards on those maps stop noticing you, so you can walk the route at your own pace instead of racing a timer you cannot see. It changes nothing anywhere else in the game, and nothing is saved by it — switch it off and the guards behave exactly as the game wrote them, immediately. Off is the default, and it cannot get stuck on: it switches itself off whenever you change area, and it starts every session off. F10 only does something while you are actually standing on one of those guarded maps — press it anywhere else and it stays quiet, because there is nothing there for it to do. If a sneaking sequence ever seems to stop making progress while this is On, switch it off and play that part normally.
-
-F4 switches Combat verbosity, F11 switches the Audio beacon and F10 switches Sneak assist, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
+F4 switches Combat verbosity and F11 switches the Audio beacon, both without opening the menu, so you can change either of them in the middle of a fight. Your choices are remembered between sessions.
 
 Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it: the game stays quiet when an enemy repeats the same ability on the same target, and when the caster is a long way off. That pacing is the game's own, not something the mod is hiding from you.
+
+#### Sneaking past the palace guards
+
+There is a point early in the story where you sneak through the Royal Palace, and guards put you back to the start of the sequence if they notice you. The mod handles that part for you, automatically, on those two maps only. **There is nothing to switch on and no key to press.** Walk it at your own pace.
+
+It does exactly one thing: it stops those guards noticing you. Everything else on those maps still works the way the game wrote it — the servant still talks to you, the doors still open, the story still moves. Nothing is saved and nothing is changed anywhere else in the game; walk out of the palace and the mod is back to only reading things to you.
 
 #### Reading
 

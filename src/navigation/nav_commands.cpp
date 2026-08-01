@@ -5,7 +5,6 @@
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
 #include "navigation/nav_types.h"
-#include "navigation/sneak_assist.h"
 #include "ui/battle_target_reader.h"
 #include "navigation/interact_target.h"
 #include "battle/party_status.h"
@@ -154,18 +153,11 @@ void OnNavKey(int vk) {
         // F11, not F9: the game owns F9 ("Hide On-Screen Keyboard", S112). Bare press only --
         // Shift+F11 belongs to NVDA; the guard is in input_tracker's edge registration.
         case VK_F11:        ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
-        // F10 mirrors the same arrangement for sneak assist -- but it is a NO-OP off its own maps
-        // (S109, user instruction). The feature exists to get past scripted guards, so the key may
-        // only arm it while standing where guards are; anywhere else it does not toggle and does not
-        // speak, which is the same silence `;` and `7` use for "nothing here to report". The reason
-        // goes to the log, never to speech.
-        case VK_F10:
-            if (SneakAssist::AvailableHere()) {
-                ModMenu::CycleSetting(ModMenu::SettingId::SneakAssist);
-            } else {
-                Log::Write("SNEAK", "F10 ignored: this map has no guarded sequence (no-op by design)");
-            }
-            break;
+        // F10 IS NOT BOUND (Session 115). It held the sneak-assist toggle from S107 to S114; that
+        // feature now acts automatically on the maps `path_danger.cpp` names and has no setting to
+        // switch, so the key went back to the game. Do not re-bind it without checking the
+        // on-screen-keyboard overlay first -- the config screen is not evidence a key is free
+        // (S112, the F9 collision).
         case VK_F8:         ModMenu::Toggle();                break;  // F8 mod menu
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
