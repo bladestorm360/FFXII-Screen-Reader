@@ -256,12 +256,14 @@ int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly, std::vector
 // clearance without reaching for ground that is not there.
 constexpr float kClearanceMargin = 0.15f;
 
-int InsetCorners(std::vector<FVec3>& poly) {
+int InsetCorners(std::vector<FVec3>& poly, InsetStats* stats) {
+    if (stats) *stats = InsetStats{};
     if (poly.size() < 3) return 0;
     const float r = NavFootprint::BodyRadius() + kClearanceMargin;
     int moved = 0;
 
     for (size_t i = 1; i + 1 < poly.size(); ++i) {
+        if (stats) ++stats->corners;
         const FVec3 prev = poly[i - 1], cur = poly[i], next = poly[i + 1];
 
         // Unit vectors along the two legs, away from the corner. Their sum bisects the interior angle,
@@ -304,9 +306,10 @@ int InsetCorners(std::vector<FVec3>& poly) {
             { -bz, bx },         // ...and of the outgoing leg
             { bz, -bx },
         };
-        float bestAfter = before;
-        FVec3 bestCand{};
-        bool  haveBest = false;
+        float  bestAfter = before;
+        FVec3  bestCand{};
+        PolyId bestPoly  = NavMesh::kNoPoly;   // where the winning candidate landed -- the instrument
+        bool   haveBest  = false;
         for (const auto& d : dirs) {
             const FVec3 cand{ cur.x + d[0] * r, cur.y, cur.z + d[1] * r };
             const PolyId candPoly = NavMesh::FindPolyAt(cand.x, cand.y, cand.z);
@@ -318,11 +321,21 @@ int InsetCorners(std::vector<FVec3>& poly) {
             // ONLY IF IT HELPS -- strictly better than the corner's own measured clearance. A corner
             // already clear keeps its exact position: the spoken legs are computed from these points
             // and moving them for nothing would change the words.
-            if (after > bestAfter) { bestAfter = after; bestCand = cand; haveBest = true; }
+            if (after > bestAfter) {
+                bestAfter = after; bestCand = cand; bestPoly = candPoly; haveBest = true;
+            }
         }
         if (haveBest) {
             poly[i] = bestCand;
             ++moved;
+            // LOG-ONLY, and free: both poly ids were already resolved above to decide the move. A
+            // corner that leaves the poly it was sampled from has been pushed out of the corridor
+            // A* certified, which is the S117 suspect for why the ladder repairs short routes and
+            // fails long dense ones. Counted, never acted on.
+            if (stats) {
+                ++stats->moved;
+                if (bestPoly != home) ++stats->leftHome;
+            }
         }
     }
     return moved;

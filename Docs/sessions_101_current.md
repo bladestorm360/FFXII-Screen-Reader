@@ -1402,3 +1402,138 @@ So the mod invented a shop out of two unrelated doors at opposite ends of the ma
 proximity rule on the interactable branch plus a requirement that the shared name be DISTINCTIVE
 rather than a generic fallback — **and note this can only ever have made things worse where it
 fired, because it also DELETED the other door**: 569 lists zero Doors.
+
+## Session 117 — 2026-08-01 — [navigation] Map 569's catch is the ENGINE's, not the script's; and a twin filter with no distance test
+
+**KEYWORDS: sneak assist map 569 event fire FUN_003dbb60 RVA 0x2BBB60 FUN_0025c830 trigger volume
+update ENTER LEAVE routine index FUN_003dbcf0 routine count bound capture routine name 捕獲 Shift-JIS
+95 DF 8A 6C action_binding_tables validated script_native_table dbg join unreliable seteventwakerect
+STRUCK 0x3DF FUN_0034dca0 setter 0x26E FUN_00341000 0x409 0x40A twin filter kTwinNearDist
+kTwinNameMaxObjects hasNameSign Shop misclassified door 90.06m InsetCorners leftHome instrument
+census latch write-once consumed by the print**
+
+Three open defects from S116's play test, all with root causes already recorded. All three fixed; one
+of them needed the mechanism found first.
+
+### 1. THE 569 CATCH — no script native is involved at any point
+
+S116 established that `rrp_a03` calls **zero** `0x26D` and **zero** `0x525`, so `FUN_002677f0` — the
+choke point the S113 suppression hooks — is never reached on 569, and the play log's zero touch lines
+of either kind agreed. What it left open was what the catch actually IS. It is the engine's own
+trigger-volume update:
+
+> **`FUN_0025c830(container, object)`** zeroes the object's inside-mask, walks the FOUR party actors
+> at `DAT_0209a1f0` against the volume, ORs each slot bit into `*(u32*)(*(object+0xB8) + 0x60)` — **the
+> same mask `FUN_002677f0` reads** — and then, on the frame the mask goes from empty to occupied,
+> calls **`FUN_003dbb60(object, 4, routineIdx, 0)`: START THIS OBJECT'S ROUTINE.** That ENTER branch is
+> the one that goes on to `FUN_002e1cd0(0,0xd)` / `FUN_00268530(2)` and hands the field to a scripted
+> scene. Kind 2 is ON LEAVE, kinds 3/6 the in-volume tests.
+
+**The suppression is keyed on the ROUTINE, not on the object, and that is forced rather than chosen.**
+569's volumes are the `捕獲レクト兵士01..07` ("capture rect soldier") actors — rect actors carry no
+npcdic name, so the entity scan cannot see them and `IsGuardObject` could never match them. The
+routine, by contrast, names itself. `FUN_003dbcf0` rejects a record whose index is `>=`
+`**(u32**)(object+0x48)` — it bounds the fired index against the object's script container's ROUTINE
+COUNT, which is what establishes that the index addresses the same table `MapScript` already reads. So
+`MapScript::RoutineNameAt(idx)` resolves it, and the mod declines any fire whose routine the map's own
+author named `捕獲` ("capture").
+
+That is the **global** rule the per-map table never was: it matches 568's one capture routine
+(`ヴァン捕獲`) and 569's twelve with no map id, offset or index in it. The danger table stays as the
+containment gate. **It FAILS OPEN by construction** — unreadable blob, out-of-range index, or an
+unmatched name all take the original path — and it logs every fire on a table map, matched or not,
+with the raw name bytes, so "the index space is not this table's" and "this volume is not a capture"
+cannot print identically.
+
+### 2. THE NATIVE TABLE THAT WAS BEING QUOTED IS THE WRONG ONE — `seteventwakerect` STRUCK
+
+`GameArchitecture.md` and S115's census carried "**569 also uses `seteventwakerect` (`0x3DF` →
+`FUN_0034d470`) x70 and an unnamed `0x26E` x77** — the first two places to look". Both halves are
+wrong, and re-deriving the census this session is what caught it:
+
+- **The handler is wrong.** `output/script_native_table.txt` is anchored on `mapjump` and joins names
+  from the `.dbg` symbols through a *measured* delta; its own self-check prints
+  `VERDICT: NOT COHERENT -- do not use any id above`. **`output/action_binding_tables.txt` is the
+  validated table** — it independently reproduces all three previously-established facts (`0x08D` exec
+  `FUN_00355350` mapjump, `0x290` poll `FUN_003448f0` distance, `0x525` enter/exec
+  `FUN_003407c0`/`FUN_00340bc0`) — and it maps `0x3DF` to **`FUN_0034dca0`**, not `FUN_0034d470`.
+- **The name is wrong, and so is the lead.** `0x3DF` → `FUN_0034dca0` → `FUN_0026a660` sets bit 5 of
+  `object+0xC`. `0x26E` → `FUN_00341000` sets bit 5 of `object+0x8`. `0x409`/`0x40A` (also x70 — the
+  same three-natives-per-rect signature) → `FUN_0033f1e0`/`FUN_0033f650` set bits 1 and 0 of
+  `object+0xB`. **All four are SETTERS that configure a volume; not one of them tests anything.** Two
+  of those bits are read by `FUN_0025c830` itself: `+0x8` bit 5 restricts the test to the LEADER, and
+  `+0xC` bit 5 gates the volume on an event being active.
+
+> **A NAME FROM AN UNVALIDATED JOIN IS A GUESS WEARING A LABEL.** "seteventwakerect" was quoted across
+> three documents as the mechanism to hook, and it is a flag setter whose name came from a table that
+> says in its own output that its mapping is wrong. The census COUNTS were right all along (this
+> session reproduced 568's 1 and 569's 12 capture-routine names, and the `0x290`/`0x26D`/`0x525`/
+> `0x26E`/`0x3DF` counts, exactly from the `.ebp` files); only the resolution was fiction.
+
+### 3. THE TWIN FILTER HAD NO DISTANCE TEST — and one of the two recorded faults was wrong
+
+The interactable branch matched on `label` + `doorway` and nothing else, so on 569 it paired two
+generic `"Door"` objects **90.06 m apart**, deleted one, and promoted the survivor to `Category::Shop`.
+The map listed a bare unlabelled door as a shop and listed **no doors at all**.
+
+Both halves now gate the DROP, not just the Shop promotion — deleting a real door because it shares
+the game's word for "door" with a bound one costs a blind player a way out of the room:
+
+- **`kTwinNearDist` = 20 m.** From the measurement the filter was built on: East End's shop pairs sit
+  **6-15 m apart**, so the bound must admit 15 and reject 90.
+- **`kTwinNameMaxObjects` = 2.** A shopfront's name is carried by exactly the two objects that make it
+  up; `"Door"` is carried by every door on the map (568 has three). No word list, nothing assumed
+  generic — the map's own data answers it.
+- **A refusal is now logged too** (`twin KEPT ...`, one line per label per map). The drop line has been
+  unconditional since it deleted a story NPC; its refusals were invisible in exactly the same way.
+
+> **CORRECTION TO THE S116 WRITE-UP:** it recorded fault 2 as "`hasNameSign` was derived from a GENERIC
+> FALLBACK LABEL — the mod's OWN fallback naming". **That is wrong.** `ApplyFallbackLabels` runs
+> *after* `TagDoorwaysAndDropSignTwins`, and `gameNamed` is set from whether the game supplied text at
+> all — so at filter time `"Door"` is the map's own `fieldsignmes` string, not a mod word. The defect
+> was the missing distance test, once. A second fault asserted beside a real one gets fixed twice and
+> believed forever.
+
+### 4. THE INSTRUMENT S116 ASKED FOR — free, log-only
+
+`PathFunnel::InsetCorners` now fills an optional `InsetStats{corners, moved, leftHome}`, and
+`repair[...]` prints it: **`inset M/N corner(s) moved, K LEFT their poly`**. `leftHome` counts moves
+whose accepted point landed in a **different mesh poly** from the corner it came from — i.e. a corner
+pushed out of the corridor A\* certified. It costs nothing: both `FindPolyAt` results were already
+computed to decide the move, and the function's behaviour is byte-identical.
+
+The prediction to read off the next log: **`K` stays 0 on the rungs that report `OK` and grows on the
+dense candidates that report `still breaching`.** Confirmed => bound or skip the inset on dense
+polylines. Small on both => the suspect is wrong and the next one is `CheckLegs`' own body sweep.
+Nothing was changed in the cost model, the ladder or the tolerances.
+
+### 5. The census map label, third attempt — and this one is not an ordering bet
+
+S115 latched the map id on the field tick; the play log still said `map 569 census` for 568's two
+calls, because the field tick has already run for the NEW map by the time teardown fires. The latch is
+now **write-once per map and consumed by the print**: the tick fills it only when empty, teardown
+prints it and clears it. Whichever runs first, the id printed is the one the counter was counting on.
+
+### Containment
+
+Ten files, all in `src/navigation/`, and the other twenty-odd nav sources verified unchanged by diff.
+The event-fire hook's FIRST branch is the danger-table gate, exactly like the two hooks beside it, so
+on every map but 568/569 the build is behaviourally identical to today's — and trigger fires happen on
+every map in the game, which is why that early-out is what keeps the hook from having a blast radius.
+No cost-model, tolerance or bounds change anywhere in the pathfinder.
+
+### Verify next play
+
+**Map 569, nothing switched on.** `event-fire hook installed`; walking into a guard's rect produces
+`event fire on map 569: ... CAPTURE, SUPPRESSED` and **no capture**. The falsifier is a capture that
+happens with no `CAPTURE, SUPPRESSED` line — then the index space is not the routine table's, and the
+`passed through` lines name every index and raw name the fire carried. 568 must still behave exactly
+as S116 play-confirmed (`clamp ACTIVE`, `touch SUPPRESSED ... "Imperial"`). **Zero `event fire` lines
+on any map that is not 568/569.**
+
+**Map 569 exits:** the rescan should read `Door=2, Shop=0` — `[0:57]` survives and `[0:56]` is no
+longer promoted — with a `twin KEPT "Door" ... 90.06m ...` line saying why. Rabanastre East End's shops
+must still list as Shops: that pairing is 6-15 m with exactly two objects per name.
+
+**Routing gate, unchanged and non-negotiable:** map 315 still `pass=mesh`, `pass=seam` grep-dead,
+working routes still `attempts=1`, and every `repair[...]` line now carries its `inset`/`LEFT` counts.

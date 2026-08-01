@@ -21,6 +21,27 @@
 //      slot for the call being serviced, inside that call. Walking off the map restores vanilla
 //      behaviour on the very next call; nothing is left behind for a save to capture.
 //
+// THE THIRD OVERRIDE (Session 117) IS NOT A WRITE AT ALL. Map 569's catch never touches the script
+// VM: the ENGINE's trigger update `FUN_0025c830` sees the leader enter a `捕獲レクト兵士` ("capture
+// rect soldier") volume and calls `FUN_003dbb60` to START that volume's routine. The mod declines
+// that one call and returns the engine's own "no event slot free" answer. Nothing is written, so
+// boundary 4 holds a fortiori.
+//
+//   * IT IS KEYED ON THE ROUTINE'S NAME, WHICH IS THE MAP'S OWN AUTHORING. The volumes are rect
+//     actors with no npcdic name -- invisible to the entity scan -- so per-object identity was never
+//     available for them; the routine index the fire carries is, and `FUN_003dbcf0` bounds that index
+//     against the script container's routine count, which is what proves it indexes the table
+//     `MapScript::RoutineNameAt` reads. "Do not start a routine the author named `捕獲`" is a GLOBAL
+//     rule: it matches 568's one capture routine and 569's twelve with no map id in it.
+//   * IT FAILS OPEN. An unreadable blob, an out-of-range index, or a name that does not match all
+//     take the original path. If the model is wrong the build behaves exactly as today, and the log
+//     line -- which prints the index and the raw name bytes for EVERY fire on a table map, matched or
+//     not -- is the falsifier.
+//
+// WHY S115's CENSUS ALREADY SAID THIS AND THE FILE CLAIMED 569 COVERED ANYWAY: `rrp_a03` contains
+// ZERO `0x26D` and ZERO `0x525`, the natives that funnel into `FUN_002677f0`. A census that says a
+// mechanism is ABSENT is not a detail; it is the answer.
+//
 // WHY THE TOGGLE WENT (Session 115, tester's decision). S113 shipped armed and PLAY-CONFIRMED: the
 // tester crossed 568 with it on for three minutes and the servant chain, the shout and the
 // transition all worked, with the falsifier silent throughout. The arming existed to contain a risk
@@ -54,9 +75,9 @@
 // KNOWN LIMIT, accepted by the user: `distance` is a GENERIC native, so this clamps every call on a
 // table map. If a map ever gates progression on the party APPROACHING something, that gate would
 // stall — hence the table being as small as the evidence allows, and a log line for every clamp so
-// a stall is diagnosable in one grep. Map 569's catch is documented as capture RECTS as well as the
-// distance native; the rects carry no npcdic name, so if one ever catches the player the falsifier
-// below names the object and it becomes one more table entry.
+// a stall is diagnosable in one grep. **Map 569's catch is the capture RECTS, and they are handled by
+// the event-fire override above, not by a table entry** — S116's play test proved the touch path is
+// never even reached there, and a rect actor carries no npcdic name for a table to hold.
 namespace SneakAssist {
 
 // Installs the native hooks. Non-fatal on failure: the feature simply never acts.

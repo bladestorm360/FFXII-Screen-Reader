@@ -184,6 +184,34 @@ void ApplyFallbackLabels(std::vector<Entity>& out) {
 }
 
 
+// A pairing the interactable twin filter looked at and REFUSED, logged once per label per map.
+//
+// The filter's drop line has always been unconditional, because a wrong drop is invisible otherwise
+// (it deleted a story NPC once and four more in another session). Its REFUSALS were invisible for the
+// same reason and in the same way -- and now that there are two tests it can fail, "why is this door
+// still listed twice" needs the same answer in the log that "why did this door vanish" already has.
+static void LogTwinDeclinedOnce(const Entity& sign, const Entity& doorway,
+                                float apart, size_t sameName) {
+    static int                      s_map = -1;
+    static std::vector<std::wstring> s_said;
+    const int m = MapNames::CurrentMapId();
+    if (m != s_map) { s_map = m; s_said.clear(); }
+    for (const auto& w : s_said) if (w == sign.label) return;
+    if (s_said.size() >= 32) return;
+    s_said.push_back(sign.label);
+
+    char n8[64] = {};
+    for (size_t k = 0; k < sign.label.size() && k < 63; ++k)
+        n8[k] = (sign.label[k] < 128) ? static_cast<char>(sign.label[k]) : '?';
+    char msg[288];
+    snprintf(msg, sizeof(msg),
+             "twin KEPT \"%s\": [%u:%u] is %.2fm from the same-named doorway [%u:%u] and %zu object(s) "
+             "on this map share the name -- not a shopfront (bound %.1fm, at most %zu)",
+             n8, sign.container, sign.slot, apart, doorway.container, doorway.slot, sameName,
+             kTwinNearDist, kTwinNameMaxObjects);
+    Log::Write("NAV-DIAG", msg);
+}
+
 // Mark every object the map script bound to a location jump, then drop the same-named twins that were
 // NOT bound to one.
 //
@@ -364,15 +392,35 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
             // INTERACTABLES: the case this filter was written for. A shop SIGN and the shop DOORWAY
             // are two interactables the game gave the same name, and only one carries the location
             // jump (`Entity::doorway`). Drop the one WITHOUT the transition point; keep the one with.
+            //
+            // A SIGN STANDS BESIDE ITS DOORWAY, AND UNDER A NAME NOTHING ELSE ON THE MAP CARRIES.
+            // Both tests are new in Session 117 and both are load-bearing: without the first this
+            // paired two `"Door"` objects 90 m apart on map 569; without the second, proximity alone
+            // would still fuse two ordinary doors standing together. See kTwinNearDist /
+            // kTwinNameMaxObjects in entity_scan.h for where the numbers come from.
             if (cur.doorway) { ++i; continue; }
+            size_t sameName = 0;
+            for (const auto& o : out)
+                if (o.gameNamed && o.category != EntityList::Category::NPC && o.label == cur.label)
+                    ++sameName;
+            int    nearest  = -1;      // the same-named doorway this object came closest to pairing with
+            float  nearestD = 0.0f;
             for (size_t j = 0; j < out.size(); ++j) {
                 if (j == i) continue;
                 if (out[j].category == EntityList::Category::NPC) continue;
-                if (out[j].doorway && out[j].gameNamed && out[j].label == cur.label) {
-                    twin = static_cast<int>(j);
-                    why  = "sign repeats a doorway";
-                    break;
-                }
+                if (!out[j].doorway || !out[j].gameNamed || out[j].label != cur.label) continue;
+                const float d = NavCommon::Distance2D(out[j].pos, cur.pos);
+                if (nearest < 0 || d < nearestD) { nearest = static_cast<int>(j); nearestD = d; }
+            }
+            if (nearest >= 0 && sameName <= kTwinNameMaxObjects && nearestD <= kTwinNearDist) {
+                twin = nearest;
+                why  = "sign repeats a doorway";
+            } else if (nearest >= 0) {
+                // A PAIRING THIS FILTER DECLINED IS EVIDENCE, and the version that shipped without
+                // these two tests declined nothing and said nothing. Bounded to one line per label
+                // per map: the scan runs several times a second, and the same near-miss is the same
+                // fact every time.
+                LogTwinDeclinedOnce(cur, out[nearest], nearestD, sameName);
             }
         }
 

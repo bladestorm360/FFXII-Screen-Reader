@@ -206,6 +206,29 @@ std::string AsciiSafe(const std::string& s) {
 
 namespace MapScript {
 
+bool RoutineNameAt(uint32_t index, std::string& out) {
+    out.clear();
+
+    void* blob = BlobBase();
+    if (!blob) return false;
+
+    uint32_t rtOff = 0, poolOff = 0;
+    if (!BlobU32(blob, HDR_ROUTINE_TABLE, &rtOff) || rtOff == 0 || rtOff >= OFFSET_MAX) return false;
+    if (!BlobU32(blob, HDR_NAME_POOL, &poolOff) || poolOff == 0 || poolOff >= OFFSET_MAX) return false;
+
+    // Word 0 of the routine table is the ENTRY COUNT (the same word `FUN_003dbcf0` bounds the fired
+    // index against before it starts anything). An index at or past it is not a routine.
+    uint32_t count = 0;
+    if (!BlobU32(blob, rtOff, &count) || count == 0 || count > MAX_ROUTINES) return false;
+    if (index >= count) return false;
+
+    uint32_t nameOff = 0;
+    if (!BlobU32(blob, rtOff + 4 + index * ROUTINE_STRIDE + REC_NAME_OFF, &nameOff)) return false;
+
+    out = PoolName(blob, poolOff, nameOff);
+    return !out.empty();
+}
+
 bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
     out.clear();
 

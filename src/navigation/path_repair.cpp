@@ -22,16 +22,23 @@ Result Mend(const std::vector<FVec3>& poly,
     // `out.probes` move together so the caller's accounting cannot drift from ours.
     auto tryPoly = [&](std::vector<FVec3>& cand, const char* how, int detail) -> bool {
         if (cand.size() < 2 || budget <= 0) return false;
-        PathFunnel::InsetCorners(cand);
+        // `inset` runs BEFORE the body sweep, so anything it did to the candidate is already baked
+        // into the verdict below -- which is exactly why its numbers belong on this line and not on
+        // one of its own. See PathFunnel::InsetStats: `left` is the S117 measurement, and the
+        // prediction it tests is that it stays 0 on the rungs that report OK and grows on the dense
+        // candidates that report "still breaching".
+        PathFunnel::InsetStats ins;
+        PathFunnel::InsetCorners(cand, &ins);
         const PathValidate::LegReport r2 = PathValidate::CheckLegs(cand, budget, arrivalTol);
         budget      -= r2.probes;
         out.probes  += r2.probes;
         const bool good = r2.ok && !r2.truncated;
-        char rm[288];
+        char rm[352];
         snprintf(rm, sizeof(rm),
-                 "repair[%s]: leg %zu, %d -- %zu->%zu points, probes=%d -> %s",
-                 how, bad, detail, poly.size(), cand.size(), r2.probes,
-                 good ? "OK" : "still breaching");
+                 "repair[%s]: leg %zu, %d -- %zu->%zu points, inset %d/%d corner(s) moved, "
+                 "%d LEFT their poly, probes=%d -> %s",
+                 how, bad, detail, poly.size(), cand.size(), ins.moved, ins.corners, ins.leftHome,
+                 r2.probes, good ? "OK" : "still breaching");
         Log::Write("NAV-ROUTE", rm);
         if (!good) return false;
         out.ok     = true;

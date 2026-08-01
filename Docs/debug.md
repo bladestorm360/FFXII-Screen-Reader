@@ -4729,3 +4729,82 @@ Fix needs an id that cannot advance first: the teardown hook's own map argument,
 updates only when the id CHANGES and reports the PREVIOUS value.
 
 **Rule: a fix for an ordering bug must be verified against the ordering, not against the read.**
+
+## Map 569's catch, the twin filter, the inset instrument — Solved / corrected (Session 117, 2026-08-01)
+
+**KEYWORDS: FUN_0025c830 FUN_003dbb60 FUN_003dbcf0 routine index bound event fire capture routine
+name 捕獲 action_binding_tables validated script_native_table incoherent seteventwakerect STRUCK
+twin filter kTwinNearDist 20m kTwinNameMaxObjects 2 hasNameSign InsetCorners leftHome census latch**
+
+### SOLVED — sneak assist on map 569: hook the ENGINE's event fire, not a script native
+
+Symptom: guard suppression works on 568 and does nothing on 569; the log carries `clamp ACTIVE on
+map 569` and **zero** `touch SUPPRESSED` / `touch REPORTED` lines.
+
+Root cause chain, each step measured:
+
+1. `rrp_a03` (map 569) calls **zero** `0x26D` and **zero** `0x525` — the natives that funnel into
+   `FUN_002677f0`. Nothing on 569 ever asks the touch test, so a per-object override of it has
+   nothing to override. (S115 measured this and the entry claimed 569 covered anyway.)
+2. The catch is `FUN_0025c830`, the engine's per-object trigger-volume update. On the frame its
+   inside-mask goes from empty to occupied it calls `FUN_003dbb60(object, 4, routineIdx, 0)` and, if
+   that returns 1, takes the field into a scripted scene.
+3. `routineIdx` is resolvable: `FUN_003dbcf0` rejects the record when
+   `**(u32**)(object+0x48) <= routineIdx`, bounding it against the object's script container's routine
+   count — the same table `MapScript` reads.
+
+Fix: `sneak_assist.cpp` hooks `FUN_003dbb60` and, **on danger-table maps only**, declines a fire whose
+routine name contains `捕獲` (Shift-JIS `95 DF 8A 6C`), returning the engine's own `2` = "no event slot
+free". Keyed on the ROUTINE because the volumes are rect actors with no npcdic name — per-object
+identity was never available for them. Fails open on every unknown, and logs every fire with its raw
+name bytes.
+
+### TRIED & FAILED — resolving a native through `script_native_table.txt`
+
+`seteventwakerect (0x3DF -> FUN_0034d470) x70` was carried in `GameArchitecture.md`, the S115 memory
+and the session log as 569's mechanism and "the first place to look". **Wrong on both halves.** That
+dump indexes a different table (base `0x1eee448`, stride 8) and joins `.dbg` names through a measured
+delta; its own output ends with `VERDICT: NOT COHERENT -- do not use any id above`. The validated
+CALLACT table is `action_binding_tables.txt` (selector 0, `0x1EED700`, stride `0x20`), which
+reproduces `0x08D`/`0x290`/`0x525`/`0x26D` independently — and maps `0x3DF` to `FUN_0034dca0`.
+
+`0x3DF`, `0x26E`, `0x409` and `0x40A` (all x70/x77 on 569) are **flag setters on the volume**
+(`object+0xC` bit 5, `object+0x8` bit 5, `object+0xB` bits 1/0), read by `FUN_0025c830`. **Not one of
+them tests anything**, so no amount of hooking them would ever have caught the player.
+
+**Rule: a name from an unvalidated join is a guess wearing a label.** Check the dump's own self-check
+before quoting a handler out of it.
+
+### SOLVED — a bare door listed as a Shop (map 569)
+
+`TagDoorwaysAndDropSignTwins`' interactable branch matched on `label` + `doorway` and **nothing else**,
+so it paired two generic `"Door"` objects **90.06 m apart**, deleted one, and set `hasNameSign` on the
+survivor — which the categoriser turns straight into `Category::Shop`. Map 569 listed a bare unlabelled
+door as a shop and listed no doors at all.
+
+Both new tests gate the DROP, not just the promotion:
+* `kTwinNearDist` = **20 m** — East End's shop pairs measure 6-15 m apart, so the bound must admit 15
+  and reject 90.
+* `kTwinNameMaxObjects` = **2** — a shopfront's name belongs to exactly the two objects that make it
+  up; `"Door"` belongs to every door on the map. Measured from the map, not from a word list.
+* Refusals are now logged (`twin KEPT ...`), one line per label per map.
+
+**CORRECTION to the S116 write-up:** it also recorded "`hasNameSign` was derived from a GENERIC
+FALLBACK LABEL — the mod's OWN fallback naming". **That half is wrong.** `ApplyFallbackLabels` runs
+*after* this filter, and `gameNamed` is set from whether the game supplied text at all, so at filter
+time `"Door"` is the map's own `fieldsignmes` string. There was one fault, not two.
+
+### The inset instrument (log-only) — the S116 test, now shipped
+
+`PathFunnel::InsetCorners` fills an optional `InsetStats{corners, moved, leftHome}` and `repair[...]`
+prints it. `leftHome` counts moved corners whose accepted point landed in a **different mesh poly**
+from the corner's own — a point pushed out of the corridor A* certified. Free: both `FindPolyAt`
+results were already computed to decide the move. **Prediction: 0 on rungs that report `OK`, growing
+on dense candidates that report `still breaching`.** If it is small on both, the suspect is wrong and
+the next one is `CheckLegs`' own body sweep.
+
+### The census map label, third attempt
+
+S115's field-tick latch did not work (the tick has already run for the new map when teardown fires).
+The latch is now **write-once per map and consumed by the print**: the tick fills it only when empty,
+teardown prints and clears it. No ordering assumption survives in it.

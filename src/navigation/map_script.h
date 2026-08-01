@@ -103,6 +103,19 @@ struct ExitDest {
 // the map has actually changed.
 bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail);
 
+// The NAME of routine `index` in the currently loaded map's field script, raw from the name pool.
+//
+// Same table `ReadExitDests` walks -- extended rather than duplicated, so a caller that needs one
+// name does not stand up a second parser beside it. Names are mostly Shift-JIS, so the bytes are
+// returned untranscoded and callers compare bytes; nothing here is user-facing text.
+//
+// WHY A SINGLE-INDEX LOOKUP EXISTS: the engine's trigger volumes name the routine they will start by
+// INDEX (`FUN_003dbcf0` rejects one that is `>=` the container's routine count, which is what proves
+// the index space is this table's). `sneak_assist.cpp` resolves that index to a name at fire time.
+// False on a torn/absent blob or an out-of-range index -- callers must treat that as "unknown", never
+// as "not a match".
+bool RoutineNameAt(uint32_t index, std::string& out);
+
 // Session 57 capture (file-only, `'`-triggered): dumps BOTH parallel position tables (+0x54 and +0x84)
 // raw + un-deduped, and every `__MJ_CTRL` routine's full bytecode with its CALLACTPOPA native calls
 // annotated (mapjump 0x008d / zone-test 0x202d + operands). This is the data the offline decode uses to

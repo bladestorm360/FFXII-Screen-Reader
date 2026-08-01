@@ -10,6 +10,7 @@
 #include "core/logger.h"
 #include "navigation/entity_list.h"
 #include "navigation/map_names.h"
+#include "navigation/map_script.h"
 #include "navigation/nav_rva.h"
 #include "navigation/path_danger.h"
 
@@ -48,11 +49,21 @@ constexpr float kClampMetres = 9999.0f;
 // in S112: `native FIRED on map 568`, and the clamp works.
 std::atomic<uint32_t> s_callsThisMap{0};
 std::atomic<bool>     s_loggedFirstCall{false};
-// THE MAP THE COUNTER BELONGS TO, latched on the field tick (Session 115). `OnMapTeardown` used to
-// print `MapNames::CurrentMapId()`, which by then has ALREADY ADVANCED -- so the log read
-// `map 569 census: ... 2 time(s)` for a count that was 568's, and every census line in the file
-// named the wrong map by one. Latched here, printed from here.
-std::atomic<int> s_censusMapId{-1};
+// THE MAP THE COUNTER BELONGS TO. `OnMapTeardown` used to print `MapNames::CurrentMapId()`, which by
+// then has ALREADY ADVANCED -- so the log read `map 569 census: ... 2 time(s)` for a count that was
+// 568's, and every census line in the file named the wrong map by one.
+//
+// S115 LATCHED IT ON THE FIELD TICK AND THAT DID NOT WORK EITHER -- the play log still says
+// `map 569 census` for 568's two calls, because **the field tick has already run for the NEW map by
+// the time teardown fires**, so the latch advanced with it. A fix for an ORDERING bug has to be
+// verified against the ordering, not against the read.
+//
+// So the latch is WRITE-ONCE PER MAP and CONSUMED BY THE PRINT: the field tick fills it only when it
+// is empty, and teardown empties it after printing. The new map's early ticks find it full and leave
+// 568's id alone; teardown prints 568 and clears; the next tick latches 569. No ordering assumption
+// survives in it at all -- whoever runs first, the id printed is the one the counter was counting on.
+constexpr int kNoCensusMap = -1;
+std::atomic<int> s_censusMapId{kNoCensusMap};
 // Log-only, and reset on every map change: the watcher polls per frame, so without this the
 // first-clamp evidence would be O(frames). This suppresses a LOG line, never speech (CLAUDE.md's
 // log-volume exception -- the per-frame producer is the map script's own watcher routine).
@@ -232,6 +243,127 @@ bool __fastcall HookedTouchTest(void* object, int mode) {
     return false;
 }
 
+// ---- THE OTHER CATCH: A TRIGGER VOLUME THAT STARTS A ROUTINE (Session 117) ----------------------
+//
+// MAP 569 CALLS NONE OF THE TOUCH NATIVES. `rrp_a03` contains ZERO `0x26D` and ZERO `0x525` -- S115
+// measured that and this file claimed 569 covered anyway; S116's play test then produced ZERO touch
+// lines of either kind on 569, exactly as the census predicted. The three natives that funnel into
+// `FUN_002677f0` are simply never dispatched there, so nothing above can suppress anything.
+//
+// What 569 uses instead is the ENGINE's own trigger update, `FUN_0025c830`: it walks the four party
+// actors against each volume and, on the frame the volume goes from empty to occupied, calls
+// `FUN_003dbb60(object, 4, routineIdx, 0)` -- START THIS OBJECT'S ROUTINE. That is the capture; the
+// twelve `捕獲…` routines in `rrp_a03` are its targets, and the `捕獲レクト兵士01..07` ("capture rect
+// soldier") actors are the volumes. No script native is involved at any point.
+//
+// **THE SUPPRESSION IS KEYED ON THE ROUTINE THE FIRE WOULD START, NOT ON THE OBJECT.** That is the
+// only identity available: the volumes are rect actors with no npcdic name, so the entity scan cannot
+// see them and `IsGuardObject` can never match them. The routine, by contrast, names itself -- and
+// the index is resolvable because `FUN_003dbcf0` bounds it against the object's script container's
+// routine count, i.e. against the very table `MapScript::RoutineNameAt` reads.
+//
+// It is also the GLOBAL rule the per-map table never was: "do not start a routine the map's own
+// author named a capture" holds on both palace maps (568's single `ヴァン捕獲` and 569's twelve) with
+// no map id, offset or index in it. The map table stays as the containment gate, not as the answer.
+//
+// FAILS OPEN BY CONSTRUCTION. An unreadable blob, an index the table does not hold, or a name that
+// does not match all take the same path: call the original. If the index space turns out not to be
+// this table's, the mod does nothing different and the log below says so, naming every index it saw.
+using EventFireFn = int(__fastcall*)(void*, uint32_t, uint32_t, int, int);
+EventFireFn s_origFire = nullptr;
+
+// `捕獲` ("capture") in Shift-JIS, the encoding the name pool stores. This is the GAME's word for its
+// own fail branch, read out of the game's own script -- not a mod-authored label, and never spoken.
+constexpr char kCaptureMarker[] = "\x95\xDF\x8A\x6C";
+constexpr size_t kCaptureMarkerLen = 4;
+
+// The engine's own "no event slot was free" answer (`FUN_003dbcf0` returns it when the object's
+// current-event slot is -1). Returned instead of firing, because it is a value the callers already
+// handle: `FUN_0025c830` continues only on 1, so 2 makes its ENTER branch return before the scene
+// takes over, and its LEAVE branch runs the cleanup it runs whenever an event could not start.
+constexpr int kFireDeclined = 2;
+
+// Per-map cache of "is routine N a capture routine?", so a fire costs an array read rather than a
+// blob parse. 0 = not looked up yet, 1 = no, 2 = yes. Cleared on map teardown; a routine index is
+// bounded by the container's own count, which real maps run in the tens.
+constexpr uint32_t kMaxRoutineIdx = 512;
+std::atomic<uint8_t> s_routineVerdict[kMaxRoutineIdx] = {};
+
+// Log latch: fires are event-driven, not per-frame, but a volume the player paces in and out of
+// would still repeat. One line per (routine index, kind) pair per map.
+std::atomic<uint32_t> s_firesSeen[32] = {};
+std::atomic<int>      s_firesSeenN{0};
+
+bool NoteFireOnce(uint32_t kind, uint32_t routineIdx) {
+    const uint32_t key = (kind << 24) | (routineIdx & 0xFFFFFFu);
+    const int n = s_firesSeenN.load(std::memory_order_relaxed);
+    for (int i = 0; i < n && i < 32; ++i)
+        if (s_firesSeen[i].load(std::memory_order_relaxed) == key) return false;
+    if (n >= 32) return false;
+    s_firesSeen[n].store(key, std::memory_order_relaxed);
+    s_firesSeenN.store(n + 1, std::memory_order_relaxed);
+    return true;
+}
+
+// Routine names are Shift-JIS; the log is ASCII. Printable bytes pass through, everything else
+// becomes its hex value, so the LOG CARRIES THE BYTES -- a name that did not match can be checked
+// against the script offline instead of being an unreadable row of question marks.
+std::string NameForLog(const std::string& raw) {
+    std::string o;
+    char hex[5];
+    for (unsigned char c : raw) {
+        if (c >= 0x20 && c < 0x7f) { o.push_back(static_cast<char>(c)); continue; }
+        snprintf(hex, sizeof(hex), "\\x%02X", c);
+        o += hex;
+        if (o.size() > 96) break;
+    }
+    return o;
+}
+
+// True when the map's own script names routine `idx` a capture.
+//
+// `name` is filled whenever the pool could be read, matched or not -- an unmatched fire has to stay
+// evidence rather than become a silent pass, because "the index space is not this table's" and "this
+// volume is not a capture" would otherwise print identically. That distinction is the whole falsifier.
+bool IsCaptureRoutine(uint32_t idx, std::string& name) {
+    if (idx >= kMaxRoutineIdx) return false;
+    const bool named = MapScript::RoutineNameAt(idx, name);
+    if (!named) {
+        // Unreadable this instant (a torn blob mid-load) -- fall back to the verdict this map already
+        // reached for the index, and to "not a capture" if it never reached one. Fail open, always.
+        return s_routineVerdict[idx].load(std::memory_order_relaxed) == 2;
+    }
+    const bool hit = name.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos;
+    s_routineVerdict[idx].store(hit ? uint8_t{2} : uint8_t{1}, std::memory_order_relaxed);
+    return hit;
+}
+
+int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx, int mode, int flag) {
+    // OFF-TABLE IS THE FIRST BRANCH, exactly as the two hooks above: on every map but the danger
+    // table's this is the original plus one table scan, and nothing below is reachable. Trigger fires
+    // happen on every map in the game -- doors, chests, conversations -- so this early-out is what
+    // keeps the hook from having a blast radius at all.
+    if (!CoveredMap())
+        return s_origFire ? s_origFire(object, kind, routineIdx, mode, flag) : kFireDeclined;
+
+    std::string name;
+    const bool capture = IsCaptureRoutine(routineIdx, name);
+
+    if (NoteFireOnce(kind, routineIdx)) {
+        char m[288];
+        snprintf(m, sizeof(m),
+                 "event fire on map %d: obj=%p kind=%u routine=%u name=\"%s\" -- %s",
+                 MapNames::CurrentMapId(), object, kind, routineIdx,
+                 name.empty() ? "<unreadable>" : NameForLog(name).c_str(),
+                 capture ? "CAPTURE, SUPPRESSED (the routine the map's own author named a capture)"
+                         : "passed through");
+        Log::Write("SNEAK", m);
+    }
+
+    if (capture) return kFireDeclined;
+    return s_origFire ? s_origFire(object, kind, routineIdx, mode, flag) : kFireDeclined;
+}
+
 } // namespace
 
 void OnFieldFrame() {
@@ -241,7 +373,10 @@ void OnFieldFrame() {
     // Refreshed EVERY tick, not once: the guards move (that is the whole minigame), so a snapshot
     // taken at map load would go stale. Pointers, not positions, so a moving actor does not
     // invalidate it -- only despawning does.
-    s_censusMapId.store(MapNames::CurrentMapId(), std::memory_order_relaxed);
+    // Fill the census latch only when it is EMPTY -- see the note on s_censusMapId. Ticks of the map
+    // being entered must not overwrite the id of the map whose census has not been printed yet.
+    if (s_censusMapId.load(std::memory_order_relaxed) == kNoCensusMap)
+        s_censusMapId.store(MapNames::CurrentMapId(), std::memory_order_relaxed);
     const int16_t nameIdx = PathDanger::DangerNameIdx(static_cast<uint32_t>(MapNames::CurrentMapId()));
     if (nameIdx < 0) { s_guardN.store(0, std::memory_order_release); return; }
     void* found[kMaxGuards] = {};
@@ -254,6 +389,11 @@ bool Init() {
     const bool okTouch = Hooks::InstallTyped(NavRva::TOUCH_TEST, &HookedTouchTest, &s_origTouch);
     Log::Write("SNEAK", okTouch ? "touch-test hook installed (the guards' own trigger volume)"
                                 : "touch-test hook FAILED to install -- guards will still notice you");
+    const bool okFire = Hooks::InstallTyped(NavRva::EVENT_FIRE, &HookedEventFire, &s_origFire);
+    Log::Write("SNEAK", okFire
+        ? "event-fire hook installed (a trigger volume starting a routine -- map 569's catch, which "
+          "calls no script native at all)"
+        : "event-fire hook FAILED to install -- rect-driven captures will still happen");
     const bool ok = Hooks::InstallTyped(NavRva::SCRIPT_DISTANCE, &HookedScriptDistance, &s_orig);
     Log::Write("SNEAK", ok ? "script-distance hook installed (sneak assist acts on the danger-table "
                              "maps only; nothing to switch on)"
@@ -273,10 +413,12 @@ void OnMapTeardown() {
     {
         const uint32_t n = s_callsThisMap.exchange(0, std::memory_order_relaxed);
         s_loggedFirstCall.store(false, std::memory_order_relaxed);
+        // Consume the latch: printing it is what frees it for the next map to claim.
+        const int mapId = s_censusMapId.exchange(kNoCensusMap, std::memory_order_relaxed);
         char m[176];
         snprintf(m, sizeof(m), "map %d census: the distance native was called %u time(s) while it "
                                "was loaded (the map being LEFT, not the one being entered)",
-                 s_censusMapId.load(std::memory_order_relaxed), n);
+                 mapId, n);
         Log::Write("SNEAK", m);
     }
     // The snapshot and the log latches belong to the map being left. Cleared unconditionally, so a
@@ -286,6 +428,13 @@ void OnMapTeardown() {
     s_touchedN.store(0, std::memory_order_relaxed);
     s_loggedSuppress.store(false, std::memory_order_relaxed);
     s_loggedThisMap.store(false, std::memory_order_relaxed);
+
+    // The routine-name cache is indexed by a number that means something DIFFERENT on the next map --
+    // routine 47 is a capture rect here and a door there -- so it must not survive the change. Same
+    // reason the guard snapshot is cleared: an identity is only valid inside the map it was read on.
+    for (uint32_t i = 0; i < kMaxRoutineIdx; ++i)
+        s_routineVerdict[i].store(0, std::memory_order_relaxed);
+    s_firesSeenN.store(0, std::memory_order_relaxed);
 }
 
 } // namespace SneakAssist

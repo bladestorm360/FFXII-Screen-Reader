@@ -708,6 +708,31 @@ constexpr uint32_t SCRIPT_DISTANCE   = 0x2248F0;  // FUN_003448f0 (ABS 0x3448f0)
 // no distance3d / checkdistance3d / waitdistance3d in that script, so those two natives plus this
 // function are the whole detection surface. Signature: bool(void* object, int mode).
 constexpr uint32_t TOUCH_TEST        = 0x1477F0;  // FUN_002677f0 (ABS 0x2677f0)
+// FUN_003dbb60(object, kind, routineIdx, mode, flag) -> int: **START A SCRIPT ROUTINE ON AN OBJECT**,
+// the engine's own event-fire. Session 117, and it is the mechanism map 569's capture uses, which no
+// script-native hook could ever have reached (`rrp_a03` calls ZERO of the touch natives).
+//
+// It builds an 8-byte event record {mode, 1, kind, routineIdx:u16, 0x8000, flags} and hands it to
+// `FUN_003dbcf0(object, &rec, 1)`. **`FUN_003dbcf0` REJECTS the record when
+// `**(u32**)(object+0x48) <= routineIdx` -- it bounds the index against the object's script
+// container's ROUTINE COUNT.** That comparison is what establishes the index space: `routineIdx` is
+// an index into the same routine table `MapScript` already reads, so a fire can be resolved to the
+// routine's NAME. Confidence 0.98 (the bound is read straight from the container, not inferred).
+//
+// WHO CALLS IT with a trigger volume: `FUN_0025c830(container, object)` -- the per-object trigger
+// update. It zeroes the object's inside-mask, walks the FOUR party actors at `DAT_0209a1f0`, tests
+// each against the volume, ORs the slot bit into `*(u32*)(*(object+0xB8) + 0x60)` -- the SAME mask
+// `FUN_002677f0` reads -- and then fires:
+//     kind 4  mask was 0 and is now non-zero      => ON ENTER  (routine at object+0xD0)
+//     kind 2  mask was non-zero and is now 0      => ON LEAVE  (routine at object+0xD2)
+//     kind 3 / 6                                  => the in-volume tests (object+0xCE/+0xD8/+0xE2)
+// The ENTER branch is the one that goes on to `FUN_002e1cd0(0,0xd)` / `FUN_00268530(2)` -- taking the
+// field into a scripted scene. That IS the capture on 569.
+//
+// Returns 1 when the caller should continue (`FUN_0025c830` bails on anything else); 2 is the
+// engine's own "no event slot free" answer, which is what the mod returns when it declines a fire.
+// Signature: int(void* object, u32 kind, u32 routineIdx, int mode, int flag) -- MS x64, 5th on stack.
+constexpr uint32_t EVENT_FIRE        = 0x2BBB60;  // FUN_003dbb60 (ABS 0x3dbb60)
 // Liveness globals for IsFieldNavSafe(). The FIELD_ACTIVE 0x10 bit alone is NOT safe:
 // it is set early on load (before area collision + world are ready) and cleared late
 // on teardown (after they are freed). These back it up (DAT_02b5e0c0 is the earliest

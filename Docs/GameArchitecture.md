@@ -2218,17 +2218,66 @@ trusting anything below it.**
   `FUN_0033fa40` (`0x26D`, the instant touch test), `FUN_003407c0` / `FUN_00340bc0` (`0x525`, the
   waiting one), and **`FUN_0033f680`** (`FUN_00267e10` → `FUN_002677f0` → `FUN_0026b4e0`, added
   S115). Hooking `FUN_002677f0` therefore covers every native that reaches it, whichever slot the VM
-  dispatches — which is why map 569 needed only a table row and no new mechanism.
+  dispatches — ~~which is why map 569 needed only a table row and no new mechanism.~~
+  > **STRUCK (Session 117).** It covers every NATIVE, and map 569 calls none of them: `rrp_a03`
+  > contains zero `0x26D` and zero `0x525`, and S116's play produced zero touch lines of either kind
+  > there. **A choke point is only a choke point for the paths that reach it.** 569's catch is the
+  > ENGINE-side trigger update below, which never enters the script VM at all.
+
+- **`FUN_0025c830(container, object)` — THE PER-OBJECT TRIGGER-VOLUME UPDATE, and the writer of the
+  mask `FUN_002677f0` reads (Session 117).** Confidence 0.98. It zeroes `*(u32*)(*(object+0xB8)+0x60)`
+  at entry, walks the FOUR party actors at `DAT_0209a1f0` against the volume (OBB math via
+  `FUN_0025a8e0` / `FUN_003da5a0`), ORs each occupying slot's bit back into that word, and then fires
+  the object's own routines through `FUN_003dbb60`:
+  | trigger | condition | routine slot on the object |
+  |---|---|---|
+  | kind **4** — ON ENTER | mask was 0, is now non-zero | `+0xD0` (fallback: object data `+0x0A`) |
+  | kind **2** — ON LEAVE | mask was non-zero, is now 0 | `+0xD2` (fallback `+0x0C`) |
+  | kind **3** | leader inside, mode bit 8 of `object+0x1C` | `+0xD8` / `+0xCE` |
+  | kind **6** | leader outside, mode bit 13 | `+0xE2` (fallback `+0x1C`) |
+  Gates read off the volume: **`object+0x8` bit 5 = LEADER ONLY** (native `0x26E`), **`object+0xC`
+  bit 5 = only while an event is active** (native `0x3DF`), `object+0xB` bits 0/1 (natives `0x40A` /
+  `0x409`). The ENTER branch continues into `FUN_00227420` / `FUN_002e1cd0(0,0xd)` / `FUN_00268530(2)`
+  — handing the field to a scripted scene. **That is map 569's capture.**
+
+- **`FUN_003dbb60(object, kind, routineIdx, mode, flag) -> int` (RVA `0x2BBB60`) — START A SCRIPT
+  ROUTINE ON AN OBJECT (Session 117).** Confidence 0.98. Builds an 8-byte event record
+  `{mode, 1, kind, routineIdx:u16, 0x8000, flags}` and hands it to `FUN_003dbcf0(object, &rec, 1)`.
+  **`FUN_003dbcf0` REJECTS the record when `**(u32**)(object+0x48) <= routineIdx`** — it bounds the
+  index against the object's script container's ROUTINE COUNT, which is what establishes that
+  `routineIdx` indexes the same routine table `MapScript` reads (`hdr+0x18` / name pool `hdr+0x4C`).
+  Returns 1 when the caller should continue (`FUN_0025c830` bails on anything else); **2** is the
+  engine's own "no event slot free". ~20 call sites — interactions and conversations use it too, so
+  anything hooking it must gate hard. Consumed by SNEAK ASSIST, which declines a fire whose routine
+  the map named `捕獲`; see `src/navigation/sneak_assist.h`.
+
+- **WHICH NATIVE TABLE DUMP TO BELIEVE (Session 117, and one wrong claim came out of the other).**
+  `..\FFXII-Decompile\output\action_binding_tables.txt` is the **VALIDATED** CALLACT table: selector 0,
+  `0x1EED700`, stride `0x20`, `enter@+0x08 exec@+0x10 poll@+0x20`, and it independently reproduces
+  every previously-established fact (`0x08D` exec `FUN_00355350` mapjump, `0x290` poll `FUN_003448f0`
+  distance, `0x525` enter/exec `FUN_003407c0`/`FUN_00340bc0`, `0x26D` poll `FUN_0033fa40`).
+  `script_native_table.txt` is a DIFFERENT table (base `0x1eee448`, stride 8) whose `.dbg` name join
+  runs through a measured delta, and whose own self-check prints
+  `VERDICT: NOT COHERENT -- do not use any id above`. **Do not quote a name or a handler from it.**
 
 - **The ROYAL PALACE capture census (Session 115) — the palace's danger table is COMPLETE.** Maps
   567–572 are scripts `rrp_a01`..`rrp_a06`; each `.ebp` scanned for capture-routine name strings and
   for `CALLACT` operands. **Only 568 (`rrp_a02`: 1 capture routine `ヴァン捕獲`; `0x290` ×8, `0x26D`
   ×4, `0x525` ×21) and 569 (`rrp_a03`: 12 capture routines incl. `捕獲レクトＡ/Ｂ/Ｃ`,
   `捕獲レクト兵士０１..０７`, `捕獲監視監督`; `0x290` ×4) run a capture sequence at all.** 567, 570,
-  571 and 572 contain zero. 569 also uses `seteventwakerect` (`0x3DF` → `FUN_0034d470`) ×70 and an
-  unnamed `0x26E` ×77, neither yet resolved to a handler — if a capture ever survives the shipped
-  suppression on 569, those are the first two places to look and the `touch REPORTED` falsifier will
-  name the object. Confidence 0.99 (two independent signals agreeing; no inference between them).
+  571 and 572 contain zero. Confidence 0.99 (two independent signals agreeing; no inference between
+  them), and the counts were **independently reproduced from the `.ebp` files in Session 117** — 568's
+  1 capture name and 569's 12, and every CALLACT count above.
+  > ~~569 also uses `seteventwakerect` (`0x3DF` → `FUN_0034d470`) ×70 and an unnamed `0x26E` ×77,
+  > neither yet resolved to a handler — those are the first two places to look.~~
+  > **STRUCK (Session 117): BOTH THE HANDLER AND THE NAME WERE WRONG, and the lead was a dead end.**
+  > `0x3DF`'s CALLACT handler is `FUN_0034dca0` (→ `FUN_0026a660`), not `FUN_0034d470`; the name
+  > "seteventwakerect" came from `script_native_table.txt`'s `.dbg` join, which that file's own output
+  > declares incoherent. `0x3DF`, `0x26E` (`FUN_00341000`) and the two that appear ×70 beside them,
+  > `0x409` (`FUN_0033f1e0`) and `0x40A` (`FUN_0033f650`), are **all four flag SETTERS on the volume**
+  > — `object+0xC` bit 5, `object+0x8` bit 5, `object+0xB` bits 1 and 0 — read by `FUN_0025c830`
+  > above. None of them tests anything. **A name from an unvalidated join is a guess wearing a label**,
+  > and this one was quoted across three documents as the mechanism to hook.
 
 ~~**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination … Best unverified lead:
 `FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20 … **Unverified — do not ship.**~~

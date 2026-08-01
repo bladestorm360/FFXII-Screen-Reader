@@ -52,6 +52,13 @@ struct Entity {
     // non-shop door never has a same-named placard. The drop line at the bottom of that function
     // logs every pairing unconditionally, so a session's log is the falsifier -- read it before
     // treating Category::Shop as settled.
+    //
+    // THE FALSIFIER FIRED (Session 116 play test, fixed 117): map 569 listed a bare unlabelled door
+    // as a Shop and listed NO doors, because the pairing had no distance test whatsoever and fused
+    // two generic `"Door"` objects **90.06 m apart**. Both of the tests that now gate it --
+    // kTwinNearDist and kTwinNameMaxObjects below -- were missing, and the tester read the result
+    // before the log did. **A promotion is only as good as the pairing under it**; this flag is set
+    // in exactly one place, and that place must stay the only one.
     bool         hasNameSign = false;
     // `label` is the game's own string (npcdic or the map's fieldsignmes text), not the category-word
     // fallback. The sign-twin drop compares labels, and an unnamed object whose label is merely the word
@@ -152,6 +159,29 @@ constexpr int   kSignDoorwayGroup = 0;
 // the rule is "literally the same coordinates", because at any real separation they are two people
 // the game happened to give one name, and deleting one of those cost a tester a story NPC.
 constexpr float kStackedDist    = 0.05f;
+
+// ---- How far apart a shopfront's SIGN and its DOORWAY may stand (Session 117) --------------------
+//
+// THE INTERACTABLE HALF OF THE TWIN FILTER HAD NO DISTANCE TEST AT ALL. It matched on label plus
+// `doorway` and nothing else, and on map 569 it paired two generic `"Door"` objects **90.06 m apart**,
+// deleted one, and promoted the survivor to Category::Shop -- so the Royal Palace's Lower Halls
+// listed a bare unlabelled door as a shop and listed no doors. A shop SIGN stands BESIDE its doorway;
+// that proximity is the filter's entire premise and it was the one thing unchecked.
+//
+// 20 m, from the measurement the filter was built on: on East End the two objects of each shop pair
+// sit **6-15 m apart** (see the note above TagDoorwaysAndDropSignTwins), so the bound has to admit 15
+// and reject 90. It is a sanity BOUND, not a discriminator -- the distinctiveness rule below is what
+// separates a shopfront from two ordinary doors that happen to share a word.
+constexpr float kTwinNearDist   = 20.0f;
+// ...AND THE SHARED NAME MUST BE DISTINCTIVE, which is measured, not listed. A shopfront's name is
+// carried by exactly the two objects that make it up; `"Door"` is carried by every door on the map
+// (568 has three). So the pair is only fused when the map holds NO THIRD object of that name --
+// nothing is compared against a word list, and no label is invented or assumed generic.
+//
+// BOTH halves gate the DROP, not just the Shop promotion: deleting a real door because it stands near
+// a bound one and shares the game's generic word for "door" costs a blind player a way out of the
+// room, which is the same failure this filter has had twice before with NPCs.
+constexpr size_t kTwinNameMaxObjects = 2;
 // STRUCK (this session) -- `kFloatingDrop = 2.0f` and `kNpcReachTol = 1.5f`, the thresholds
 // DropUnplacedCharacters judged unnamed NPCs by. Both were read off ONE map's object dump, and the
 // pass only ever fired on that map: Nomad Village's three stacked bodies float at Y=6.06, while the

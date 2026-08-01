@@ -130,6 +130,35 @@ int DropPassedWaypoints(const FVec3& from, std::vector<FVec3>& poly, std::vector
 // IF the footprint test is happier there. Endpoints never move: the first is the player's own position
 // and the last is the target, which `/` also measures to (S76).
 // Returns how many corners were inset.
-int InsetCorners(std::vector<FVec3>& poly);
+//
+// ---- THE INSTRUMENT (Session 117, LOG-ONLY AND FREE) --------------------------------------------
+//
+// S116 shipped a corridor march to tell "the corridor is unwalkable" from "the shape inside it is
+// wrong", and its own falsifier refuted the diagnosis on the first play: `CLEAR` x81, `BREACH` x0.
+// What it BOUGHT was a sharper suspect, and it is this function. On one Sluiceway request, the same
+// polyline came back adjacency-CLEAR over 139 hops and body-BREACH from the repair ladder:
+//
+//     corridor march: CLEAR over 139 hop(s) (grazes=73 noVerdict=0)
+//     repair[full-corridor]: leg 20, 138 -- 21->140 points, probes=310 -> still breaching
+//
+// Exactly two things differ between those instruments, and one of them is that `PathRepair::tryPoly`
+// runs THIS and `MarchCorridor` does not. Stepping every interior corner by `BodyRadius + margin`
+// along its bisector is right for a 20-corner route; on a 140-point polyline of portal midpoints in a
+// narrow channel, consecutive "corners" are centimetres apart and the step can push a point clean out
+// of the corridor it was sampled from. It predicts the log exactly: the ladder repaired nine routes
+// this session and every one of them was SHORT.
+//
+// `stats` counts, per call, the corners looked at, the corners actually moved, and -- the measurement
+// -- how many of those moves LANDED IN A DIFFERENT MESH POLY from the corner's own. It costs nothing:
+// both `FindPolyAt` results are already computed to decide the move, and NOTHING here changes what
+// the function does. Large `leftHome` on the failures and zero on the repairs confirms the suspect;
+// the fix is then to bound or skip the inset on dense polylines. Small on both refutes it, and the
+// next suspect is `CheckLegs`' own body sweep.
+struct InsetStats {
+    int corners  = 0;   // interior corners considered (endpoints never move)
+    int moved    = 0;   // corners the footprint measured as better somewhere else
+    int leftHome = 0;   // ...of which the accepted point sits in a DIFFERENT poly from the corner
+};
+int InsetCorners(std::vector<FVec3>& poly, InsetStats* stats = nullptr);
 
 } // namespace PathFunnel
