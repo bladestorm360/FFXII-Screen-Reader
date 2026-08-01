@@ -4643,3 +4643,89 @@ it is a black box that says "still breaching" four times per attempt.
 Held back from Session 116 deliberately — with the ladder skipped on the corridor-is-broken branch,
 most of this pressure disappears, so it gets re-measured before it gets sized. Three changes in one
 build is what S96 records as the cause of the damage it spent a session undoing.
+
+## OPEN — a bare unlabelled door is classified as a SHOP (map 569, Session 116)
+
+**Symptom (tester):** map 569 (Royal Palace: Lower Halls) lists a plain door under **Shop**. "There
+is definitely no sign that says what this door is for and it shouldn't be falling into the shop
+category, it's just a bare unlabelled door." The rescan line reads `Door=0 Shop=1` — so the map
+lists **zero** doors and one invented shop.
+
+**Root cause, found in the log and confirmed in the source** — `src\navigation\entity_postscan.cpp`:
+
+```
+[NAV-DIAG] twin dropped (sign repeats a doorway) "Door": [0:57] (83.92,0.00,38.48)
+                                            <- keeping [0:56] (41.65,0.00,118.00) 90.06m away
+```
+
+Two faults compounding:
+
+1. **THE TWIN FILTER HAS NO DISTANCE TEST ON INTERACTABLES.** The NPC branch guards with
+   `kStackedDist` on both horizontal distance and Y. The interactable branch matches on `label` +
+   `doorway` alone, so it paired two objects **90.06 m apart**. A shop SIGN stands BESIDE its
+   doorway — that proximity is the filter's entire premise and it is the one thing unchecked.
+2. **`hasNameSign` was derived from a GENERIC FALLBACK LABEL.** Both objects were labelled `"Door"`,
+   the mod's own fallback naming, not game-supplied sign text. Two objects sharing a generic label
+   is no evidence of a shopfront.
+
+The drop then sets `out[twin].hasNameSign = true`, and the categorisation loop turns that flag into
+`Category::Shop` (`e.category = e.hasNameSign ? Shop : Door`).
+
+**It also DELETED a real door** — that is why 569 lists `Door=0`. This filter has form: it deleted a
+story-critical NPC once (S77) and 4 NPCs in another session, which is why it logs unconditionally.
+
+**Fix when this resumes:** a bounded proximity rule on the interactable branch (a sign is metres from
+its doorway, not 90), plus a requirement that the shared name be DISTINCTIVE rather than a generic
+fallback. Both halves are needed: proximity alone still fuses two adjacent generic "Door" objects,
+and distinctiveness alone still fuses two identically-named shopfronts on the same map.
+
+## SOLVED-BY-FALSIFIER — "the corridor is not walkable" was the WRONG diagnosis (Session 116)
+
+S116 shipped `PathCorridor::MarchCorridor` on this reasoning: `repair[full-corridor]` fails, that rung
+walks the corridor's own openings, therefore the corridor is unwalkable. **The falsifier shipped with
+it says otherwise on its first play: `corridor march: CLEAR` ×81, `BREACH` ×0.** The BREACH branch
+never executed, so the change is behaviourally inert so far and nothing observed can be credited to it.
+
+**Both readings were measurements; the inference between them was the error.**
+
+**What the falsifier bought — a sharper suspect.** On the same request, the same polyline:
+
+```
+corridor march: CLEAR over 139 hop(s) (grazes=73 noVerdict=0)
+repair[full-corridor]: leg 20, 138 -- 21->140 points, probes=310 -> still breaching
+```
+
+Adjacency-CLEAR, body-BREACH. Exactly two differences between what they walked:
+
+1. **`PathRepair::tryPoly` runs `PathFunnel::InsetCorners(cand)`; `MarchCorridor` does not.** The
+   inset steps EVERY interior corner by `BodyRadius + kClearanceMargin` along its angle bisector —
+   right for a 20-corner route through open rooms, and on a **140-point** polyline of portal
+   midpoints in a narrow channel every point is a "corner" with a near-straight bisector, so stepping
+   all of them can push points off the corridor they were sampled from. **PRIME SUSPECT.**
+2. `CheckLegs` also runs the body sweep; the march makes none.
+
+**This predicts the pattern already in the log:** the ladder repaired 9 routes this session
+(`unpull` ×4, `unpull-departure` ×4, `full-corridor` ×1), all short, and failed on every long dense
+one. `probes=310` for 139 legs is ~2.2/leg — a real validation, not a truncation.
+
+**Cheapest next test, log-only and free:** after `InsetCorners` on a repair candidate, count how many
+points left the poly they were sampled from (`NavMesh::FindPolyAt` before vs after). Large on the
+failing routes and zero on the repairing ones confirms it; the fix is then to bound or skip the inset
+on dense polylines.
+
+**Rule: two instruments that walk "the same" polyline and disagree are not measuring the same thing.**
+S97 from the other side — there a coarse probe overruled the engine's sweep; here a fine one agreed
+with nothing.
+
+## Tried & Failed — latching the map id in OnFieldFrame to fix the census label (Session 115, still broken)
+
+S115 recorded the sneak census line as naming the wrong map (`OnMapTeardown` read
+`MapNames::CurrentMapId()` after the engine had advanced it) and "fixed" it by latching the id on the
+field tick. **It did not work.** S116's log still reads `map 567 census` when leaving 313 and
+`map 569 census` when leaving 568 — because **the field tick has already run for the NEW map by the
+time `OnMapTeardown` fires**, so the latch is advanced too.
+
+Fix needs an id that cannot advance first: the teardown hook's own map argument, or a latch that
+updates only when the id CHANGES and reports the PREVIOUS value.
+
+**Rule: a fix for an ordering bug must be verified against the ordering, not against the read.**

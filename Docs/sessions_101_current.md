@@ -889,6 +889,16 @@ halves were needed: `clamp ACTIVE ... 3.50 -> 9999` fired first, then the touch 
 
 ### FIX FOR MAP 569 (Royal Palace: Lower Halls) — a one-line table row
 
+> **⚠ STRUCK by Session 116's play test — "a one-line table row" WAS WRONG.** The row and
+> `kMaxGuards` shipped in S115 and the tester reports the guard suppression **does not work on 569**.
+> The log shows the distance clamp firing there (`27.80 -> 9999`) and **zero** `touch SUPPRESSED`
+> **and zero** `touch REPORTED` lines — the touch hook never reaches a guard at all. Why:
+> **`rrp_a03` contains ZERO `0x26D` and ZERO `0x525`**, the two natives that funnel into
+> `FUN_002677f0`, so per-object suppression has nothing to suppress on 569. It uses
+> `seteventwakerect` (`0x3DF`) ×70 and an unresolved `0x26E` ×77 instead — the `捕獲レクト兵士`
+> mechanism. **S115's own script census contained this fact and the entry claimed 569 was covered
+> anyway.** The row is harmless and stays; 569 needs its own hook. See Session 116.
+
 The tester ended the log on 569, and it is the same problem with more of it:
 
 - **14 "Imperial" actors, ALL `nameIdx=694`** — the SAME npcdic id as 568's pair, at
@@ -1003,6 +1013,12 @@ Also fixed, both log-only and both wrong in a way that would mislead the next re
   the engine has ALREADY advanced by then — so 568's two `distance` calls were logged as
   `map 569 census`. Every census line in the file was one map late. The id is latched on the field
   tick now and the line says which map it means.
+  > **⚠ STRUCK by Session 116's play test — THE LATCH DID NOT FIX IT.** The log still reads
+  > `map 567 census` when leaving 313 and `map 569 census` when leaving 568, because **the field
+  > tick has already run for the NEW map by the time `OnMapTeardown` fires**, so the latch advances
+  > too. Needs an id that cannot advance first (the teardown hook's own map argument, or a latch
+  > that updates only when the id CHANGES and reports the PREVIOUS value). **A fix for an ordering
+  > bug must be verified against the ORDERING, not against the read.**
 - **`Controls.md` still told the tester to press `F9` for the beacon**, in the mod-menu paragraph
   S112 did not reach. That is the key the game uses for *Hide On-Screen Keyboard*.
 
@@ -1248,3 +1264,141 @@ both, with a named crossing, followed by `re-costed … [MEASURED by the corrido
 actual test — a route where there was `No path`. Regression gate unchanged and non-negotiable: **map
 315 still `pass=mesh`**, `pass=seam` still grep-dead, and routes that work today still answer
 `attempts=1` with no `corridor march:` line at all.
+
+### PLAY RESULTS (2026-08-01, same session) — and S116's falsifier fired AGAINST it
+
+**KEYWORDS ADDENDUM: corridor march CLEAR x81 zero BREACH falsifier refuted InsetCorners dense
+polyline 569 guard suppression does not work 0x26D 0x525 absent from rrp_a03 seteventwakerect 0x26E
+twin filter no distance test 90.06m hasNameSign Shop misclassified door census label still off by one**
+
+#### 1. Sneak assist is PLAY-CONFIRMED on map 568, automatically, with no key
+
+```
+[SNEAK] script-distance hook installed (sneak assist acts on the danger-table maps only; nothing to switch on)
+[SNEAK] clamp ACTIVE on map 568: script distance 3.04 -> 9999 (float slot)
+[SNEAK] touch SUPPRESSED on map 568 for a danger actor ... suppressed object is: "Imperial 1"
+```
+
+The tester reports it "works perfectly". No toggle, no `F10`, nothing to arm. **The S115 track is
+confirmed for 568.**
+
+#### 2. ⚠ IT DOES NOT WORK ON MAP 569 — and S115's own census predicted this
+
+The tester reports the guard suppression does not work on 569. The log agrees and says exactly why:
+
+```
+[SNEAK] clamp ACTIVE on map 569: script distance 27.80 -> 9999 (float slot)     <- the CLAMP fires
+                                                                                <- ZERO touch lines
+```
+
+**Zero `touch SUPPRESSED` and zero `touch REPORTED` on 569.** Not one. The falsifier cannot fire
+either, which means the touch hook is never reaching a guard at all.
+
+> **THE ANSWER WAS ALREADY IN S115's SCRIPT CENSUS AND I UNDER-WEIGHTED IT.** `rrp_a03` (map 569)
+> contains **ZERO `0x26D` and ZERO `0x525`** — the two natives that funnel into `FUN_002677f0`. 568
+> has 4 and 21 of them. **The touch test is never called on 569**, so per-object suppression has
+> nothing to suppress. 569 instead uses **`seteventwakerect` (`0x3DF` → `FUN_0034d470`) ×70** and an
+> unresolved **`0x26E` ×77**, which is what the `捕獲レクト兵士` ("capture rect soldier") actors are
+> driven by. That is the mechanism to hook, and it was written down as "the first two places to look"
+> — the census answered this before the play test did, and the entry claimed 569 was covered anyway.
+>
+> **A CENSUS THAT SAYS A MECHANISM IS ABSENT IS NOT A DETAIL — IT IS THE ANSWER.** Same shape as
+> S107's "when a user proposes a state change, check whether the state exists".
+
+Next session: resolve `0x26E`'s handler and whether `seteventwakerect`'s rects test the leader through
+a different choke point, then hook that. `kMaxGuards` 16 and the `{569,694}` row are harmless and
+stay; the distance clamp on 569 is live and correct, it is simply not the whole catch there either.
+
+#### 3. S116's corridor march is REFUTED BY ITS OWN FALSIFIER
+
+```
+corridor march: CLEAR   x81
+corridor march: BREACH  x0
+```
+
+**The BREACH branch never executed.** So S116 changed nothing observable this session, the repair
+ladder ran exactly as it always did, and — stated plainly — **568's pathing behaving well is NOT
+attributable to the corridor march.** (It is also unconfirmed: the tester walked straight to the
+door and did not stress it.)
+
+> **THE DIAGNOSIS WAS WRONG, AND THE FALSIFIER IS WHY WE KNOW IN ONE SESSION RATHER THAN FOUR.** The
+> S116 reasoning was: `repair[full-corridor]` fails, that rung walks the corridor's own openings,
+> therefore the corridor is unwalkable. The march says the corridor IS walkable. Both were measured;
+> the inference between them was the error. **Two instruments that walk "the same" polyline and
+> disagree are not measuring the same thing** — which is S97's lesson arriving from the other side.
+
+#### 4. What the falsifier BOUGHT — a new and much sharper suspect
+
+On the Sluiceway failure, the same request, the same polyline:
+
+```
+corridor march: CLEAR over 139 hop(s) (grazes=73 noVerdict=0)
+repair[full-corridor]: leg 20, 138 -- 21->140 points, probes=310 -> still breaching
+```
+
+Adjacency-CLEAR and body-BREACH on the corridor's own openings. There are exactly two differences
+between what those two walked:
+
+1. **`tryPoly` runs `PathFunnel::InsetCorners(cand)` and `MarchCorridor` does not.** The inset steps
+   EVERY interior corner by `BodyRadius + kClearanceMargin` along its angle bisector. That is right
+   for a 20-corner route through open rooms. **On a 140-point polyline of portal midpoints in a
+   narrow channel, every point is a "corner" with a near-straight bisector, and stepping all of them
+   can push points off the corridor they were sampled from.** PRIME SUSPECT.
+2. `CheckLegs` also runs the body sweep; the march makes none.
+
+**And this predicts the pattern already in the log:** the ladder REPAIRED 9 routes this session
+(`unpull` ×4, `unpull-departure` ×4, `full-corridor` ×1) — all short — and failed on every long dense
+one. `probes=310` for 139 legs is ~2.2/leg, a real validation, not a truncation.
+
+Cheapest next test, log-only and free: after `InsetCorners` on a repair candidate, count how many
+points left the poly they were sampled from (`NavMesh::FindPolyAt` before vs after). If that number
+is large on the failing routes and zero on the repairing ones, the suspect is confirmed and the fix
+is to bound or skip the inset on dense polylines.
+
+Also worth weighing: `grazes=73` of 139 hops. The corridor is only "clear" thanks to graze rescues,
+so the march's CLEAR here is not a comfortable one.
+
+#### 5. Still failing, unchanged: all 8 remaining failures are the same exit
+
+`target="Exit, Garamsythe Waterway: North Spur Sluiceway"` ×8, all with the identical breach
+(`bad=last len=61.16m reached=17.25m stop=(116.4,9.75,86.2) why=march from=632:2 nbr=939
+nbrEff=0x17B00000`, `corner: poly=324 clear=0 margin=-0.27m`) and all with
+`surface-goal ... probes=128 -> REJECTED (budget ran out -- NOT verified)`. The tester adds that it
+is **easier to get loose of** than before, but notes the confound: **there are enemies at that
+location and a fleeing one drags the player out of the stuck spot** — so a recovery in the log may be
+the enemy's doing, not the router's. Do not credit any fix for it.
+
+#### 6. ⚠ CORRECTION — the S115 census map-label fix DID NOT WORK
+
+It still names the map being ENTERED: `map 567 census` prints when leaving 313, `map 569 census` when
+leaving 568. Latching the id in `OnFieldFrame` was not enough, because **the field tick has already
+run for the NEW map by the time `OnMapTeardown` fires**. The S115 entry claims this was fixed; it was
+not. Needs the id latched somewhere that cannot advance first (the teardown hook's own map argument,
+or a latch that only updates when the id CHANGES and reports the previous value).
+
+#### 7. NEW DEFECT — a bare unlabelled door on 569 is classified as a SHOP
+
+Tester: *"there is definitely no sign that says what this door is for and it shouldn't be falling
+into the shop category, it's just a bare unlabelled door."* Map 569 lists `Door=0 Shop=1`.
+
+**Root cause found, and it is two faults compounding** — `src\navigation\entity_postscan.cpp`:
+
+```
+[NAV-DIAG] twin dropped (sign repeats a doorway) "Door": [0:57] (83.92,0.00,38.48)
+                                            <- keeping [0:56] (41.65,0.00,118.00) 90.06m away
+```
+
+1. **THE TWIN FILTER HAS NO DISTANCE TEST ON INTERACTABLES.** The NPC branch guards with
+   `kStackedDist` on both the horizontal distance and the Y (lines ~357-358). The interactable branch
+   (~368-376) matches on `label` and `doorway` alone and will pair two objects **90 metres apart**. A
+   shop SIGN stands BESIDE its doorway — that is the entire premise of the filter, and it is the one
+   thing not being checked.
+2. **`hasNameSign` was derived from a GENERIC FALLBACK LABEL.** Both objects were called `"Door"` —
+   the mod's own fallback naming, not game-supplied sign text. Two objects sharing a generic label is
+   no evidence of a shopfront. The drop then sets `out[twin].hasNameSign = true` (line ~406), and
+   line ~435 turns that into `Category::Shop`.
+
+So the mod invented a shop out of two unrelated doors at opposite ends of the map. Fix is a bounded
+proximity rule on the interactable branch plus a requirement that the shared name be DISTINCTIVE
+rather than a generic fallback — **and note this can only ever have made things worse where it
+fired, because it also DELETED the other door**: 569 lists zero Doors.
