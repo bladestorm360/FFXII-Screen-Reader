@@ -20,17 +20,20 @@ const std::vector<MapExits::SignRec>& CachedSigns();
 // Append this map's exits to `out` as fixed-position Category::Exit entities. Caller holds the mutex.
 void ScanExits(std::vector<Entity>& out);
 
-// AN EVENT-BOUND EXIT WITH NO SURFACE (Session 122, exit_event_bind.cpp) -- map 572's class: the
+// AN EVENT-BOUND EXIT WITH NO SURFACE (S122/S123, exit_event_bind.cpp) -- map 572's class: the
 // map's one transition is an event routine (`mapjump`, no group armed) and the walkmap carries no
-// map-jump surfaces, so both S64's binding and S105's elimination have nothing to pair. The S119
-// event-table join binds the routine to the trigger RECT that fires it (`ExitDest::nameOff` ==
-// an entry of a container-0 object's event table) and the rect's position becomes the route target.
+// map-jump surfaces, so both S64's binding and S105's elimination have nothing to pair. Two
+// binding sources, in order: (1) the S119 event-table join (`ExitDest::nameOff` == an entry of a
+// container-0 object's event table -- REFUTED on 572, 0 matches: event tables name an object's
+// own handlers, not the routines they fire; kept as the per-map measurement); (2) FIELD-SIGN
+// ELIMINATION -- exactly one unclaimed live group-0 `+0x70` record and exactly one unbound event
+// dest pair up, and the record's position (the game's own exit placard) is the route target.
 //
-// Reachable ONLY when `candidates` is empty -- a map that lists any exit never runs the join at
-// all -- and binds only 1:1 matches. `scanned` is the object list ScanExits was handed, used solely
-// to measure the bound rect against the nearest Door/Shop for the log. Decrements `dropNoGroup`
-// for each dest it lists, so the exit inventory reports outcomes, not intermediate states. Caller
-// holds the mutex.
+// Reachable ONLY when `candidates` is empty -- a map that lists any exit never runs either source
+// -- and both bind 1:1 or nothing. `scanned` is the object list ScanExits was handed: the sign
+// claim test runs against it (the S92 rule, kSignMatchDist), and the bound target is measured
+// against its nearest Door/Shop for the log. Decrements `dropNoGroup` for each dest it lists, so
+// the exit inventory reports outcomes, not intermediate states. Caller holds the mutex.
 void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
                            const std::vector<Entity>& scanned,
                            bool haveSurfaces,

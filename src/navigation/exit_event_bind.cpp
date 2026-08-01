@@ -8,6 +8,7 @@
 #include "core/mem_read.h"
 #include "core/logger.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -21,14 +22,33 @@
 // pair either: that rule needs exactly one unclaimed surface, and here there are none to claim.
 // `Exit=0` for a blind player on a map whose one way out is invisible.
 //
-// WHAT BINDS IT INSTEAD: the S119 event-table join, object-side. The rect the player walks into to
-// fire the event carries that routine in its OWN event table (`object+0x48`, entries are name-pool
-// offsets), and `ExitDest::nameOff` is the same routine's offset in the same pool. Offset == offset
-// is the map's own data saying "entering this object's volume runs that transition routine" -- the
-// join that already binds doors to transition routines in entity_postscan.cpp, and the first
-// object<->routine binding this project ever measured (S119). The rect's POSITION then becomes the
-// route target: no surface, no seam group, no geometry invented. Walking into the rect IS the exit,
-// which is exactly what `Entity::isTransition` already means.
+// TWO BINDING SOURCES, tried in order, both from the map's own data:
+//
+// 1. The S119 event-table join, object-side: an object whose event table (`object+0x48`) carries
+//    `ExitDest::nameOff` is wired to that routine, and its position becomes the route target.
+//    ⚠ REFUTED ON 572 BY ITS OWN FALSIFIER (S123, first play of this pass): `nameOff=0x39A
+//    matches 0 container-0 object(s)` on every scan of the visit. An event table names the
+//    object's OWN handlers (`init|touch|touchon|SET_RECT|…`); a routine those handlers FIRE never
+//    appears in it. That is S120's door lesson (`[0:57]` ran the field-sign template; the jump
+//    lived inside the machinery) repeating for rects -- the join has now missed for BOTH object
+//    classes it was proposed for. It stays as the first source because it is one integer compare
+//    from certainty when it does hit, and because its match-count line is the measurement that
+//    settles the question per map -- but expect source 2 to be the one that binds.
+//
+// 2. FIELD-SIGN ELIMINATION (S123, from the same play's log): the map's `+0x70` table carried the
+//    answer all along -- five records, and `g0[1] pos=(85.95,32.00,61.08) usable=1 shown=1` is a
+//    LIVE group-0 doorway placard at the top of the stairs that NO object claims (nearest is the
+//    back door, 20.75 m -- far outside kSignMatchDist). The game draws its exit arrow from that
+//    record this instant (`shown=1`) while the mod lists nothing. A `g1[2]` record sits at the
+//    SAME position -- the doubled-placard pattern S105 measured at 313's event staircase. So:
+//    exactly ONE unclaimed live group-0 record and exactly ONE still-unbound group-less event
+//    dest ⇒ they are each other's, and the record's position is the exit. Any other count binds
+//    NOTHING and prints both counts -- S105's elimination, over the field-sign table instead of
+//    the walkmap. On a working map every live group-0 record is claimed by its door object (that
+//    is what a group-0 record IS, S92), so the unclaimed count is 0 and the rule cannot fire.
+//
+// No surface, no seam group, no geometry invented. Walking to the placard IS the exit, which is
+// exactly what `Entity::isTransition` already means.
 //
 // WHY THIS CANNOT TOUCH A WORKING MAP (the tester's rule, structural, not promised):
 //   1. It runs only when `candidates` is EMPTY -- the map is about to list NOTHING. Any map that
@@ -158,6 +178,26 @@ void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
 
     struct Bound { const EvtObj* rec; FVec3 pos; };
     std::vector<std::pair<int, Bound>> boundLog;   // routineIndex -> what got bound, for the detail
+    // Qualifying dests source 1 could not bind, in dest order -- source 2's candidate side.
+    std::vector<const MapScript::ExitDest*> unbound;
+
+    // One construction for both sources, so the two kinds of event exit cannot drift apart.
+    auto listExit = [&candidates, &dropNoGroup](const MapScript::ExitDest& d, const FVec3& pos) {
+        Entity e;
+        e.sceneObj = nullptr;   // fixed world pos, exactly like every other exit entry: the target
+        e.fixed    = true;      // does not move, and a scene pointer here would drag this entry
+        e.flags    = 0;         // through passes built for interactables.
+        // Same disjoint id band the surface path gives an event-bound transition: stable per
+        // routine slot, collision-free against controller exits by construction.
+        e.nameIdx      = static_cast<int16_t>(-(2000 + d.routineIndex));
+        e.category     = Category::Exit;
+        e.isTransition = true;  // arriving at the target IS crossing it
+        e.seamGroup    = 0;     // NO surface behind this exit; the seam machinery must stay out
+        e.label        = std::wstring(CategoryWord(Category::Exit)) + L", " + d.destName;
+        e.pos          = pos;
+        candidates.push_back(e);
+        --dropNoGroup;          // the inventory line reports outcomes, and this dest is now LISTED
+    };
 
     for (const auto& d : dests) {
         if (d.viaController || d.group > 0) continue;
@@ -176,6 +216,8 @@ void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
                      d.routineIndex, d.routineName.c_str(), d.destMapId, n8);
             Log::Write("NAV-DIAG", m);
             sig ^= static_cast<size_t>(d.routineIndex) * 2654435761u;
+            // No key, no join -- but the dest is still real; source 2 may bind it by count.
+            unbound.push_back(&d);
             continue;
         }
 
@@ -217,6 +259,7 @@ void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
                          ok ? "" : " (unreadable)");
                 Log::Write("NAV-DIAG", l);
             }
+            unbound.push_back(&d);
             continue;
         }
 
@@ -229,23 +272,11 @@ void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
                      "unreadable/unplaced -- nothing listed this scan",
                      d.routineIndex, d.routineName.c_str(), hit->table, hit->slot);
             Log::Write("NAV-DIAG", m);
+            unbound.push_back(&d);
             continue;
         }
 
-        Entity e;
-        e.sceneObj = nullptr;   // fixed world pos, exactly like every other exit entry: the rect
-        e.fixed    = true;      // does not move, and a scene pointer here would drag this entry
-        e.flags    = 0;         // through passes built for interactables.
-        // Same disjoint id band the surface path gives an event-bound transition: stable per
-        // routine slot, collision-free against controller exits by construction.
-        e.nameIdx      = static_cast<int16_t>(-(2000 + d.routineIndex));
-        e.category     = Category::Exit;
-        e.isTransition = true;  // arriving at the rect IS crossing it -- the trigger fires on entry
-        e.seamGroup    = 0;     // NO surface behind this exit; the seam machinery must stay out of it
-        e.label        = std::wstring(CategoryWord(Category::Exit)) + L", " + d.destName;
-        e.pos          = pos;
-        candidates.push_back(e);
-        --dropNoGroup;          // the inventory line reports outcomes, and this dest is now LISTED
+        listExit(d, pos);
 
         char m[320];
         snprintf(m, sizeof(m),
@@ -256,6 +287,86 @@ void AppendEventBoundExits(const std::vector<MapScript::ExitDest>& dests,
                  pos.x, pos.y, pos.z, d.nameOff);
         Log::Write("NAV-DIAG", m);
         boundLog.push_back({ d.routineIndex, Bound{ hit, pos } });
+    }
+
+    // ---- Source 2: FIELD-SIGN ELIMINATION (S123) ------------------------------------------------
+    //
+    // The `+0x70` table is the game's own placard registry, and a live group-0 record is a doorway
+    // placard by S92's measurement (only group 0 holds press-Enter doorways; the record marks the
+    // "-> area" arrow). On a correct map every live group-0 record is claimed by a door object
+    // within kSignMatchDist -- that pairing is exactly what TagDoorwaysAndDropSignTwins ships on.
+    // On 572 one live record is claimed by nothing: `g0[1] (85.95,32.00,61.08) usable=1 shown=1`,
+    // nearest object the back door 20.75 m away -- a placard whose "door" is the EVENT rect at the
+    // top of the stairs, which the entity scan can never list (nameless, non-interactive). The
+    // game draws an exit arrow from that record while the mod says the room has no exits.
+    //
+    // So: exactly ONE unclaimed live group-0 record AND exactly ONE still-unbound group-less event
+    // dest ⇒ they are each other's, and the record's position is the exit. Any other count binds
+    // nothing and prints both counts -- S105's elimination, arithmetic over two of the game's own
+    // lists. The claim test reuses the S92 rule verbatim (non-NPC scene object within
+    // kSignMatchDist), so this pass and the doorway tagger cannot disagree about what "claimed"
+    // means. Early in a visit, before the handle table streams in, even the BACK door's record
+    // reads unclaimed -- the count is then 2, and the rule declines until the map is actually
+    // loaded. Fail closed, self-healing.
+    //
+    // KNOWN LIMIT, printed rather than hidden: the dest-side count is a LOWER BOUND while the 0x40
+    // scan hole stands (572 reads `spans read=9, unreadable=6` -- six routines this reader never
+    // read). A hidden second dest would make 1:1 a coincidence; the falsifier is the CROSSING
+    // itself, and the decline path already handles the day the hole is fixed and a second dest
+    // appears.
+    if (!unbound.empty()) {
+        const std::vector<MapExits::SignRec>& signs = CachedSigns();
+        int                      unclaimedCount = 0;
+        const MapExits::SignRec* rec            = nullptr;
+        for (const auto& s : signs) {
+            if (s.group != kSignDoorwayGroup) continue;
+            if (s.pos.x == 0.0f && s.pos.y == 0.0f && s.pos.z == 0.0f) continue;   // unused slot
+            bool claimed = false;
+            for (const auto& o : scanned) {
+                if (!o.sceneObj || o.category == Category::NPC) continue;
+                if (NavCommon::Distance2D(s.pos, o.pos) <= kSignMatchDist) { claimed = true; break; }
+            }
+            if (!claimed) { ++unclaimedCount; rec = &s; }
+        }
+        sig ^= static_cast<size_t>(unclaimedCount) * 8191u + unbound.size() * 127u;
+
+        if (unbound.size() != 1 || unclaimedCount != 1) {
+            char m[224];
+            snprintf(m, sizeof(m),
+                     "field-sign elimination: %d unclaimed live g0 record(s) vs %zu unbound event "
+                     "dest(s) -- not 1:1, nothing bound",
+                     unclaimedCount, unbound.size());
+            Log::Write("NAV-DIAG", m);
+        } else {
+            const MapScript::ExitDest& d = *unbound[0];
+            listExit(d, rec->pos);
+
+            char n8[96] = {};
+            for (size_t k = 0; k < d.destName.size() && k < 95; ++k)
+                n8[k] = (d.destName[k] < 128) ? static_cast<char>(d.destName[k]) : '?';
+            char m[352];
+            snprintf(m, sizeof(m),
+                     "field-sign elimination: the ONE unclaimed live g0 record [%d] at "
+                     "(%.2f,%.2f,%.2f) usable=%d shown=%d is routine[%d] \"%s\"'s -> dest=%u "
+                     "(\"%s\") -- INFERRED, position from the map's own placard",
+                     rec->index, rec->pos.x, rec->pos.y, rec->pos.z, rec->usable ? 1 : 0,
+                     rec->shown ? 1 : 0, d.routineIndex, d.routineName.c_str(), d.destMapId, n8);
+            Log::Write("NAV-DIAG", m);
+
+            // The 313 corroboration, measured here too: S105 found the event staircase carrying a
+            // doubled placard (a live record in a HIGHER group at the same spot). Log-only.
+            for (const auto& s : signs) {
+                if (&s == rec || s.group == kSignDoorwayGroup) continue;
+                if (NavCommon::Distance2D(s.pos, rec->pos) > 0.25f ||
+                    std::fabs(s.pos.y - rec->pos.y) > 0.25f) continue;
+                snprintf(m, sizeof(m),
+                         "  corroboration: g%d[%d] sits at the same position -- the doubled-placard "
+                         "pattern S105 measured at 313's event staircase",
+                         s.group, s.index);
+                Log::Write("NAV-DIAG", m);
+                break;
+            }
+        }
     }
 
     const int mapId = MapNames::CurrentMapId();

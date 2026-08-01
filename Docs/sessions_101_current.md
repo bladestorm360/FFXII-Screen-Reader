@@ -1897,3 +1897,68 @@ none) — the play is the oracle.
   backlog item gains its first measurement.
 - Any OTHER map: **zero `event-exit:` lines** — one on a map that lists exits is the never-widen
   gate failing and is a bug regardless of what it says.
+
+## Session 123 — 2026-08-01 — [navigation] The join measured ZERO on its first play; the +0x70 table had the answer all along — field-sign elimination
+
+**KEYWORDS: map 572 event-exit join refuted nameOff 0x39A matches 0 objects event table names own
+handlers not fired routines S120 lesson repeated rects field-sign elimination unclaimed live g0
+record placard 85.95 32.00 61.08 usable shown exit arrow drawn doubled placard g1 same position
+313 staircase pattern kSignMatchDist claim test 1:1 or nothing scan hole lower bound**
+
+S122's build went straight to a play and the join's own falsifier fired: **`event-exit:
+routine[7] … nameOff=0x39A matches 0 container-0 object(s)`, every scan, all visit.** No object's
+event table names "ムービー開始位置". The S120 door lesson, now measured for rects too: **an event
+table names the object's OWN handlers (`init|touch|touchon|SET_RECT|…`), never the routines those
+handlers FIRE** — the movie routine is started from inside the rect's template machinery, so the
+nameOff join misses by construction. The join has now missed for BOTH object classes it was
+proposed for (doors S120, rects S123). It stays in the pass as the per-map measurement — its
+match-count line is what settled this in one play — but it is not the binder.
+
+### What the same log had been printing all along (the S101 instrument lesson, again)
+
+The `+0x70` field-sign table on 572 — printed once per map since the sign-table diagnostic
+shipped — reads:
+
+```
+sign g0[0] pos=(82.00,0.00,39.05)  … | nearest "Door" 2.43m  | CLAIMED -> doorway   (the way BACK)
+sign g0[1] pos=(85.95,32.00,61.08) usable=1 shown=1 | nearest "Door" 20.75m | TOO FAR, unclaimed
+sign g1[2] pos=(85.95,32.00,61.08) — same position, higher group
+```
+
+**`g0[1]` is a LIVE group-0 doorway placard at the top of the Garden Stairs (Y=32) that no object
+claims — and `shown=1` means the game is drawing its exit arrow from that record this instant**
+while the mod lists nothing. The doorway it describes is the EVENT rect, which the entity scan can
+never list (nameless, non-interactive). And `g1[2]` doubles it at the same spot — the exact
+doubled-placard pattern S105 measured at 313's event staircase. The room's one way out has been in
+the log, with `shown=1` beside it, since the first scan.
+
+### The fix — source 2 in `exit_event_bind.cpp`: field-sign elimination
+
+After the join binds nothing: **exactly ONE unclaimed live group-0 record and exactly ONE
+still-unbound group-less event dest ⇒ they are each other's**, and the record's position is the
+exit. Any other count binds nothing and prints both counts — S105's elimination over the game's
+placard table instead of the walkmap. The claim test reuses the S92 rule verbatim (non-NPC scene
+object within `kSignMatchDist`), so this pass and `TagDoorwaysAndDropSignTwins` cannot disagree
+about "claimed". All S122 gates unchanged: `candidates` empty (unreachable from a working map),
+`haveSurfaces`, dropped dests only. On a correct map every live g0 record is claimed by its door
+object — the unclaimed count is 0 and the rule cannot fire. Early in a visit even the back door's
+record reads unclaimed → count 2 → declines until the handle table streams in. Fail closed,
+self-heals.
+
+**Printed limit, not hidden:** 572 reads `spans read=9, unreadable=6` — the 0x40 scan hole bites
+on this exact map, so the dest-side count is a LOWER BOUND. 1:1 protects the day the hole is
+fixed: a second dest surfacing flips the rule to decline, never to a different guess.
+
+### Verify next play (572)
+
+- `field-sign elimination: the ONE unclaimed live g0 record [1] at (85.95,32.00,61.08) usable=1
+  shown=1 is routine[7] "…"'s -> dest=314 … INFERRED` + the `corroboration: g1[…] sits at the same
+  position` line.
+- Exits list speaks **Exit, Garamsythe Waterway: East Spur Stairs**; inventory
+  `controllers=1 surfaces=0 listed=1 | nogroup=0`; `routable?` line says whether (85.95,32,61) is
+  on the reach flood (233 polys from poly 184 — the stairs should be in it).
+- Route `\` to it: up the stairs, movie fires → arrive 314. **Falsifier: standing AT the placard
+  with no cutscene** — then the rect is elsewhere/dormant and the next instrument is a census-style
+  dump of every container-0 object's position + event table on a gated map.
+- The join line still prints `matches 0` first — expected, it is the measurement, not the binder.
+- Any map that lists exits: **zero `event-exit:` and zero `field-sign elimination:` lines.**
