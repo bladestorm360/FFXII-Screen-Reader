@@ -115,6 +115,9 @@ enum class Id {
     // and on route loss -- player-initiated stops and self-announcing ones (arrival cue, combat,
     // map transition) stay silent per the silence-is-normal rule.
     SettingAutoWalk, AutoWalkDesc, AutoWalkDescOff, AutoWalkDescOn, AutoWalkStopped,
+    // S106: sneak assist. Off/On VALUES reuse BeaconOff/BeaconOn like every other toggle. Wording
+    // was included in the approved S106 plan; flag to the user before rewording.
+    SettingSneakAssist, SneakAssistDesc, SneakAssistDescOff, SneakAssistDescOn,
 
     Count
 };

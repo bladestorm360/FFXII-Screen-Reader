@@ -108,6 +108,11 @@ const Row kTable[] = {
     EN(L"Off never moves the character."),
     EN(L"On walks the route automatically after the route key. Combat, menus, or your own movement stop it instantly."),
     EN(L"Auto-walk stopped."),
+    // S106: sneak assist (wording from the approved plan; flag to the user before reword).
+    EN(L"Sneak assist"),
+    EN(L"Stops guards noticing you during sneaking puzzles, on the maps that have one."),
+    EN(L"Off plays the puzzle as the game wrote it."),
+    EN(L"On keeps the guards from spotting you, so you can walk past at your own pace. If a sequence ever seems stuck, turn this off."),
 };
 
 #undef EN

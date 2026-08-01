@@ -2193,6 +2193,20 @@ trusting anything below it.**
   offset (`getmapjumpposbyindex` implies 5142, `getmapjumpanglebyindex` implies 5140), because the
   .dbg symbol list interleaves variables/source-markers with actions. Resolve natives **by behaviour**,
   never by index arithmetic.
+- **`distance` is native `0x0290` → `FUN_003448f0` (RVA `0x2248F0`), NOT `0x028f` (Session 106).**
+  Worked example of the rule above: the generated name table pairs "distance" with index `0x028f`
+  (`FUN_003482f0`, a two-line wrapper round the bitmask setter `FUN_00379010` — plainly not a
+  distance), while map 568's `rrp_a02.ebp` contains **8 `CALLACT 0x0290` sites and zero `0x028f`**,
+  and the `0x0290` handler measures exactly what the script needs. **Off by one SLOT; the bytecode
+  and the handler body outrank the name table.** Body: pops two coords + an actor id (`FUN_00267db0`
+  ×2, `FUN_00267e10`), resolves the actor via `FUN_00264010` → `FUN_00265060` (returns the actor's
+  `+0xB8` transform — the same offset the entity scan reads), measures with **`FUN_004686d0` =
+  `sqrtf(dx*dx + dz*dz)`, a HORIZONTAL distance**, and stores the result through **`FUN_0026b4c0`**:
+  `base = *(u64*)(ctx+0xA8)`, `idx = *(i8*)(ctx+0x11)`, stride `0x28`, **value at `+0xC`, type tag
+  `3` at `+0x15`**. Whether that word holds float BITS or a converted int is not settled by the
+  decompile; `sneak_assist.cpp` therefore decides per call from the stored value's own magnitude and
+  logs which reading it saw. Consumed by SNEAK ASSIST (`src/navigation/sneak_assist.h`) — the mod's
+  second write-category exception, user-authorized, default OFF, danger-table maps only.
 
 ~~**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination … Best unverified lead:
 `FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20 … **Unverified — do not ship.**~~

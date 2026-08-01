@@ -47,6 +47,8 @@ const Row* RowForMap(uint32_t mapId) {
 
 } // namespace
 
+bool MapHasRow(uint32_t mapId) { return RowForMap(mapId) != nullptr; }
+
 void ActiveZones(uint32_t mapId, const FVec3& target, std::vector<Disc>& out) {
     out.clear();
     const Row* row = RowForMap(mapId);

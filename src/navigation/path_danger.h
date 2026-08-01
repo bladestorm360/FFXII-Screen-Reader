@@ -39,6 +39,11 @@ struct Disc {
 // AND the named actors are currently listed. `target` is the route goal the player asked for.
 void ActiveZones(uint32_t mapId, const FVec3& target, std::vector<Disc>& out);
 
+// Does this map have a danger row at all? The table doubles as the map WHITELIST for sneak assist
+// (sneak_assist.h), which must be inert everywhere the project has not established a stealth
+// minigame. One linear scan of a tiny constexpr table; no allocation, no game reads.
+bool MapHasRow(uint32_t mapId);
+
 // Sum of `w` over zones containing `p` (XZ disc test -- the script's own check is horizontal).
 float PenaltyAt(const std::vector<Disc>& zones, const FVec3& p);
 

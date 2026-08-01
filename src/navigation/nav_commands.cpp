@@ -151,6 +151,10 @@ void OnNavKey(int vk) {
         // Turning it OFF silences a running beacon; turning it ON only re-arms the feature, since an
         // On press has no destination to aim at -- press `\` to seed one.
         case VK_F9:         ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
+        // F10 mirrors the same arrangement for sneak assist. It speaks only the setting's own value
+        // (via ModMenu, the one choke point); whether the CURRENT map is one it can act on is a
+        // log-side fact -- SneakAssist::ArmedHere -- not a second sentence spoken over the first.
+        case VK_F10:        ModMenu::CycleSetting(ModMenu::SettingId::SneakAssist);     break;
         case VK_F8:         ModMenu::Toggle();                break;  // F8 mod menu
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category

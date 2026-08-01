@@ -69,6 +69,12 @@ const Setting kSettings[] = {
       { Id::BeaconOff,       Id::BeaconOn },
       { Id::AutoWalkDescOff, Id::AutoWalkDescOn },
       Id::AutoWalkDesc, "auto_walk", 0 },
+    // Default OFF for the same reason as auto-walk, and more so: this one overrides the GAME'S OWN
+    // rules on the maps it covers, so it must never be something an install turned on for somebody.
+    { Id::SettingSneakAssist, Kind::Named, 2,
+      { Id::BeaconOff,          Id::BeaconOn },
+      { Id::SneakAssistDescOff, Id::SneakAssistDescOn },
+      Id::SneakAssistDesc, "sneak_assist", 0 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -256,6 +262,11 @@ bool TargetBeaconOn() {
 
 bool AutoWalkOn() {
     return g_values[static_cast<int>(SettingId::AutoWalk)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
+}
+
+bool SneakAssistOn() {
+    return g_values[static_cast<int>(SettingId::SneakAssist)].load(std::memory_order_relaxed)
            == static_cast<int>(Beacon::On);
 }
 

@@ -4,6 +4,7 @@
 #include "navigation/entity_list.h"
 #include "navigation/item_scan.h"
 #include "navigation/path_planner.h"
+#include "navigation/sneak_assist.h"
 #include "core/logger.h"
 #include "input/input_tracker.h"
 
@@ -16,6 +17,9 @@ bool Init() {
     bool ok = NavHooks::Init();
     // Ground-loot hooks — must init BEFORE the entity list, which scans the pool they feed.
     ok &= ItemScan::Init();
+    // Sneak assist (S106). Non-fatal by design: a failed install just means the toggle can never
+    // do anything, which is the same as its default state.
+    SneakAssist::Init();
     // Field-object list (walks the game's actor pool on demand).
     EntityList::Init();
     // Route nav hotkeys to the command dispatcher.

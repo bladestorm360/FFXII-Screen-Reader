@@ -680,6 +680,19 @@ constexpr uint32_t FIELD_FRAME       = 0x10A770;  // FUN_0022a770 (no args, retu
 // to invalidate the cached physics world + bump the map epoch BEFORE the game zeroes
 // the leader ptr / frees the world / clears the 0x10 bit.
 constexpr uint32_t FIELD_TEARDOWN    = 0x1495A0;  // FUN_002695a0 (returns void)
+// FUN_003448f0: the script native the `0x0290` action slot dispatches -- a HORIZONTAL distance
+// from an actor to a literal (x,z). Pops two coords + an actor id, resolves the actor
+// (FUN_00264010 -> FUN_00265060 -> the actor's +0xB8 transform, the same offset the entity scan
+// reads), measures with FUN_004686d0 = sqrtf(dx*dx + dz*dz), and stores the result through
+// FUN_0026b4c0 into the VM ctx's return slot (base *(u64*)(ctx+0xA8), index *(i8*)(ctx+0x11),
+// stride 0x28, value at +0xC, type tag 3 at +0x15).
+//
+// RESOLVED FROM THE BYTECODE, NOT THE NAME TABLE (Session 106): map 568's script has 8
+// `CALLACT 0x0290` sites and none for `0x028f`, and this handler's body computes exactly the
+// proximity the sneak minigame's catch needs. `mapctrl.dbg` labels index `0x028f` "distance" --
+// off by one slot, which is the standing "resolve natives by BEHAVIOUR" rule again.
+// Signature: void(ctx, _, _, vmState) -- MS x64 RCX/RDX/R8/R9.
+constexpr uint32_t SCRIPT_DISTANCE   = 0x2248F0;  // FUN_003448f0 (ABS 0x3448f0)
 // Liveness globals for IsFieldNavSafe(). The FIELD_ACTIVE 0x10 bit alone is NOT safe:
 // it is set early on load (before area collision + world are ready) and cleared late
 // on teardown (after they are freed). These back it up (DAT_02b5e0c0 is the earliest

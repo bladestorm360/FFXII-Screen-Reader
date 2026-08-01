@@ -545,3 +545,52 @@ menuhandbook_* extracted to `..\FFXII-Decompile\extracted\...\handbook\`.
 and NEITHER on a servant route; a z≈121-lane start giving `plan=Route` with the way open; honest
 "No path" only with the guard at post; `DANGER scene-gap` lines on any capture; CROSSING ORACLE
 568 → 569 on success. Regression gate: no `pass=seam`; working routes still `pass=mesh`.
+
+## Session 107 — 2026-07-31 — [navigation] Sneak assist (F10): clamp the guards' notice check
+
+**KEYWORDS: sneak assist F10 toggle default off clamp script distance native 0x0290 FUN_003448f0
+RVA 0x2248F0 off-by-one name table 0x028f FUN_0026b4c0 return slot ctx+0xA8 ctx+0x11 stride 0x28
+tag 3 FUN_004686d0 sqrtf horizontal distance actor +0xB8 write-category exception danger table
+MapHasRow map 568 capture Vaan captured mod menu sneak_assist phrasebook Controls.md README**
+
+Commit: `<this session's commit>`. Built, NOT play-confirmed. **Second write-category exception in
+the project, after auto-walk — USER-AUTHORIZED explicitly this conversation.**
+
+**The user's idea, corrected by the data.** Proposal was "set the guards to *let him pass* once the
+shout has been made". There is **no such flag**: `とおしてあげる` is a ROUTINE, and the fail condition
+is a watcher calling a distance native and branching to `ヴァン捕獲`. So the override belongs at the
+MEASUREMENT, not at a flag — while armed, the native's result is replaced with 9999, and the "too
+close" branch can never be taken.
+
+**RE, and a name-table correction worth keeping.** The generated table pairs "distance" with native
+`0x028f` → `FUN_003482f0`, which is a two-line wrapper round a bitmask setter — plainly not a
+distance. The bytecode settles it: `rrp_a02.ebp` has **8 `CALLACT 0x0290` sites and zero `0x028f`**,
+and the `0x0290` handler `FUN_003448f0` (RVA `0x2248F0`) pops two coords + an actor id, resolves the
+actor's `+0xB8` transform, and measures `sqrtf(dx²+dz²)`. **Off by one SLOT** — the standing "resolve
+natives by BEHAVIOUR" rule paying for itself. Full offsets in GameArchitecture.md.
+
+**One honest gap, handled rather than guessed:** the result word's representation (float bits vs
+converted int) is NOT settled by the decompile — `FUN_004686d0` returns sqrtf's float and
+`FUN_0026b4c0` stores an undefined4, with the XMM→GPR move invisible in the decompile. Rather than
+ship a guess, the clamp **decides per call from the stored value's own magnitude** (a real distance
+reads as 0.001..100000 as a float; as an int the same bits read ~1e9) and **logs which reading it
+saw on the first clamp per arming**. One log line settles it permanently.
+
+**Boundaries (all in `sneak_assist.h`, none negotiable):** default OFF; the unarmed path is the
+hook's FIRST branch, so the write is unreachable rather than skipped; effective ONLY where
+`PathDanger::MapHasRow` (the S106 table — map 568 today); and **no persistent game state is written**
+— the only write is the VM's return slot for the call being serviced, so toggling off restores
+vanilla on the very next check. Accepted limit, documented for the tester: `distance` is generic, so
+v1 clamps every call on a table map while armed; if a sequence ever stalls, F10 off. Map 569's catch
+is capture RECTS, so F10 does nothing there until 569 gets its own mechanism.
+
+Wiring reused rather than reinvented: `Hooks::InstallTyped` + a constexpr in `nav_rva.h` (no
+`mod_config.ini` involvement — that file belongs to the RVA validator); `ModMenu` row + `F10` through
+`ModMenu::CycleSetting`, so the value has exactly ONE place it changes, persists and is announced;
+phrasebook rows for the new strings (plan-approved wording — flag before rewording). `README.md`,
+`Docs\Controls.md` updated.
+
+**Verify next play:** F10 anywhere speaks the new state; on map 568 with it ON, the log shows
+`[SNEAK] clamp ACTIVE on map 568: script distance <d> -> 9999 (float|int slot)` once per arming and
+walking the corridor near a guard no longer triggers a capture; with it OFF, captures still happen
+(vanilla preserved) and no `SNEAK` clamp lines appear. S106's own verification greps still outstanding.

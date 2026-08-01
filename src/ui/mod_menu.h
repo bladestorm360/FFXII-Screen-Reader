@@ -51,6 +51,7 @@ enum class SettingId : int {
     TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
+    SneakAssist,          // S106: neutralise stealth-minigame catches. Default Off; see sneak_assist.h
     Count
 };
 
@@ -69,6 +70,9 @@ Verbosity CombatVerbosity();
 bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
+// S106: whether the sneak-assist clamp may fire. Read from the SCRIPT VM's thread inside a native
+// call, so it must stay a lock-free relaxed load like the rest of this family.
+bool SneakAssistOn();
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get
