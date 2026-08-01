@@ -7,6 +7,34 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### REFUTED TWICE — "an object's event table names the transition routine it fires" (S119 doors, S122/S123 rects)
+
+KEYWORDS: nameOff join event table object+0x48 name-pool offset transition routine movie rect
+ムービー開始位置 0x39A matches 0 map 572 map 569 door 0:57 template machinery touchon fires
+event-exit binder handlers not fired routines
+
+The S119 join (`ExitDest::nameOff` == an entry of a container-0 object's event table) is a sound
+MEASUREMENT but has never once bound a transition, and it has now been refuted as a binder for both
+object classes it was proposed for:
+
+- **Doors (S120):** 569's `[0:57]` runs the field-sign TEMPLATE (`init|talk|フィールドサインＯＫ…`);
+  the location jump lives inside that machinery. The template-SIGNATURE rule bound it instead.
+- **Rects (S122→S123, one play):** 572's movie rect never matched — `nameOff=0x39A matches 0
+  container-0 object(s)`, every scan of the visit.
+
+**An event table names the object's OWN handler routines (`init|touch|touchon|SET_RECT|…`), never
+the routines those handlers FIRE** — the transition routine is started from inside the handler's
+body (script-side event call), so the join misses by construction. It stays in
+`exit_event_bind.cpp` as the per-map measurement (its match-count line settled 572 in one play).
+**Do not propose it as a binder a third time without a map whose log shows it measuring 1.**
+
+What bound 572 instead (SOLVED, play-confirmed same day): **field-sign elimination** — the ONE
+unclaimed live group-0 `+0x70` record (`g0[1] (85.95,32.00,61.08) usable=1 shown=1`, the game's own
+exit arrow at the top of the Garden Stairs, doubled by `g1[2]` at the same position — S105's
+313-staircase placard pattern) paired 1:1 with the ONE unbound group-less event dest. The placard
+had been printing in the sign-table dump, with `shown=1` beside it, since the diagnostic shipped —
+the S101 unconsumed-instrument lesson, again.
+
 ### OPEN DEFECT — a routine shorter than 0x40 bytes is DROPPED WITHOUT EVER BEING READ (found Session 105)
 
 KEYWORDS: span unreadable 0x40 floor CODE_SPAN_MAX ReadExitDests map_script spansUnreadable short

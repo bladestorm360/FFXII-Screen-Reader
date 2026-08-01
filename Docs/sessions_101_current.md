@@ -1962,3 +1962,16 @@ fixed: a second dest surfacing flips the rule to decline, never to a different g
   dump of every container-0 object's position + event table on a gated map.
 - The join line still prints `matches 0` first — expected, it is the measurement, not the binder.
 - Any map that lists exits: **zero `event-exit:` and zero `field-sign elimination:` lines.**
+
+### PLAY-CONFIRMED (2026-08-01, same day) — 572 IS CLEARED
+
+**KEYWORDS ADDENDUM: 572 PLAY-CONFIRMED field-sign elimination works placard exit listed routed
+movie fired arrived 314 tester confirmed**
+
+Tester's verdict: **works.** The field-sign elimination listed the exit, the route led up the
+Garden Stairs to the placard at (85.95, 32.00, 61.08), and progression continued into the
+Garamsythe Waterway (314). Source 2 is the binder for this class; the nameOff join stays as the
+per-map measurement only (its refutation is recorded in debug.md, Tried & Failed). The never-widen
+gate held: no `event-exit:` / `field-sign elimination:` lines on any exit-listing map. Still open
+from this track: the 0x40 scan hole (dest-side counts are lower bounds until it is fixed), and the
+569 zero-exits backlog — both sources will print their counts on any 569 visit.
