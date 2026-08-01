@@ -398,19 +398,12 @@ void OnGameFrame() {
         }
     }
 
-    // DANGER ZONES (Session 106): map-specific, user-authorized, and ARMED PER TARGET -- ActiveZones
-    // matches (map, target) against its table and returns nothing for every other request, expressly
-    // including routes to the Palace Servant who stands beside the very guards the table names. Only
-    // a non-empty set is ever passed, so an unarmed search is byte-identical to a build without this.
-    // Rebuilt on every drain, so the discs track the guards as the distraction moves them.
-    std::vector<PathDanger::Disc> danger;
-    PathDanger::ActiveZones(static_cast<uint32_t>(MapNames::CurrentMapId()), target, danger);
-
+    // (Session 106's danger-zone argument was REVERTED in S108 -- it made map 568's Door 2
+    // unroutable. The zone table survives only as the F10 sneak-assist map whitelist.)
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
     PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st,
-                                         seamPolys.empty() ? nullptr : &seamPolys,
-                                         danger.empty() ? nullptr : &danger);
+                                         seamPolys.empty() ? nullptr : &seamPolys);
 
     const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
                          : (r == PathSearch::Plan::Frontier) ? "Frontier"

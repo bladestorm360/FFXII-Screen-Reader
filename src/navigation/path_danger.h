@@ -1,57 +1,37 @@
 #pragma once
 
-#include <vector>
-#include "navigation/nav_types.h"
+#include <cstdint>
 
-// Soft PENALTY ZONES around scripted danger actors, for maps whose story events punish proximity.
+// The MAP TABLE of scripted danger actors: which maps run a stealth minigame that punishes
+// proximity, and who does the watching.
 //
-// WHY THIS EXISTS (Session 106). Map 568's sneak minigame: the player calls the guard away and must
-// reach the stair door while he is distracted, but the script checks distance-to-the-soldier eight
-// times ("get too close and he's liable to notice you") and a catch turns the player back and
-// restarts the sequence. That notice radius exists ONLY as literals inside the story script -- no
-// volume, flag, or walkmap datum exposes it -- so the mesh cannot see it and the sweep will happily
-// validate a route straight past the soldier's nose.
+// WHAT THIS WAS, AND WHAT IT IS NOW (Session 108). It shipped in S106 as soft PENALTY ZONES for the
+// route search -- discs around the guards, priced so A* would route wide of them. **That was
+// REVERTED: it made map 568's Door 2 unroutable where it had worked.** The discs sat across the only
+// corridor to the stair, so instead of taking a wider berth the search bought its way onto ground
+// the party's class cannot stand on (`corridor paid terrain=8000` on every armed request) and the
+// route died in validation. A penalty is only a detour when a detour EXISTS; in a one-corridor room
+// it is just a bribe the search pays with the nearest wrong thing.
 //
-// THE MECHANISM IS GLOBAL, THE DATA IS PER-MAP, AND THE ARMING IS PER-TARGET:
-//   * A zone is a disc: crossings inside it pay a soft price (same tier as a measured block --
-//     avoided whenever an alternative exists, still crossable when it is the only way through).
-//     Never a cut, never part of validation: the body walk stays the sole authority on walkability.
-//   * The table below `ActiveZones` is USER-AUTHORIZED map-specific data (2026-07-31), keyed by the
-//     game's own identifiers (npcdic name index), never by anything invented here.
-//   * Zones arm ONLY when the route target IS the door the table names. Routing to anything else on
-//     the same map -- expressly including the Palace Servant who STARTS the event chain and stands
-//     beside these guards -- passes an empty set, and an empty set never reaches the search at all
-//     (the planner passes null), so every other route is byte-identical to a build without this file.
+// The table itself survives because two things still need it, neither of which touches routing:
+//   * SNEAK ASSIST (`sneak_assist.h`) uses it as the MAP WHITELIST -- F10 is inert on any map with
+//     no row here;
+//   * the capture-distance diagnostic below, which is log-only and measures what the game's own
+//     script considers "too close" so the numbers come from play rather than from an estimate.
 //
-// Positions are LIVE: the planner rebuilds the zone set on every request/replan (~2 s apart during a
-// run), so the discs follow the soldier as the distraction moves him. Radius/weight start as
-// conservative estimates and are tuned from the capture diagnostic below -- every real catch a
-// tester hits logs the measured distances, so the numbers converge on the script's own.
+// The reverted routing code is in `git show 1a6b9dc` if a future session wants to revisit it -- but
+// read the paragraph above first: the radius was not the only thing wrong with it.
 namespace PathDanger {
 
-struct Disc {
-    FVec3 c{};        // live actor position (world)
-    float r = 0.0f;   // metres
-    float w = 0.0f;   // metres of added cost for a crossing inside the disc
-};
-
-// Fill `out` with the zones for THIS request. Empty unless (mapId, target) matches a table entry
-// AND the named actors are currently listed. `target` is the route goal the player asked for.
-void ActiveZones(uint32_t mapId, const FVec3& target, std::vector<Disc>& out);
-
-// Does this map have a danger row at all? The table doubles as the map WHITELIST for sneak assist
-// (sneak_assist.h), which must be inert everywhere the project has not established a stealth
-// minigame. One linear scan of a tiny constexpr table; no allocation, no game reads.
+// Does this map have a danger row at all? One linear scan of a tiny constexpr table; no allocation,
+// no game reads, safe from any thread.
 bool MapHasRow(uint32_t mapId);
 
-// Sum of `w` over zones containing `p` (XZ disc test -- the script's own check is horizontal).
-float PenaltyAt(const std::vector<Disc>& zones, const FVec3& p);
-
 // Capture-distance diagnostic (log-only). Called once per game frame from the planner's field tick;
-// does nothing unless the CURRENT map has a table entry, so every other map pays one int compare.
-// A field-tick gap > 600 ms is a scripted scene (the catch is one); when the tick resumes this logs
-// the player's pre-gap position and the distances to the table's actors, so each tester capture
-// refines the radius from real data. One line per gap, tag DANGER.
+// does nothing unless the CURRENT map has a table row, so every other map pays one int compare.
+// A field-tick gap > 600 ms is a scripted scene (a capture is one); when the tick resumes this logs
+// the player's pre-gap position and the distances to the table's actors, so each real capture
+// measures the game's own notice radius. One line per gap, tag DANGER.
 void NoteFieldFrame();
 
 } // namespace PathDanger

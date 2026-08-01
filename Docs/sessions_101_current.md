@@ -625,3 +625,48 @@ the six unresolved sites to the seconds they are needed.
 the ORIGINAL distance is small (below ~25 m). Any check of the form "too far ⇒ force something" fires
 on a LARGE value, so leaving large values untouched removes that entire class from the blast radius,
 while the capture test (which fires small) is still defeated.
+
+## Session 108 — 2026-08-01 — [navigation] REVERT the S106 pathing; the toggles stay
+
+**KEYWORDS: revert danger zones penalty disc Door 2 unroutable corridor paid terrain=8000 no route
+map 568 sneak assist F10 kept MapHasRow whitelist re-attribution reverted d18943e 1a6b9dc partial
+revert one-corridor room a penalty is only a detour when a detour exists**
+
+Tester deployed S106+S107 and reported: **no path to Door 2, where it had worked before.** Both S106
+pathing commits are OUT. **Sneak assist (F10, S107) is UNAFFECTED and stays.**
+
+**The log named the mechanism, and it is worth keeping.** On every armed request:
+
+```
+[DANGER] zones armed: map 568 target-door matched; 2 disc(s) r=9.0 (20.8,-8.0,125.1) (19.4,-8.0,126.2)
+[NAV-ROUTE] costed: ... terrain=457 foreignSeam=7 danger=29 ... | corridor paid terrain=8000 other=500
+[NAV-ROUTE] drain seq=1: target="Door 2" ... plan=Frontier legs=4
+[NAV-ROUTE] FRONTIER SUPPRESSED for "Door 2" -- 4 legs reaching 4.8m short; spoken as No path
+```
+
+> **A PENALTY IS ONLY A DETOUR WHEN A DETOUR EXISTS.** The guards stand in the ONLY corridor to the
+> stair, so the discs did not push the route wide — there was no wide. The search did what a soft
+> cost tells it to do and bought its way out through the next-cheapest thing available, which was
+> **ground the party's own floor class cannot stand on** (`corridor paid terrain=8000` = four
+> kTerrainPenalty crossings). That corridor then failed validation, and the honest frontier was
+> suppressed as designed. **The S96 lesson ("nothing severs the graph; everything difficult is
+> expensive") does not license pricing the only way through: in a one-corridor room a price and a
+> cut are the same move with extra steps.** The 9 m radius estimate made it worse, but the radius
+> was not the defect — the placement was.
+
+Also measured: **the S106 re-attribution never fired** (`re-attributed by the sweep stop`: zero
+occurrences). The late `pass=no-frontier` failures show `attempts=1 banned=0`, i.e. they break
+BEFORE the re-cost step, so that fix addressed a case the log does not actually contain. Reverted
+too — an unexercised change on a hot path is cost without evidence.
+
+**What was done.** `d18943e` = `git revert 01b7746` (clean, self-contained). The danger zones were
+PARTIALLY reverted rather than `git revert 1a6b9dc`, because S107's sneak assist depends on the
+table: `Disc`/`ActiveZones`/`PenaltyAt`, the `PathSearch::Run` parameter, the pricing block, the
+`danger=` counter and the planner's arming are all gone; `PathDanger::MapHasRow` (the F10 map
+whitelist) and the log-only `scene-gap` capture diagnostic remain, with the table trimmed to
+`{mapId, nameIdx}`. `EntityList::CollectPositionsByNameIdx` stays — the diagnostic uses it.
+
+**Verify next play:** map 568 Door 2 routes again as it did before S106; no `zones armed:` or
+`danger=` lines anywhere; `[SNEAK] script-distance hook installed` still present at startup and F10
+still speaks its state. The S106 memory entry and MEMORY.md were corrected — the danger zones must
+not be remembered as shipped.
