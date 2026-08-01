@@ -43,6 +43,11 @@ const Row* RowForMap(uint32_t mapId) {
 
 bool MapHasRow(uint32_t mapId) { return RowForMap(mapId) != nullptr; }
 
+int16_t DangerNameIdx(uint32_t mapId) {
+    const Row* r = RowForMap(mapId);
+    return r ? r->nameIdx : static_cast<int16_t>(-1);
+}
+
 void NoteFieldFrame() {
     // One int compare on every map without a row -- the early-out that keeps this free.
     const Row* row = RowForMap(static_cast<uint32_t>(MapNames::CurrentMapId()));

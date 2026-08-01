@@ -465,6 +465,26 @@ int CollectPositionsByNameIdx(int16_t nameIdx, std::vector<FVec3>& out) {
     return static_cast<int>(out.size());
 }
 
+int CollectSceneObjectsByNameIdx(int16_t nameIdx, void** out, int cap) {
+    if (!out || cap <= 0) return 0;
+    int n = 0;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (const EntityScan::Entity& e : g_entities) {
+        if (e.nameIdx != nameIdx || !e.sceneObj) continue;
+        out[n++] = e.sceneObj;
+        if (n >= cap) break;
+    }
+    return n;
+}
+
+std::wstring LabelForSceneObject(void* sceneObj) {
+    if (!sceneObj) return std::wstring();
+    std::lock_guard<std::mutex> lk(g_mutex);
+    for (const EntityScan::Entity& e : g_entities)
+        if (e.sceneObj == sceneObj) return e.label;
+    return std::wstring();
+}
+
 // `` ` `` object dump. The walk itself is in entity_diag.cpp; the lock stays here, with the list it
 // protects, because the dump reads live game tables and must not race a rescan.
 void LogDiagnostic() {

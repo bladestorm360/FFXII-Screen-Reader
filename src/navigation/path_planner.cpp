@@ -5,6 +5,7 @@
 #include "navigation/nav_mesh.h"
 #include "navigation/path_search.h"
 #include "navigation/path_danger.h"
+#include "navigation/sneak_assist.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/nav_reach.h"
 #include "navigation/nav_trace.h"
@@ -218,6 +219,9 @@ void OnGameFrame() {
     // a danger-table row; on table maps it logs the pre-gap player position and actor distances when
     // a scripted scene (a catch, among others) hands control back. See path_danger.h.
     PathDanger::NoteFieldFrame();
+    // Refresh which scene objects are this map's guards, so the touch-test override can answer per
+    // object (S113). One table lookup and a store while disarmed, which is almost always.
+    SneakAssist::OnFieldFrame();
     // Advance the per-map reachability fill BEFORE the pending-request check: it is bounded work that has
     // to make progress whether or not anyone asked for a route, because the exit list filters on it. Once
     // the component is closed this is a couple of atomic loads.

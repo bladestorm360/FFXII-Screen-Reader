@@ -108,4 +108,18 @@ void LogDiagnostic();
 // during the very window the route must avoid them in.
 int CollectPositionsByNameIdx(int16_t nameIdx, std::vector<FVec3>& out);
 
+// SCENE-OBJECT POINTERS for every listed entity whose npcdic name index equals `nameIdx`, written
+// into `out` (at most `cap`); returns how many were written. The identity a hook can compare
+// against — `Entity::sceneObj` is stable for the life of the map.
+//
+// Added for sneak assist (S113), which must answer "is THIS object one of the map's guards?" from
+// inside the game's own trigger test, tens of times per frame. Pointers, not positions, because the
+// question is identity and identity must not be re-derived from geometry.
+int CollectSceneObjectsByNameIdx(int16_t nameIdx, void** out, int cap);
+
+// The label the scan gave a scene object, or empty when it is not listed (unnamed rect actors, and
+// anything the handle-table walk filtered). Diagnostic use only — it is what lets a log line name
+// the object that reported a touch instead of printing a bare pointer.
+std::wstring LabelForSceneObject(void* sceneObj);
+
 } // namespace EntityList

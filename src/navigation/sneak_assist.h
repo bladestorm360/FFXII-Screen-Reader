@@ -56,6 +56,11 @@ bool AvailableHere();
 // True when the toggle is on AND the current map is covered — i.e. the clamp would actually fire.
 bool ArmedHere();
 
+// GAME THREAD, once per field tick. Refreshes the snapshot of WHICH scene objects are this map's
+// guards, which is what lets the touch-test override answer per OBJECT instead of per map. Costs a
+// table lookup and one store while the toggle is off or the map has no row — i.e. almost always.
+void OnFieldFrame();
+
 // GAME THREAD, from the field-teardown hook. **Forces the toggle OFF on every map change** (S109,
 // user instruction), silently and persistently, so the feature can never carry into a map it was
 // not authorized for because a player forgot to switch it off. Arming is therefore always a

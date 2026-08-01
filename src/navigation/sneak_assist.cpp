@@ -8,10 +8,13 @@
 
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "navigation/entity_list.h"
 #include "navigation/map_names.h"
 #include "navigation/nav_rva.h"
 #include "navigation/path_danger.h"
 #include "ui/mod_menu.h"
+
+#include <string>
 
 namespace SneakAssist {
 namespace {
@@ -50,6 +53,34 @@ std::atomic<bool>     s_loggedFirstCall{false};
 // evidence would be O(frames). This suppresses a LOG line, never speech (CLAUDE.md's log-volume
 // exception -- the per-frame producer is the map script's own watcher routine).
 std::atomic<bool> s_loggedThisArming{false};
+
+// ---- THE GUARDS' OWN TRIGGER VOLUME (S113) ------------------------------------------------------
+// FUN_002677f0(object, mode) answers "is the party LEADER inside THIS object's volume?" and is the
+// shared choke point under both of the script's touch tests -- the instant one and the 21 waiting
+// ones. Clamping `distance` alone was not enough: it stretched the distraction window from 4-7
+// seconds to 3m02s, and then the sequence still ended, because this is the second catch path.
+//
+// IT IS ANSWERED PER OBJECT, WHICH IS THE WHOLE POINT. `object` is param_1, so the guards can be
+// silenced while every other trigger volume on the map -- doors, event rects, the servant's own
+// conversation triggers, the advance-urging rects -- keeps answering truthfully. A map-wide
+// suppression would risk stopping the sequence from starting at all; this cannot.
+using TouchTestFn = bool(__fastcall*)(void*, int);
+TouchTestFn s_origTouch = nullptr;
+
+// Snapshot of the current map's danger actors, refreshed on the field tick. Read from the VM thread
+// inside a test the script polls tens of times a frame, so it must not take a lock: a tiny fixed
+// array plus a relaxed count, and a stale entry can only mean one frame of vanilla behaviour.
+constexpr int kMaxGuards = 8;
+void*                 s_guards[kMaxGuards] = {};
+std::atomic<int>      s_guardN{0};
+std::atomic<bool>     s_loggedSuppress{false};
+
+bool IsGuardObject(void* obj) {
+    const int n = s_guardN.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < kMaxGuards; ++i)
+        if (s_guards[i] == obj) return true;
+    return false;
+}
 
 bool ToggleOn() { return ModMenu::SneakAssistOn(); }
 
@@ -147,10 +178,85 @@ void __fastcall HookedScriptDistance(void* ctx, void* a2, void* a3, void* vm) {
     }
 }
 
+// The FALSIFIER (log-only). The capture volume may not belong to the guard NPCs at all -- map 569's
+// own actor names include `捕獲レクト兵士` ("capture rect soldier"), and a rect actor carries no
+// npcdic name, so the entity scan cannot see it and the rule above would never match it. Every
+// OTHER object that reports the leader inside it, while armed on a danger map, is logged once. If a
+// capture still happens, this names the object that caused it -- one table entry, not another
+// guessing round. Deliberately does NOT suppress: an unnamed object may be a story rect, and
+// silencing one could stop the sequence starting.
+void*             s_touchedSeen[16] = {};
+std::atomic<int>  s_touchedN{0};
+
+void NoteTouchingObject(void* object, int mode) {
+    int n = s_touchedN.load(std::memory_order_relaxed);
+    for (int i = 0; i < n && i < 16; ++i) if (s_touchedSeen[i] == object) return;
+    if (n >= 16) return;
+    s_touchedSeen[n] = object;
+    s_touchedN.store(n + 1, std::memory_order_relaxed);
+    char m[224];
+    snprintf(m, sizeof(m),
+             "touch REPORTED on map %d by a NON-guard object (obj=%p, mode=%d) -- left alone. If a "
+             "capture happened around now, this is the candidate to add to the danger table",
+             MapNames::CurrentMapId(), object, mode);
+    Log::Write("SNEAK", m);
+    const std::wstring label = EntityList::LabelForSceneObject(object);
+    if (!label.empty()) Log::WriteW("SNEAK", "  object is: ", label);
+}
+
+bool __fastcall HookedTouchTest(void* object, int mode) {
+    // Cheapest first: with the toggle off this is one relaxed load and a tail call, so the override
+    // is unreachable rather than merely skipped -- the same shape as the distance clamp.
+    if (!ToggleOn()) return s_origTouch ? s_origTouch(object, mode) : false;
+    // The snapshot IS the map gate: it is only ever populated on a map PathDanger names, so an
+    // empty one means "nothing here is a guard" and costs a single acquire load.
+    if (s_guardN.load(std::memory_order_acquire) == 0)
+        return s_origTouch ? s_origTouch(object, mode) : false;
+
+    const bool inside = s_origTouch ? s_origTouch(object, mode) : false;
+    if (!inside) return false;                       // nothing to hide; the common case
+
+    if (!IsGuardObject(object)) { NoteTouchingObject(object, mode); return inside; }
+
+    // A GUARD'S OWN VOLUME, and the leader is in it. Answer no. Every other trigger on the map --
+    // doors, event rects, the servant's conversation triggers -- answered truthfully above.
+    if (!s_loggedSuppress.exchange(true, std::memory_order_relaxed)) {
+        char m[224];
+        snprintf(m, sizeof(m),
+                 "touch SUPPRESSED on map %d for a danger actor (obj=%p, mode=%d) -- the guard's own "
+                 "volume reported the leader inside and was answered no; first suppression this "
+                 "arming, later ones are silent (the script polls this every frame)",
+                 MapNames::CurrentMapId(), object, mode);
+        Log::Write("SNEAK", m);
+        const std::wstring label = EntityList::LabelForSceneObject(object);
+        if (!label.empty()) Log::WriteW("SNEAK", "  suppressed object is: ", label);
+    }
+    return false;
+}
+
 } // namespace
+
+void OnFieldFrame() {
+    // GAME THREAD, once per field tick. Off a danger map -- every map but one today -- this is a
+    // table lookup and a store of 0, after which the touch hook can never match anything.
+    //
+    // Only refreshed while ARMED: with the toggle off there is nothing to publish, and the guards
+    // move (that is the whole minigame), so a snapshot taken once would go stale. Pointers, not
+    // positions, so a moving actor does not invalidate it -- only despawning does.
+    if (!ToggleOn()) { s_guardN.store(0, std::memory_order_release); return; }
+    const int16_t nameIdx = PathDanger::DangerNameIdx(static_cast<uint32_t>(MapNames::CurrentMapId()));
+    if (nameIdx < 0) { s_guardN.store(0, std::memory_order_release); return; }
+    void* found[kMaxGuards] = {};
+    const int n = EntityList::CollectSceneObjectsByNameIdx(nameIdx, found, kMaxGuards);
+    for (int i = 0; i < n && i < kMaxGuards; ++i) s_guards[i] = found[i];
+    s_guardN.store(n, std::memory_order_release);   // publish AFTER the pointers are written
+}
 
 bool Init() {
     ForceOffAtStartup();
+    const bool okTouch = Hooks::InstallTyped(NavRva::TOUCH_TEST, &HookedTouchTest, &s_origTouch);
+    Log::Write("SNEAK", okTouch ? "touch-test hook installed (the guards' own trigger volume)"
+                                : "touch-test hook FAILED to install -- guards will still notice you");
     const bool ok = Hooks::InstallTyped(NavRva::SCRIPT_DISTANCE, &HookedScriptDistance, &s_orig);
     s_installed.store(ok, std::memory_order_release);
     Log::Write("SNEAK", ok ? "script-distance hook installed (sneak assist available; default OFF)"
@@ -186,6 +292,11 @@ void OnMapTeardown() {
     // Unconditional: read the toggle, and if it is on, put it back off. Checked on EVERY teardown
     // rather than only when leaving a covered map, because the state that matters is "armed while
     // the player walks into somewhere new", and a map load is exactly where that would happen.
+    // The snapshot and both log latches belong to the map being left. Cleared unconditionally, so a
+    // stale scene-object pointer can never be matched against an object on the next map.
+    s_guardN.store(0, std::memory_order_release);
+    s_touchedN.store(0, std::memory_order_relaxed);
+    s_loggedSuppress.store(false, std::memory_order_relaxed);
     if (!ModMenu::SneakAssistOn()) return;
     ModMenu::SetSilently(ModMenu::SettingId::SneakAssist, 0);
     s_loggedThisArming.store(false, std::memory_order_relaxed);

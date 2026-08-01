@@ -693,6 +693,21 @@ constexpr uint32_t FIELD_TEARDOWN    = 0x1495A0;  // FUN_002695a0 (returns void)
 // off by one slot, which is the standing "resolve natives by BEHAVIOUR" rule again.
 // Signature: void(ctx, _, _, vmState) -- MS x64 RCX/RDX/R8/R9.
 constexpr uint32_t SCRIPT_DISTANCE   = 0x2248F0;  // FUN_003448f0 (ABS 0x3448f0)
+// FUN_002677f0(object, mode) -> bool: **"is the party LEADER inside THIS object's volume?"** —
+// the shared choke point under BOTH of the script's touch tests, which is what makes a per-object
+// override possible at all (Session 113):
+//   * native `0x26D` (instant)  -> FUN_0033fa40 -> FUN_002677f0(param_2, popped_mode)
+//   * native `0x525` (waiting)  -> FUN_003407c0 (enter, stores the mode) / FUN_00340bc0 (poll)
+//                                  -> FUN_002677f0(param_2, *param_3)
+// Body: leader via FUN_003590d0 -> FUN_003588b0; party-slot bit `1 << leader[0x12]`; tested against
+// a mask at `*(object+0xB8) + 0x60` (kind 1) or `+0x100` / `+0x228` (kind 3, by mode) — the same
+// `+0xB8` scene transform the entity scan reads. `object` is param_1, so a caller can be answered
+// per-object without touching any other trigger on the map.
+//
+// Map 568 uses `0x26D` x4 and `0x525` x21; `0x290` (distance) x8 is the other catch path. There is
+// no distance3d / checkdistance3d / waitdistance3d in that script, so those two natives plus this
+// function are the whole detection surface. Signature: bool(void* object, int mode).
+constexpr uint32_t TOUCH_TEST        = 0x1477F0;  // FUN_002677f0 (ABS 0x2677f0)
 // Liveness globals for IsFieldNavSafe(). The FIELD_ACTIVE 0x10 bit alone is NOT safe:
 // it is set early on load (before area collision + world are ready) and cleared late
 // on teardown (after they are freed). These back it up (DAT_02b5e0c0 is the earliest

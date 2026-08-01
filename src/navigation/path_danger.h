@@ -27,6 +27,11 @@ namespace PathDanger {
 // no game reads, safe from any thread.
 bool MapHasRow(uint32_t mapId);
 
+// The npcdic name index of this map's watching actors, or -1 when the map has no row. Sneak assist
+// resolves it to live scene objects so it can silence the guards' own trigger volume and nothing
+// else on the map (S113).
+int16_t DangerNameIdx(uint32_t mapId);
+
 // Capture-distance diagnostic (log-only). Called once per game frame from the planner's field tick;
 // does nothing unless the CURRENT map has a table row, so every other map pays one int compare.
 // A field-tick gap > 600 ms is a scripted scene (a capture is one); when the tick resumes this logs

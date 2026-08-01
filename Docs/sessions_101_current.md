@@ -814,3 +814,56 @@ the panel open settles it.
 - **S111's retry fix works**: `drain seq=21: target="Door 2" from=(20.73,-8.00,127.99) plan=Route
   legs=18` — a full route from the exact coordinate that answered `NoPath` before it. Other start
   positions still fail; that work is not finished.
+
+## Session 113 — 2026-08-01 — [navigation] The guards' own trigger volume, silenced per OBJECT
+
+**KEYWORDS: sneak assist touch test FUN_002677f0 RVA 0x1477F0 native 0x26D 0x525 FUN_0033fa40
+FUN_00340bc0 FUN_003407c0 leader slot bit object+0xB8 +0x60 +0x100 +0x228 per-object suppression
+guard npcdic 694 scene object identity falsifier capture rect soldier map 568 writes no flags**
+
+**The tester's requirement, and every alternative was already refuted in play:** hear where the
+guards are (impossible — stereo panning, camera-relative), route around them (refuted — S106's
+zones made Door 2 unroutable), avoid bumping them (impossible — two moving guards in a room of
+servants). **So the guards' notice has to go.**
+
+**The distance clamp was necessary but NOT sufficient.** It works — the log proves the write
+(`script distance 5.25 -> 9999 (float slot)`) and the window went from **4–7 s to 3 m 02 s** — and
+then the sequence still ended. Map 568 has a second catch path.
+
+### The second path, measured
+
+Besides `distance` (`0x290` ×8) the script uses exactly two trigger natives — the instant touch test
+(**`0x26D`** ×4, `FUN_0033fa40`) and the waiting one (**`0x525`** ×21, `FUN_003407c0`/`FUN_00340bc0`)
+— and **both funnel into ONE function, `FUN_002677f0(object, mode)` (RVA `0x1477F0`)**: leader via
+`FUN_003590d0`/`FUN_003588b0`, party-slot bit `1 << leader[0x12]`, tested against a mask at
+`*(object+0xB8) + 0x60 | 0x100 | 0x228` — **"is the leader inside THIS object's volume?"** The map's
+`recttocircle` ×3 makes those volumes circles around actors. **No `distance3d` / `checkdistance3d` /
+`waitdistance3d` anywhere in the file**, so `0x290` + this function are the entire detection surface.
+
+> **THE OBJECT UNDER TEST IS `param_1`, AND THAT IS WHAT MAKES THIS SAFE.** The guards are silenced
+> by IDENTITY — their scene objects, resolved from the game's own npcdic name index in the existing
+> per-map table — while every other trigger volume on the map answers truthfully: doors, event
+> rects, the servant's conversation triggers, the advance-urging rects. **A map-wide suppression
+> would have risked stopping the sequence from starting; per-object cannot.**
+
+### Why no event flag can be lost
+
+**Map 568 writes NO story flags.** The sequence's flags are `setquestscenarioflag(4,40)` and `(4,70)`
+and both live in `rrp_a03.ebp` — **map 569, after arrival**. Nothing on 568 records success or
+failure, so the only thing that matters is reaching the door.
+
+### The falsifier ships with it (tester chose the conservative rule)
+
+The capture volume may belong to an **unnamed rect actor** rather than the guard NPCs — 569's own
+names include `捕獲レクト兵士` ("capture rect soldier") and rect actors carry no npcdic name, so the
+identity rule would miss them. Every OTHER object that reports the leader inside it, while armed, is
+**logged once and left alone**. An unnamed object may be a story rect; silencing one could stop the
+sequence. If a capture still happens, the log names the culprit and it becomes one table entry.
+
+### Verify next play (armed on 568)
+
+`touch SUPPRESSED … for a danger actor` naming the guard object; walking into a guard during the
+distraction produces **no** capture and no retry line ("You...weren't the swiftest pup in the
+litter"); `Wait here until I've further directions` does not re-fire while the window is open; the
+servant still starts the chain and the shout still works; `CROSSING ORACLE` prints `568 -> 569`.
+With the toggle OFF, captures happen exactly as vanilla. Routing untouched this session.
