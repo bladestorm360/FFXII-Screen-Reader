@@ -733,6 +733,17 @@ constexpr uint32_t TOUCH_TEST        = 0x1477F0;  // FUN_002677f0 (ABS 0x2677f0)
 // engine's own "no event slot free" answer, which is what the mod returns when it declines a fire.
 // Signature: int(void* object, u32 kind, u32 routineIdx, int mode, int flag) -- MS x64, 5th on stack.
 constexpr uint32_t EVENT_FIRE        = 0x2BBB60;  // FUN_003dbb60 (ABS 0x3dbb60)
+// FUN_0025c830(container, object) -> void: the per-object TRIGGER-VOLUME UPDATE described above.
+// Single caller (`FUN_0025c230`'s object loop), return value used nowhere.
+//
+// HOOKED ONLY AS A SCOPE MARKER, and that is a containment decision, not a behavioural one.
+// `FUN_003dbb60` has ~20 call sites and they are not all trigger volumes: `FUN_00269640` /
+// `FUN_00269860` start conversation events, and `FUN_00269a90` / `FUN_00269ba0` / `FUN_00266530` are
+// reached with a `param_5` the volume path never passes. A routine the SCRIPT asks for must run --
+// suppressing, say, a `捕獲監視監督` ("capture watch supervisor") that the map's own setup starts
+// could stall the sequence instead of saving it. Marking this function's extent makes "the fire came
+// from a trigger volume the player walked into" a fact rather than an inference from the kind byte.
+constexpr uint32_t TRIGGER_UPDATE    = 0x13C830;  // FUN_0025c830 (ABS 0x25c830)
 // Liveness globals for IsFieldNavSafe(). The FIELD_ACTIVE 0x10 bit alone is NOT safe:
 // it is set early on load (before area collision + world are ready) and cleared late
 // on teardown (after they are freed). These back it up (DAT_02b5e0c0 is the earliest

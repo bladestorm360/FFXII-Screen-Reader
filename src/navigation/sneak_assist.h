@@ -33,10 +33,16 @@
 //     against the script container's routine count, which is what proves it indexes the table
 //     `MapScript::RoutineNameAt` reads. "Do not start a routine the author named `捕獲`" is a GLOBAL
 //     rule: it matches 568's one capture routine and 569's twelve with no map id in it.
+//   * ONLY A TRIGGER VOLUME'S FIRE MAY BE DECLINED. `FUN_003dbb60` also starts conversation events
+//     and script-side event calls, and its `kind` byte does not separate them, so `FUN_0025c830` is
+//     hooked as a pure SCOPE MARKER (two thread-local stores around a passthrough) and only fires
+//     issued inside its extent are candidates. **A routine the SCRIPT asks for must run** -- declining
+//     a `捕獲監視監督` ("capture watch supervisor") the map's own setup starts would stall the
+//     sequence rather than save it.
 //   * IT FAILS OPEN. An unreadable blob, an out-of-range index, or a name that does not match all
 //     take the original path. If the model is wrong the build behaves exactly as today, and the log
-//     line -- which prints the index and the raw name bytes for EVERY fire on a table map, matched or
-//     not -- is the falsifier.
+//     line -- which prints the index, the source and the raw name bytes for EVERY fire on a table
+//     map, matched or not -- is the falsifier.
 //
 // WHY S115's CENSUS ALREADY SAID THIS AND THE FILE CLAIMED 569 COVERED ANYWAY: `rrp_a03` contains
 // ZERO `0x26D` and ZERO `0x525`, the natives that funnel into `FUN_002677f0`. A census that says a

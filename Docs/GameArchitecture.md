@@ -2224,8 +2224,9 @@ trusting anything below it.**
   > there. **A choke point is only a choke point for the paths that reach it.** 569's catch is the
   > ENGINE-side trigger update below, which never enters the script VM at all.
 
-- **`FUN_0025c830(container, object)` — THE PER-OBJECT TRIGGER-VOLUME UPDATE, and the writer of the
-  mask `FUN_002677f0` reads (Session 117).** Confidence 0.98. It zeroes `*(u32*)(*(object+0xB8)+0x60)`
+- **`FUN_0025c830(container, object)` (RVA `0x13C830`) — THE PER-OBJECT TRIGGER-VOLUME UPDATE, and the
+  writer of the mask `FUN_002677f0` reads (Session 117).** Confidence 0.98. Single caller
+  (`FUN_0025c230`'s object loop); return value used nowhere. It zeroes `*(u32*)(*(object+0xB8)+0x60)`
   at entry, walks the FOUR party actors at `DAT_0209a1f0` against the volume (OBB math via
   `FUN_0025a8e0` / `FUN_003da5a0`), ORs each occupying slot's bit back into that word, and then fires
   the object's own routines through `FUN_003dbb60`:
@@ -2247,9 +2248,14 @@ trusting anything below it.**
   index against the object's script container's ROUTINE COUNT, which is what establishes that
   `routineIdx` indexes the same routine table `MapScript` reads (`hdr+0x18` / name pool `hdr+0x4C`).
   Returns 1 when the caller should continue (`FUN_0025c830` bails on anything else); **2** is the
-  engine's own "no event slot free". ~20 call sites — interactions and conversations use it too, so
-  anything hooking it must gate hard. Consumed by SNEAK ASSIST, which declines a fire whose routine
-  the map named `捕獲`; see `src/navigation/sneak_assist.h`.
+  engine's own "no event slot free". **~20 call sites and they are NOT all trigger volumes:**
+  `FUN_00269640` / `FUN_00269860` start conversation events, and `FUN_00269a90` / `FUN_00269ba0` /
+  `FUN_00266530` / `FUN_00266c50` are script-side event calls reached with a `param_5` the volume path
+  never passes. The `kind` byte does not separate them — it is a per-object event-slot selector and
+  the ranges overlap. **The only sound discriminator is the CALLER**, which is why sneak assist hooks
+  `FUN_0025c830` as a scope marker rather than filtering on `kind`. Consumed by SNEAK ASSIST, which
+  declines a trigger-volume fire whose routine the map named `捕獲`; see
+  `src/navigation/sneak_assist.h`.
 
 - **WHICH NATIVE TABLE DUMP TO BELIEVE (Session 117, and one wrong claim came out of the other).**
   `..\FFXII-Decompile\output\action_binding_tables.txt` is the **VALIDATED** CALLACT table: selector 0,

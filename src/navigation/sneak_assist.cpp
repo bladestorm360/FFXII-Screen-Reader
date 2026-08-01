@@ -272,6 +272,27 @@ bool __fastcall HookedTouchTest(void* object, int mode) {
 using EventFireFn = int(__fastcall*)(void*, uint32_t, uint32_t, int, int);
 EventFireFn s_origFire = nullptr;
 
+// ONLY A FIRE THAT CAME FROM A TRIGGER VOLUME MAY BE DECLINED, and this makes that a fact rather than
+// a guess at the kind byte. `FUN_003dbb60` has ~20 call sites and they are not all volumes --
+// conversation starts (`FUN_00269640`/`FUN_00269860`) and script-side event calls
+// (`FUN_00269a90`/`FUN_00269ba0`/`FUN_00266530`) go through it too. **A routine the SCRIPT asks for
+// must run:** if the map's own setup starts `捕獲監視監督` ("capture watch supervisor"), declining it
+// would stall the sequence rather than save it. So the trigger update is bracketed and only fires
+// issued inside it are candidates. Game thread on both sides; the flag is thread-local, so nothing
+// else can observe or race it.
+using TriggerUpdateFn = void(__fastcall*)(void*, void*);
+TriggerUpdateFn s_origTrigger = nullptr;
+thread_local bool t_inTriggerUpdate = false;
+
+void __fastcall HookedTriggerUpdate(void* container, void* object) {
+    // Unconditional and map-independent -- two stores around a passthrough. Gating it on the danger
+    // table would cost a table scan per trigger object per frame to save one bool.
+    const bool prev = t_inTriggerUpdate;
+    t_inTriggerUpdate = true;
+    if (s_origTrigger) s_origTrigger(container, object);
+    t_inTriggerUpdate = prev;
+}
+
 // `捕獲` ("capture") in Shift-JIS, the encoding the name pool stores. This is the GAME's word for its
 // own fail branch, read out of the game's own script -- not a mod-authored label, and never spoken.
 constexpr char kCaptureMarker[] = "\x95\xDF\x8A\x6C";
@@ -347,20 +368,27 @@ int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx,
         return s_origFire ? s_origFire(object, kind, routineIdx, mode, flag) : kFireDeclined;
 
     std::string name;
-    const bool capture = IsCaptureRoutine(routineIdx, name);
+    const bool fromVolume = t_inTriggerUpdate;
+    const bool capture    = IsCaptureRoutine(routineIdx, name);
+    const bool suppress   = capture && fromVolume;
 
+    // EVERY fire on a table map is logged, matched or not, suppressed or not -- that is the falsifier.
+    // "the index space is not the routine table's" and "this volume is not a capture" would otherwise
+    // print identically, and so would "the capture came from somewhere other than a trigger volume".
     if (NoteFireOnce(kind, routineIdx)) {
-        char m[288];
+        char m[320];
         snprintf(m, sizeof(m),
-                 "event fire on map %d: obj=%p kind=%u routine=%u name=\"%s\" -- %s",
+                 "event fire on map %d: obj=%p kind=%u routine=%u src=%s name=\"%s\" -- %s",
                  MapNames::CurrentMapId(), object, kind, routineIdx,
+                 fromVolume ? "trigger-volume" : "script/other",
                  name.empty() ? "<unreadable>" : NameForLog(name).c_str(),
-                 capture ? "CAPTURE, SUPPRESSED (the routine the map's own author named a capture)"
-                         : "passed through");
+                 suppress ? "CAPTURE, SUPPRESSED (the routine the map's own author named a capture)"
+                 : capture ? "capture routine, but NOT from a trigger volume -- passed through"
+                           : "passed through");
         Log::Write("SNEAK", m);
     }
 
-    if (capture) return kFireDeclined;
+    if (suppress) return kFireDeclined;
     return s_origFire ? s_origFire(object, kind, routineIdx, mode, flag) : kFireDeclined;
 }
 
@@ -389,6 +417,13 @@ bool Init() {
     const bool okTouch = Hooks::InstallTyped(NavRva::TOUCH_TEST, &HookedTouchTest, &s_origTouch);
     Log::Write("SNEAK", okTouch ? "touch-test hook installed (the guards' own trigger volume)"
                                 : "touch-test hook FAILED to install -- guards will still notice you");
+    // The scope marker goes in FIRST: an event-fire hook without it would have no way to tell a
+    // trigger volume's fire from one the script asked for, and only the first may be declined.
+    const bool okTrig = Hooks::InstallTyped(NavRva::TRIGGER_UPDATE, &HookedTriggerUpdate,
+                                            &s_origTrigger);
+    Log::Write("SNEAK", okTrig
+        ? "trigger-volume scope marker installed (only fires issued inside it may be declined)"
+        : "trigger-volume scope marker FAILED to install -- no fire will be declined at all");
     const bool okFire = Hooks::InstallTyped(NavRva::EVENT_FIRE, &HookedEventFire, &s_origFire);
     Log::Write("SNEAK", okFire
         ? "event-fire hook installed (a trigger volume starting a routine -- map 569's catch, which "

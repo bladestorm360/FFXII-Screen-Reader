@@ -1445,6 +1445,17 @@ unmatched name all take the original path — and it logs every fire on a table 
 with the raw name bytes, so "the index space is not this table's" and "this volume is not a capture"
 cannot print identically.
 
+**ONLY A TRIGGER VOLUME'S FIRE MAY BE DECLINED, and that is made a fact rather than inferred from the
+kind byte.** `FUN_003dbb60` has ~20 call sites and they are not all volumes — `FUN_00269640` /
+`FUN_00269860` start conversation events, `FUN_00269a90` / `FUN_00269ba0` / `FUN_00266530` are
+script-side event calls reached with a `param_5` the volume path never passes. **A routine the SCRIPT
+asks for must run:** declining a `捕獲監視監督` ("capture watch supervisor") that the map's own setup
+starts would stall the sequence rather than save it. So `FUN_0025c830` (RVA `0x13C830`) is hooked as a
+pure SCOPE MARKER — two thread-local stores around a passthrough, no behaviour of its own — and only
+fires issued inside its extent are candidates. The log line carries `src=trigger-volume` or
+`src=script/other` either way, so a capture routine that arrives by the other path is visible instead
+of being silently suppressed or silently missed.
+
 ### 2. THE NATIVE TABLE THAT WAS BEING QUOTED IS THE WRONG ONE — `seteventwakerect` STRUCK
 
 `GameArchitecture.md` and S115's census carried "**569 also uses `seteventwakerect` (`0x3DF` →
