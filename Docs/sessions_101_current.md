@@ -867,3 +867,78 @@ distraction produces **no** capture and no retry line ("You...weren't the swifte
 litter"); `Wait here until I've further directions` does not re-fire while the window is open; the
 servant still starts the chain and the shout still works; `CROSSING ORACLE` prints `568 -> 569`.
 With the toggle OFF, captures happen exactly as vanilla. Routing untouched this session.
+
+## Session 114 — 2026-08-01 — [navigation] S113 PLAY-CONFIRMED; and what maps 569 + the corridor still need
+
+**KEYWORDS: sneak assist PLAY-CONFIRMED touch SUPPRESSED Imperial 1 map 568 -> 569 CROSSING ORACLE
+seam g2 identical retries kBreachPenalty 500 vs kTerrainPenalty 2000 reachability oracle 569 Lower
+Halls npcdic 694 fourteen guards exits controllers=3 surfaces=3 listed=0 nogroup=3 tight quarters**
+
+### S113 IS PLAY-CONFIRMED — the tester got through
+
+```
+[SNEAK] touch SUPPRESSED on map 568 for a danger actor (obj=...2D099AC0, mode=0) ...
+[SNEAK]   suppressed object is: "Imperial 1"
+[NAV-TRACE] TRANSITION FIRED: mapId 568 -> 569
+```
+
+**The falsifier stayed silent** — not one `touch REPORTED` line — so the guard NPCs really were the
+whole remaining catch, and the conservative object-scoped rule was sufficient. The servant's own
+triggers and the shout kept working, which is the property object-scoping was chosen for. Both
+halves were needed: `clamp ACTIVE ... 3.50 -> 9999` fired first, then the touch suppression.
+
+### FIX FOR MAP 569 (Royal Palace: Lower Halls) — a one-line table row
+
+The tester ended the log on 569, and it is the same problem with more of it:
+
+- **14 "Imperial" actors, ALL `nameIdx=694`** — the SAME npcdic id as 568's pair, at
+  `(57.99,0,78.03)`, `(57.97,0,97.98)`, `(95.91,0,118.02)`, `(103.25,0,84.15)`,
+  `(102.17,0.79,106.08)`, `(102.18,0.80,141.93)`, `(103.59,1.00,179.93)` and more — several guard
+  POSTS along the halls.
+- **`native FIRED on map 569`** — the distance native is live there too.
+
+=> **`PathDanger`'s table needs exactly one new row, `{569, 694}`**, and `kMaxGuards` must rise from
+8 to at least 16 for this map. No new mechanism: S113's suppression is keyed on npcdic identity.
+**Do NOT widen anything else** — 569's catch is documented as capture RECTS (`捕獲レクト兵士` in
+`rrp_a03.ebp`), so if a capture still happens there the S113 falsifier will name the rect object and
+it becomes a second table entry, exactly as designed.
+
+**Also on 569, and SEPARATE: it lists ZERO exits.** `exits: controllers=3 surfaces=3 listed=0 |
+dropped: nogroup=3` — three controllers, three surfaces, all three dropped for arming no group. Same
+family as 568's 2-against-2, one size larger. Not fixed here.
+
+**Ground truth banked for the S105 2-against-2:** the oracle measured
+`left map 568 via seam g2 ... -> arrived 569`, so 568's **g2 = `door_gunbit` -> 569** and therefore
+**g1 = `door1` -> 567**. That is a MEASUREMENT, not a rule — the mod must still DERIVE the pairing;
+this is the answer any future discriminator has to reproduce, and the falsifier for it.
+
+### THE "NO PATH" ROUTING DEFECT — diagnosed, NOT fixed (tester deferred it)
+
+S111's two fixes fire correctly (`re-attributed by the sweep stop`, `attempts=4 banned=1`). **The
+retries are useless because they are IDENTICAL:**
+
+```
+attempt 1  BREACH bad=1 len=8.00m reached=7.04m stop=(23.4,-8.00,121.5)
+attempt 2  BREACH bad=1 len=8.00m reached=7.04m stop=(23.4,-8.00,121.5)
+attempt 3  ... same ...      attempt 4  ... same ...
+```
+
+> **THE RE-COST CANNOT WIN AN ARGUMENT IT IS PRICED OUT OF.** `kBreachPenalty` adds a flat **500**
+> per attempt (500->1000->1500->2000) while every candidate corridor `pays terrain=4000` —
+> `kTerrainPenalty` is **2000 per crossing**. Four attempts cannot outbid one terrain crossing, so
+> A* returns the same disproved corridor every time and 1,445 expansions are spent to say "No path".
+
+**The tester's framing, and it is the right one: this is the standing "stuck in corners / tight
+quarters" path-invalidation defect that also happens in the WATERWAYS.** Treat it as ONE defect
+class, not a palace bug. (Treasure routing on 568 is explicitly NOT a concern — the tester's issue
+is routing round into the corridor that leads to the door.)
+
+Candidate fixes when this resumes, all failure-path-only so a validating route cannot reach them:
+
+1. **Escalate MULTIPLICATIVELY when a retry reproduces an identical breach** (same portal, same
+   stop, same leg) rather than adding a flat 500 — directly targets "the four attempts are the same".
+2. **A reachability ORACLE (log-only):** on total failure, a pure adjacency flood start->goal, so
+   "No path" is separable into *genuinely unreachable* vs *the search gave up*. This is what makes
+   the whole class diagnosable instead of anecdotal.
+3. **Only then** question whether `0x07A01000` is over-refused. **This one has cross-map blast
+   radius (Waterways, Giza) and must not be attempted casually.**
