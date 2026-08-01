@@ -94,6 +94,7 @@ TouchTestFn s_origTouch = nullptr;
 // truthfully -- the one failure mode this array has.
 constexpr int kMaxGuards = 16;
 void*                 s_guards[kMaxGuards] = {};
+FVec3                 s_guardPos[kMaxGuards] = {};   // refreshed with the pointers, same tick
 std::atomic<int>      s_guardN{0};
 std::atomic<bool>     s_loggedSuppress{false};
 
@@ -396,6 +397,7 @@ bool IsCaptureRoutine(void* object, uint32_t idx, std::string& name) {
 struct TriggerObj {
     void* obj          = nullptr;
     bool  namesCapture = false;   // its event table names a `捕獲` routine (cached verdict)
+    bool  hasTalkEvent = false;   // its event table has a `talk` event => an INTERACTABLE's rect
     bool  skipLogged   = false;   // the skip line for this object has been written
 };
 constexpr int kMaxTriggerObjs = 160;
@@ -405,7 +407,9 @@ bool       s_trigObjOverflow = false;
 
 // Does this object's OWN event table name a capture routine? Walks every entry through the same
 // chain the fire hook resolves one entry with. Unreadable table or names => false (fail open).
-bool ScanObjectForCaptureNames(void* object, std::string* firstNames, int* outCount) {
+// Also records whether the table has a `talk` event -- the exclusion the catch-rect rule below
+// stands on, so it is measured here once, beside the names it comes from.
+bool ScanObjectForCaptureNames(void* object, std::string* firstNames, int* outCount, bool* outTalk) {
     bool hit = false;
     void* tbl = MemRead::PtrAt(object, 0x48);
     uint32_t count = 0;
@@ -416,12 +420,51 @@ bool ScanObjectForCaptureNames(void* object, std::string* firstNames, int* outCo
         std::string nm;
         if (!MapScript::FiredRoutineName(object, i, nm)) continue;
         if (nm.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos) hit = true;
+        if (outTalk && nm == "talk") *outTalk = true;
         if (firstNames && i < 6) {
             if (!firstNames->empty()) *firstNames += "|";
             *firstNames += NameForLog(nm);
         }
     }
     return hit;
+}
+
+// ---- THE MEASURED CATCH RECT (Session 120 -- from the S119 census, not from a model) ------------
+//
+// The census named the catcher on its first outing: the fire that preceded the capture came from a
+// rect at (58.0, 98.0) -- ON the patrolling Imperial at (57.97, 97.98) -- with event names
+// `init|touch|touchon|touchoff|SET_RECT|同期` and flags `f8=0x55 fC=0x28`. The guards' vision
+// volumes are SEPARATE rect objects riding the guards: `IsGuardObject` can never match them (they
+// are not the npcdic actors) and their event names are template-generic (no `捕獲` anywhere), which
+// is why both S119 identities missed. Three facts from that census, ANDed, are the rule:
+//
+//   1. **`object+0xC` bit 5 -- the WAKE-EVENT flag** (written by native `0x3DF`; the bit
+//      `FUN_0025c830`'s ENTER branch requires before it hands the field to a scene). In the whole
+//      569 census exactly SEVEN objects carry it: the three `同期` rects on the patrollers and the
+//      four `兵士全停止` rects between the stationary pairs -- the capture machinery, complete, and
+//      nothing else. Read LIVE each time (one byte): rects are configured by script and can change.
+//   2. **Within kGuardRectRadius of a snapshotted guard, LIVE.** The `同期` rects ride the guards
+//      (0.1 m); the `兵士全停止` rects sit 3.8-4.9 m from their pairs. 8 m covers both with margin
+//      for a frame of patrol drift, and every legitimate wake rect far from a guard stays live.
+//   3. **NO `talk` EVENT.** The exclusion that protects map 568: its servant stands 3.4 m from a
+//      guard, inside any radius that admits the stop-rects, and the servant chain must fire. An
+//      interactable's rect carries the template's `talk` event; the seven catch rects carry none.
+//      Excluding talk-rects can only widen safety -- it can never suppress more, only less.
+//
+// The verdict is evaluated at USE time (skip + decline), not cached: fact 2 moves every frame.
+constexpr float kGuardRectRadius = 8.0f;
+
+bool IsGuardCatchRect(void* object, const TriggerObj* rec) {
+    if (!rec || rec->hasTalkEvent) return false;
+    uint8_t fC = 0;
+    if (!MemRead::SafeReadU8(object, 0x0C, &fC) || (fC & 0x20) == 0) return false;
+    const int n = s_guardN.load(std::memory_order_acquire);
+    if (n == 0) return false;
+    FVec3 pos{};
+    if (!PlayerState::ReadSceneObjectPos(object, pos)) return false;   // unreadable => fail open
+    for (int i = 0; i < n && i < kMaxGuards; ++i)
+        if (NavCommon::Distance2D(pos, s_guardPos[i]) <= kGuardRectRadius) return true;
+    return false;
 }
 
 // First sight of an object: census-log it and cache the capture-name verdict. Returns its record.
@@ -441,7 +484,7 @@ TriggerObj* CensusOnce(void* object) {
 
     std::string names;
     int evtCount = 0;
-    rec->namesCapture = ScanObjectForCaptureNames(object, &names, &evtCount);
+    rec->namesCapture = ScanObjectForCaptureNames(object, &names, &evtCount, &rec->hasTalkEvent);
 
     uint8_t cls = 0, f8 = 0, fB = 0, fC = 0;
     MemRead::SafeReadU8(object, 0x18, &cls);
@@ -465,10 +508,11 @@ TriggerObj* CensusOnce(void* object) {
     char m[400];
     snprintf(m, sizeof(m),
              "trigger census obj=%p class=0x%02X f8=0x%02X fB=0x%02X fC=0x%02X pos=(%.1f,%.1f,%.1f) "
-             "nearestGuard=%.1fm evt=%d names:%s%s",
+             "nearestGuard=%.1fm evt=%d talk=%d wake=%d names:%s%s",
              object, cls, f8, fB, fC,
              posOk ? pos.x : 0.0f, posOk ? pos.y : 0.0f, posOk ? pos.z : 0.0f,
-             guardDist, evtCount, names.empty() ? "(none)" : names.c_str(),
+             guardDist, evtCount, rec->hasTalkEvent ? 1 : 0, (fC & 0x20) ? 1 : 0,
+             names.empty() ? "(none)" : names.c_str(),
              rec->namesCapture ? "  <== NAMES A CAPTURE ROUTINE" : "");
     Log::Write("SNEAK", m);
     return rec;
@@ -487,20 +531,23 @@ void __fastcall HookedTriggerUpdate(void* container, void* object) {
 
     TriggerObj* rec = CensusOnce(object);
 
-    // THE SKIP. A guard's own volume, or a volume whose event table names a capture routine, is
-    // inert: mask never written, bits never set, notification registers never posted, fires never
-    // issued. Both identities are measured; everything else runs the original unchanged.
+    // THE SKIP. A guard's own volume, a volume whose event table names a capture routine, or -- the
+    // rule the S119 census bought -- a talkless WAKE rect riding a guard, is inert: mask never
+    // written, bits never set, notification registers never posted, fires never issued. All three
+    // identities are measured; everything else runs the original unchanged.
     const bool guard = IsGuardObject(object);
-    if (guard || (rec && rec->namesCapture)) {
+    const bool catchRect = IsGuardCatchRect(object, rec);
+    if (guard || catchRect || (rec && rec->namesCapture)) {
         if (rec && !rec->skipLogged) {
             rec->skipLogged = true;
-            char m[224];
+            char m[240];
             snprintf(m, sizeof(m),
                      "trigger update SKIPPED for obj=%p on map %d -- %s; its volume reports nobody, "
                      "on every read path at once",
                      object, MapNames::CurrentMapId(),
                      guard ? "a guard's own object (npcdic snapshot)"
-                           : "its event table names a capture routine");
+                     : catchRect ? "a talkless WAKE rect within 8m of a guard (the measured catch rect)"
+                                 : "its event table names a capture routine");
             Log::Write("SNEAK", m);
             if (guard) {
                 const std::wstring label = EntityList::LabelForSceneObject(object);
@@ -527,7 +574,12 @@ int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx,
     std::string name;
     const bool fromVolume = t_inTriggerUpdate;
     const bool capture    = IsCaptureRoutine(object, routineIdx, name);
-    const bool suppress   = capture && fromVolume;
+    // The catch-rect verdict, second net: with the trigger update skipped these fires should never
+    // arrive at all, but a path outside the update (there are ~20 callers) still may not start a
+    // catch rect's routine. Volume fires only -- CensusOnce off the volume path would fill the
+    // census table with script actors.
+    const bool catchRect  = fromVolume && IsGuardCatchRect(object, CensusOnce(object));
+    const bool suppress   = (capture || catchRect) && fromVolume;
 
     // THE LOG BUDGET IS TIERED BY WHAT THE LINE CAN PROVE (Session 119). The S118 play burned all 96
     // shared slots on load-time `init`/`main` fires inside 18 seconds, so the one line that mattered
@@ -551,9 +603,10 @@ int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx,
                  MapNames::CurrentMapId(), object, kind, routineIdx,
                  fromVolume ? "trigger-volume" : "script/other",
                  name.empty() ? "<unreadable>" : NameForLog(name).c_str(),
-                 suppress ? "CAPTURE, SUPPRESSED (the routine the map's own author named a capture)"
-                 : capture ? "capture routine, but NOT from a trigger volume -- passed through"
-                           : "passed through");
+                 (suppress && catchRect) ? "CATCH RECT, SUPPRESSED (talkless wake rect riding a guard)"
+                 : suppress  ? "CAPTURE, SUPPRESSED (the routine the map's own author named a capture)"
+                 : capture   ? "capture routine, but NOT from a trigger volume -- passed through"
+                             : "passed through");
         Log::Write("SNEAK", m);
     }
 
@@ -578,7 +631,12 @@ void OnFieldFrame() {
     if (nameIdx < 0) { s_guardN.store(0, std::memory_order_release); return; }
     void* found[kMaxGuards] = {};
     const int n = EntityList::CollectSceneObjectsByNameIdx(nameIdx, found, kMaxGuards);
-    for (int i = 0; i < n && i < kMaxGuards; ++i) s_guards[i] = found[i];
+    for (int i = 0; i < n && i < kMaxGuards; ++i) {
+        s_guards[i] = found[i];
+        // Positions ride along for the catch-rect radius test. A failed read keeps the previous
+        // tick's value -- one frame of drift against an 8 m radius, not a hole in the rule.
+        PlayerState::ReadSceneObjectPos(found[i], s_guardPos[i]);
+    }
     s_guardN.store(n, std::memory_order_release);   // publish AFTER the pointers are written
 }
 

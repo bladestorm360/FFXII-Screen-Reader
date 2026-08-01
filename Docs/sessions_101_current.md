@@ -1692,3 +1692,71 @@ project has had; the 569-lists-zero-exits backlog should start from it.**
 - 568 (when tested): sequence still completes; `clamp ACTIVE` + `touch SUPPRESSED` still print;
   `trigger update SKIPPED … a guard's own object` ×2 is EXPECTED there now.
 - Off 568/569: zero `SNEAK` lines beyond install + census prints.
+
+## Session 120 — 2026-08-01 — [navigation] The census named the catcher: a talkless WAKE rect riding the guard; and doors are template siblings
+
+**KEYWORDS: sneak assist 569 fourth round census delivered catch rect 同期 sync 兵士全停止 soldiers
+stop wake flag fC bit5 0x20 seteventwakerect vindicated guard-riding rect separate object talk
+exclusion 8m radius template signature door fieldsign ＯＫ ＮＯＴ ＯＮ ＯＦＦ anchored inference
+[0:57] template-door catch rect suppressed at writer and fire**
+
+The S119 census worked on its first play. The capture moment is in the log, named:
+
+```
+trigger census obj=2CFD18D0 ... fC=0x28 pos=(58.0,-0.0,98.0) evt=7 names:init|touch|touchon|touchoff|SET_RECT|同期
+[00:33:10] event fire ... obj=2CFD18D0 kind=3 routine=1 src=trigger-volume name="touch"   -- passed through
+[00:33:10] event fire ... obj=2CFD18D0 kind=4 routine=2 src=trigger-volume name="touchon" -- passed through
+                                                          <- capture; log ends
+```
+
+**The catcher is a rect at (58.0, 98.0) — riding the patrolling Imperial at (57.97, 97.98).** The
+guards' vision volumes are SEPARATE rect objects that move with the guards. Both S119 identities
+missed by construction: `IsGuardObject` (they are not the npcdic actors) and the `捕獲` name rule
+(their event names are template-generic — `init|touch|touchon|touchoff|SET_RECT|同期`). Also
+refuted: the S119 `+0x18==1` theory — every trigger object in the census is `class=0x00`, and the
+catch DID go through the fire hook; we simply had no rule that matched it.
+
+### What the census measured, and the rule built from it
+
+Exactly SEVEN objects in the whole 569 census carry `fC` bit 5 — **the WAKE-EVENT flag, `0x3DF`'s
+own bit, the one `FUN_0025c830`'s ENTER branch requires before handing the field to a scene**: three
+`同期` ("sync") rects on the patrolling guards and four `兵士全停止` ("all soldiers stop") rects
+between the stationary pairs (3.8–4.9 m from them). The capture machinery, complete, and nothing
+else. (So `seteventwakerect` — the name S117 struck as a wrong lead — turns out to be a fair
+description after all: it flags the rects whose ENTER wakes an event. The HANDLER resolution was
+still wrong; the lead died for the right reason and the flag came back as the discriminator.)
+
+**The rule (S120), all three facts measured and ANDed:** on a danger-table map, an object is a catch
+rect when it (1) carries the wake flag (read live), (2) sits within **8 m** of a snapshotted guard
+(read live — fact 2 moves every frame), and (3) has **no `talk` event** in its event table. The talk
+exclusion is what protects 568: its servant stands 3.4 m from a guard — inside any radius that
+admits the stop-rects — and interactables' rects carry the template's `talk` event; the seven catch
+rects carry none. Excluding talk-rects can only widen safety.
+
+Catch rects are skipped at the trigger update (mask/bits/registers/fires all dead) AND declined at
+the fire hook (second net; logs `CATCH RECT, SUPPRESSED`). Guard positions now ride along with the
+pointer snapshot each field tick. Census line gains `talk=`/`wake=` columns.
+
+### The door — template siblings of a proven doorway
+
+The census also explained the event-door failure: a door object's events are NOT the map's
+transition routines. `[0:56]` and `[0:57]` both run the FIELD-SIGN TEMPLATE
+(`init|talk|フィールドサインＯＫ/ＮＯＴ/ＯＮ/ＯＦＦ`) in its own container — the location jump
+lives inside that machinery, so the S119 nameOff join could never fire (kept: it is correct where
+objects do live in container 0). New rule, ANCHORED: an object whose event-table SIGNATURE
+(container id + exact sorted event name-pool offsets) equals that of an object the map's own `+0x70`
+table proved to be a doorway is a Door. No anchor on a map, no promotion — fail closed. Signets and
+walls run different templates and cannot match. Logged as an inference (`[inferred from the
+anchor]`), same honesty rule as `groupInferred`.
+
+### Verify next play (569)
+
+- Walking at a patrolling guard: `trigger update SKIPPED … a talkless WAKE rect within 8m of a
+  guard` and **no capture**. Walking between the stationary pairs on the east side: same, via the
+  `兵士全停止` rects.
+- Census: the seven rects show `wake=1 talk=0`; every other object `wake=0` or `talk=1`.
+- `[0:57]` under **Doors** (`Door=2 Shop=0`), `template-door:` line on map change.
+- 568: the servant chain must still fire (its rects carry `talk`); watch for any
+  `SKIPPED … WAKE rect` line there and check what it names before judging it wrong.
+- Falsifier: a capture with the seven rects logged as skipped means a catch path that does not run
+  through `FUN_0025c830` on those objects — the census + tiered fire log will carry it.

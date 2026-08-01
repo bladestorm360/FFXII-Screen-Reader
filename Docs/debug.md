@@ -4877,3 +4877,30 @@ had — the 569-exits backlog should start from it.**
 The 569 capture mechanism has never appeared in a log — two plays, two logging failures. The per-
 object trigger census (one line per object: class, flags, event names, position, nearest guard) now
 guarantees the next play names it even if the S119 skip does not already stop it.
+
+## The catcher was a guard-riding WAKE rect; doors are template siblings (Session 120, 2026-08-01)
+
+**KEYWORDS: catch rect wake flag fC 0x20 同期 兵士全停止 talk exclusion 8m guard radius template
+signature door anchored inference census delivered**
+
+### SOLVED (pending play) — 569 capture: the S119 census named the catcher on its first outing
+
+The catcher: rect obj at (58.0,98.0) riding the patrolling Imperial at (57.97,97.98), event names
+init|touch|touchon|touchoff|SET_RECT|同期, fC=0x28. Guards' vision volumes are SEPARATE rect objects
+riding the guards — which is why IsGuardObject (not the npcdic actor) and the 捕獲 name rule
+(template-generic names) both missed. Exactly SEVEN 569 objects carry fC bit 5 (the WAKE flag,
+0x3DF's bit, required by FUN_0025c830's ENTER scene handoff): three 同期 on patrollers, four
+兵士全停止 between stationary pairs. Rule shipped: wake flag (live) AND within 8m of a snapshotted
+guard (live) AND no `talk` event => skip at trigger update + decline at fire hook. The talk
+exclusion protects 568's servant (3.4m from a guard, rect carries talk).
+
+**Lesson: S119's `+0x18==1` theory was wrong (all census objects class=0x00) — the catch DID pass
+through the fire hook; there was just no rule for it. The census, not the model, named the catcher.**
+
+### TRIED & FAILED — binding a door object to its transition via ExitDest nameOff (S119)
+
+A door object's events are the FIELD-SIGN TEMPLATE (init|talk|フィールドサインＯＫ/ＮＯＴ/ＯＮ/ＯＦＦ)
+in its own container — not the map's door1/door3 routines, and not container 0. The join is kept for
+maps where it applies, but 569's doors bind through the template. SOLVED instead by the ANCHORED
+template-signature rule: same container + same sorted event nameOffs as a +0x70-proven doorway =>
+Door. Fail closed without an anchor; logged as an inference.

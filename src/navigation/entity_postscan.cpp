@@ -531,6 +531,63 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
             }
         }
     }
+
+    // ---- TEMPLATE SIBLINGS OF A PROVEN DOORWAY (Session 120) ------------------------------------
+    //
+    // The pass above never fired for map 569's second door, and the S119 trigger census showed why:
+    // a door object's events are not the map's transition routines at all. They are the FIELD-SIGN
+    // TEMPLATE -- `init|talk|フィールドサインＯＫ/ＮＯＴ/ＯＮ/ＯＦＦ`, a per-purpose controller in
+    // its own container -- and the location jump happens inside that machinery, not via a name the
+    // exit reader knows. So the object-side binding is the TEMPLATE ITSELF: `[0:56]` (door=1, has
+    // the map's one `+0x70` record) and `[0:57]` (no record) run byte-identical event tables in the
+    // same container.
+    //
+    // The rule, ANCHORED so it cannot drift: an object whose event-table SIGNATURE -- container id
+    // plus the exact multiset of event name-pool offsets -- equals that of an object this map's own
+    // `+0x70` table PROVED to be a doorway, is a Door. The anchor is the game's data; no anchor on
+    // a map, no promotion (fail closed). Signets and walls run different templates and cannot
+    // match; NPCs are already out of Category::Object. This is an inference and is logged as one --
+    // same honesty rule as `groupInferred` -- but its anchor is a measurement, not a word list, an
+    // authoring order (S46/S58), or label text.
+    {
+        struct Sig { int container; int n; uint32_t offs[8]; };
+        auto sigOf = [](void* sceneObj, Sig& s) -> bool {
+            s.container = MapScript::ObjectContainerId(sceneObj);
+            if (s.container < 0) return false;
+            s.n = MapScript::ObjectEventNameOffsets(sceneObj, s.offs, 8);
+            if (s.n <= 0) return false;
+            std::sort(s.offs, s.offs + s.n);
+            return true;
+        };
+        std::vector<Sig> anchors;
+        for (const auto& e : out) {
+            if (!e.doorway || !e.sceneObj) continue;
+            Sig s{};
+            if (sigOf(e.sceneObj, s)) anchors.push_back(s);
+        }
+        for (auto& e : out) {
+            if (anchors.empty()) break;
+            if (e.category != EntityList::Category::Object) continue;
+            if (!e.sceneObj || !e.gameNamed) continue;
+            Sig s{};
+            if (!sigOf(e.sceneObj, s)) continue;
+            for (const auto& a : anchors) {
+                if (a.container != s.container || a.n != s.n) continue;
+                if (!std::equal(a.offs, a.offs + a.n, s.offs)) continue;
+                e.category = EntityList::Category::Door;
+                if (logDetail) {
+                    char m[224];
+                    snprintf(m, sizeof(m),
+                             "template-door: obj [%u:%u] at (%.1f,%.1f,%.1f) runs the same event "
+                             "template (container %d, %d events) as a +0x70-proven doorway -> "
+                             "Category::Door [inferred from the anchor, not read]",
+                             e.container, e.slot, e.pos.x, e.pos.y, e.pos.z, s.container, s.n);
+                    Log::Write("NAV-DIAG", m);
+                }
+                break;
+            }
+        }
+    }
 }
 
 // Append " 1", " 2", ... to labels that occur more than once, so fifteen identically-named townsfolk
