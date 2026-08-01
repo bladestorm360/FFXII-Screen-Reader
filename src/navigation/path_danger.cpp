@@ -39,12 +39,23 @@ namespace {
 // sneak_assist.cpp names the object rather than leaving it to another guessing round.
 struct Row {
     uint32_t mapId;
-    int16_t  nameIdx;    // npcdic id of the watching actor(s)
+    int16_t  nameIdx;      // npcdic id of the watching actor(s)
+    // WHICH CATCH MECHANISM THIS MAP RUNS -- a MEASUREMENT, and the per-map scope the tester
+    // demanded (2026-08-01, fourth 569 round): "568 was already working, ensure it is not touched."
+    //
+    // false = SCRIPT-NATIVE catch: the `0x290` distance watcher + the `0x26D`/`0x525` touch tests.
+    //         The map gets the distance clamp and the per-guard touch suppression -- the exact set
+    //         play-confirmed on 568 -- and NOTHING else: no trigger-update skip, no event-fire
+    //         declines, no census. Its trigger machinery runs vanilla.
+    // true  = ENGINE-TRIGGER catch: zero touch natives in the script (S115 census), guards' vision
+    //         volumes are wake rects riding the guard actors (S119 census named the catcher). The
+    //         map ALSO gets the S120 machinery: catch-rect skip/decline + the trigger census.
+    bool     engineCatch;
 };
 
 constexpr Row kRows[] = {
-    { 568u, 694 },   // Royal Palace: Cellars     -- the guarded stair to 569 (2 "Imperial" actors)
-    { 569u, 694 },   // Royal Palace: Lower Halls -- 14 "Imperial" actors, the SAME npcdic id
+    { 568u, 694, false },  // Royal Palace: Cellars     -- script-native catch, PLAY-CONFIRMED set only
+    { 569u, 694, true  },  // Royal Palace: Lower Halls -- engine-trigger catch (wake rects, S119/S120)
 };
 
 const Row* RowForMap(uint32_t mapId) {
@@ -56,6 +67,11 @@ const Row* RowForMap(uint32_t mapId) {
 } // namespace
 
 bool MapHasRow(uint32_t mapId) { return RowForMap(mapId) != nullptr; }
+
+bool MapUsesEngineCatch(uint32_t mapId) {
+    const Row* r = RowForMap(mapId);
+    return r && r->engineCatch;
+}
 
 int16_t DangerNameIdx(uint32_t mapId) {
     const Row* r = RowForMap(mapId);

@@ -28,6 +28,15 @@ namespace PathDanger {
 // no game reads, safe from any thread.
 bool MapHasRow(uint32_t mapId);
 
+// Does this map's row record the ENGINE-TRIGGER catch mechanism (wake rects riding the guards)?
+// Only such maps get the S120 machinery -- the catch-rect skip/decline and the trigger census. A
+// script-native row (568) gets the distance clamp + touch suppression ONLY: its trigger machinery
+// runs vanilla, exactly the play-confirmed set. The mechanism is a MEASUREMENT recorded per row
+// (S115's native census; S119's trigger census), and the split is the tester's explicit instruction
+// (2026-08-01): map-specific behaviour must be scoped map-specifically -- a working map is never
+// widened onto.
+bool MapUsesEngineCatch(uint32_t mapId);
+
 // The npcdic name index of this map's watching actors, or -1 when the map has no row. Sneak assist
 // resolves it to live scene objects so it can silence the guards' own trigger volume and nothing
 // else on the map (S113).

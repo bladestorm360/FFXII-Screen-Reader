@@ -41,6 +41,14 @@
 //     issued inside its extent are candidates. **A routine the SCRIPT asks for must run** -- declining
 //     a `捕獲監視監督` ("capture watch supervisor") the map's own setup starts would stall the
 //     sequence rather than save it.
+//   * THE ENGINE-TRIGGER MACHINERY IS SCOPED TO THE MECHANISM, NOT THE TABLE (Session 121, tester's
+//     explicit instruction: "568 was already working, ensure it is not touched"). The danger row
+//     records WHICH catch the map runs (`PathDanger::MapUsesEngineCatch`); the catch-rect
+//     skip/decline, the event-fire declines and the trigger census exist only on an engine-catch
+//     row (today: 569). On a script-native row (568) the trigger update and event fires run
+//     VANILLA -- that map's behaviour is the play-confirmed clamp + touch suppression, nothing
+//     newer. **A working map is never widened onto: new machinery starts scoped to the map whose
+//     defect bought it, and earns each additional map with play evidence.**
 //   * IT FAILS OPEN. An unreadable blob, an out-of-range index, or a name that does not match all
 //     take the original path. If the model is wrong the build behaves exactly as today, and the log
 //     line -- which prints the index, the source and the raw name bytes for EVERY fire on a table

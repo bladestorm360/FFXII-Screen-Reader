@@ -111,6 +111,15 @@ bool CoveredMap() {
     return PathDanger::MapHasRow(static_cast<uint32_t>(MapNames::CurrentMapId()));
 }
 
+// THE MECHANISM GATE (Session 121, tester's explicit instruction after 568 was widened onto). The
+// row records WHICH catch the map runs; only an engine-catch row (569) gets the S120 machinery --
+// catch-rect skip/decline, event-fire declines, the trigger census. On a script-native row (568)
+// everything below the two play-confirmed hooks is unreachable, so that map's execution is the
+// confirmed build's: clamp + touch suppression, trigger machinery vanilla.
+bool EngineCatchMap() {
+    return PathDanger::MapUsesEngineCatch(static_cast<uint32_t>(MapNames::CurrentMapId()));
+}
+
 // SEH-guarded: the ctx comes from the game's VM, and a torn/streaming pointer must degrade to
 // "leave the value alone", never to a fault inside a native call.
 bool ClampResultSlot(void* ctx, float* outOriginal, bool* outWasFloat) {
@@ -519,9 +528,11 @@ TriggerObj* CensusOnce(void* object) {
 }
 
 void __fastcall HookedTriggerUpdate(void* container, void* object) {
-    // Off the danger table this is the original plus one two-row scan -- no census, no skip, and the
-    // bracket still marks the extent so the fire hook's `src=` stays truthful everywhere.
-    if (!CoveredMap()) {
+    // Everywhere but an ENGINE-CATCH map -- including 568, whose row is script-native -- this is the
+    // original plus one two-row scan: no census, no skips. The bracket still marks the extent so the
+    // fire hook's `src=` stays truthful everywhere. Scoped to the mechanism, not the table, in S121:
+    // the tester's instruction after S119/S120 widened onto the working map.
+    if (!EngineCatchMap()) {
         const bool prev = t_inTriggerUpdate;
         t_inTriggerUpdate = true;
         if (s_origTrigger) s_origTrigger(container, object);
@@ -564,11 +575,12 @@ void __fastcall HookedTriggerUpdate(void* container, void* object) {
 }
 
 int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx, int mode, int flag) {
-    // OFF-TABLE IS THE FIRST BRANCH, exactly as the two hooks above: on every map but the danger
-    // table's this is the original plus one table scan, and nothing below is reachable. Trigger fires
-    // happen on every map in the game -- doors, chests, conversations -- so this early-out is what
-    // keeps the hook from having a blast radius at all.
-    if (!CoveredMap())
+    // THE FIRST BRANCH IS THE MECHANISM GATE (S121; was the danger table until the tester's
+    // instruction). On every map whose row is not engine-catch -- including 568 -- this is the
+    // original plus one table scan, and nothing below is reachable: no name resolution, no logging,
+    // no declines. Trigger fires happen on every map in the game -- doors, chests, conversations --
+    // so this early-out is what keeps the hook from having a blast radius at all.
+    if (!EngineCatchMap())
         return s_origFire ? s_origFire(object, kind, routineIdx, mode, flag) : kFireDeclined;
 
     std::string name;

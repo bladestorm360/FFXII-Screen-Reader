@@ -1760,3 +1760,28 @@ anchor]`), same honesty rule as `groupInferred`.
   `SKIPPED … WAKE rect` line there and check what it names before judging it wrong.
 - Falsifier: a capture with the seven rects logged as skipped means a catch path that does not run
   through `FUN_0025c830` on those objects — the census + tiered fire log will carry it.
+
+## Session 121 — 2026-08-01 — [navigation] The mechanism is the scope: 568's row is script-native, and the S120 machinery no longer exists there
+
+**KEYWORDS: mechanism gate MapUsesEngineCatch engineCatch row scoped 568 untouched vanilla trigger
+update fire hook passthrough tester instruction working map never widened onto**
+
+Tester's instruction, verbatim requirement: S119/S120 must not have changed 568 — "if you need map
+specific behavior then it should be map specific." They were right that it had: the guard-object
+skip (S119) and the catch-rect rule (S120) were gated on the danger TABLE, and 568 has a row, so
+its guards' trigger volumes were being skipped on the play-confirmed map.
+
+The row now records WHICH catch the map runs — a measurement, not a switch: 568 = script-native
+(`0x290` watcher + `0x26D`/`0x525` touch tests; S115's census), 569 = engine-trigger (zero touch
+natives; wake rects riding the guards; S119's census). `PathDanger::MapUsesEngineCatch` exposes it,
+and ALL of the S119/S120 machinery — catch-rect skip/decline, guard-object skip, event-fire
+declines, the trigger census — is reachable only on an engine-catch row. On 568 the trigger update
+and every event fire run VANILLA: its behaviour is the play-confirmed set (distance clamp + per-
+guard touch suppression) and nothing newer. The only residue is inert: the scope-marker bracket
+(two thread-local stores) and the fire hook's one boolean test.
+
+> **RULE (tester's, now structural): a working map is never widened onto. New machinery starts
+> scoped to the map whose defect bought it, and earns each additional map with play evidence.**
+
+Verify: on 568 — zero `trigger census` / `SKIPPED` / `event fire` lines; `clamp ACTIVE` and
+`touch SUPPRESSED … "Imperial"` exactly as S116's confirmed play. On 569 — everything S120 listed.
