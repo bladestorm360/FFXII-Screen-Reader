@@ -594,3 +594,34 @@ phrasebook rows for the new strings (plan-approved wording — flag before rewor
 `[SNEAK] clamp ACTIVE on map 568: script distance <d> -> 9999 (float|int slot)` once per arming and
 walking the corridor near a guard no longer triggers a capture; with it OFF, captures still happen
 (vanilla preserved) and no `SNEAK` clamp lines appear. S106's own verification greps still outstanding.
+
+### Addendum — WHAT the 8 call sites are, asked by the tester ("could this softlock me?")
+
+Disassembled all 8 `CALLACT 0x0290` sites in `rrp_a02.ebp` (opcode table: `notes\athena_opcodes.md`;
+`PUSHDBG` operands run sequentially at each site, which is the alignment check):
+
+- **2 sites (`0x248e3`, `0x24b2e`) are the CAPTURE TEST, and they are unambiguous:**
+  `CALLACT(0x290) → PUSH[0xe](0x79) → OPLSE(<=)` then a branch body of
+  `CALLPOPA(0x15|0x19) CALLACTPOPA(0x415) (0x416) (0x273) (0x3b7) (0x553) (0x3ed)` — the "he noticed
+  you" reaction. **The comparison is `distance <= X`, so it fires when the number is SMALL: a large
+  clamp makes it FALSE and can only ever SUPPRESS the capture, never trigger anything.**
+- **6 sites are three IDENTICAL pairs** (variable sets `0x22`/`0xb`, `0x28`/`0xd`, `0x2e`/`0xe` —
+  three copies of one block, matching the map's three `先行促し01/02/03` "urge-to-advance" actors).
+  Their results are POPped into variables and compared elsewhere, so the direction is NOT established
+  offline. **Not resolved, and deliberately not guessed.**
+
+**The tester's actual worry — the "no going upstairs until you talk to the servant" gate — is NOT
+distance-driven.** That gate and its siblings are RECT/TOUCH events: `seteventwakerect` ×9,
+`setrect` ×6, `rectdisable` ×5, `settouchuconly` ×6, `istouchuc`/`istouchucsync` ×25, with the named
+rect actors `地下イベントレクト`, `練習用レクト`, `引き返し禁止`, `先行促し01-03`. Sneak assist
+changes the return value of ONE native and touches no rect, flag, or touch test, so story gates,
+trigger volumes and dialogue fire exactly as they do in vanilla.
+
+**Standing guidance to the tester, and the intended usage: leave it OFF and switch it ON only for
+the sneak run itself.** That is not a workaround for a weakness — it is the design, and it bounds
+the six unresolved sites to the seconds they are needed.
+
+**Available hardening if the six ever misbehave (NOT built — would need approval):** clamp only when
+the ORIGINAL distance is small (below ~25 m). Any check of the form "too far ⇒ force something" fires
+on a LARGE value, so leaving large values untouched removes that entire class from the blast radius,
+while the capture test (which fires small) is still defeated.
