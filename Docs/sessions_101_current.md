@@ -942,3 +942,172 @@ Candidate fixes when this resumes, all failure-path-only so a validating route c
    the whole class diagnosable instead of anecdotal.
 3. **Only then** question whether `0x07A01000` is over-refused. **This one has cross-map blast
    radius (Waterways, Giza) and must not be attempted casually.**
+
+## Session 115 — 2026-08-01 — [navigation] The palace sneak becomes automatic; and a re-cost that can actually win
+
+**KEYWORDS: sneak assist always on no toggle F10 unbound PathDanger 569 Lower Halls npcdic 694
+kMaxGuards 16 rrp_a01..a06 palace script census capture routine CALLACT 0x290 0x26D 0x525
+SetSilently removed phrasebook ids removed census map label off by one kBreachEscalation
+kIdenticalStopTol identical breach same stop terrain guard S108 reachability oracle FloodFrom
+corridor openings dump full-corridor rung fails**
+
+Two tracks, two commits, deliberately separately revertable.
+
+### Track 1 — sneak assist is automatic on the palace maps (`0fceed1`)
+
+**The tester's call, on S113's play evidence.** The suppression turned out to silence only the
+guards' catch — the servant chain, the shout, the doors and the transition all worked through three
+minutes of armed play, with the falsifier silent throughout. So the arming was no longer containing a
+risk; it was making a blind player re-arm a fix for a puzzle they cannot see, on every entry to the
+map that needs it. **The `PathDanger` map table is now the feature's only gate**, and F10 went back
+to the game.
+
+**Map 569 got the row S114 predicted.** Fourteen "Imperial" actors, all `nameIdx=694` — the same
+npcdic id as 568's pair — so S113's identity-keyed mechanism covers it with one line. `kMaxGuards`
+8 → **16**, because a snapshot that truncated at fourteen would silently leave real guards answering
+truthfully, which is this array's only failure mode.
+
+> ### THE PALACE TABLE IS COMPLETE, AND THAT IS A MEASUREMENT
+>
+> The question "are there other palace maps?" was answered from the game's own scripts rather than
+> guessed. The palace is maps 567–572 = `rrp_a01`..`rrp_a06`; each `.ebp` was scanned for
+> capture-routine name strings AND for the detection natives' `CALLACT` operands, and the two
+> signals agree:
+>
+> | map | script | `捕獲` routines | `0x290` distance | `0x26D` touch | `0x525` wait-touch |
+> |---|---|---|---|---|---|
+> | 567 Cellar Stores | `rrp_a01` | **0** | 1 | – | – |
+> | **568 Cellars** | `rrp_a02` | 1 (`ヴァン捕獲`) | 8 | 4 | 21 |
+> | **569 Lower Halls** | `rrp_a03` | **12** (`捕獲レクトＡ/Ｂ/Ｃ`, `捕獲レクト兵士０１..０７`, `捕獲監視監督`) | 4 | – | – |
+> | 570 Secret Passage | `rrp_a04` | 0 | – | – | – |
+> | 571 Treasure Room No. 8 | `rrp_a05` | 0 | – | – | – |
+> | 572 The Garden Stairs | `rrp_a06` | 0 | – | – | – |
+>
+> **Only 568 and 569 run a capture sequence at all**, which is exactly the pair the tester asked
+> for. Confidence 0.99 — two independent signals, no inference in between. **Sweep the corpus
+> before theorising about one member of it** (S104's lesson, paying again).
+
+**What it costs, recorded rather than buried.** The accepted limit — `distance` is a GENERIC native,
+so every call on a table map is clamped — **no longer has a player-side escape hatch**. On 568 that
+risk is retired by play. On 569 it is not, so the `clamp ACTIVE` line and the non-guard falsifier
+both still print and the fix, if a 569 gate ever stalls, is dropping 569's row.
+
+Gone with the toggle: the ModMenu row and `SneakAssistOn`, **`SetSilently` (its only caller)**, the
+four phrasebook ids, the `F10` binding and its DirectInput edge, and `AvailableHere` / `ArmedHere` /
+`Shutdown` — the last of which recorded a flag nothing read and was never called by
+`Navigation::Shutdown` anyway. `Adjust` is once again the ONLY place a setting's value changes.
+
+Also fixed, both log-only and both wrong in a way that would mislead the next reader:
+
+- **The census line named the wrong map.** `OnMapTeardown` printed `MapNames::CurrentMapId()`, which
+  the engine has ALREADY advanced by then — so 568's two `distance` calls were logged as
+  `map 569 census`. Every census line in the file was one map late. The id is latched on the field
+  tick now and the line says which map it means.
+- **`Controls.md` still told the tester to press `F9` for the beacon**, in the mod-menu paragraph
+  S112 did not reach. That is the key the game uses for *Hide On-Screen Keyboard*.
+
+Also recorded in `GameArchitecture.md`: **`FUN_0033f680` is a THIRD native handler funnelling into
+`FUN_002677f0`** (`FUN_00267e10` → `FUN_002677f0` → `FUN_0026b4e0`), with no callers of its own.
+Hooking the shared choke point covers every native that reaches it, whichever slot dispatches it —
+which is why 569 needed no new mechanism, only a row.
+
+### Track 2 — the re-cost can finally outbid the corridor it disproved (`path_search.cpp` only)
+
+**The tester's hard requirement for this half was "do not break pathing on other maps", so the
+containment is argued from the code and verified by diff, not asserted.**
+
+#### Two corrections to what S114 recorded, both material
+
+S114 wrote this up from the summary; the log itself (seq 32, start poly 207, target Door 2) says
+something sharper:
+
+1. **The "priced out by `terrain=4000`" story does not hold.** That failure logs
+   `corridor paid terrain=0 other=1000` — **there is no terrain price in it at all.** The retries
+   are identical because **+500 on one portal is simply not enough to change A\*'s answer**, not
+   because a terrain crossing outbids it.
+2. **The whole corridor is unwalkable, not just the taut chord.** `repair[full-corridor]` re-inserts
+   *every portal midpoint* (4 → 10 points) and **still breaches**. The `retreat` rung never even
+   runs: it needs `badReached > BodyRadius()` and the body got **0.07 m**.
+
+```
+attempt 1  BREACH bad=3 len=22.60m reached=0.07m stop=(16.2,-7.72,120.4) why=sweep
+           repair[unpull] / [unpull-departure] / [full-corridor]  -> still breaching
+           replan: portal (poly 449, edge 1) re-costed to 500
+attempt 2  IDENTICAL corridor, IDENTICAL breach   -> 1000
+attempt 3  different corridor, breach ~the same place -> portal 453:1 -> 500
+attempt 4  BACK to attempt 1's corridor, IDENTICAL breach -> 1500
+           frontier: 22.6m short. attempts=4 banned=2
+```
+
+#### What shipped
+
+1. **`kBreachEscalation` (×3) on a REPEATED IDENTICAL breach.** `BannedEdge` now carries the stop
+   that earned its last price. When the same `(poly, edge)` breaches again and the body stopped
+   within `kIdenticalStopTol` (0.5 m) of last time, the price **multiplies** — 500 → 1500 → 4500 —
+   instead of crawling 500 → 1000 → 1500. A retry whose breach MOVED is progress and keeps the
+   gentle additive step it has always had.
+
+   > **THE DISTINCTION IS A MEASUREMENT, NOT AN INDEX** — the same correction S111 applied to the
+   > final-approach rule. An identical stop is not new information about the route; it is a
+   > measurement that the price was too low. And it is still a PRICE: even the escalated figure is
+   > one A\* will pay when the portal is genuinely the only way through, which is the property S96
+   > bought and S108 re-bought.
+
+2. **A terrain guard, because escalation is exactly what could buy S108's regression back.** S106
+   priced the ground round the guards, the discs sat across the ONLY corridor, and the search did
+   not take a wider berth — it bought its way onto ground the party's class cannot stand on and
+   validation killed the route. So: **the moment a retry's corridor starts paying terrain where its
+   predecessor paid none, the loop stops** rather than spending its remaining attempts proving it.
+   A corridor that paid terrain from attempt 1 is untouched — nothing got worse there.
+
+3. **A reachability ORACLE, log-only** (S114's candidate 2). On a request that is about to answer
+   Frontier or NoPath, `NavMesh::FloodFrom` — the flood that already exists for `nav_probe`, pure
+   adjacency plus the party's walkability test, no rays, no costs — says whether the goal poly is in
+   the start's component at all.
+
+   > **Every "No path" in this project has been argued about from two words that cannot be told
+   > apart in the log**: *genuinely unreachable* and *the search gave up* are opposite defects that
+   > print identically. One line now separates them, on every map — which is what turns the tester's
+   > "stuck in corners, also in the Waterways" into a decidable question instead of an anecdote.
+
+4. **The corridor itself, dumped on failure.** `corners(xyz)` prints the string-pulled polyline —
+   what the body was asked to walk — but never what A\* actually found. When `full-corridor` fails,
+   that distinction IS the question: if the corridor's own openings do not walk either, the chord
+   was never the problem and no amount of un-pulling will help.
+
+#### Containment — why no other map can move
+
+1. **Every line of 1 and 2 sits after `rep.ok` failed AND all three `PathRepair` rungs failed**, on
+   the path to `break`. A route that validates on attempt 1 — which is every route the tester walks
+   today — never executes one instruction of it.
+2. **The escalation differs from today only on the SECOND breach of the SAME portal at the SAME
+   stop.** That needs attempt ≥ 2 of a request whose attempt 1 already failed. Those requests end
+   today as `No path` or a suppressed frontier, so the set of requests whose OUTCOME can change is
+   exactly the set that currently produces no route.
+3. **The terrain guard can only make the loop stop EARLIER.** It cannot refuse a walkable route:
+   validated routes have already broken out above it.
+4. **3 and 4 change nothing** — log output on a path that has already failed.
+5. **`git diff --stat` shows ONE file: `path_search.cpp`.** `path_funnel`, `path_validate`,
+   `path_corridor`, `path_repair`, `path_march`, `nav_mesh`, `nav_footprint`, `map_query`,
+   `path_surface_goal`, `path_planner` verified unchanged **by diff, not by assertion**.
+6. **Bounds untouched**: `kMaxAttempts=4`, `kMaxTotalExpand=40000`, `kProbeBudget=1600`. No request
+   can cost more frames than it does today.
+
+**Explicitly NOT done:** `0x07A01000` is not touched (S114's candidate 3 — cross-map blast radius
+into the Waterways and Giza). The frontier stays suppressed and "No path" stays honest; partial-route
+speech was rejected by the user in S106 and is not re-opened.
+
+### Verify next play
+
+**Sneak assist:** on 568 AND 569, with nothing switched on, `clamp ACTIVE on map 568|569` and
+`touch SUPPRESSED ... for a danger actor` naming an `"Imperial"` object; no capture walking past
+569's Imperial posts; `touch REPORTED ... by a NON-guard object` is the falsifier and names any
+capture rect that still catches you; `map <n> census:` now names the map the count belongs to; `F10`
+does nothing anywhere; the `F8` menu walks six settings and never says "Sneak assist"; **no `SNEAK`
+lines at all on any map that is not 568 or 569.**
+
+**Routing — this is the half that must not regress:** map 315 still `pass=mesh`, `pass=seam` still
+grep-dead, and routes that work today still answer `attempts=1` (the new lines cannot appear on
+them). From the east side of 568 (start x ≥ 17.4), look for `re-cost ESCALATED x3` and whether a
+route appears where `Frontier` was. **Every total failure now carries an `oracle:` line — that line
+is the deliverable even if the escalation does not fix 568.**

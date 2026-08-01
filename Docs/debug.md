@@ -4475,3 +4475,87 @@ S106 for the full write-up and the deferred 0x0f-glyph / controls-overlay ground
 
 **KEYWORDS: midpoint attribution start poly edge strand seed no-frontier false No path z=121 lane
 568 danger zones path_danger npcdic 694 Imperial scene-gap capture distance**
+
+## SOLVED — the re-cost loop could not outbid the corridor it had already disproved (Session 115, 2026-08-01)
+
+**Symptom:** `\` on the east side of map 568 answers "No path" (suppressed frontier) while a route
+demonstrably exists from the same coordinate seconds earlier. The log shows `attempts=4 banned=2`
+and four attempts that are *identical*.
+
+**What the log actually said** (seq 32, start poly 207, target Door 2) — and it is NOT what Session
+114 recorded:
+
+```
+attempt 1  BREACH bad=3 len=22.60m reached=0.07m stop=(16.2,-7.72,120.4) why=sweep
+           corners: (14.4,-8.00,119.7) (15.4,-8.00,120.5) (16.1,-7.75,120.4) (38.6,-0.00,117.9)
+           repair[unpull] 4->8 pts / [unpull-departure] 4->4 / [full-corridor] 4->10  -> all still breaching
+           replan: portal (poly 449, edge 1) re-costed to 500
+attempt 2  IDENTICAL corridor, IDENTICAL breach   -> 1000
+attempt 3  different corridor (3 corners), breach at nearly the same place -> portal 453:1 -> 500
+attempt 4  BACK to attempt 1's corridor, IDENTICAL breach -> 1500
+           cost: corridor pays terrain=0 other=1000
+           frontier: 22.6m short. attempts=4 banned=2
+```
+
+**TWO CORRECTIONS TO THE S114 WRITE-UP, both material:**
+
+1. **The "the retries are priced out by `terrain=4000`" story does not hold here.** This failure logs
+   `corridor paid terrain=0 other=1000` — **there is no terrain price in it at all.** The retries are
+   identical because **+500 on one portal is not enough to change A\*'s answer**, full stop. The
+   correct general statement is the weaker one: a flat additive re-cost cannot move the search off a
+   corridor whose alternative is dearer than four steps of it.
+2. **The whole corridor is unwalkable, not just the taut chord.** `repair[full-corridor]` re-inserts
+   *every portal midpoint* and still breaches, and the `retreat` rung never even runs because it
+   requires `badReached > NavFootprint::BodyRadius()` and the body got **0.07 m**. So un-pulling was
+   never going to help, and "find a DIFFERENT corridor" — which is exactly what the re-cost loop is
+   for — is the right lever.
+
+**Root cause:** `kBreachPenalty` was added flat (500 → 1000 → 1500 → 2000 across `kMaxAttempts=4`),
+so a portal could be re-costed four times and still be the cheapest way A\* knew.
+
+**Fix (all failure-path-only, `path_search.cpp` only):**
+
+- `BannedEdge` carries the `badStopAt` that earned its last price. When the same `(poly, edge)`
+  breaches again and the body stopped within `kIdenticalStopTol` (0.5 m) of last time, the price
+  **multiplies** by `kBreachEscalation` (3) — 500 → 1500 → 4500 — instead of crawling. A retry whose
+  breach MOVED keeps the additive step, because that case was never the problem. **The distinction is
+  a MEASUREMENT, not a leg index** (the S111 correction, applied again).
+- A **terrain guard**, because escalation is precisely what could buy back S108's regression: the
+  moment a retry's corridor starts paying terrain where its predecessor paid none, the loop stops.
+  S106 priced the only corridor and the search bought its way onto class-refused ground; a faster
+  escalation makes that failure cheaper to reach, so it is now a stop condition rather than a hope.
+- A **log-only reachability oracle** (`NavMesh::FloodFrom`, reused from `nav_probe`) and a **corridor
+  dump** on total failure — see the next entry.
+
+**Containment (the tester's hard requirement was "do not break pathing on other maps"):** every line
+sits after `rep.ok` failed AND all three `PathRepair` rungs failed, on the path to `break`; the
+escalation differs from the old behaviour only on the SECOND breach of the SAME portal at the SAME
+stop, which needs attempt ≥ 2 of a request that already failed; the terrain guard can only stop the
+loop EARLIER and never refuses a route that validated. `git diff --stat` shows ONE file, and
+`path_funnel` / `path_validate` / `path_corridor` / `path_repair` / `path_march` / `nav_mesh` /
+`nav_footprint` / `map_query` / `path_surface_goal` / `path_planner` were verified unchanged **by
+diff, not by assertion**. `kMaxAttempts` / `kMaxTotalExpand` / `kProbeBudget` untouched.
+
+## Tried & Failed — arguing about "No path" from a log that cannot tell the two cases apart (through Session 114)
+
+**"No path" has meant two OPPOSITE things for this project's whole history, and the log printed them
+identically:**
+
+- the goal is **genuinely unreachable** — no chain of adjacent walkable polys exists, and refusing to
+  route is the honest answer;
+- **the search gave up** — a chain exists and something in the costing, the string-pull or the
+  validation could not turn it into a walkable polyline.
+
+Every session that theorised about a "barrier" (S111's `refused eff-flags: 0x07A01000 x305`, which
+turned out to measure search BREADTH), about over-refusal, or about pricing, was arguing without this
+distinction. **Session 115 ships the oracle that settles it in one line**, on every map, on the
+failure path only: `NavMesh::FloodFrom` from the start poly — pure adjacency plus the party's own
+walkability test, no rays, no volume tests, no costs — and whether the goal poly is in the result.
+
+Shipped alongside it: **the CORRIDOR, dumped on failure.** `corners(xyz)` prints the string-pulled
+polyline (what the body was asked to walk) but never what A\* actually found. When
+`repair[full-corridor]` fails, that distinction is the entire question — if the corridor's own
+openings do not walk either, the chord was never the problem.
+
+**Rule to carry forward: before proposing a cause for a "No path", read the `oracle:` line. If it
+says the goal IS in the component, no theory about the mesh being severed can be right.**

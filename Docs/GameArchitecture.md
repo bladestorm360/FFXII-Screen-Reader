@@ -2206,7 +2206,29 @@ trusting anything below it.**
   `3` at `+0x15`**. Whether that word holds float BITS or a converted int is not settled by the
   decompile; `sneak_assist.cpp` therefore decides per call from the stored value's own magnitude and
   logs which reading it saw. Consumed by SNEAK ASSIST (`src/navigation/sneak_assist.h`) — the mod's
-  second write-category exception, user-authorized, default OFF, danger-table maps only.
+  second write-category exception, user-authorized, ~~default OFF~~ **always on, danger-table maps
+  only (Session 115; the toggle and its `F10` key were removed after S113 was play-confirmed).**
+
+- **`FUN_002677f0` (RVA `0x1477F0`) — "is the party LEADER inside THIS object's volume?" — is the
+  SHARED CHOKE POINT under every trigger native (Sessions 113 + 115).** Leader via `FUN_003590d0` /
+  `FUN_003588b0`, party-slot bit `1 << leader[0x12]`, tested against a mask at
+  `*(object+0xB8) + 0x60 | 0x100 | 0x228`. **`object` is param_1**, which is what lets the mod answer
+  it per OBJECT instead of per map. **THREE distinct native handlers funnel into it, and none of them
+  has any caller of its own — they are dispatched from the native table:**
+  `FUN_0033fa40` (`0x26D`, the instant touch test), `FUN_003407c0` / `FUN_00340bc0` (`0x525`, the
+  waiting one), and **`FUN_0033f680`** (`FUN_00267e10` → `FUN_002677f0` → `FUN_0026b4e0`, added
+  S115). Hooking `FUN_002677f0` therefore covers every native that reaches it, whichever slot the VM
+  dispatches — which is why map 569 needed only a table row and no new mechanism.
+
+- **The ROYAL PALACE capture census (Session 115) — the palace's danger table is COMPLETE.** Maps
+  567–572 are scripts `rrp_a01`..`rrp_a06`; each `.ebp` scanned for capture-routine name strings and
+  for `CALLACT` operands. **Only 568 (`rrp_a02`: 1 capture routine `ヴァン捕獲`; `0x290` ×8, `0x26D`
+  ×4, `0x525` ×21) and 569 (`rrp_a03`: 12 capture routines incl. `捕獲レクトＡ/Ｂ/Ｃ`,
+  `捕獲レクト兵士０１..０７`, `捕獲監視監督`; `0x290` ×4) run a capture sequence at all.** 567, 570,
+  571 and 572 contain zero. 569 also uses `seteventwakerect` (`0x3DF` → `FUN_0034d470`) ×70 and an
+  unnamed `0x26E` ×77, neither yet resolved to a handler — if a capture ever survives the shipped
+  suppression on 569, those are the first two places to look and the `touch REPORTED` falsifier will
+  name the object. Confidence 0.99 (two independent signals agreeing; no inference between them).
 
 ~~**STILL OPEN:** the `meswin` field dialogue window + multi-page pagination … Best unverified lead:
 `FUN_003cb650` (RVA `0x2AB650`) case 1 vs case 0x20 … **Unverified — do not ship.**~~

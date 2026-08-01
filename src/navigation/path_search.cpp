@@ -80,6 +80,19 @@ constexpr float kTightPenalty   = 500.0f;    // body does not fit anywhere along
 constexpr float kTerrainPenalty = 2000.0f;   // the LEADER's floor class may not stand on the neighbour
 constexpr float kBlockedPenalty = 2000.0f;   // the player PHYSICALLY failed to get past here
 constexpr float kBreachPenalty  = 500.0f;    // a validated leg through this portal did not walk
+// ...AND IT MULTIPLIES WHEN THE SAME BREACH COMES BACK (Session 115). A flat +500 per attempt cannot
+// move A* off a corridor whose alternative is dearer than 2000: map 568 measured four attempts
+// returning the IDENTICAL corridor with the IDENTICAL breach (`bad=3 len=22.60m reached=0.07m
+// stop=(16.2,-7.72,120.4)` four times) while the price crawled 500->1000->1500. THE RE-COST CANNOT
+// WIN AN ARGUMENT IT IS PRICED OUT OF. A retry that reproduces the same stop has PROVED the price is
+// too low, so that -- and only that -- escalates: 500 -> 1500 -> 4500. A retry whose breach MOVED is
+// progress and keeps the gentle additive step it has always had.
+constexpr float kBreachEscalation = 3.0f;
+// How near two breach stops must be to count as the SAME breach rather than a new one. A
+// MEASUREMENT, not a leg index -- the same correction S111 applied to the final-approach rule. Well
+// under the body radius, so "the walk died in the same spot again" and "the walk got further this
+// time" cannot be confused.
+constexpr float kIdenticalStopTol = 0.5f;
 // Crossing a transition surface that is not the route's own goal fires a map jump the player did
 // not ask for (S100: the 311<->321 auto-walk bounce). Same tier as a physical block: avoided
 // whenever any alternative exists, still crossable when it is genuinely the only way.
@@ -93,7 +106,12 @@ constexpr float kForeignSeamPenalty = 2000.0f;
 // opening and the goal is unreachable, which is exactly how a route that A* had already reached the
 // goal with came back "No path". `pen` accumulates, so a portal that keeps failing keeps getting
 // dearer and the search moves off it on its own, without any attempt ever losing the option.
-struct BannedEdge { PolyId poly; int edge; float pen; };
+//
+// `stop` is where the body was refused when this portal earned its last price (Session 115). It is
+// what tells "the retry produced the same disproved corridor" apart from "the retry got further" --
+// see kBreachEscalation. Still a price: even the escalated figure is one A* will pay when the portal
+// is genuinely the only way through, which is the property S96 bought and S108 re-bought.
+struct BannedEdge { PolyId poly; int edge; float pen; FVec3 stop; };
 
 inline float Dist3(const FVec3& a, const FVec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
@@ -223,6 +241,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     }
 
     std::vector<BannedEdge> banned;
+    // The terrain price the PREVIOUS attempt's corridor paid, or -1 before any attempt has produced
+    // one. It exists for one check, below: a retry that starts paying terrain where its predecessor
+    // paid none has stopped looking for a detour and started buying its way onto ground the party's
+    // floor class may not stand on. See the guard beside the re-cost.
+    float prevPenTerrain = -1.0f;
     PassResult best{};                 // the last pass that produced a corridor at all
     std::vector<FVec3> bestPoly;
     PathValidate::LegReport bestReport{};
@@ -640,6 +663,32 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // how far short they stop.
         if (rep.ok) break;
 
+        // ---- A PENALTY IS ONLY A DETOUR WHEN A DETOUR EXISTS (Session 115) ------------------------
+        // This is S108's regression written down as a stop condition instead of trusted not to
+        // happen. Session 106 priced the ground around map 568's guards, the discs sat across the
+        // ONLY corridor, and the search did not take a wider berth -- it paid the price by leaving
+        // through the next-cheapest thing available, which was ground the party's class cannot stand
+        // on (`corridor paid terrain=8000` on every armed request), and validation then killed the
+        // route. Door 2 became unroutable where it had worked.
+        //
+        // The escalation above makes prices rise faster, so the same failure is exactly what it could
+        // buy. It cannot: the moment a retry's corridor starts paying terrain where its predecessor
+        // paid none, the re-cost has stopped finding detours and started bidding for a worse KIND of
+        // route, and the loop stops rather than spending its remaining attempts proving it. A route
+        // that validates has already broken out above, so this can never refuse a walkable route --
+        // and a corridor that pays terrain from attempt 1 is untouched, because nothing got worse.
+        if (prevPenTerrain == 0.0f && pr.penTerrain > 0.0f) {
+            char tm[240];
+            snprintf(tm, sizeof(tm),
+                     "replan: attempt %d's corridor now pays terrain=%.0f where the previous one paid "
+                     "none -- the re-cost is buying its way onto ground the party's class may not "
+                     "stand on (S108); stopping here and going to the frontier",
+                     attempt, pr.penTerrain);
+            Log::Write("NAV-ROUTE", tm);
+            break;
+        }
+        prevPenTerrain = pr.penTerrain;
+
         // RE-COST the portal the breaching leg crosses. Which one is a geometric question: the leg that
         // failed runs between two taut corners, and the portal it crosses is the one whose span sits
         // closest to that leg's midpoint. Make that (poly, edge) dearer and search again.
@@ -719,20 +768,41 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 break;
             }
         }
-        float newPen = kBreachPenalty;
-        bool  seen   = false;
-        for (BannedEdge& b : banned)
-            if (b.poly == kill.poly && b.edge == kill.edge) { b.pen += kBreachPenalty; newPen = b.pen; seen = true; break; }
-        if (!seen) banned.push_back(BannedEdge{ kill.poly, kill.edge, kBreachPenalty });
+        // ---- PRICE IT, AND ESCALATE IF THIS IS THE SAME BREACH AGAIN (Session 115) ----------------
+        // The old rule added a flat kBreachPenalty every time, which map 568 proved cannot work: the
+        // same portal came back four times with the body stopping at the SAME COORDINATE, while the
+        // price crawled 500 -> 1000 -> 1500 against alternatives dearer than that. An identical stop
+        // is not new information about the route, it is a measurement that the price was too low --
+        // so it multiplies. A stop that MOVED means the retry made progress and keeps the additive
+        // step, because that case has never been the problem.
+        float newPen    = kBreachPenalty;
+        bool  seen      = false;
+        bool  escalated = false;
+        for (BannedEdge& bn : banned) {
+            if (bn.poly != kill.poly || bn.edge != kill.edge) continue;
+            seen = true;
+            escalated = NavCommon::Distance2D(bn.stop, rep.badStopAt) <= kIdenticalStopTol;
+            bn.pen  = escalated ? bn.pen * kBreachEscalation : bn.pen + kBreachPenalty;
+            bn.stop = rep.badStopAt;
+            newPen  = bn.pen;
+            break;
+        }
+        if (!seen) banned.push_back(BannedEdge{ kill.poly, kill.edge, kBreachPenalty, rep.badStopAt });
         stats.bannedEdges = static_cast<int>(banned.size());
         {
-            char rm[272];
+            char esc[152] = "";
+            if (escalated)
+                snprintf(esc, sizeof(esc),
+                         " (ESCALATED x%.0f -- this portal breached AGAIN at the same stop (%.1f,%.1f), "
+                         "so the previous price was not enough to move the search)",
+                         kBreachEscalation, rep.badStopAt.x, rep.badStopAt.z);
+            char rm[400];
             snprintf(rm, sizeof(rm),
                      "replan: breach on leg %zu/%zu (%.1f,%.1f)->(%.1f,%.1f); portal (poly %d, edge %d) "
-                     "re-costed to %.0f and searching again -- attempt %d/%d, expands %d/%d",
+                     "re-costed to %.0f%s and searching again -- attempt %d/%d, expands %d/%d",
                      rep.firstBad, rep.total, a.x, a.z, b.x, b.z,
-                     kill.poly, kill.edge, newPen, attempt, kMaxAttempts,
-                     stats.expands, kMaxTotalExpand);
+                     kill.poly, kill.edge, newPen, esc,
+                     attempt, kMaxAttempts, stats.expands, kMaxTotalExpand);
             Log::Write("NAV-ROUTE", rm);
         }
         if (probesLeft <= 0 || stats.expands >= kMaxTotalExpand) {
@@ -832,6 +902,68 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             Log::Write("NAV-ROUTE", m);
             return rawPoly.size() >= 2 ? Plan::Route : Plan::NoPath;
         }
+    }
+
+    // ---- WHY DID THIS FAIL? (Session 115 -- LOG-ONLY, and only once everything else has given up) ---
+    //
+    // Every "No path" in this project's history has been argued about from the same two words, and the
+    // arguments went in circles because the log could not tell the two cases apart:
+    //   * the goal is GENUINELY UNREACHABLE -- there is no chain of adjacent walkable polys to it, and
+    //     refusing to route is the honest answer;
+    //   * THE SEARCH GAVE UP -- a chain exists and something in the costing, the string-pull or the
+    //     validation could not turn it into a walkable polyline.
+    // These are opposite defects and they produce the identical line. The oracle answers it in one
+    // measurement, on every map, for the whole "stuck in tight quarters" class the tester reports in
+    // the Waterways as well as the palace.
+    //
+    // It reuses `NavMesh::FloodFrom` -- pure adjacency plus the party's own walkability test, no rays,
+    // no volume tests, no costs, bounded by the mesh's own poly cap -- so it can neither be fooled by
+    // this function's pricing nor cost a frame on any request that succeeded. Nothing reads its
+    // result: it is printed and forgotten.
+    if (!goalOffMesh && goal != kNoPoly && start != kNoPoly) {
+        std::vector<PolyId> comp;
+        const int n = NavMesh::FloodFrom(start, comp);
+        bool inComponent = false;
+        for (const PolyId p : comp) if (p == goal) { inComponent = true; break; }
+        char om[288];
+        snprintf(om, sizeof(om),
+                 "oracle: goal poly %d is %s the start poly %d's adjacency component (%d polys) -- %s",
+                 goal, inComponent ? "IN" : "NOT IN", start, n,
+                 inComponent
+                     ? "the mesh connects these two, so this is the SEARCH giving up, not an "
+                       "unreachable goal"
+                     : "there is no walkable chain between them at all; \"No path\" is the honest "
+                       "answer and no amount of re-costing can change it");
+        Log::Write("NAV-ROUTE", om);
+    }
+
+    // THE CORRIDOR ITSELF, on a failure only. `corners(xyz)` above prints the string-pulled polyline,
+    // which is what the body was asked to walk -- but not what A* actually found. The distinction is
+    // the whole question when `repair[full-corridor]` fails: that rung re-inserts every portal
+    // midpoint, so if the corridor's own openings do not walk either, the chord was never the problem
+    // and no amount of un-pulling will help. Map 568 measured exactly that. Bounded to a dozen
+    // entries; this fires only where the request already ends without a route.
+    if (!best.chain.empty()) {
+        char cm[256]; int q = 0;
+        for (size_t i = 0; i < best.chain.size() && i < 12 && q < static_cast<int>(sizeof(cm)) - 12; ++i)
+            q += snprintf(cm + q, sizeof(cm) - static_cast<size_t>(q), "%s%d", i ? "->" : "",
+                          best.chain[i]);
+        char m[320];
+        snprintf(m, sizeof(m), "corridor: %zu polys %s%s", best.chain.size(), cm,
+                 best.chain.size() > 12 ? " ..." : "");
+        Log::Write("NAV-ROUTE", m);
+
+        char pm[288]; q = 0;
+        for (size_t i = 0; i < best.portals.size() && i < 8 && q < static_cast<int>(sizeof(pm)) - 32; ++i) {
+            const Portal& pp = best.portals[i].p;
+            q += snprintf(pm + q, sizeof(pm) - static_cast<size_t>(q), "%s%d:%d(%.1f,%.1f)",
+                          i ? " " : "", best.portals[i].poly, best.portals[i].edge,
+                          (pp.left.x + pp.right.x) * 0.5f, (pp.left.z + pp.right.z) * 0.5f);
+        }
+        char m2[352];
+        snprintf(m2, sizeof(m2), "corridor openings (poly:edge at their midpoints): %s%s", pm,
+                 best.portals.size() > 8 ? " ..." : "");
+        Log::Write("NAV-ROUTE", m2);
     }
 
     // ---- FRONTIER: never dead-end ------------------------------------------------------------------
