@@ -2240,6 +2240,13 @@ trusting anything below it.**
   bit 5 = only while an event is active** (native `0x3DF`), `object+0xB` bits 0/1 (natives `0x40A` /
   `0x409`). The ENTER branch continues into `FUN_00227420` / `FUN_002e1cd0(0,0xd)` / `FUN_00268530(2)`
   — handing the field to a scripted scene. **That is map 569's capture.**
+  **CLASS `+0x18 == 1` (script-created objects — rects) NEVER REACHES `FUN_003dbb60` (Session 119,
+  confidence 0.95):** the ENTER branch returns before the call and the kind-3/6 branches guard it
+  out. For those objects the update's only outputs are the inside-mask, the `object+0xC` bits, and
+  the notification registers **`FUN_003df760`** writes (`DAT_02b59c40/c80/cc0/ce0`, 4 parallel
+  arrays indexed by slot, slots 1/2 here) for the script to poll. **Any suppression aimed at the
+  fire path cannot reach that class — suppress at this function (the writer), which every read path
+  shares.** Consumed by SNEAK ASSIST S119: guard-object and capture-named volumes are skipped here.
 
 - **`FUN_003dbb60(object, kind, routineIdx, mode, flag) -> int` (RVA `0x2BBB60`) — START A SCRIPT
   ROUTINE ON AN OBJECT (Session 117).** Confidence 0.98. Builds an 8-byte event record

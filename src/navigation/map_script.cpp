@@ -252,6 +252,28 @@ bool FiredRoutineName(void* object, uint32_t eventIdx, std::string& out) {
     return !out.empty();
 }
 
+int ObjectEventNameOffsets(void* object, uint32_t* out, int cap) {
+    if (!object || !out || cap <= 0) return 0;
+    void* tbl = MemRead::PtrAt(object, 0x48);
+    if (!tbl) return 0;
+    uint32_t count = 0;
+    if (!MemRead::SafeReadU32(tbl, 0, &count) || count == 0 || count > 64) return 0;
+    int n = 0;
+    for (uint32_t i = 0; i < count && n < cap; ++i) {
+        uint32_t off = 0;
+        if (!MemRead::SafeReadU32(tbl, 4 + i * 8, &off) || off >= OFFSET_MAX) continue;
+        out[n++] = off;
+    }
+    return n;
+}
+
+int ObjectContainerId(void* object) {
+    if (!object) return -1;
+    uint8_t id = 0;
+    if (!MemRead::SafeReadU8(object, 0x15, &id)) return -1;
+    return static_cast<int>(id);
+}
+
 bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
     out.clear();
 
@@ -422,6 +444,7 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             d.routineIndex  = static_cast<int>(i);
             d.viaController = isCtrl;
             d.routineName   = AsciiSafe(names[i]);
+            d.nameOff       = U32(tbl, static_cast<size_t>(i) * ROUTINE_STRIDE + REC_NAME_OFF);
             d.jumpFlags     = jumpFlags;
             d.slot      = isCtrl ? (idx + 1) : -1;     // authoring-order id; diagnostics only
             d.group     = group;            // the walkmap tag that locates this transition

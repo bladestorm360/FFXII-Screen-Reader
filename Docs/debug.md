@@ -4839,3 +4839,41 @@ Two secondary defects fixed with it:
   design, so different objects' fires were deduplicated into one line. That is exactly how the
   capture's own fire went unlogged during the failed play. **A dedup key that omits part of the
   identity deletes evidence.** Now (object, kind, index), 96 slots.
+
+## Suppress at the WRITER; tiered log budgets; the event-table door join (Session 119, 2026-08-01)
+
+**KEYWORDS: trigger update skip class 0x18==1 never fires FUN_003dbb60 FUN_003df760 notification
+registers writer not reader log budget tiers spam exhausted 96 slots census event-door nameOff join**
+
+### TRIED & FAILED — declining the capture at the event-fire hook (S117/S118 design)
+
+`FUN_0025c830` fires `FUN_003dbb60` ONLY for objects with class `+0x18 != 1`. Script-created rects
+are `+0x18 == 1`: the ENTER branch returns before the call, the kind-3/6 branches guard it out, and
+the update's outputs for them are the inside-mask, `object+0xC` bits, and the `FUN_003df760`
+notification registers the script polls. **A capture rect of that class never passes through the fire
+hook, so no decline there can reach it — the suppression point must be the WRITER
+(`FUN_0025c830`), which every read path shares.** S119 skips the update outright for guard objects
+and for objects whose event table names a `捕獲` routine (both measured identities, fail-open).
+
+### TRIED & FAILED — one shared budget for the fire log
+
+The S118 play spent all 96 slots on load-time `init`/`main` fires in 18 s; the line that mattered
+could never print. The play before, an under-keyed dedup deleted it. **A shared budget is a dedup key
+with the same failure mode: whatever fills it first decides what evidence survives.** Now tiered by
+what a line can prove: capture-named fires always log; trigger-volume fires get the per-object dedup
+and the big budget; script/other spam gets 16.
+
+### SOLVED — a door under Interactables (event-bound doors have no +0x70 record)
+
+`doorway` comes from the field-sign table alone; a door whose transition is event-bound (569's
+`[0:57]`, routines `door1`/`door3`) has no record and fell to Object. The join that exists in game
+data: `ExitDest::nameOff` (the transition routine's name-pool offset) == an entry in the object's own
+event table (`object+0x48`). Integer compare in one pool, container-checked; category Door only, no
+destination spoken, `doorway` untouched. **First measured object<->routine binding this project has
+had — the 569-exits backlog should start from it.**
+
+### Still unobserved
+
+The 569 capture mechanism has never appeared in a log — two plays, two logging failures. The per-
+object trigger census (one line per object: class, flags, event names, position, nearest guard) now
+guarantees the next play names it even if the S119 skip does not already stop it.

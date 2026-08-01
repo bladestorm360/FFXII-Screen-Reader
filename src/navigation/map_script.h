@@ -62,6 +62,12 @@ struct ExitDest {
     // decide -- the event does. Recorded so a log line can never present an inference as a reading.
     bool         groupInferred = false;
     std::string  routineName;      // sanitised, for the log only (most are Shift-JIS)
+    // The routine's NAME-POOL OFFSET -- the join key that binds a door OBJECT to its transition
+    // (Session 119). Scene objects carry an event table (`object+0x48`) whose entries are name-pool
+    // offsets into the same pool, so `entry == nameOff` is the map's own data saying "this object's
+    // events run that routine": no authoring order (banned S46/S58), no label text, no locale.
+    // Only comparable within one container's pool; see ObjectEventNameOffsets.
+    uint32_t     nameOff = 0;
     // The `mapjump` call's third literal. NOT a transition kind: the decompile chain
     // FUN_00355350 -> FUN_00314440 -> FUN_003145e0 uses it as a PRESENTATION bitfield (bit 0 picks
     // the no-fade path, bit 1 feeds FUN_002efa70). `0x0A` is the world-map teleport menu's
@@ -116,6 +122,18 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail);
 // nothing here is user-facing text. False on a torn/absent blob, table, or an out-of-range index --
 // callers must treat that as "unknown", never as "not a match".
 bool FiredRoutineName(void* object, uint32_t eventIdx, std::string& out);
+
+// The RAW name-pool offsets in `object`'s event table (`object+0x48`, [count:u32][8-byte records]),
+// up to `cap`. Returns how many were written; 0 on no/unreadable table. The offset form exists for
+// exact joins against `ExitDest::nameOff` -- an integer compare in the map's own pool, immune to the
+// Shift-JIS names that `AsciiSafe` mangles. Offsets are pool-relative, so a join is only valid when
+// both sides live in the SAME container: check ObjectContainerId first.
+int ObjectEventNameOffsets(void* object, uint32_t* out, int cap);
+
+// Which script container owns `object` (`object+0x15`, the id `FUN_00263ff0` indexes the handle
+// table with). -1 when unreadable. The map-global script -- the one ReadExitDests parses -- is
+// container 0.
+int ObjectContainerId(void* object);
 
 // Session 57 capture (file-only, `'`-triggered): dumps BOTH parallel position tables (+0x54 and +0x84)
 // raw + un-deduped, and every `__MJ_CTRL` routine's full bytecode with its CALLACTPOPA native calls

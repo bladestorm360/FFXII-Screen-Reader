@@ -32,6 +32,15 @@ pathfinder work:
 | `ui/menu_reader.cpp` | 570 | Hooks + speech decisions; grew past its S51 split |
 | `navigation/entity_postscan.cpp` | 546 | Sign/doorway tagging + the twin filter |
 
+**Session 119 grew two of the debtors during the live 569 defect chase** — recorded here rather than
+split mid-firefight, because both changes had to land at existing choke points and a motion-only
+refactor under an unconfirmed fix would have doubled the risk:
+
+| File | Lines | Note |
+|---|---|---|
+| `navigation/entity_postscan.cpp` | 667 | +event-door pass (S119) on top of the twin filter. Clean seam when paid: the sign/doorway/twin block vs the label/numbering passes. |
+| `navigation/sneak_assist.cpp` | 651 | Was 292 in S116; +event-fire hook (S117/118) + trigger census/skip (S119). Clean seam: the script-native clamps vs the engine-trigger machinery — but split only after 569 is play-confirmed, not before. |
+
 Re-measured **2026-07-30 (Session 94)**. The same four files are over, and none of them grew materially:
 `menu_reader.cpp` took the two-line gambit dispatch branch and `ingame_menu_reader.cpp` a corrected
 comment, both of which had to land in those files -- the dispatch is the one choke point for `0x8000`,

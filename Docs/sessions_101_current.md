@@ -1612,3 +1612,83 @@ and no capture. The falsifier is unchanged: a capture with no `CAPTURE, SUPPRESS
 per-object log now naming what actually fired. The impossible names (`setup` as a volume's kind-3)
 must be gone — if they persist, the chain is still wrong and the log says where. 568: unchanged
 expectations (`clamp ACTIVE`, `touch SUPPRESSED`), zero `event fire` lines off 568/569.
+
+## Session 119 — 2026-08-01 — [navigation] Skip the volume at the WRITER; a census that cannot miss; and the event-table join names a door
+
+**KEYWORDS: sneak assist 569 third round trigger update skip FUN_0025c830 class +0x18==1 never fires
+FUN_003dbb60 notification registers FUN_003df760 DAT_02b59c40 mask node+0x60 writer not reader
+trigger census per object event names nearest guard log budget tiers spam init main 96 slots
+exhausted event-door nameOff join ExitDest object+0x48 category Door twin KEPT play-confirmed**
+
+Third round on the 569 capture. The S118 resolver is CONFIRMED (names now real: `init`/`main`), and
+the twin filter is PLAY-CONFIRMED (`twin KEPT "Door" … 90.06m`, `Shop=0`, `[0:56]` cat=Door). But the
+guard still caught the player, and the log had — again — no line for it: **all 96 fire-log slots were
+spent on load-time `init`/`main` spam inside 18 seconds.** Two plays, two different logging failures,
+and the capture's mechanism has STILL never been observed.
+
+### What a closer read of `FUN_0025c830` settles
+
+**Objects of class `+0x18 == 1` (script-created — rects) NEVER reach `FUN_003dbb60`.** The ENTER
+branch returns before the call; the kind-3/6 branches guard it out. Their trigger update's only
+outputs are the inside-mask at `node+0x60`, status bits on `object+0xC`, and the notification
+registers `FUN_003df760` writes (`DAT_02b59c40/c80/cc0/ce0`, slots 1/2) for the script to poll. **A
+capture rect of that class is invisible to the fire hook by construction** — no decline there can
+ever reach it. The S117/S118 fire-hook design could only have worked for `+0x18 != 1` volumes.
+
+### The fix — suppress at the WRITER, which every read path shares
+
+`HookedTriggerUpdate` (already installed as the scope marker) now SKIPS the original for exactly two
+measured identities, danger-table maps only:
+
+1. **A guard's own object** (`IsGuardObject`, the npcdic snapshot) — S113's user-approved "silence
+   the guards' own trigger volume, per object", moved from the reader (`FUN_002677f0`, which 569's
+   script never calls) to the writer. Covers vision volumes attached to the guards themselves.
+2. **An object whose own event table names a `捕獲` routine** — the same author's-own-word rule the
+   fire hook applies, evaluated over the identity a rect actually carries.
+
+A skipped volume's mask is never written, bits never set, registers never posted, fires never issued
+— inert on every downstream path at once, whichever one the script polls. Fail-open: unreadable
+table/names ⇒ no skip. The fire-hook decline stays as the second net for `+0x18 != 1` volumes.
+**NOTE for 568:** guards there are also skipped now (same table, same identities) — S113 established
+568's sequence lives in servant routines + the distance watcher, but this is a behaviour change on
+the working map; the gate below covers it.
+
+### The census that cannot miss
+
+One line per object the trigger update touches on a danger map, first touch, file-only:
+`trigger census obj=… class=0x… f8/fB/fC=… pos=… nearestGuard=…m evt=N names:a|b|c` (+
+`<== NAMES A CAPTURE ROUTINE`). Whatever catches the player next play IS in this table — class,
+flags, event names, position, distance to the nearest guard — and turning it into a rule is one
+read. 160 objects, overflow logged loudly.
+
+**Log budgets are now tiered by what a line can prove:** capture-named fires always log;
+trigger-volume fires get the per-object dedup and the 96 slots; script/other spam gets 16. The S118
+play was the second in a row where the logging design deleted the one line that mattered — first by
+an under-keyed dedup, then by an unpartitioned budget. **A shared budget is a dedup key with the
+same failure mode: whatever fills it first decides what evidence survives.**
+
+### The door under Interactables (tester's report, same play)
+
+`[0:57]` — the door the old twin filter used to DELETE — survived and listed under Interactables:
+`doorway` comes from the `+0x70` sign table alone, and the map's only group-0 record claims the
+OTHER door. The binding that does exist is the map's own: **`ExitDest` now carries its routine's
+name-pool offset, and a scene object's event table (`object+0x48`) holds name-pool offsets — offset
+== offset says "this object's events run that transition routine."** S102's "the binding is the
+CALLS", object-side; an integer compare in one pool, no authoring order (S46/S58), no label text, no
+locale. New pass in `TagDoorwaysAndDropSignTwins` promotes such objects to `Category::Door` (never
+Shop; `doorway` stays false; no destination is spoken — the exits work stays open). **This join —
+object ↔ transition routine via nameOff — is also the first measured object↔routine binding this
+project has had; the 569-lists-zero-exits backlog should start from it.**
+
+### Verify next play (569 focus)
+
+- Walking into a guard/capture volume: `trigger update SKIPPED for obj=…` and **no capture**. If a
+  capture still happens, the census table + the tiered fire log now name the mechanism — read them
+  before proposing anything.
+- `trigger census` lines: expect the ~70 rects with `class=0x01`, their event names, and
+  `NAMES A CAPTURE ROUTINE` on the capture rects. If NO census object names a capture routine, rule
+  2 never fires and the census says what to key on instead.
+- `[0:57]` lists under **Doors** (`Door=2`), `event-door:` line on map change, Shop still 0.
+- 568 (when tested): sequence still completes; `clamp ACTIVE` + `touch SUPPRESSED` still print;
+  `trigger update SKIPPED … a guard's own object` ×2 is EXPECTED there now.
+- Off 568/569: zero `SNEAK` lines beyond install + census prints.

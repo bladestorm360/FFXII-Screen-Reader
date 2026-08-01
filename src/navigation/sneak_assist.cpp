@@ -8,11 +8,14 @@
 
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/mem_read.h"
 #include "navigation/entity_list.h"
 #include "navigation/map_names.h"
 #include "navigation/map_script.h"
+#include "navigation/nav_common.h"
 #include "navigation/nav_rva.h"
 #include "navigation/path_danger.h"
+#include "navigation/player_state.h"
 
 #include <string>
 
@@ -286,18 +289,28 @@ EventFireFn s_origFire = nullptr;
 // would stall the sequence rather than save it. So the trigger update is bracketed and only fires
 // issued inside it are candidates. Game thread on both sides; the flag is thread-local, so nothing
 // else can observe or race it.
+//
+// ---- AND SINCE SESSION 119 THE UPDATE ITSELF IS THE SUPPRESSION POINT. --------------------------
+// The S118 play forced the question the fire hook cannot answer: `FUN_0025c830` fires `FUN_003dbb60`
+// ONLY for objects whose class byte `+0x18 != 1`. For `+0x18 == 1` (script-created objects -- which
+// rects are) every branch either skips the fire or returns before it, and the update's outputs are
+// the inside-mask at `node+0x60`, the status bits on `object+0xC`, and the notification registers
+// `FUN_003df760` writes (`DAT_02b59c40..ce0`, slots 1/2) for the script to poll. A capture rect of
+// that class NEVER passes through the fire hook, and no decline there can reach it.
+//
+// So the update is skipped outright -- mask never set, bits never set, registers never written, and
+// the fire (when the class does fire one) never issued -- for exactly two object identities, both
+// MEASURED, on danger-table maps only:
+//   1. A GUARD'S OWN OBJECT (`IsGuardObject`, the npcdic snapshot). This is S113's user-approved
+//      design -- "silence the guards' own trigger volume, per object" -- moved from the reader
+//      (`FUN_002677f0`, which 569's script never calls) to the writer, which every read path shares.
+//   2. AN OBJECT WHOSE OWN EVENT TABLE NAMES A `捕獲` ROUTINE (`ObjectNamesCapture` below) -- the
+//      map author's own word for the fail branch, the same rule the fire hook applies, evaluated
+//      over the identity a rect actually carries.
+// Everything else runs the original unchanged. Fail-open: an unreadable table or names mean NO skip.
 using TriggerUpdateFn = void(__fastcall*)(void*, void*);
 TriggerUpdateFn s_origTrigger = nullptr;
 thread_local bool t_inTriggerUpdate = false;
-
-void __fastcall HookedTriggerUpdate(void* container, void* object) {
-    // Unconditional and map-independent -- two stores around a passthrough. Gating it on the danger
-    // table would cost a table scan per trigger object per frame to save one bool.
-    const bool prev = t_inTriggerUpdate;
-    t_inTriggerUpdate = true;
-    if (s_origTrigger) s_origTrigger(container, object);
-    t_inTriggerUpdate = prev;
-}
 
 // `捕獲` ("capture") in Shift-JIS, the encoding the name pool stores. This is the GAME's word for its
 // own fail branch, read out of the game's own script -- not a mod-authored label, and never spoken.
@@ -327,6 +340,11 @@ struct FireSeen { void* obj; uint32_t key; };
 constexpr int kMaxFiresSeen = 96;
 FireSeen         s_firesSeen[kMaxFiresSeen] = {};
 std::atomic<int> s_firesSeenN{0};
+
+// The spam tier's own budget (script/other fires -- map boot REQs, conversations). Separate from the
+// trigger-volume dedup so load-time volume can never starve the lines that decide anything.
+constexpr int    kScriptFireLogBudget = 16;
+std::atomic<int> s_scriptFiresLogged{0};
 
 bool NoteFireOnce(void* object, uint32_t kind, uint32_t routineIdx) {
     const uint32_t key = (kind << 24) | (routineIdx & 0xFFFFFFu);
@@ -366,6 +384,138 @@ bool IsCaptureRoutine(void* object, uint32_t idx, std::string& name) {
     return name.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos;
 }
 
+// ---- The per-object trigger census (Session 119, danger maps only, file-only) -------------------
+//
+// TWO PLAYS FAILED FOR TWO DIFFERENT LOGGING REASONS and the capture's mechanism has still never
+// been OBSERVED -- S118's object-less dedup hid it, then S118's fix spent all 96 log slots on the
+// load-time `init`/`main` spam before the player took a step. This census cannot miss: ONE line per
+// object the trigger update touches, the first time it touches it, carrying every identity surface
+// the object has -- class byte, flag bytes, event-table names, position, distance to the nearest
+// guard, and the skip verdict. Whatever catches the player next is IN this table, and turning it
+// into a rule is one read.
+struct TriggerObj {
+    void* obj          = nullptr;
+    bool  namesCapture = false;   // its event table names a `捕獲` routine (cached verdict)
+    bool  skipLogged   = false;   // the skip line for this object has been written
+};
+constexpr int kMaxTriggerObjs = 160;
+TriggerObj s_trigObjs[kMaxTriggerObjs] = {};
+int        s_trigObjN = 0;                 // game thread only -- no atomics needed
+bool       s_trigObjOverflow = false;
+
+// Does this object's OWN event table name a capture routine? Walks every entry through the same
+// chain the fire hook resolves one entry with. Unreadable table or names => false (fail open).
+bool ScanObjectForCaptureNames(void* object, std::string* firstNames, int* outCount) {
+    bool hit = false;
+    void* tbl = MemRead::PtrAt(object, 0x48);
+    uint32_t count = 0;
+    if (tbl) MemRead::SafeReadU32(tbl, 0, &count);
+    if (count > 64) count = 0;             // torn read; treat as no table
+    if (outCount) *outCount = static_cast<int>(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string nm;
+        if (!MapScript::FiredRoutineName(object, i, nm)) continue;
+        if (nm.find(kCaptureMarker, 0, kCaptureMarkerLen) != std::string::npos) hit = true;
+        if (firstNames && i < 6) {
+            if (!firstNames->empty()) *firstNames += "|";
+            *firstNames += NameForLog(nm);
+        }
+    }
+    return hit;
+}
+
+// First sight of an object: census-log it and cache the capture-name verdict. Returns its record.
+TriggerObj* CensusOnce(void* object) {
+    for (int i = 0; i < s_trigObjN; ++i)
+        if (s_trigObjs[i].obj == object) return &s_trigObjs[i];
+    if (s_trigObjN >= kMaxTriggerObjs) {
+        if (!s_trigObjOverflow) {
+            s_trigObjOverflow = true;
+            Log::Write("SNEAK", "trigger census FULL (160 objects) -- later objects are NOT counted; "
+                                "if the capture is still unexplained, raise kMaxTriggerObjs");
+        }
+        return nullptr;
+    }
+    TriggerObj* rec = &s_trigObjs[s_trigObjN++];
+    rec->obj = object;
+
+    std::string names;
+    int evtCount = 0;
+    rec->namesCapture = ScanObjectForCaptureNames(object, &names, &evtCount);
+
+    uint8_t cls = 0, f8 = 0, fB = 0, fC = 0;
+    MemRead::SafeReadU8(object, 0x18, &cls);
+    MemRead::SafeReadU8(object, 0x08, &f8);
+    MemRead::SafeReadU8(object, 0x0B, &fB);
+    MemRead::SafeReadU8(object, 0x0C, &fC);
+
+    FVec3 pos{};
+    const bool posOk = PlayerState::ReadSceneObjectPos(object, pos);
+    float guardDist = -1.0f;
+    if (posOk) {
+        const int n = s_guardN.load(std::memory_order_acquire);
+        for (int i = 0; i < n && i < kMaxGuards; ++i) {
+            FVec3 gp{};
+            if (!PlayerState::ReadSceneObjectPos(s_guards[i], gp)) continue;
+            const float d = NavCommon::Distance2D(pos, gp);
+            if (guardDist < 0.0f || d < guardDist) guardDist = d;
+        }
+    }
+
+    char m[400];
+    snprintf(m, sizeof(m),
+             "trigger census obj=%p class=0x%02X f8=0x%02X fB=0x%02X fC=0x%02X pos=(%.1f,%.1f,%.1f) "
+             "nearestGuard=%.1fm evt=%d names:%s%s",
+             object, cls, f8, fB, fC,
+             posOk ? pos.x : 0.0f, posOk ? pos.y : 0.0f, posOk ? pos.z : 0.0f,
+             guardDist, evtCount, names.empty() ? "(none)" : names.c_str(),
+             rec->namesCapture ? "  <== NAMES A CAPTURE ROUTINE" : "");
+    Log::Write("SNEAK", m);
+    return rec;
+}
+
+void __fastcall HookedTriggerUpdate(void* container, void* object) {
+    // Off the danger table this is the original plus one two-row scan -- no census, no skip, and the
+    // bracket still marks the extent so the fire hook's `src=` stays truthful everywhere.
+    if (!CoveredMap()) {
+        const bool prev = t_inTriggerUpdate;
+        t_inTriggerUpdate = true;
+        if (s_origTrigger) s_origTrigger(container, object);
+        t_inTriggerUpdate = prev;
+        return;
+    }
+
+    TriggerObj* rec = CensusOnce(object);
+
+    // THE SKIP. A guard's own volume, or a volume whose event table names a capture routine, is
+    // inert: mask never written, bits never set, notification registers never posted, fires never
+    // issued. Both identities are measured; everything else runs the original unchanged.
+    const bool guard = IsGuardObject(object);
+    if (guard || (rec && rec->namesCapture)) {
+        if (rec && !rec->skipLogged) {
+            rec->skipLogged = true;
+            char m[224];
+            snprintf(m, sizeof(m),
+                     "trigger update SKIPPED for obj=%p on map %d -- %s; its volume reports nobody, "
+                     "on every read path at once",
+                     object, MapNames::CurrentMapId(),
+                     guard ? "a guard's own object (npcdic snapshot)"
+                           : "its event table names a capture routine");
+            Log::Write("SNEAK", m);
+            if (guard) {
+                const std::wstring label = EntityList::LabelForSceneObject(object);
+                if (!label.empty()) Log::WriteW("SNEAK", "  skipped object is: ", label);
+            }
+        }
+        return;
+    }
+
+    const bool prev = t_inTriggerUpdate;
+    t_inTriggerUpdate = true;
+    if (s_origTrigger) s_origTrigger(container, object);
+    t_inTriggerUpdate = prev;
+}
+
 int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx, int mode, int flag) {
     // OFF-TABLE IS THE FIRST BRANCH, exactly as the two hooks above: on every map but the danger
     // table's this is the original plus one table scan, and nothing below is reachable. Trigger fires
@@ -379,10 +529,22 @@ int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx,
     const bool capture    = IsCaptureRoutine(object, routineIdx, name);
     const bool suppress   = capture && fromVolume;
 
-    // EVERY fire on a table map is logged, matched or not, suppressed or not -- that is the falsifier.
-    // "the resolution chain is wrong" and "this volume is not a capture" would otherwise print
-    // identically, and so would "the capture came from somewhere other than a trigger volume".
-    if (NoteFireOnce(object, kind, routineIdx)) {
+    // THE LOG BUDGET IS TIERED BY WHAT THE LINE CAN PROVE (Session 119). The S118 play burned all 96
+    // shared slots on load-time `init`/`main` fires inside 18 seconds, so the one line that mattered
+    // could never print -- the cap deleted the evidence exactly as the object-less key had the play
+    // before. Now: a CAPTURE-named fire always logs, budget be damned (there are twelve on the worst
+    // map); a trigger-volume fire gets the per-object dedup and the big budget (these are the
+    // falsifier); script/other fires -- the spam tier, and the tier that is never declined -- get a
+    // small count so the file still shows the map booting without drowning the rest.
+    bool logIt;
+    if (capture) {
+        logIt = true;
+    } else if (fromVolume) {
+        logIt = NoteFireOnce(object, kind, routineIdx);
+    } else {
+        logIt = (s_scriptFiresLogged < kScriptFireLogBudget) && ++s_scriptFiresLogged;
+    }
+    if (logIt) {
         char m[320];
         snprintf(m, sizeof(m),
                  "event fire on map %d: obj=%p kind=%u routine=%u src=%s name=\"%s\" -- %s",
@@ -424,13 +586,16 @@ bool Init() {
     const bool okTouch = Hooks::InstallTyped(NavRva::TOUCH_TEST, &HookedTouchTest, &s_origTouch);
     Log::Write("SNEAK", okTouch ? "touch-test hook installed (the guards' own trigger volume)"
                                 : "touch-test hook FAILED to install -- guards will still notice you");
-    // The scope marker goes in FIRST: an event-fire hook without it would have no way to tell a
-    // trigger volume's fire from one the script asked for, and only the first may be declined.
+    // The trigger-update hook goes in FIRST: it is the scope marker for the fire hook AND, since
+    // S119, the suppression point itself -- a guard's or capture-named object's volume is skipped
+    // outright, which silences every downstream signal at once (mask, bits, notification registers,
+    // fires), including the paths class +0x18==1 objects take that never reach the fire hook.
     const bool okTrig = Hooks::InstallTyped(NavRva::TRIGGER_UPDATE, &HookedTriggerUpdate,
                                             &s_origTrigger);
     Log::Write("SNEAK", okTrig
-        ? "trigger-volume scope marker installed (only fires issued inside it may be declined)"
-        : "trigger-volume scope marker FAILED to install -- no fire will be declined at all");
+        ? "trigger-update hook installed (guard/capture volumes are skipped at the writer; also the "
+          "fire hook's scope marker, and the per-object census on danger maps)"
+        : "trigger-update hook FAILED to install -- rect volumes cannot be silenced");
     const bool okFire = Hooks::InstallTyped(NavRva::EVENT_FIRE, &HookedEventFire, &s_origFire);
     Log::Write("SNEAK", okFire
         ? "event-fire hook installed (a trigger volume starting a routine -- map 569's catch, which "
@@ -471,11 +636,16 @@ void OnMapTeardown() {
     s_loggedSuppress.store(false, std::memory_order_relaxed);
     s_loggedThisMap.store(false, std::memory_order_relaxed);
 
-    // The fires-seen latch holds scene-object pointers that die with the map -- cleared for the same
-    // reason the guard snapshot is: an identity is only valid inside the map it was read on. (The
-    // S117 per-index verdict cache is GONE, not merely cleared -- the index is object-local, so a
-    // cached verdict keyed on the bare index was wrong within a single map, not just across two.)
+    // The fires-seen latch, the spam budget and the trigger census all hold scene-object pointers or
+    // verdicts that die with the map -- cleared for the same reason the guard snapshot is: an
+    // identity is only valid inside the map it was read on. (The S117 per-index verdict cache is
+    // GONE, not merely cleared -- the index is object-local, so a cached verdict keyed on the bare
+    // index was wrong within a single map, not just across two.)
     s_firesSeenN.store(0, std::memory_order_relaxed);
+    s_scriptFiresLogged.store(0, std::memory_order_relaxed);
+    for (int i = 0; i < s_trigObjN; ++i) s_trigObjs[i] = TriggerObj{};
+    s_trigObjN = 0;
+    s_trigObjOverflow = false;
 }
 
 } // namespace SneakAssist

@@ -9,6 +9,7 @@
 #include "navigation/nav_common.h"
 #include "navigation/map_exits.h"
 #include "navigation/map_names.h"
+#include "navigation/map_script.h"
 #include "navigation/entity_labels.h"
 #include "navigation/exit_scan.h"
 #include "core/mem_read.h"
@@ -481,6 +482,54 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
         if (!e.doorway) continue;
         if (e.category != EntityList::Category::Object) continue;
         e.category = e.hasNameSign ? EntityList::Category::Shop : EntityList::Category::Door;
+    }
+
+    // ---- EVENT-BOUND DOORS (Session 119) --------------------------------------------------------
+    //
+    // `doorway` -- and so everything above -- comes from the `+0x70` field-sign table alone, and a
+    // door whose transition is EVENT-bound has no record there: map 569's second "Door" ([0:57])
+    // survived the fixed twin filter and then listed under Interactables, because the map's only
+    // group-0 record claims the OTHER door. The tester heard a door filed as not-a-door.
+    //
+    // The binding that does exist is the map's own: a scene object's EVENT TABLE (`object+0x48`)
+    // holds name-pool offsets, and `ReadExitDests` knows the name-pool offset of every routine that
+    // calls `mapjump`. Offset == offset is the object saying "my events run that transition routine"
+    // -- S102's "the binding is the CALLS, not the NAME", object-side. An integer compare in one
+    // pool: no authoring-order pairing (banned S46/S58), no label text, no locale dependence.
+    // Comparable only within one container, so non-global objects (own-controller actors) are
+    // skipped -- transition routines live in the map-global script, container 0.
+    //
+    // CATEGORY ONLY. `doorway` stays false (it records the +0x70 fact and feeds the sign pairing),
+    // and no destination is spoken from this match -- which routine goes WHERE via which surface is
+    // the still-open exits work, not this pass.
+    {
+        std::vector<MapScript::ExitDest> dests;
+        bool haveDests = false;   // parsed lazily: most maps have no unclassified interactables left
+        for (auto& e : out) {
+            if (e.category != EntityList::Category::Object) continue;
+            if (!e.sceneObj || !e.gameNamed) continue;
+            if (MapScript::ObjectContainerId(e.sceneObj) != 0) continue;
+            uint32_t offs[8];
+            const int n = MapScript::ObjectEventNameOffsets(e.sceneObj, offs, 8);
+            if (n <= 0) continue;
+            if (!haveDests) { MapScript::ReadExitDests(dests, false); haveDests = true; }
+            for (const auto& d : dests) {
+                bool hit = false;
+                for (int i = 0; i < n && !hit; ++i) hit = (offs[i] == d.nameOff && d.nameOff != 0);
+                if (!hit) continue;
+                e.category = EntityList::Category::Door;
+                if (logDetail) {
+                    char m[224];
+                    snprintf(m, sizeof(m),
+                             "event-door: obj [%u:%u] at (%.1f,%.1f,%.1f) -- its event table names "
+                             "transition routine \"%s\" (nameOff 0x%X) -> Category::Door",
+                             e.container, e.slot, e.pos.x, e.pos.y, e.pos.z,
+                             d.routineName.c_str(), d.nameOff);
+                    Log::Write("NAV-DIAG", m);
+                }
+                break;
+            }
+        }
     }
 }
 
