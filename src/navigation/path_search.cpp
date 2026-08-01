@@ -671,42 +671,14 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             const float d2 = dx * dx + dz * dz;
             if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bestIdx = k; }
         }
-        PortalRef kill = pr.portals[bestIdx];
+        const PortalRef& kill = pr.portals[bestIdx];
         // The START poly's own edges are left alone: pricing one can push the search off its own seed
         // and reproduce S76's `expands=1 touched=0` (the search never ran).
-        //
-        // BUT MIDPOINT ATTRIBUTION LIES ON A LONG FIRST LEG (Session 106). On this mesh the start
-        // triangle is often an entire room, so leg 1 can be 8 m long with its midpoint nearest the
-        // seed's own edge while the sweep's stop -- the obstruction -- sits at the far end (568's
-        // z=121 lane: len 8.13 m, reached 7.51 m, stopped at the stair pinch; every such request
-        // ended pass=no-frontier and a false "No path"). Before conceding, re-attribute by the STOP
-        // POINT: that is where the body was refused, and a portal there is a real candidate the
-        // seed rule was never meant to protect. Only if THAT portal is also the seed's own edge is
-        // the breach genuinely on the seed, and the frontier is the honest remainder.
         if (kill.poly == start) {
-            size_t stopIdx = 0;
-            float  stopD2  = -1.0f;
-            for (size_t k = 0; k < pr.portals.size(); ++k) {
-                const Portal& q = pr.portals[k].p;
-                const float mx = (q.left.x + q.right.x) * 0.5f, mz = (q.left.z + q.right.z) * 0.5f;
-                const float dx = mx - rep.badStopAt.x, dz = mz - rep.badStopAt.z;
-                const float d2 = dx * dx + dz * dz;
-                if (stopD2 < 0.0f || d2 < stopD2) { stopD2 = d2; stopIdx = k; }
-            }
-            if (pr.portals[stopIdx].poly != start) {
-                kill = pr.portals[stopIdx];
-                char am[224];
-                snprintf(am, sizeof(am),
-                         "replan: midpoint attribution landed on the START poly's own edge; "
-                         "re-attributed by the sweep stop (%.1f,%.1f) -> portal (poly %d, edge %d)",
-                         rep.badStopAt.x, rep.badStopAt.z, kill.poly, kill.edge);
-                Log::Write("NAV-ROUTE", am);
-            } else {
-                Log::Write("NAV-ROUTE",
-                           "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
-                           "(that would strand the seed); going to the frontier instead");
-                break;
-            }
+            Log::Write("NAV-ROUTE",
+                       "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
+                       "(that would strand the seed); going to the frontier instead");
+            break;
         }
         float newPen = kBreachPenalty;
         bool  seen   = false;
