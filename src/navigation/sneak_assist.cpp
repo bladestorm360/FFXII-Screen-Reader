@@ -36,6 +36,16 @@ constexpr size_t    SLOT_STRIDE      = 0x28;
 constexpr float kClampMetres = 9999.0f;
 
 std::atomic<bool> s_installed{false};
+// ---- IS THE HOOKED NATIVE EVER CALLED? (S110 -- log-only, toggle-independent) --------------------
+// The first play test armed the toggle on map 568, ran the minigame through three complete
+// shout/capture cycles, and produced ZERO clamp lines. Toggle on + map covered + hook installed
+// should have logged one. Something upstream of the clamp is wrong, and exactly two hypotheses fit:
+// the script never calls this native during the sequence (so the capture is driven by something
+// else -- the map's rect/touch tests are the obvious candidate), or the hook is not on the function
+// the VM dispatches. **These counters tell the two apart with one play session**, and they run
+// regardless of the toggle so the answer does not depend on the feature working.
+std::atomic<uint32_t> s_callsThisMap{0};
+std::atomic<bool>     s_loggedFirstCall{false};
 // Log-only, and reset on every disarm: the watcher polls per frame, so without this the first-clamp
 // evidence would be O(frames). This suppresses a LOG line, never speech (CLAUDE.md's log-volume
 // exception -- the per-frame producer is the map script's own watcher routine).
@@ -93,6 +103,18 @@ bool ClampResultSlot(void* ctx, float* outOriginal, bool* outWasFloat) {
 }
 
 void __fastcall HookedScriptDistance(void* ctx, void* a2, void* a3, void* vm) {
+    // Log-only census (S110). One relaxed increment per call, and ONE log line per map load -- the
+    // script polls this, so anything per-call would be O(frames). Deliberately ABOVE the toggle
+    // check: the question it answers ("is this native called at all?") must not depend on the
+    // feature being switched on.
+    s_callsThisMap.fetch_add(1, std::memory_order_relaxed);
+    if (!s_loggedFirstCall.exchange(true, std::memory_order_relaxed)) {
+        char m[160];
+        snprintf(m, sizeof(m), "native FIRED on map %d (first call this map) -- the hook is on a "
+                               "function the script actually calls", MapNames::CurrentMapId());
+        Log::Write("SNEAK", m);
+    }
+
     // THE UNARMED PATH IS THE FIRST BRANCH -- with the toggle off, this function is the original
     // plus one relaxed atomic load, and no write below is reachable.
     if (!ToggleOn()) {
@@ -149,6 +171,18 @@ bool ArmedHere() {
 }
 
 void OnMapTeardown() {
+    // The census verdict for the map being left (S110, log-only). A ZERO here on a covered map
+    // whose sequence the player actually played is the falsifier: it means the script never calls
+    // this native, so no clamp of it could ever have worked and the capture is driven by something
+    // else. Printed for EVERY map, because "which maps use it at all" is the same question.
+    {
+        const uint32_t n = s_callsThisMap.exchange(0, std::memory_order_relaxed);
+        s_loggedFirstCall.store(false, std::memory_order_relaxed);
+        char m[144];
+        snprintf(m, sizeof(m), "map %d census: the distance native was called %u time(s) while it "
+                               "was loaded", MapNames::CurrentMapId(), n);
+        Log::Write("SNEAK", m);
+    }
     // Unconditional: read the toggle, and if it is on, put it back off. Checked on EVERY teardown
     // rather than only when leaving a covered map, because the state that matters is "armed while
     // the player walks into somewhere new", and a map load is exactly where that would happen.
