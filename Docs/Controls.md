@@ -133,6 +133,27 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 - Confirm Button: Type A (A) / Type B (B) — user has Type B
 - Miscellaneous → Default (restore-defaults button)
 
+> ## ⚠ STRUCK (Session 112): "free — game binds F1/F2/F3 only"
+>
+> That claim appears in the Conflict column of nearly every row below and it is **FALSE**. It was
+> derived from the game's own **Controls configuration screen**, which lists only rebindable actions
+> — and the game has bindings that screen never shows.
+>
+> **`F9` is bound by the game to "Hide On-Screen Keyboard".** Measured from the game's own
+> on-screen-keyboard overlay, photographed by the tester on map 568: the panel's footer reads
+> `F9  Hide On-Screen Keyboard`, and `Space  Close`. The mod also binds `F9` (audio beacon), and the
+> mod is strictly read-only on input — **it cannot swallow a key** — so every beacon toggle ALSO
+> toggles that full-screen overlay, and every dismissal of the overlay toggles the beacon.
+>
+> **THE LESSON: "the config screen does not list it" is not evidence that a key is free.** Absence
+> from a rebinding UI proves only that the binding is not rebindable. Before claiming any key,
+> check the on-screen-keyboard overlay, which is the game showing its own layout.
+>
+> Also visible in that overlay and **NOT** reconciled with this file's Session 44 correction below:
+> `1 Game Speed/Change Group`, `2 Lock On`, `3 Change Group`. Session 44 recorded runtime evidence
+> that 1/2/3 are all Game Speed; the overlay disagrees. **Neither is struck here** — one of them is
+> reading a different profile and it has not been measured which. Do not act on either until it is.
+
 ## Mod-reserved keys (all STANDALONE — no Shift)
 | Key | Mod function | Conflict status |
 |---|---|---|
@@ -144,7 +165,8 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
 | `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key | reserved |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
-| `F9` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at | free — game binds F1/F2/F3 only |
+| `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY (S112):** with Shift, Ctrl or Alt held it does nothing, because **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys. **Moved off `F9`, which belongs to the game** | free |
+| `F9` | **NOT A MOD KEY — the GAME uses it** for *Hide On-Screen Keyboard* (S112). Left alone deliberately | game-owned |
 | `F10` | **Sneak assist — On ⇄ Off (Sessions 107/109).** Speaks the new setting. Same setting the mod menu holds. **Default OFF**, forced off at startup AND on every map change, and **the key is a NO-OP (silent, log-only) on any map without a `path_danger.cpp` row** (map 568 today) — so it can only ever be armed deliberately, this session, while standing on the guarded map it acts on. There it stops the guards' proximity check from catching you. It writes no game state: switching it off restores the game's own behaviour on the very next check. See `sneak_assist.h` | free — game binds F1/F2/F3 only |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
 | `[` | Nav: previous object | free |

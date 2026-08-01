@@ -449,6 +449,39 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             // otherwise entering one of those panes would announce the row without it.
             OnFocus(o, idx, /*fromPaint=*/true);
         }
+    } else if (newWin) {
+        // ---- UNCLAIMED PANE CENSUS (Session 112, LOG-ONLY) -----------------------------------------
+        // A pane took the cursor and nothing above spoke for it. That is exactly what the tester's
+        // full-screen CONTROLS panel does: the log shows `menu-open pane-entry` firing over and over
+        // on map 568 with no text and no speech, and the screenshot confirms it is the game's own
+        // on-screen keyboard (footer: `F9 Hide On-Screen Keyboard` / `Space Close`).
+        //
+        // To ANNOUNCE it the reader has to recognise it, and recognition here is always the owner's
+        // obj[0] CLASS pointer against a known RVA -- which this project has never measured for this
+        // surface. This line measures it: one entry per DISTINCT class, so a per-frame re-open
+        // cannot flood the log, and a hard cap so an unexpected variety cannot either.
+        //
+        // It speaks NOTHING. Announcing every unclaimed pane would talk over surfaces that are
+        // deliberately silent, and a wrong guess here is a regression in a working reader -- so the
+        // RVA gets measured first and the announce ships gated on it.
+        static void*        s_seenCls[12] = {};
+        static int          s_seenN = 0;
+        void* cls = MemRead::Obj0(newWin);
+        if (cls && s_seenN < 12) {
+            bool known = false;
+            for (int i = 0; i < s_seenN; ++i) if (s_seenCls[i] == cls) { known = true; break; }
+            if (!known) {
+                s_seenCls[s_seenN++] = cls;
+                const uintptr_t base = reinterpret_cast<uintptr_t>(Hooks::ResolveRva(0));
+                const uintptr_t c    = reinterpret_cast<uintptr_t>(cls);
+                char m[192];
+                snprintf(m, sizeof(m),
+                         "unclaimed pane: obj0 RVA=0x%llX win=%p -- no reader spoke for it "
+                         "(candidate: the on-screen CONTROLS panel)",
+                         static_cast<unsigned long long>(c >= base ? c - base : c), newWin);
+                Log::Write("READER", m);
+            }
+        }
     }
 }
 

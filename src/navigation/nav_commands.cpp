@@ -151,7 +151,9 @@ void OnNavKey(int vk) {
         // Same arrangement for the beacon: F9 is the shortcut, the F8 menu holds the same value.
         // Turning it OFF silences a running beacon; turning it ON only re-arms the feature, since an
         // On press has no destination to aim at -- press `\` to seed one.
-        case VK_F9:         ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
+        // F11, not F9: the game owns F9 ("Hide On-Screen Keyboard", S112). Bare press only --
+        // Shift+F11 belongs to NVDA; the guard is in input_tracker's edge registration.
+        case VK_F11:        ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
         // F10 mirrors the same arrangement for sneak assist -- but it is a NO-OP off its own maps
         // (S109, user instruction). The feature exists to get past scripted guards, so the key may
         // only arm it while standing where guards are; anywhere else it does not toggle and does not

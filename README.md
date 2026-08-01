@@ -60,7 +60,7 @@ Check the log the mod writes next to the game executable: FFXII-Screen-Reader-La
 
 ### If the beacon makes no sound
 
-Speech working but no beacon means SDL3 loaded and the audio device did not open. The log records this under AUDIO, including the reason SDL gave. Check the beacon is switched on with `F9` or the `F8` menu.
+Speech working but no beacon means SDL3 loaded and the audio device did not open. The log records this under AUDIO, including the reason SDL gave. Check the beacon is switched on with `F11` or the `F8` menu.
 
 ## Keys
 
@@ -99,7 +99,7 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
 * F6: give the selected object your own name, taken from the clipboard.
-* F9: turn the audio beacon on or off.
+* F11: turn the audio beacon on or off. It only responds to F11 on its own — hold Shift, Ctrl or Alt and it does nothing, so Shift+F11 stays yours for your screen reader.
 * F10: turn sneak assist on or off — see the mod menu below.
 * F8: open or close the mod menu.
 
@@ -123,7 +123,7 @@ In a fight, the route beacon stands down and a second sound takes over: it follo
 
 This is its own setting. It plays in battle whether or not you had a route running, so you can use it on its own, and switching the route beacon off does not switch it off too. Both beacons have their own volume, from 20% up to 100%. Neither volume goes all the way to silent — each beacon has its own on/off switch, so a beacon that is switched on is never silent for a reason you cannot hear.
 
-F9 turns the route beacon off and on, and both beacons and both volumes are in the F8 menu. Your choices are remembered between sessions. Changing area stops the route beacon — the route belonged to the old map — but not the target beacon, which follows whatever you are fighting wherever you are.
+F11 turns the route beacon off and on (F11 on its own — not with Shift, Ctrl or Alt held, so your screen-reader chords are untouched), and both beacons and both volumes are in the F8 menu. Your choices are remembered between sessions. Changing area stops the route beacon — the route belonged to the old map — but not the target beacon, which follows whatever you are fighting wherever you are.
 
 #### Naming things yourself (F6)
 
@@ -176,7 +176,7 @@ One setting so far:
 
 * Sneak assist — Off or On. A few points in the story make you sneak past guards who catch you if you come too close, and being caught puts you back to the start of the sequence. With this On, the guards on those maps stop noticing you, so you can walk the route at your own pace instead of racing a timer you cannot see. It changes nothing anywhere else in the game, and nothing is saved by it — switch it off and the guards behave exactly as the game wrote them, immediately. Off is the default, and it cannot get stuck on: it switches itself off whenever you change area, and it starts every session off. F10 only does something while you are actually standing on one of those guarded maps — press it anywhere else and it stays quiet, because there is nothing there for it to do. If a sneaking sequence ever seems to stop making progress while this is On, switch it off and play that part normally.
 
-F4 switches Combat verbosity, F9 switches the Audio beacon and F10 switches Sneak assist, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
+F4 switches Combat verbosity, F11 switches the Audio beacon and F10 switches Sneak assist, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 
 Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it: the game stays quiet when an enemy repeats the same ability on the same target, and when the caster is a long way off. That pacing is the game's own, not something the mod is hiding from you.
 

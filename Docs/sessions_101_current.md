@@ -764,3 +764,53 @@ by the existing `kMaxAttempts=4` / `kMaxTotalExpand`. `path_funnel`, `path_valid
 `legs≈18`) instead of "No path"; the log shows `attempts` > 1 with a `replan:` line naming the
 re-costed portal, and where applicable `re-attributed by the sweep stop`. Regression gate unchanged:
 315 still `pass=mesh`, no `pass=seam`, and no new `attempts>1` on routes that already validated.
+
+## Session 112 — 2026-08-01 — [input] The game owns F9; the beacon moves to F11 (bare press only)
+
+**KEYWORDS: on-screen keyboard overlay F9 Hide On-Screen Keyboard Space Close controls panel
+audio beacon F11 bare press Shift+F11 NVDA modifier guard DIK_F11 0x57 config screen not evidence
+unclaimed pane census obj0 class RVA menu_reader HookedFocusSet map 568 pane-entry spam**
+
+**The tester photographed the panel that keeps interrupting them.** It is the game's own
+**on-screen keyboard**, and its footer reads `F9  Hide On-Screen Keyboard` / `Space  Close`.
+
+**The mod had `F9` bound to the audio beacon.** The mod is strictly read-only on input and cannot
+swallow a key, so every beacon toggle ALSO flipped that full-screen panel, and every dismissal of
+the panel flipped the beacon. The tester pressed F9 three times in the log that came with the
+screenshot (`set: audio_beacon=1/0/1`).
+
+> **"THE CONFIG SCREEN DOES NOT LIST IT" IS NOT EVIDENCE THAT A KEY IS FREE.** Every mod F-key row
+> in `Controls.md` carried "free — game binds F1/F2/F3 only", derived from the game's **Controls
+> configuration screen** — which lists only REBINDABLE actions. The game has bindings it never shows
+> there. The on-screen-keyboard overlay is the game showing its own layout, and it is the instrument
+> that should have been consulted. Struck in `Controls.md`, with the overlay's real bindings recorded
+> — including `1 Game Speed/Change Group`, `2 Lock On`, `3 Change Group`, which **contradict this
+> file's own Session 44 correction**. Neither is struck: one of them is reading a different profile
+> and it has not been measured which. **Flagged as unresolved rather than silently overwritten.**
+
+### What shipped
+
+- **Audio beacon `F9` → `F11`**, and **BARE PRESS ONLY**: Shift, Ctrl or Alt held suppresses it,
+  because **Shift+F11 is an NVDA command the tester uses while playing** (their instruction). The
+  guard is deliberately LOCAL to that one edge registration — every other hotkey keeps the exact
+  behaviour it was tested with. `DIK_F9` is now unused by the mod; F9 belongs to the game.
+- **Unclaimed-pane census** (`menu_reader.cpp`, LOG-ONLY): when a pane takes the cursor and no
+  reader speaks for it, log its `obj[0]` class RVA — one line per DISTINCT class, capped at 12, so
+  the per-frame re-opens on 568 cannot flood the file.
+
+**Why the announce did NOT ship with it.** Recognising a surface here is always `obj[0]` against a
+known RVA, and this project has never measured one for this panel. Announcing every unclaimed pane
+would talk over surfaces that are deliberately silent, and **a wrong guess is a regression in a
+working reader** — so the RVA is measured first and the announce ships gated on it. One session with
+the panel open settles it.
+
+### Also confirmed this round (from the tester's log, not asserted)
+
+- **The S110 census answered its question: `[SNEAK] native FIRED on map 568`** — the hook IS on a
+  function the script calls. The earlier zero was the sequence not having reached the watcher.
+- **The clamp works and the representation is settled:**
+  `clamp ACTIVE on map 568: script distance 5.25 -> 9999 (float slot)`. **FLOAT**, as the per-call
+  discriminator determined at runtime rather than by guess.
+- **S111's retry fix works**: `drain seq=21: target="Door 2" from=(20.73,-8.00,127.99) plan=Route
+  legs=18` — a full route from the exact coordinate that answered `NoPath` before it. Other start
+  positions still fail; that work is not finished.
