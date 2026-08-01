@@ -670,3 +670,41 @@ whitelist) and the log-only `scene-gap` capture diagnostic remain, with the tabl
 `danger=` lines anywhere; `[SNEAK] script-distance hook installed` still present at startup and F10
 still speaks its state. The S106 memory entry and MEMORY.md were corrected — the danger zones must
 not be remembered as shipped.
+
+## Session 109 — 2026-08-01 — [navigation] Sneak assist can only be armed where it is meant to act
+
+**KEYWORDS: sneak assist F10 no-op unsupported map auto-off map transition teardown forced off
+startup safety net SetSilently silent persist ModMenu one choke point AvailableHere OnMapTeardown
+never carries across a map arming is deliberate**
+
+Tester instruction, on the S107 feature: **auto-off on a map transition** so a forgotten toggle
+cannot affect other maps, and **make `F10` a no-op off the maps it is meant for** — "it should only
+be for getting around guards". Both shipped; the clamp itself is unchanged.
+
+**Three gates now stand between the feature and an unintended map**, and the point of having all
+three is that no single one of them has to be perfect:
+
+1. **`F10` is a NO-OP where the feature does not apply.** `SneakAssist::AvailableHere()` (a
+   `PathDanger::MapHasRow` test) gates the key in `nav_commands.cpp`: off-table it does not toggle,
+   does not speak, and writes one log line. **Silent by design** — this is the same silence `;` and
+   `7` already use for "nothing here to report", and speaking "not available here" on a key the
+   player pressed on the wrong map would be exactly the filler the standing rule forbids.
+2. **Forced OFF on every map teardown**, from `NavHooks::HookedTeardown` beside
+   `PathPlanner::OnMapTeardown` — unconditional, not "only when leaving a covered map", because the
+   state that matters is *armed while the player walks somewhere new*.
+3. **Forced OFF at startup**, because a crash or an old settings file could otherwise hand a launch
+   a `sneak_assist=1` nobody chose this session.
+
+**The auto-off is SILENT, and that needed a new choke point rather than a raw write.**
+`ModMenu::SetSilently` sets + persists + logs through the same path `Adjust` uses (CLAUDE.md's "one
+place a setting's value changes"), minus the speech. Announcing a setting nobody touched, on every
+single map load, is filler; the log records it instead.
+
+**Net effect: the only way the toggle can be on is that the player deliberately armed it, this
+session, while standing on the guarded map it acts on.** `README.md` and `Docs\Controls.md` updated
+to say so in the tester's terms.
+
+**Verify next play:** `F10` on any ordinary map says nothing and logs
+`F10 ignored: this map has no guarded sequence`; on map 568 it speaks On/Off as before; walking
+through any transition while it is on logs `map change: sneak assist forced OFF` and the next `F10`
+press on the new map is a no-op unless that map is covered.

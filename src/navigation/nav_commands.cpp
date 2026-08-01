@@ -5,6 +5,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
 #include "navigation/nav_types.h"
+#include "navigation/sneak_assist.h"
 #include "ui/battle_target_reader.h"
 #include "navigation/interact_target.h"
 #include "battle/party_status.h"
@@ -151,10 +152,18 @@ void OnNavKey(int vk) {
         // Turning it OFF silences a running beacon; turning it ON only re-arms the feature, since an
         // On press has no destination to aim at -- press `\` to seed one.
         case VK_F9:         ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
-        // F10 mirrors the same arrangement for sneak assist. It speaks only the setting's own value
-        // (via ModMenu, the one choke point); whether the CURRENT map is one it can act on is a
-        // log-side fact -- SneakAssist::ArmedHere -- not a second sentence spoken over the first.
-        case VK_F10:        ModMenu::CycleSetting(ModMenu::SettingId::SneakAssist);     break;
+        // F10 mirrors the same arrangement for sneak assist -- but it is a NO-OP off its own maps
+        // (S109, user instruction). The feature exists to get past scripted guards, so the key may
+        // only arm it while standing where guards are; anywhere else it does not toggle and does not
+        // speak, which is the same silence `;` and `7` use for "nothing here to report". The reason
+        // goes to the log, never to speech.
+        case VK_F10:
+            if (SneakAssist::AvailableHere()) {
+                ModMenu::CycleSetting(ModMenu::SettingId::SneakAssist);
+            } else {
+                Log::Write("SNEAK", "F10 ignored: this map has no guarded sequence (no-op by design)");
+            }
+            break;
         case VK_F8:         ModMenu::Toggle();                break;  // F8 mod menu
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category

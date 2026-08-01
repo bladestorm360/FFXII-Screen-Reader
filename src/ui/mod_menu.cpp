@@ -316,4 +316,23 @@ void Adjust(SettingId id, int delta) {
     Speech::Output(ValueOf(i), true);
 }
 
+// Set WITHOUT speaking. The one caller is sneak assist's auto-off on a map change (S109), and the
+// silence is the point: the mod would otherwise announce a setting nobody touched, on every single
+// map transition, which is exactly the filler the standing rule forbids. It still persists and still
+// logs, so the change is neither invisible to the next session nor to the log.
+//
+// It routes through the SAME store + Save + LogState as Adjust rather than writing g_values from the
+// caller -- one place where a setting's value changes (CLAUDE.md's one-choke-point rule). GAME
+// THREAD safe: the store is a relaxed atomic and Save is a small synchronous file write on a path
+// that runs once per map load, not per frame.
+void SetSilently(SettingId id, int value) {
+    const int i = static_cast<int>(id);
+    if (i < 0 || i >= kCount) return;
+    if (value < 0 || value >= kSettings[i].count) return;
+    if (g_values[i].load(std::memory_order_relaxed) == value) return;
+    g_values[i].store(value, std::memory_order_relaxed);
+    Save();
+    LogState("auto", i);
+}
+
 } // namespace ModMenu

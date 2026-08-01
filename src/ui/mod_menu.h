@@ -96,6 +96,11 @@ void CycleSetting(SettingId id);
 // surprise and the repeated spoken value is how the player hears they are at the end.
 void Adjust(SettingId id, int delta);
 
+// Set a setting WITHOUT speaking, persisting and logging it like any other change. For automatic
+// changes the player did not ask for — announcing those would be filler on a path that runs on
+// every map load. Sole caller today: sneak assist's auto-off on a map change (see sneak_assist.h).
+void SetSilently(SettingId id, int value);
+
 bool IsOpen();
 
 } // namespace ModMenu

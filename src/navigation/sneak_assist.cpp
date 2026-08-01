@@ -43,6 +43,15 @@ std::atomic<bool> s_loggedThisArming{false};
 
 bool ToggleOn() { return ModMenu::SneakAssistOn(); }
 
+// The startup safety net for the persisted value. The toggle is forced off on every map teardown,
+// but a crash, a kill, or an old settings file could leave `sneak_assist=1` on disk and hand the
+// next launch an armed feature nobody switched on this session. Applied once in Init().
+void ForceOffAtStartup() {
+    if (!ModMenu::SneakAssistOn()) return;
+    ModMenu::SetSilently(ModMenu::SettingId::SneakAssist, 0);
+    Log::Write("SNEAK", "startup: stored value was On -- forced OFF (it is never on by default)");
+}
+
 // SEH-guarded: the ctx comes from the game's VM, and a torn/streaming pointer must degrade to
 // "leave the value alone", never to a fault inside a native call.
 bool ClampResultSlot(void* ctx, float* outOriginal, bool* outWasFloat) {
@@ -119,6 +128,7 @@ void __fastcall HookedScriptDistance(void* ctx, void* a2, void* a3, void* vm) {
 } // namespace
 
 bool Init() {
+    ForceOffAtStartup();
     const bool ok = Hooks::InstallTyped(NavRva::SCRIPT_DISTANCE, &HookedScriptDistance, &s_orig);
     s_installed.store(ok, std::memory_order_release);
     Log::Write("SNEAK", ok ? "script-distance hook installed (sneak assist available; default OFF)"
@@ -130,9 +140,22 @@ void Shutdown() {
     s_installed.store(false, std::memory_order_release);
 }
 
+bool AvailableHere() {
+    return PathDanger::MapHasRow(static_cast<uint32_t>(MapNames::CurrentMapId()));
+}
+
 bool ArmedHere() {
-    return s_installed.load(std::memory_order_acquire) && ToggleOn() &&
-           PathDanger::MapHasRow(static_cast<uint32_t>(MapNames::CurrentMapId()));
+    return s_installed.load(std::memory_order_acquire) && ToggleOn() && AvailableHere();
+}
+
+void OnMapTeardown() {
+    // Unconditional: read the toggle, and if it is on, put it back off. Checked on EVERY teardown
+    // rather than only when leaving a covered map, because the state that matters is "armed while
+    // the player walks into somewhere new", and a map load is exactly where that would happen.
+    if (!ModMenu::SneakAssistOn()) return;
+    ModMenu::SetSilently(ModMenu::SettingId::SneakAssist, 0);
+    s_loggedThisArming.store(false, std::memory_order_relaxed);
+    Log::Write("SNEAK", "map change: sneak assist forced OFF (it never carries across a map)");
 }
 
 } // namespace SneakAssist

@@ -7,7 +7,10 @@
 // ⚠ THIS IS THE MOD'S SECOND WRITE-CATEGORY EXCEPTION, after auto-walk (CLAUDE.md: the mod is
 // strictly read-only on input and game memory). USER-AUTHORIZED 2026-07-31, explicitly, as an
 // accessibility skip for a hard progress block. Boundaries, all non-negotiable:
-//   1. DEFAULT OFF, gated on the ModMenu "Sneak assist" toggle (F10 is the shortcut);
+//   1. DEFAULT OFF, gated on the ModMenu "Sneak assist" toggle (F10 is the shortcut). It is forced
+//      off at STARTUP and on EVERY MAP CHANGE (S109), and `F10` is a NO-OP on any map without a
+//      PathDanger row -- so the only way it can be on is that the player deliberately armed it,
+//      this session, while standing on the guarded map it acts on;
 //   2. with the toggle off the hook's FIRST branch tail-calls the original and returns — the write
 //      is unreachable, not merely skipped, so an unarmed build is byte-identical in behaviour;
 //   3. effective ONLY on maps PathDanger has a row for (`PathDanger::MapHasRow`) — everywhere else
@@ -44,8 +47,19 @@ namespace SneakAssist {
 bool Init();
 void Shutdown();
 
-// True when the toggle is on AND the current map has a PathDanger row. Cheap; used by the F10
-// command to tell the player whether the setting can do anything where they are standing.
+// Does the CURRENT map have a stealth sequence this feature covers? **`F10` is a NO-OP when this is
+// false** (S109, user instruction): the key does not toggle, does not speak, and only logs. The
+// setting is for getting past guards, so it can only be armed while standing on a map that has
+// them — a player cannot leave it switched on somewhere it was never meant to act.
+bool AvailableHere();
+
+// True when the toggle is on AND the current map is covered — i.e. the clamp would actually fire.
 bool ArmedHere();
+
+// GAME THREAD, from the field-teardown hook. **Forces the toggle OFF on every map change** (S109,
+// user instruction), silently and persistently, so the feature can never carry into a map it was
+// not authorized for because a player forgot to switch it off. Arming is therefore always a
+// deliberate act on the map it applies to.
+void OnMapTeardown();
 
 } // namespace SneakAssist

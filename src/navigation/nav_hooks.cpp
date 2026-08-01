@@ -7,6 +7,7 @@
 #include "navigation/auto_walk.h"
 #include "navigation/nav_probe.h"
 #include "navigation/entity_list.h"
+#include "navigation/sneak_assist.h"
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
@@ -175,6 +176,9 @@ void __fastcall HookedTeardown() {
         STALL_SCOPE("NavHooks::HookedTeardown");
         BulletQuery::Invalidate();
         PathPlanner::OnMapTeardown();
+        // Sneak assist never survives a map change (S109) -- the map being torn down is the only
+        // one it was armed for, and the next one has not authorized anything.
+        SneakAssist::OnMapTeardown();
     }
     if (s_origTeardown) s_origTeardown();
 }
