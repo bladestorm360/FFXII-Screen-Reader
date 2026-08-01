@@ -1,5 +1,7 @@
 #include "navigation/path_corridor.h"
 #include "navigation/nav_common.h"
+#include "navigation/nav_footprint.h"
+#include "navigation/path_march.h"
 
 #include <algorithm>
 
@@ -102,6 +104,46 @@ bool BuildFrontier(const CameMap& came, PolyId frontierPoly,
     if (out.endPoly == NavMesh::kNoPoly) out.endPoly = frontierPoly;
     out.shortfall = NavCommon::Distance2D(out.poly.back(), to);
     return true;
+}
+
+CorridorMarch MarchCorridor(const FVec3& from, const FVec3& to,
+                            const std::vector<PathFunnel::Portal>& portals, float arrivalTol) {
+    CorridorMarch out;
+    if (portals.empty()) return out;
+
+    // THE SAME POLYLINE `repair[full-corridor]` BUILDS, from the same function -- one definition of
+    // "the corridor as a walkable line", so this check and that rung can never describe different
+    // things. The difference is only that this one costs nothing and is asked FIRST.
+    std::vector<FVec3> pts;
+    if (PathFunnel::FullCorridor(from, to, portals, pts) <= 0 || pts.size() < 2) return out;
+    out.hops = pts.size() - 1;
+
+    // Tolerances mirror PathValidate::CheckLegs exactly: the body's own reach mid-route, the
+    // caller's arrival tolerance on the last hop. Two instruments that forgive different things
+    // would disagree about routes neither of them objects to.
+    const float tol = NavFootprint::BodyRadius() + PathMarch::kEndSlack;
+
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const bool  last   = (i + 1 == pts.size());
+        const float legTol = (last && arrivalTol > tol) ? arrivalTol : tol;
+
+        const PathMarch::MarchResult m = PathMarch::MarchLeg(pts[i - 1], pts[i], legTol);
+        out.grazes += m.grazes;
+        // FAIL OPEN. An undecidable hop is counted, never promoted to a breach -- see the header.
+        if (m.verdict != PathMarch::MarchVerdict::Breach) {
+            if (m.verdict == PathMarch::MarchVerdict::NoVerdict) ++out.noVerdict;
+            continue;
+        }
+        out.breached = true;
+        out.hop      = i;
+        out.hitPoint = m.hitPoint;
+        out.fromPoly = m.fromPoly;
+        out.edge     = m.edge;
+        out.nbr      = m.nbr;
+        out.nbrEff   = m.nbrEff;
+        return out;                 // the FIRST refusal is the one to price; later ones are its shadow
+    }
+    return out;
 }
 
 } // namespace PathCorridor

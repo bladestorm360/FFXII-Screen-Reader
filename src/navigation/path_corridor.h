@@ -80,4 +80,51 @@ bool BuildFrontier(const CameMap& came, PolyId frontierPoly,
                    const FVec3& from, const FVec3& to, int probeBudget,
                    FrontierRoute& out);
 
+// ---- IS THE CORRIDOR ITSELF WALKABLE? (Session 116) ----------------------------------------------
+//
+// **A* CERTIFIES CROSSINGS. IT NEVER CERTIFIES THE TRAVEL BETWEEN TWO CONSECUTIVE CROSSINGS.**
+// `EdgePassable` accepts an edge when the body can be swept across it "at SOME parameter along it"
+// (nav_mesh.h, its own words). So every opening in a corridor can be individually passable while the
+// hop from one opening to the next is not -- a pillar between two portals, a ramp lip, a flooded
+// channel, a party-only volume. Nothing in the search asks about those hops, and the first thing that
+// does is the body walk, by which time it is a breach with a repair ladder pointed at it.
+//
+// This walks the corridor's OWN openings, opening to opening, with the adjacency march -- which
+// spends NO PROBES (path_march.h: "probes price SWEEPS, and this makes none"). It answers the one
+// question that decides which tool a breach needs:
+//
+//   * CLEAR  -> the corridor is walkable and only the taut chord was not. That is exactly what
+//               `PathRepair` was built for (a shape problem WITHIN walkable ground); run it.
+//   * BREACH -> the corridor is not walkable, so no rung can help -- every one of them reshapes a
+//               path through this same hop -- and the re-cost should price the crossing that
+//               actually refused rather than the portal nearest the failing chord's midpoint, which
+//               is a guess.
+//
+// MEASURED ON TWO MAPS BEFORE IT WAS WRITTEN. `repair[full-corridor]` -- the rung that rebuilds the
+// polyline from every portal midpoint -- failed on map 568's palace ramp (`4->10 points`, corridor
+// paid terrain=0, no water anywhere) and in the Garamsythe Waterway (`22->166 points`). Both spent
+// the whole ladder and most of a 1600-probe budget establishing something this answers for free,
+// before the funnel is even consulted.
+//
+// FAILS OPEN, exactly like `MarchLeg` itself: a hop the march cannot decide is counted and skipped,
+// never treated as a breach. Inventing a wall on a working map is the one regression this project
+// cannot afford (S96), and this runs on maps nobody has tested.
+struct CorridorMarch {
+    bool     breached  = false;  // a crossing the mover would refuse, on the corridor's own openings
+    size_t   hop       = 0;      // 1-based index of the failing hop, for the log
+    size_t   hops      = 0;      // hops walked
+    FVec3    hitPoint{};         // where the refusal is -- a MEASUREMENT, not an attribution
+    PolyId   fromPoly  = NavMesh::kNoPoly;   // the crossing to re-cost
+    int      edge      = -1;
+    int      nbr       = -1;     // the refused neighbour, -1 = a true boundary
+    uint32_t nbrEff    = 0;
+    int      grazes    = 0;
+    int      noVerdict = 0;      // hops the march declined to judge (never a breach)
+};
+
+// GAME THREAD (reads the live walkmap). `arrivalTol` is the caller's own final-leg tolerance, used
+// for the last hop only, so this instrument and `PathValidate::CheckLegs` forgive arrivals alike.
+CorridorMarch MarchCorridor(const FVec3& from, const FVec3& to,
+                            const std::vector<PathFunnel::Portal>& portals, float arrivalTol);
+
 } // namespace PathCorridor

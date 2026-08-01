@@ -196,3 +196,22 @@ the result.
 inside their limits. **`nav_mesh.cpp` is now 5 lines from the hard cap** — it was "close enough to
 watch" last session and is now the next one to trip. Watch it, or take the `BodyFitsAt`/`EdgePassable`/
 `EdgeClearSpan` block out to `nav_edges.cpp` at the next opportunity that is not a regression fix.
+
+## Session 116 — `path_search.cpp` breaks 1000 lines, and the named seam is now overdue
+
+The corridor-march change added ~145 lines to `path_search.cpp` and the file is now **1108**. That is
+more than twice the hard cap, and the seam Session 96 named is still the right one and is now the
+only sensible cut:
+
+> the ATTEMPT LOOP body (funnel → validate → **corridor march** → repair ladder → re-cost) is
+> self-contained and reads as one unit — it belongs beside `path_corridor` as `path_attempt.cpp`,
+> leaving `Run` as the A* pass plus the outcome block.
+
+| file | lines | limit | note |
+|---|---|---|---|
+| `src\navigation\path_search.cpp` | **1108** (was 711) | 500 (hard), 400 (plan a split) | The attempt loop is now ~330 lines on its own and has grown a second decision point (which SOURCE names the crossing to price). Take `path_attempt.cpp` at the next opportunity that is **not** a regression fix — the restraint is the same one recorded in S96 and S100, and this change is unconfirmed in play, so it must stay revertable as one commit against one file. |
+| `src\navigation\path_corridor.h` | **130** (was 83) | 150 (header rule) | Inside the limit but the growth is all `CorridorMarch`'s reasoning. Once the finding is play-confirmed, the "A\* certifies crossings, never the travel between them" paragraph belongs in `GameArchitecture.md` and this can be cut to a pointer — the same trade `path_validate.h` already owes. |
+| `src\navigation\path_corridor.cpp` | 149 | 500 | Fine. |
+
+Everything else is unchanged from Session 100's table; `nav_mesh.cpp` is still 5 lines from the cap
+and still wants `nav_edges.cpp`.

@@ -607,12 +607,44 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             Log::Write("NAV-ROUTE", m);
         }
 
+        // ---- WHICH KIND OF FAILURE IS THIS? (Session 116) -------------------------------------------
+        // Asked BEFORE the repair ladder, because it decides whether the ladder is the right tool at
+        // all -- and it costs nothing to ask (the adjacency march spends no probes). See
+        // path_corridor.h: A* certifies CROSSINGS, never the TRAVEL BETWEEN two consecutive crossings,
+        // so a corridor whose every opening is passable can still have a hop the body cannot make.
+        //
+        //   corridor CLEAR  -> a shape problem inside walkable ground. The ladder's own case; run it.
+        //   corridor BREACH -> the corridor is not walkable. No rung can help (each one reshapes a
+        //                      path through the same hop) and the re-cost has a MEASUREMENT to aim at
+        //                      instead of the portal nearest the failing chord's midpoint.
+        const PathCorridor::CorridorMarch cmarch =
+            PathCorridor::MarchCorridor(from, to, plain, kArrivalTol);
+        {
+            char cmm[336];
+            if (cmarch.breached)
+                snprintf(cmm, sizeof(cmm),
+                         "corridor march: BREACH at hop %zu/%zu -- crossing %d:%d -> nbr=%d "
+                         "nbrEff=0x%08X at (%.1f,%.2f,%.1f), grazes=%d noVerdict=%d. The CORRIDOR is "
+                         "not walkable, so the repair ladder is skipped (every rung would reshape a "
+                         "path through this same hop) and this crossing is what gets re-costed",
+                         cmarch.hop, cmarch.hops, cmarch.fromPoly, cmarch.edge, cmarch.nbr,
+                         cmarch.nbrEff, cmarch.hitPoint.x, cmarch.hitPoint.y, cmarch.hitPoint.z,
+                         cmarch.grazes, cmarch.noVerdict);
+            else
+                snprintf(cmm, sizeof(cmm),
+                         "corridor march: CLEAR over %zu hop(s) (grazes=%d noVerdict=%d) -- the "
+                         "corridor walks and only the taut chord did not, which is the repair "
+                         "ladder's own case",
+                         cmarch.hops, cmarch.grazes, cmarch.noVerdict);
+            Log::Write("NAV-ROUTE", cmm);
+        }
+
         // ---- REPAIR BEFORE RE-SEARCHING -------------------------------------------------------------
         // The ladder itself lives in `path_repair.{h,cpp}` -- it needs none of this function's search
         // state, and the reasoning behind each rung is long enough to belong beside the code it governs.
         // What stays here is the only part that is `Run`'s business: spending the budget and adopting
         // the result. A route that validates on the chord never enters `Mend` at all.
-        {
+        if (!cmarch.breached) {
             const PathRepair::Result mend =
                 PathRepair::Mend(poly, polyIdx, plain, rep, from, to, probesLeft, kArrivalTol);
             // Probes are spent whether or not a rung won, so they come off the budget either way.
@@ -706,67 +738,108 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // spot had validated seconds earlier. The protection is now keyed on what it was always
         // about: how close the BODY STOPPED to the target, at twice the arrival tolerance, so every
         // case its evidence came from (a stop 2.55 m out) is still protected.
-        const bool onLastLeg  = (rep.firstBad >= poly.size() - 1);
-        const bool stopIsNearTarget =
-            NavCommon::Distance2D(rep.badStopAt, to) <= kFinalApproachDist;
-        if (rep.firstBad == 0 || plain.empty() || (onLastLeg && stopIsNearTarget)) break;
-        const FVec3 a = poly[rep.firstBad - 1], b = poly[rep.firstBad];
-        // ON A MARCH BREACH, AIM AT THE MEASUREMENT (Session 100, failure-path-only). A 43 m leg's
-        // midpoint can sit 20 m from the refused crossing; `badStopAt` is where the mover's own rule
-        // said no, so the portal nearest THAT is the one to make expensive. Sweep/budget breaches
-        // keep the midpoint -- their stop is already how far the walk got, not a single crossing.
-        const bool  useStop = (rep.badCause == PathValidate::StopCause::March);
-        const FVec3 legMid  = useStop
-            ? rep.badStopAt
-            : FVec3{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
-        size_t bestIdx = 0;
-        float  bestD2  = -1.0f;
-        for (size_t k = 0; k < pr.portals.size(); ++k) {
-            const Portal& q = pr.portals[k].p;
-            const float mx = (q.left.x + q.right.x) * 0.5f, mz = (q.left.z + q.right.z) * 0.5f;
-            const float dx = mx - legMid.x, dz = mz - legMid.z;
-            const float d2 = dx * dx + dz * dz;
-            if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bestIdx = k; }
+        // ---- WHICH CROSSING GETS PRICED, AND FROM WHICH SOURCE (Session 116) ----------------------
+        // TWO SOURCES, AND THE MEASURED ONE WINS. When the corridor march named a crossing, that IS
+        // the obstruction -- the mover's own accept rule refused it, on the corridor's own openings,
+        // and nothing about a chord is involved. Everything below it is the older, weaker question:
+        // the corridor walks, the chord did not, so INFER which opening the chord failed near.
+        PolyId killPoly = kNoPoly;
+        int    killEdge = -1;
+        FVec3  killStop = rep.badStopAt;   // what "the same breach again" means to the escalation
+        FVec3  a{}, b{};                   // the breaching leg, for the log line
+
+        if (cmarch.breached && cmarch.fromPoly != kNoPoly && cmarch.edge >= 0) {
+            // THE SAME TWO PROTECTIONS THE INFERRED PATH HAS ALWAYS HAD, applied to the better
+            // measurement rather than dropped because it is better.
+            if (NavCommon::Distance2D(cmarch.hitPoint, to) <= kFinalApproachDist) {
+                Log::Write("NAV-ROUTE",
+                           "replan: the corridor's refused crossing IS the final approach -- not "
+                           "re-costing it (that opening is the one that gets you to the target); "
+                           "going to the frontier instead");
+                break;
+            }
+            if (cmarch.fromPoly == start) {
+                Log::Write("NAV-ROUTE",
+                           "replan: the corridor's refused crossing is the START poly's own edge -- "
+                           "not re-costing it (that would strand the seed); going to the frontier "
+                           "instead");
+                break;
+            }
+            killPoly = cmarch.fromPoly;
+            killEdge = cmarch.edge;
+            killStop = cmarch.hitPoint;
+            if (rep.firstBad > 0 && rep.firstBad < poly.size()) {
+                a = poly[rep.firstBad - 1];
+                b = poly[rep.firstBad];
+            }
         }
-        PortalRef kill = pr.portals[bestIdx];
-        // The START poly's own edges are left alone: pricing one can push the search off its own seed
-        // and reproduce S76's `expands=1 touched=0` (the search never ran).
-        //
-        // BUT A LONG FIRST LEG'S MIDPOINT LIES ABOUT WHERE THE OBSTRUCTION IS (Session 111; first
-        // built in S106, reverted in S108 on evidence that turned out to be contaminated -- the
-        // danger zones had already deformed every route in that log, so this branch never ran and
-        // was wrongly recorded as "never fires"). On this mesh the start triangle is often a whole
-        // room, so leg 1 can be 8 m long with its midpoint nearest the seed's own edge while the
-        // sweep stopped at the far end: map 568 measured `len=8.00m reached=7.04m
-        // stop=(23.4,-8.00,121.5)` and then broke out with `attempts=1 banned=0`.
-        //
-        // Before conceding, re-attribute by the STOP POINT -- where the body was actually refused.
-        // A portal there is a real candidate that the seed rule was never written to protect; only
-        // when THAT portal is also the seed's own edge is the breach genuinely on the seed.
-        if (kill.poly == start) {
-            size_t stopIdx = 0;
-            float  stopD2  = -1.0f;
+
+        if (killPoly == kNoPoly) {
+            const bool onLastLeg  = (rep.firstBad >= poly.size() - 1);
+            const bool stopIsNearTarget =
+                NavCommon::Distance2D(rep.badStopAt, to) <= kFinalApproachDist;
+            if (rep.firstBad == 0 || plain.empty() || (onLastLeg && stopIsNearTarget)) break;
+            a = poly[rep.firstBad - 1];
+            b = poly[rep.firstBad];
+            // ON A MARCH BREACH, AIM AT THE MEASUREMENT (Session 100, failure-path-only). A 43 m leg's
+            // midpoint can sit 20 m from the refused crossing; `badStopAt` is where the mover's own rule
+            // said no, so the portal nearest THAT is the one to make expensive. Sweep/budget breaches
+            // keep the midpoint -- their stop is already how far the walk got, not a single crossing.
+            const bool  useStop = (rep.badCause == PathValidate::StopCause::March);
+            const FVec3 legMid  = useStop
+                ? rep.badStopAt
+                : FVec3{ (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
+            size_t bestIdx = 0;
+            float  bestD2  = -1.0f;
             for (size_t k = 0; k < pr.portals.size(); ++k) {
                 const Portal& q = pr.portals[k].p;
                 const float mx = (q.left.x + q.right.x) * 0.5f, mz = (q.left.z + q.right.z) * 0.5f;
-                const float dx = mx - rep.badStopAt.x, dz = mz - rep.badStopAt.z;
+                const float dx = mx - legMid.x, dz = mz - legMid.z;
                 const float d2 = dx * dx + dz * dz;
-                if (stopD2 < 0.0f || d2 < stopD2) { stopD2 = d2; stopIdx = k; }
+                if (bestD2 < 0.0f || d2 < bestD2) { bestD2 = d2; bestIdx = k; }
             }
-            if (pr.portals[stopIdx].poly != start) {
-                kill = pr.portals[stopIdx];
-                char am[224];
-                snprintf(am, sizeof(am),
-                         "replan: midpoint attribution landed on the START poly's own edge; "
-                         "re-attributed by the sweep stop (%.1f,%.1f) -> portal (poly %d, edge %d)",
-                         rep.badStopAt.x, rep.badStopAt.z, kill.poly, kill.edge);
-                Log::Write("NAV-ROUTE", am);
-            } else {
-                Log::Write("NAV-ROUTE",
-                           "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
-                           "(that would strand the seed); going to the frontier instead");
-                break;
+            PortalRef kill = pr.portals[bestIdx];
+            // The START poly's own edges are left alone: pricing one can push the search off its own seed
+            // and reproduce S76's `expands=1 touched=0` (the search never ran).
+            //
+            // BUT A LONG FIRST LEG'S MIDPOINT LIES ABOUT WHERE THE OBSTRUCTION IS (Session 111; first
+            // built in S106, reverted in S108 on evidence that turned out to be contaminated -- the
+            // danger zones had already deformed every route in that log, so this branch never ran and
+            // was wrongly recorded as "never fires"). On this mesh the start triangle is often a whole
+            // room, so leg 1 can be 8 m long with its midpoint nearest the seed's own edge while the
+            // sweep stopped at the far end: map 568 measured `len=8.00m reached=7.04m
+            // stop=(23.4,-8.00,121.5)` and then broke out with `attempts=1 banned=0`.
+            //
+            // Before conceding, re-attribute by the STOP POINT -- where the body was actually refused.
+            // A portal there is a real candidate that the seed rule was never written to protect; only
+            // when THAT portal is also the seed's own edge is the breach genuinely on the seed.
+            if (kill.poly == start) {
+                size_t stopIdx = 0;
+                float  stopD2  = -1.0f;
+                for (size_t k = 0; k < pr.portals.size(); ++k) {
+                    const Portal& q = pr.portals[k].p;
+                    const float mx = (q.left.x + q.right.x) * 0.5f, mz = (q.left.z + q.right.z) * 0.5f;
+                    const float dx = mx - rep.badStopAt.x, dz = mz - rep.badStopAt.z;
+                    const float d2 = dx * dx + dz * dz;
+                    if (stopD2 < 0.0f || d2 < stopD2) { stopD2 = d2; stopIdx = k; }
+                }
+                if (pr.portals[stopIdx].poly != start) {
+                    kill = pr.portals[stopIdx];
+                    char am[224];
+                    snprintf(am, sizeof(am),
+                             "replan: midpoint attribution landed on the START poly's own edge; "
+                             "re-attributed by the sweep stop (%.1f,%.1f) -> portal (poly %d, edge %d)",
+                             rep.badStopAt.x, rep.badStopAt.z, kill.poly, kill.edge);
+                    Log::Write("NAV-ROUTE", am);
+                } else {
+                    Log::Write("NAV-ROUTE",
+                               "replan: the breaching leg crosses the START poly's own edge -- not re-costing it "
+                               "(that would strand the seed); going to the frontier instead");
+                    break;
+                }
             }
+            killPoly = kill.poly;
+            killEdge = kill.edge;
         }
         // ---- PRICE IT, AND ESCALATE IF THIS IS THE SAME BREACH AGAIN (Session 115) ----------------
         // The old rule added a flat kBreachPenalty every time, which map 568 proved cannot work: the
@@ -775,33 +848,39 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         // is not new information about the route, it is a measurement that the price was too low --
         // so it multiplies. A stop that MOVED means the retry made progress and keeps the additive
         // step, because that case has never been the problem.
+        // `killStop` -- not `rep.badStopAt` -- is what "the same breach again" means here, because the
+        // crossing may have been named by the corridor march rather than inferred from the chord. Each
+        // source carries its own notion of WHERE the refusal is, and comparing one to the other would
+        // make an identical breach look like a moved one and quietly disable the escalation.
         float newPen    = kBreachPenalty;
         bool  seen      = false;
         bool  escalated = false;
         for (BannedEdge& bn : banned) {
-            if (bn.poly != kill.poly || bn.edge != kill.edge) continue;
+            if (bn.poly != killPoly || bn.edge != killEdge) continue;
             seen = true;
-            escalated = NavCommon::Distance2D(bn.stop, rep.badStopAt) <= kIdenticalStopTol;
+            escalated = NavCommon::Distance2D(bn.stop, killStop) <= kIdenticalStopTol;
             bn.pen  = escalated ? bn.pen * kBreachEscalation : bn.pen + kBreachPenalty;
-            bn.stop = rep.badStopAt;
+            bn.stop = killStop;
             newPen  = bn.pen;
             break;
         }
-        if (!seen) banned.push_back(BannedEdge{ kill.poly, kill.edge, kBreachPenalty, rep.badStopAt });
+        if (!seen) banned.push_back(BannedEdge{ killPoly, killEdge, kBreachPenalty, killStop });
         stats.bannedEdges = static_cast<int>(banned.size());
         {
             char esc[152] = "";
             if (escalated)
                 snprintf(esc, sizeof(esc),
-                         " (ESCALATED x%.0f -- this portal breached AGAIN at the same stop (%.1f,%.1f), "
+                         " (ESCALATED x%.0f -- this crossing refused AGAIN at the same spot (%.1f,%.1f), "
                          "so the previous price was not enough to move the search)",
-                         kBreachEscalation, rep.badStopAt.x, rep.badStopAt.z);
-            char rm[400];
+                         kBreachEscalation, killStop.x, killStop.z);
+            char rm[416];
             snprintf(rm, sizeof(rm),
-                     "replan: breach on leg %zu/%zu (%.1f,%.1f)->(%.1f,%.1f); portal (poly %d, edge %d) "
-                     "re-costed to %.0f%s and searching again -- attempt %d/%d, expands %d/%d",
+                     "replan: breach on leg %zu/%zu (%.1f,%.1f)->(%.1f,%.1f); crossing (poly %d, edge %d) "
+                     "[%s] re-costed to %.0f%s and searching again -- attempt %d/%d, expands %d/%d",
                      rep.firstBad, rep.total, a.x, a.z, b.x, b.z,
-                     kill.poly, kill.edge, newPen, esc,
+                     killPoly, killEdge,
+                     cmarch.breached ? "MEASURED by the corridor march" : "inferred from the chord",
+                     newPen, esc,
                      attempt, kMaxAttempts, stats.expands, kMaxTotalExpand);
             Log::Write("NAV-ROUTE", rm);
         }

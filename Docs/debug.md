@@ -4559,3 +4559,87 @@ openings do not walk either, the chord was never the problem.
 
 **Rule to carry forward: before proposing a cause for a "No path", read the `oracle:` line. If it
 says the goal IS in the component, no theory about the mesh being severed can be right.**
+
+## Tried & Failed — blaming WATER for the "cannot replan from a tight spot" defect (Session 116)
+
+**The correlation was perfect and it was still the wrong cause.** In the Garamsythe Waterway log,
+every request whose corridor paid `terrain` failed (7 of 7) and every route actually spoken had a dry
+corridor (15 of 15). The proposed fix was a dry-first A\* pass with the priced pass as fallback.
+
+**The tester refuted it in one sentence: map 568 has the identical symptom and there is no water in
+the palace.** 568's failing corridor pays `terrain=0`.
+
+**What the correlation was hiding:** `repair[full-corridor]` — the rung that rebuilds the polyline
+from every portal midpoint — fails on BOTH maps (`4->10 points` on 568, `22->166 points` in the
+Waterway). That rung pulls nothing taut, so if it fails the CORRIDOR is unwalkable and whatever sits
+in the way is incidental. Water was simply the most common thing to find there.
+
+**Rule: when two maps show the same symptom and only one has your suspect, the suspect is a
+passenger.** Same shape as S93 ("a report about BEHAVIOUR is not a report about DATA") and S111
+("a refusal COUNT scales with search breadth").
+
+## SOLVED — A* certifies crossings, never the travel between them (Session 116, 2026-08-01)
+
+**Symptom (tester's words):** "the path is technically valid, but if the player wanders off of it too
+far for any reason or gets into a tight corner or against an obstacle, the game has trouble
+recalculating back to valid terrain." Seen on map 568 (Royal Palace Cellars, approaching Door 2 from
+off the corridor) and in the Garamsythe Waterway (North Spur Sluiceway).
+
+**Root cause, and it was written in this project's own header the whole time.** `nav_mesh.h` on
+`EdgePassable`:
+
+> 2. the body can be swept across the shared edge **at SOME parameter along it**.
+
+So A\* accepts an edge when the body fits *somewhere* along it. `EdgeClearSpan` hands the funnel that
+clear sub-span and `SpanMid` takes its midpoint — but the body has to get from the clear part of one
+edge to the clear part of the next, and **nothing in the search ever asks whether it can.** A pillar
+between two portals, a ramp lip, a flooded channel or a party-only volume all sit in exactly that gap.
+
+**Every downstream stage then fails for the right reason and the wrong target:**
+
+- validation breaches (correct);
+- every repair rung breaches (correct — the ladder reshapes a path *within* a corridor and the
+  corridor is the problem), at ~380 probes a rung, ~1,000 of the 1,600 `kProbeBudget` per attempt;
+- the re-cost prices "the portal nearest the failing chord's midpoint", **a guess**, so A\* returns
+  another corridor carrying the same untested hop and S115's escalation re-prices the guess harder;
+- the budget dies, `PathSurfaceGoal::Route` gets its 128-probe floor for a 145-corner polyline and is
+  `REJECTED (budget ran out -- NOT verified)`, and the frontier is suppressed as `No path`.
+
+**Why it correlates with the player being in an awkward spot:** from a ledge or a corner the cheapest
+corridors thread pinches that a clean start routes around. The same target from open floor validates
+first try.
+
+**Fix:** `PathCorridor::MarchCorridor` — walk the corridor's OWN openings, opening to opening, with
+the adjacency march, which **spends no probes** (`path_march.h`: "probes price SWEEPS, and this makes
+none"). It reuses `PathFunnel::FullCorridor` so it and the last repair rung can never describe
+different polylines. Run after a breach and before the ladder:
+
+- **CLEAR** → a shape problem inside walkable ground: the ladder's own case, run it unchanged;
+- **BREACH** → the corridor is not walkable: skip the ladder entirely and re-cost the crossing the
+  march NAMED (`[MEASURED by the corridor march]` in the log) rather than the chord-midpoint guess.
+
+Fails open: an undecidable hop is counted (`noVerdict=`) and skipped, never promoted to a breach.
+Both protections the inferred path always had — never price the final approach, never price the
+seed's own edge — are applied to the measured crossing too.
+
+**Falsifier, shipped with it:** the `corridor march: CLEAR|BREACH` line. If these failures come back
+CLEAR the diagnosis is wrong, the ladder runs exactly as today and the cost was one free march.
+
+**Containment:** runs only after `rep.ok` failed; CLEAR is byte-identical behaviour plus one march;
+BREACH skips a ladder whose every case today ends as `No path` anyway. Net CPU on the failure path
+falls. Three files touched; `path_funnel`, `path_validate`, `path_repair`, `path_march`, `nav_mesh`,
+`nav_footprint`, `map_query`, `path_surface_goal`, `path_planner` verified unchanged by diff.
+
+## OPEN — the repair ladder reports a TRUNCATION as a breach (Session 116, known, not yet fixed)
+
+`PathRepair::tryPoly` folds `r2.truncated` into `good = false` and logs "still breaching". Late in a
+budget-starved request that produces lines like `repair[unpull-departure]: leg 26, 1 -- 27->27
+points, probes=7 -> still breaching` — **7 probes for a 27-leg candidate is a truncation, not a
+breach.** The rung consumed budget without answering and the log says the opposite of what happened.
+
+Also missing: the ladder never logs *where* a rung's candidate broke (leg, reached, stop, cause), so
+it is a black box that says "still breaching" four times per attempt.
+
+Held back from Session 116 deliberately — with the ladder skipped on the corridor-is-broken branch,
+most of this pressure disappears, so it gets re-measured before it gets sized. Three changes in one
+build is what S96 records as the cause of the damage it spent a session undoing.

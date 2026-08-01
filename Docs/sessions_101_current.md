@@ -1111,3 +1111,140 @@ grep-dead, and routes that work today still answer `attempts=1` (the new lines c
 them). From the east side of 568 (start x ≥ 17.4), look for `re-cost ESCALATED x3` and whether a
 route appears where `Frontier` was. **Every total failure now carries an `oracle:` line — that line
 is the deliverable even if the escalation does not fix 568.**
+
+## Session 116 — 2026-08-01 — [navigation] A* certifies crossings, never the travel between them
+
+**KEYWORDS: corridor march MarchCorridor CorridorMarch path_corridor EdgePassable at SOME parameter
+along it repair ladder skipped measured vs inferred crossing re-cost full-corridor rung fails on both
+maps 568 palace ramp no water Garamsythe Northern Sluiceway oracle SEARCH giving up probe budget
+kProbeBudget surface-goal REJECTED budget ran out tight corners replan from a bad position**
+
+### The tester's challenge, and the correction it forced
+
+The first read of the Waterway log put **water** at the root: 7 of 7 requests whose corridor paid
+`terrain` failed, 15 of 15 spoken routes were dry, and the proposed fix was a dry-first search pass.
+**The tester rejected it on one sentence: map 568 has the identical symptom and there is no water in
+the palace.** They were right, and the correlation was hiding the cause.
+
+> ### THE FACT THAT KILLS THE WATER THEORY
+> `repair[full-corridor]` — the rung that rebuilds the polyline from EVERY portal midpoint in the
+> corridor — **fails on both maps**:
+>
+> ```
+> 568 palace   repair[full-corridor]: leg 3, 8   -- 4->10  points, probes=6   -> still breaching
+> waterways    repair[full-corridor]: leg 2, 164 -- 22->166 points, probes=362 -> still breaching
+> ```
+>
+> That rung pulls nothing taut. If walking the corridor's own openings in order still fails, then
+> **the corridor A\* returned is not walkable as a corridor**, and whatever is sitting in the way —
+> water, a ramp lip, a pillar, a party-only volume — is incidental. 568's failing corridor pays
+> `terrain=0`.
+
+### The root cause, and it is in this project's own header
+
+`nav_mesh.h`, on `EdgePassable`:
+
+> 2. the body can be swept across the shared edge **at SOME parameter along it**.
+
+**A\* CERTIFIES CROSSINGS. IT NEVER CERTIFIES THE TRAVEL BETWEEN TWO CONSECUTIVE CROSSINGS.** Every
+opening in a corridor can be individually passable while the hop from one opening to the next is not.
+Nothing in the search asks about those hops, and the first thing that does is the body walk — by
+which time it is a breach with a repair ladder pointed at it.
+
+That one gap produces every symptom on both maps:
+
+| | 568 palace | Waterway seq 21 |
+|---|---|---|
+| corridor pays terrain | **0** | 2000 |
+| breach leg | last (3/3) | **2 of 21** |
+| leg / body reached | 22.60 m / **0.07 m** | 16.42 m / **0.23 m** |
+| every repair rung fails | yes | yes |
+| `full-corridor` fails | yes | yes |
+
+- Every rung fails **correctly** — the ladder reshapes a path *within* a corridor, and the corridor
+  is the problem.
+- The re-cost then prices "the portal nearest the failing chord's midpoint" — **a guess** — so A\*
+  returns another corridor with the same untested hop, and S115's escalation re-prices the same guess
+  harder.
+- It correlates with the player being somewhere awkward because from a ledge or a corner the cheapest
+  corridors thread pinches a clean start routes around. That is the tester's own description of the
+  defect, and it is now explained rather than restated.
+
+### What shipped: ask the corridor, before deciding what is wrong with it
+
+`PathCorridor::MarchCorridor` walks the corridor's own openings, opening to opening, with the
+adjacency march — which **spends no probes** (`path_march.h`: "probes price SWEEPS, and this makes
+none"). It reuses `PathFunnel::FullCorridor` to build the very polyline the last repair rung builds,
+so the check and that rung can never describe different things. Run **after a breach, before the
+ladder**, it decides which tool the failure needs:
+
+- **CLEAR** → the corridor walks and only the taut chord did not. *That is exactly what the ladder
+  was built for.* Run it, unchanged. **The waterways/tight-corner repairs the ladder was introduced
+  for keep working, untouched.**
+- **BREACH** → the corridor is not walkable. **Skip the ladder** (no rung can help; today it burns
+  ~1,000 of the 1,600 `kProbeBudget` proving that) and **re-cost the crossing the march named**
+  instead of the chord-midpoint guess.
+
+The re-cost now has two sources and says which one it used: `[MEASURED by the corridor march]` or
+`[inferred from the chord]`. The measured crossing keeps **both** protections the inferred one has
+always had — never price the final approach, never price the seed's own edge — applied to the better
+measurement rather than dropped because it is better. `killStop` (the march's hit point, or the
+chord's stop) is what S115's escalation compares against, so an identical breach still reads as
+identical whichever source named it.
+
+**FAILS OPEN.** A hop `MarchLeg` cannot decide is counted (`noVerdict=`) and skipped, never promoted
+to a breach — `MarchLeg`'s own contract, and the S96 rule that inventing a wall on a working map is
+the one regression this project cannot afford.
+
+### Containment
+
+1. It runs **only after `rep.ok` has already failed.** A route that validates on the chord never
+   executes a line of it.
+2. When the march says CLEAR, behaviour is byte-identical to before plus one free march.
+3. When it says BREACH, the ladder is skipped — and every such case ends as `No path` today anyway,
+   because `full-corridor` is already the last rung and it already failed in every one of them.
+4. Net CPU on the failure path goes **down**: the march makes no sweeps, and skipping the ladder
+   saves the ~1,000 probes it was spending. Failing requests currently log
+   `STALL PathPlanner::OnGameFrame 50.7ms`.
+5. `git diff --stat` = **3 files** (`path_corridor.{h,cpp}`, `path_search.cpp`). `path_funnel`,
+   `path_validate`, `path_repair`, `path_march`, `nav_mesh`, `nav_footprint`, `map_query`,
+   `path_surface_goal`, `path_planner` verified unchanged **by diff, not by assertion**.
+6. `kMaxAttempts` / `kMaxTotalExpand` / `kProbeBudget` / every penalty untouched. Full path
+   validation is untouched: every leg of every spoken route still gets the same march plus sweep.
+
+### The falsifier is the log line itself
+
+`corridor march: CLEAR over N hop(s)` vs `corridor march: BREACH at hop k/N -- crossing P:E -> nbr=N
+nbrEff=0x…`. **If these failures come back CLEAR, this diagnosis is wrong**, the ladder runs exactly
+as today, and the cost was one free march. If they come back BREACH it names the exact crossing on
+both maps — the first time we would know whether 568's ramp and the Waterway channel refuse for the
+same reason.
+
+### Also confirmed this round — S115's oracle paid for itself immediately
+
+Every one of the 13 failures: `oracle: goal poly 324 is IN the start poly's adjacency component
+(1997 polys) -- the SEARCH giving up, not an unreachable goal`. That question is now closed on this
+map class and never has to be argued again.
+
+### Deliberately NOT done
+
+- **No dry-first search pass.** The corridor march subsumes it (a bit-23 crossing is one of the
+  things the march refuses) *and* it covers the palace ramp, which a dry-first pass would not. Less
+  change, wider coverage.
+- **No cost-model change.** `kTerrainPenalty` untouched — S96/S108 territory, and not needed.
+- **The budget hygiene is held back**: skipping rungs the remaining budget cannot validate, logging
+  truncation as truncation (`probes=7` on a 27-leg candidate is currently reported as "still
+  breaching", which is a lie), and reserving `PathSurfaceGoal::Route`'s probes up front — it is
+  `REJECTED (budget ran out -- NOT verified)` in 10 of 13 failures with exactly its 128-probe floor
+  spent on a 145-corner polyline. With the ladder skipped on the corridor-is-broken branch most of
+  that pressure disappears, so it gets re-measured before it gets sized. Three changes in one build
+  is what S96 records as the cause of the damage it spent a session undoing.
+
+### Verify next play
+
+On **map 568** approaching Door 2 from off the corridor, and in the **Garamsythe Waterway** heading
+for the North Spur Sluiceway: every failure now carries a `corridor march:` line. Expect BREACH on
+both, with a named crossing, followed by `re-costed … [MEASURED by the corridor march]` and — the
+actual test — a route where there was `No path`. Regression gate unchanged and non-negotiable: **map
+315 still `pass=mesh`**, `pass=seam` still grep-dead, and routes that work today still answer
+`attempts=1` with no `corridor march:` line at all.
