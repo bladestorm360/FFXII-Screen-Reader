@@ -2890,6 +2890,12 @@ enough quad; on this mesh a single triangle is often an entire corridor, and obt
 *prefers* the corrupted result, because a funnel that accepts a bound on the wrong side cuts through
 the wall and is therefore shorter. See `debug.md`, "Funnel polarity".
 
+**Enforced in code since S124:** `PathFunnel::BestPolarity` returns the as-labelled polyline
+unconditionally — this winding fact is the authority, never the length comparison. The mirrored
+funnel still runs as an instrument; a mirrored-shorter measurement on a real corridor logs
+`MESH LABELLING ANOMALY` (it caught map 315's south bank shipping a 61 m flood-crossing chord as
+"shorter"). See `debug.md`, Sluiceway table row 15.
+
 ### The mover — `FUN_002327d0`, conf 0.99
 
 Carries a CURRENT POLY INDEX across frames. When `FUN_002324f0` reports the position left the triangle

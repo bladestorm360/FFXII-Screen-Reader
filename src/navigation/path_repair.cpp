@@ -33,12 +33,30 @@ Result Mend(const std::vector<FVec3>& poly,
         budget      -= r2.probes;
         out.probes  += r2.probes;
         const bool good = r2.ok && !r2.truncated;
-        char rm[352];
+        // THREE OUTCOMES, NOT TWO (S124, closing the S116 holdback). A candidate whose validation
+        // ran out of probes was never DISPROVED, and printing it as "still breaching" is a lie that
+        // sent two sessions after the wrong suspect. And a rung's candidate is not the caller's
+        // polyline -- WHERE it died is the only fact that names the obstacle, so a real breach now
+        // prints its leg, stop and cause. `good` and the budget flow are untouched: a truncated
+        // candidate is still not accepted, it is just no longer described as refuted.
+        char verdict[144];
+        if (good) {
+            snprintf(verdict, sizeof(verdict), "OK");
+        } else if (!r2.ok) {
+            snprintf(verdict, sizeof(verdict),
+                     "still breaching @ leg %zu/%zu stop=(%.1f,%.2f,%.1f) why=%s",
+                     r2.firstBad, cand.size() - 1,
+                     r2.badStopAt.x, r2.badStopAt.y, r2.badStopAt.z,
+                     PathValidate::CauseName(r2.badCause));
+        } else {
+            snprintf(verdict, sizeof(verdict), "ran out of probes (NOT verified)");
+        }
+        char rm[448];
         snprintf(rm, sizeof(rm),
                  "repair[%s]: leg %zu, %d -- %zu->%zu points, inset %d/%d corner(s) moved, "
                  "%d LEFT their poly, probes=%d -> %s",
                  how, bad, detail, poly.size(), cand.size(), ins.moved, ins.corners, ins.leftHome,
-                 r2.probes, good ? "OK" : "still breaching");
+                 r2.probes, verdict);
         Log::Write("NAV-ROUTE", rm);
         if (!good) return false;
         out.ok     = true;

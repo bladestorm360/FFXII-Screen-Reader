@@ -91,7 +91,7 @@ walk-onto transition binding again.** Offline `.mpk` map-script analysis is sepa
 pool is packed on disk). What replaced this line of attack: the five-container census and the `+0x70`
 field-sign GROUP-1 record — see `GameArchitecture.md`, Session 104.
 
-## THE NORTHERN SLUICEWAY (map 315) — SOLVED IN S100, ROUND 4; ONE RESIDUAL FIXED IN S101
+## THE NORTHERN SLUICEWAY (map 315) — SOLVED IN S100 R4; RESIDUALS FIXED IN S101 AND S124
 
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
 player cannot cross".**
@@ -112,10 +112,17 @@ player cannot cross".**
 | 13 | S100 r3 | **PRE-EXISTING — and the real unblocker** | **`InsetCorners` WAS INERT BY GEOMETRY.** Its single candidate direction was the corner bisector, which on a wall-pinned corner slides ALONG the wall while the clearance gradient runs along the wall's NORMAL — so `after > before` never passed. **`inset=0` on every funnel line ever logged**, in a function three sessions had assumed was working | Candidates = bisector **+ both leg perpendiculars**, keep the measured best; every candidate must pass `TerrainRefused` (never inset onto flood) | **PLAY-CONFIRMED (r4): `inset=5`, 20/20, the tester walked 315 → North Spur.** A function that logs a counter nobody reads can be dead for three sessions — the counter WAS printed, and `inset=0` on every line was read as "no corners needed insetting" |
 | 14 | S101 | **PRE-EXISTING** (the S98 diagnosis, never fixed — only its circular fix was reverted) | **A transition's goal is a SURFACE, and the route was aimed at a boundary VERTEX.** Mid-route replans from mid-bank aim at the corner of a 27 m seam that walking reaches LAST, so the final leg runs 20 m ALONG the surface and returns `Frontier` 16.4 m short — suppressed, spoken as "No path", beacon stops until re-press (`ending at poly 324 (169.28,9.00,60.48), 16.4m short`) | `path_surface_goal.{h,cpp}`: the surface poly set is OBSERVED during A\* (first pop of any member; no search decision changes) and consumed ONLY below the validated-Route return. The corridor is rebuilt to that member and ends at **the PORTAL it crosses onto it**, stepped 0.5 m in and clamped by `ClosestPointOnPoly`. Validated by the SAME `CheckLegs` at the same `kArrivalTol`, with `InsetCorners` — accepted only on `ok && !truncated`. `pass=surface-goal` | **BUILT + DEPLOYED, not yet play-confirmed.** Satisfies the S99 circularity rule BY CONSTRUCTION: a portal between two mesh triangles is not a point this route produced. Blast radius is structural — `seamPolys` is null for every non-transition request, and a route that validates returns before the block is reached |
 
+| 15 | S124 | **PRE-EXISTING — and the true identity of the S115/S116 "Waterway No path" replans** | **`BestPolarity` still SELECTED by length, and the mirrored funnel won.** From the south-bank walkway polys (start 1406; y≈13, x≈38–90, z≈78–86) the mirrored string measures 1.6% shorter (223.6 vs 227.2 m) because its final chord cuts 61 m across the terrain-refused flood — **shorter BECAUSE invalid**, the exact S86 mechanism, recorded in this file and left selectable in code. Its self-check line (`POLARITY SELF-CHECK FAILED`) fired on every failure and was log-only; the mirrored polyline shipped to validation, which correctly breached (`why=march`, `nbrEff=0x17B00000`), the ladder burned ~1150 probes 0-for-4, the chord-inferred re-cost wandered (poly 503→504, defeating the S115 escalation's same-portal identity), two attempts drained the 1600-probe budget, and the S101 surface-goal — which DID touch the surface and build a 16-corner route — was REJECTED at its 128-probe floor needing ~450. Sweep of every archived log: `polarity=FLIPPED` occurs ONLY with the failed self-check, ONLY on 315's bank, ALWAYS ending Frontier→"No path" — **zero legitimate flips anywhere since the S86 sign fix** | `BestPolarity` returns the AS-LABELLED polyline **unconditionally** — all four outputs together (polyline, both lengths, portal indices; a polyline with the other run's indices would mis-address `Unpull`). The mirrored run survives as the INSTRUMENT: a mirrored-shorter measurement on a ≥2-portal corridor logs **`MESH LABELLING ANOMALY`** at all three call sites (main route; frontier and surface-goal, which had NO polarity visibility at all). Plus ladder honesty (S116 holdback, logging half): rungs log truncation as truncation and print WHERE a candidate breached (`still breaching @ leg N/M stop=… why=…`) | **BUILT+DEPLOYED S124, not play-confirmed.** Bitwise-inert wherever as-labelled already wins the comparison = every logged working route on every map — the anomaly condition is itself the scope, no map id anywhere. Gates: `polarity=FLIPPED` and `POLARITY SELF-CHECK` grep-dead; bank presses → `plan=Route`; every `MESH LABELLING ANOMALY` inside a 315 epoch |
+
 **The saga's true anatomy: (1) a class-aware terrain flag no instrument modelled, (2) funnel corners
 pinned on walls by an inset that could never fire, (3) a vertex goal on a surface.** Not gates, not
 volumes, not adjacency, not the string-pull — all four of which were the leading theory at some point
-and all four of which were wrong.
+and all four of which were wrong. **S124 added (4): a length-selected funnel polarity that preferred
+the invalid mirrored string — the replan-from-mid-map "No path" residual, which S101's surface goal
+could not catch because the ladder's budget burn starved it to an unverifiable 128 probes.** It also
+struck S117's inset suspect for this class: the `K LEFT their poly` instrument answered `0/0 on both
+outcomes` (neither confirms), and the decision tree's "next suspect `CheckLegs`" is superseded — the
+validator was measuring truly; the POLYLINE it was handed was illegal.
 
 **BE HONEST ABOUT THE SCOREBOARD. Two drafts of this table were not, each less wrong than the last.**
 Draft one listed six defects found and fixed and read like six wins. Draft two admitted most were
@@ -2571,6 +2578,13 @@ winding routing through walls impassable terrain unwalkable corners portals Reca
 **DO NOT REINTRODUCE `FunnelBestPolarity`'s "run it both ways and keep the shorter path".** It looked
 like a robustness win and it was a bug amplifier.
 
+> **FINISHED IN S124.** The S86 sign fix landed, but the length SELECTION survived in
+> `PathFunnel::BestPolarity` (reframed as a "self-check") — and on map 315's south bank the mirrored
+> run won again, by 1.6%, with a 61 m chord across the flood: four sessions of replan "No path"
+> (S100/S115/S116/S123-era logs), the marker printing every time. `BestPolarity` now returns the
+> as-labelled polyline unconditionally; the mirrored run is an instrument only, and a mirrored-shorter
+> measurement logs `MESH LABELLING ANOMALY`. See the Sluiceway table, row 15.
+
 What it did: ran the funnel with the portals as labelled and again with every portal mirrored, then
 kept whichever produced the shorter path. The comment justified it honestly — the author had derived
 the sign convention twice, traced both branches against the reference twice, and the log still
@@ -4658,19 +4672,29 @@ BREACH skips a ladder whose every case today ends as `No path` anyway. Net CPU o
 falls. Three files touched; `path_funnel`, `path_validate`, `path_repair`, `path_march`, `nav_mesh`,
 `nav_footprint`, `map_query`, `path_surface_goal`, `path_planner` verified unchanged by diff.
 
-## OPEN — the repair ladder reports a TRUNCATION as a breach (Session 116, known, not yet fixed)
+## PARTLY RESOLVED S124 — the repair ladder reports a TRUNCATION as a breach (Session 116)
 
-`PathRepair::tryPoly` folds `r2.truncated` into `good = false` and logs "still breaching". Late in a
-budget-starved request that produces lines like `repair[unpull-departure]: leg 26, 1 -- 27->27
+`PathRepair::tryPoly` folded `r2.truncated` into `good = false` and logged "still breaching". Late in
+a budget-starved request that produced lines like `repair[unpull-departure]: leg 26, 1 -- 27->27
 points, probes=7 -> still breaching` — **7 probes for a 27-leg candidate is a truncation, not a
-breach.** The rung consumed budget without answering and the log says the opposite of what happened.
+breach.** The rung consumed budget without answering and the log said the opposite of what happened.
+It also never logged *where* a rung's candidate broke, so it was a black box that said "still
+breaching" four times per attempt.
 
-Also missing: the ladder never logs *where* a rung's candidate broke (leg, reached, stop, cause), so
-it is a black box that says "still breaching" four times per attempt.
+**The LOGGING half shipped in S124** (the S116 "re-measure before sizing" condition was met by the
+2026-08-02 log — the ladder pressure did NOT disappear, because the 315 failures marched CLEAR and
+took the ladder branch): rungs now print three outcomes (`OK` / `still breaching @ leg N/M stop=…
+why=…` / `ran out of probes (NOT verified)`), with `good` and the budget flow untouched.
 
-Held back from Session 116 deliberately — with the ladder skipped on the corridor-is-broken branch,
-most of this pressure disappears, so it gets re-measured before it gets sized. Three changes in one
-build is what S96 records as the cause of the damage it spent a session undoing.
+**Still OPEN — the SIZING half, pre-designed with a gate:** `PathSurfaceGoal::Route` still shares the
+frontier's 128-probe floor (`kFrontierMinProbes`, `path_search.cpp`) and measured seam validations on
+315 cost 416–460 probes. If the S124 confirming log still contains any `surface-goal: … REJECTED
+(budget ran out` line, ship `kSurfaceGoalMinProbes = 512` at the surface-goal call site only (the
+frontier keeps 128). Failure-path-only by construction (below the validated-Route return; `seamPolys`
+non-null only for walk-onto transitions). Caveats recorded in the S124 session entry: off-315 seam
+"No path"→Route conversions are possible and intended (pre-check archived logs first), and on
+reject-by-breach paths the subsequent frontier budget can shrink toward its unchanged 128 floor —
+speech-identical, log-only. Zero hits on that grep → do not ship it.
 
 ## OPEN — a bare unlabelled door is classified as a SHOP (map 569, Session 116)
 

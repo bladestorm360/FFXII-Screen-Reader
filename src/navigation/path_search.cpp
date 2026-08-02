@@ -501,11 +501,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         plain.reserve(pr.portals.size());
         for (const PortalRef& pref : pr.portals) plain.push_back(pref.p);
 
-        bool  flipped = false;
+        bool  anomaly = false;
         float lenKept = 0.0f, lenOther = 0.0f;
         std::vector<FVec3> poly;
         std::vector<int>   polyIdx;      // which portal each corner came from -- see PathFunnel::Unpull
-        PathFunnel::BestPolarity(from, to, plain, poly, flipped, lenKept, lenOther, &polyIdx);
+        PathFunnel::BestPolarity(from, to, plain, poly, anomaly, lenKept, lenOther, &polyIdx);
 
         // Pull corners off the boundary BEFORE dropping passed waypoints, because an inset can move a
         // corner past the player and the drop is what notices.
@@ -516,14 +516,17 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         const int droppedWp = PathFunnel::DropPassedWaypoints(from, poly, &polyIdx);
 
         {
-            char fm[288];
+            // The non-anomaly format is BYTE-IDENTICAL to the pre-S124 line on purpose: working-route
+            // invariance is proven by diffing these lines across logs, so no field may move or rename.
+            char fm[320];
             snprintf(fm, sizeof(fm),
-                     "funnel: attempt %d polarity=%s kept=%.1fm other=%.1fm corners=%zu/%zu "
+                     "funnel: attempt %d polarity=as-labelled kept=%.1fm other=%.1fm corners=%zu/%zu "
                      "clipped=%d blocked=%d inset=%d droppedWp=%d%s",
-                     attempt, flipped ? "FLIPPED" : "as-labelled", lenKept, lenOther,
+                     attempt, lenKept, lenOther,
                      poly.size(), plain.size(), pr.clipped, pr.blocked, inset, droppedWp,
-                     (flipped && plain.size() >= 2)
-                         ? "   <== POLARITY SELF-CHECK FAILED: labelling and comparison signs disagree"
+                     anomaly
+                         ? "   <== MESH LABELLING ANOMALY: mirrored funnel measured shorter; "
+                           "as-labelled kept (S86: the winding is authoritative)"
                          : "");
             Log::Write("NAV-ROUTE", fm);
         }

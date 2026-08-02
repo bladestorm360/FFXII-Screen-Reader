@@ -2,8 +2,10 @@
 #include "navigation/nav_common.h"
 #include "navigation/nav_footprint.h"
 #include "navigation/path_march.h"
+#include "core/logger.h"
 
 #include <algorithm>
+#include <cstdio>
 
 namespace PathCorridor {
 
@@ -80,9 +82,20 @@ bool BuildFrontier(const CameMap& came, PolyId frontierPoly,
     plain.reserve(portals.size());
     for (const PortalRef& pr : portals) plain.push_back(pr.p);
 
-    bool  flipped = false;
+    bool  anomaly = false;
     float lenKept = 0.0f, lenOther = 0.0f;
-    PathFunnel::BestPolarity(from, fpt, plain, out.poly, flipped, lenKept, lenOther);
+    PathFunnel::BestPolarity(from, fpt, plain, out.poly, anomaly, lenKept, lenOther);
+    // This call site had no polarity logging at all, so a mirrored-shorter corridor here was
+    // invisible in every log the 315 defect was hunted through. Log-only: the returned polyline is
+    // as-labelled either way (see BestPolarity), and frontier routes are never spoken or beaconed.
+    if (anomaly) {
+        char am[160];
+        snprintf(am, sizeof(am),
+                 "frontier funnel: MESH LABELLING ANOMALY: mirrored %.1fm < as-labelled %.1fm; "
+                 "as-labelled kept",
+                 lenOther, lenKept);
+        Log::Write("NAV-ROUTE", am);
+    }
     // Inset BEFORE dropping passed waypoints, because an inset can move a corner past the player and
     // the drop is what notices -- same order as the main route.
     PathFunnel::InsetCorners(out.poly);

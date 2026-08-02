@@ -72,9 +72,9 @@ bool Route(const PathCorridor::CameMap& came, PolyId surfacePoly,
     plain.reserve(portals.size());
     for (const PathCorridor::PortalRef& pr : portals) plain.push_back(pr.p);
 
-    bool  flipped = false;
+    bool  anomaly = false;
     float lenKept = 0.0f, lenOther = 0.0f;
-    PathFunnel::BestPolarity(from, out.aim, plain, out.poly, flipped, lenKept, lenOther);
+    PathFunnel::BestPolarity(from, out.aim, plain, out.poly, anomaly, lenKept, lenOther);
     // THE SAME ORDER AS THE MAIN ROUTE, and for the same reasons. InsetCorners pulls taut corners
     // off the boundary they sit on -- the Session 100 fix without which map 315's bank route stops
     // one body radius short of every funnel corner -- and it runs BEFORE the passed-waypoint drop,
@@ -90,17 +90,22 @@ bool Route(const PathCorridor::CameMap& came, PolyId surfacePoly,
 
     const bool accept = rep.ok && !rep.truncated && out.poly.size() >= 2;
 
-    char m[352];
+    // This call site used to discard the polarity flag unlogged -- the one BestPolarity consumer
+    // whose accepted result is spoken, beacon-seeded and auto-walked, and the one with no anomaly
+    // visibility. The suffix closes that: the returned polyline is as-labelled either way.
+    char m[448];
     snprintf(m, sizeof(m),
              "surface-goal: surface poly %d entered from %d:%d, aim=(%.2f,%.2f,%.2f) "
-             "corners=%zu/%zu inset=%d droppedWp=%d probes=%d -> %s%s",
+             "corners=%zu/%zu inset=%d droppedWp=%d probes=%d -> %s%s%s",
              surfacePoly, out.entryFrom, out.entryEdge, out.aim.x, out.aim.y, out.aim.z,
              out.poly.size(), plain.size(), inset, droppedWp, rep.probes,
              accept ? "ACCEPTED" : "REJECTED",
              accept                   ? ""
              : rep.truncated          ? " (budget ran out -- NOT verified)"
              : (rep.firstBad != 0)    ? " (breach; the frontier owns this case)"
-                                      : " (nothing to speak)");
+                                      : " (nothing to speak)",
+             anomaly ? " | MESH LABELLING ANOMALY: mirrored funnel measured shorter; as-labelled kept"
+                     : "");
     Log::Write("NAV-ROUTE", m);
 
     if (!accept) { out.poly.clear(); return false; }

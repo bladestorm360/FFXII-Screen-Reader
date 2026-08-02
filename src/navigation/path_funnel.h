@@ -25,17 +25,22 @@ bool SameXZ(const FVec3& a, const FVec3& b);
 // through a given corridor, so this is what checks the claim.
 float PathLenXZ(const std::vector<FVec3>& pts);
 
-// Run the funnel BOTH ways and keep the shorter path.
+// Run the funnel BOTH ways; return the AS-LABELLED polyline, always.
 //
-// THE POLARITY IS MEASURED, NOT DERIVED -- and it is now a SELF-CHECK rather than a crutch (S86). With
-// the portals labelled from the mesh winding and the funnel's comparisons matching TriArea2's own sign,
-// `as-labelled` must win every route with a real corridor; `flipped` on >= 2 portals means one of those
-// two facts is wrong. `lenKept`/`lenOther` are reported so the log can say which.
+// THE LABELLING IS THE ANSWER; THE COMPARISON IS ONLY AN INSTRUMENT (S124, finishing S86). The
+// portals are labelled from the engine-forced mesh winding (GameArchitecture.md, VERTEX WINDING),
+// so `as-labelled` is correct by construction. A mirrored run that measures SHORTER is not a better
+// path -- it is the recorded S86 failure mode: a string accepting a bound on the wrong side cuts
+// THROUGH the wall, and is shorter BECAUSE it is invalid. Selection by length shipped map 315's
+// 61 m flood-crossing chord for four sessions of "No path"; do not reintroduce "keep the shorter".
+// `anomaly` reports that a mirrored run measured shorter on a real corridor (>= 2 portals) -- a
+// MESH LABELLING ANOMALY worth a log line at every call site -- and the mirrored polyline never
+// leaves this function. `lenKept` is the as-labelled length, `lenOther` the mirrored one.
 // `outIdx` (optional) receives, for each point in `out`, WHICH PORTAL it came from: -1 for the start,
 // `portals.size()` for the end, and the portal index for every taut corner in between. That is what
 // lets a caller undo the string-pull on ONE leg -- see PathFunnel::Unpull.
 void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
-                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther,
+                  std::vector<FVec3>& out, bool& anomaly, float& lenKept, float& lenOther,
                   std::vector<int>* outIdx = nullptr);
 
 // UNDO THE STRING-PULL ON ONE LEG (Session 96).

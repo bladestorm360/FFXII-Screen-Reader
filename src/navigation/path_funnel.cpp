@@ -107,7 +107,7 @@ float PathLenXZ(const std::vector<FVec3>& pts) {
 }
 
 void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal>& portals,
-                  std::vector<FVec3>& out, bool& flipped, float& lenKept, float& lenOther,
+                  std::vector<FVec3>& out, bool& anomaly, float& lenKept, float& lenOther,
                   std::vector<int>* outIdx) {
     std::vector<Portal> mirrored;
     mirrored.reserve(portals.size());
@@ -116,16 +116,22 @@ void BestPolarity(const FVec3& start, const FVec3& end, const std::vector<Portal
     std::vector<FVec3> a, b;
     std::vector<int>   ia, ib;
     // Mirroring swaps left/right WITHIN each portal; it does not reorder them. So a corner's portal
-    // index means the same thing in both polarities and the winner's indices travel with it.
+    // index means the same thing in both polarities and the indices travel with the polyline.
     Funnel(start, end, portals,  a, ia);
     Funnel(start, end, mirrored, b, ib);
     const float la = PathLenXZ(a), lb = PathLenXZ(b);
 
-    flipped  = (lb < la);
-    out      = flipped ? b : a;
-    lenKept  = flipped ? lb : la;
-    lenOther = flipped ? la : lb;
-    if (outIdx) *outIdx = flipped ? ib : ia;
+    // AS-LABELLED, ALWAYS -- all four outputs together (a polyline with the OTHER run's indices
+    // would silently mis-address Unpull's splices). A mirrored run measuring shorter on a real
+    // corridor is reported, never returned: on map 315's south bank it "won" by 1.6% because its
+    // final chord cut 61 m across the terrain-refused flood -- shorter because invalid (S86).
+    // At <= 1 portal mirroring cannot change the length (S86 measurement), so the size gate only
+    // keeps float ties on trivial corridors from reading as anomalies.
+    anomaly  = (lb < la) && portals.size() >= 2;
+    out      = a;
+    lenKept  = la;
+    lenOther = lb;
+    if (outIdx) *outIdx = ia;
 }
 
 // The midpoint of a portal's CLIPPED span, not of the whole edge: EdgeClearSpan already narrowed each

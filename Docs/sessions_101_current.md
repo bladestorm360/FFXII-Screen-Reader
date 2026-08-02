@@ -1975,3 +1975,93 @@ per-map measurement only (its refutation is recorded in debug.md, Tried & Failed
 gate held: no `event-exit:` / `field-sign elimination:` lines on any exit-listing map. Still open
 from this track: the 0x40 scan hole (dest-side counts are lower bounds until it is fixed), and the
 569 zero-exits backlog — both sources will print their counts on any 569 visit.
+
+## Session 124 — 2026-08-02 — [navigation] The funnel kept the mirrored string: 315's replan "No path" was the S86 comparison outliving its fix
+
+KEYWORDS: funnel polarity FLIPPED as-labelled BestPolarity mirrored shorter flood chord 61m map 315
+northern sluiceway south bank replan no path MESH LABELLING ANOMALY POLARITY SELF-CHECK retired S86
+winding authoritative repair ladder truncation three outcomes still breaching where surface-goal 128
+floor starved kSurfaceGoalMinProbes 512 gate
+
+**The tester's report:** two runs of 315 in one session. Beacon from the entrance crossed clean
+(including resuming its old route after combat); walking off-route and re-requesting from the south
+bank answered "No path" — a valid path became invalid with no game-state change. Tester's
+requirement: surgical, this map, and understand WHY the route builder fails at specific points.
+
+### The evidence chain (all from `FFXII-Screen-Reader-Latest.log`, seq=30–32, plus the archive)
+
+- The three failing requests — and ONLY they, out of 32 — funnel `polarity=FLIPPED … <== POLARITY
+  SELF-CHECK FAILED`. Every working route in the session is `as-labelled`.
+- The mirrored funnel "wins" by 1.6% (`kept=223.6m other=227.2m`) because its final leg is a 61 m
+  taut chord (102,95.8)→(153,62) across the terrain-refused flood — **shorter BECAUSE invalid**, the
+  S86 mechanism verbatim (`debug.md`: "a funnel that accepts a bound on the wrong side cuts through
+  the wall"). Its corner list shows the mirrored zigzag signature (string bouncing z=78↔82) — 35
+  corners where the neighbouring successful request produced 17.
+- Validation catches it honestly: `BREACH bad=34 … why=march … nbrEff=0x17B00000` (bit 23, flood).
+  `corridor march: CLEAR over 153 hop(s)` — the CORRIDOR walks; the polyline is the lie.
+- The ladder burns ~1150 probes 0-for-4; `inset 0/150 moved, 0 LEFT their poly` — **S117's inset
+  suspect answers 0/0 on both outcomes and is exonerated**; the chord-inferred re-cost wanders
+  (poly 503→504 on a byte-identical stop) so the S115 escalation's same-portal identity never
+  engages; two attempts drain `kProbeBudget=1600`.
+- `surface-goal: … corners=16/147 probes=128 -> REJECTED (budget ran out -- NOT verified)` — the
+  S101 designed endpoint TOUCHED the surface and built a route, then starved at the shared
+  `kFrontierMinProbes=128` floor. Measured cost of successful seam validations on this map:
+  416–460 probes. `oracle:` confirms the goal is in the component — the search gave up.
+- **The archive sweep that settled scope:** in every log since the S86 sign fix, `polarity=FLIPPED`
+  count == `POLARITY SELF-CHECK FAILED` count, per file (34, 3, 4, 12, 20, 22, 6) — **zero
+  legitimate flips exist anywhere**, all on 315's south bank (y≈13, x≈38–90), all ending
+  Frontier→"No path". This is also the true identity of the S115/S116 "Waterway No path" replans,
+  which were filed under the destination exit's name (North Spur Sluiceway). The defect printed in
+  the log for four sessions — S101's lesson, again.
+
+### What shipped (built + deployed, NOT play-confirmed)
+
+1. **`path_funnel.{h,cpp}` — `BestPolarity` returns the AS-LABELLED polyline unconditionally** (the
+   one behavior change). The winding is engine-forced (`GameArchitecture.md`, VERTEX WINDING), so
+   the labelling is the authority and the length comparison is demoted to an instrument: both runs
+   still execute, and a mirrored-shorter measurement on a ≥2-portal corridor sets an `anomaly` flag
+   the callers log as **`MESH LABELLING ANOMALY`**. All four outputs (polyline, both lengths,
+   portal indices) switch together — a polyline with the other run's indices would mis-address
+   `Unpull`'s splices. The mirrored polyline never leaves the function. This finishes `debug.md`'s
+   S86 entry ("do not reintroduce keep-the-shorter"), which the code had kept as a live selector.
+2. **`path_search.cpp`** — funnel log line: non-anomaly format byte-identical to before (that is
+   what proves working-route invariance by diff); anomaly appends the marker. `POLARITY SELF-CHECK
+   FAILED` and `polarity=FLIPPED` are now unprintable.
+3. **`path_corridor.cpp` / `path_surface_goal.cpp`** — the two `BestPolarity` call sites that had NO
+   polarity visibility now log the anomaly (log-only; frontier routes are never spoken/beaconed,
+   and the surface-goal line gains a suffix).
+4. **`path_repair.cpp` — rung honesty (log-only; `good`, budget flow, rung order untouched):** three
+   outcomes instead of two — `OK` / `still breaching @ leg N/M stop=(…) why=…` / `ran out of probes
+   (NOT verified)`. Closes the logging half of the S116 holdback (`debug.md` entry updated); the
+   re-measure condition was met: the 315 failures marched CLEAR, took the ladder branch, and the
+   pressure did not disappear.
+
+### Why this cannot change a route that works today
+
+On every logged working route on every map, as-labelled already wins the comparison, so the returned
+polyline is **bitwise identical** — the anomaly condition is itself the scope (today: only 315's
+south bank), with no map id anywhere (the tester asked for map-specific containment; this is
+containment by defect signature, which a mapId gate could not improve on other maps and would
+under-cover on future ones). The two previously-unlogged call sites are failure-path-only. Review
+caveat, recorded honestly: `repair[full-corridor]`'s candidate is polarity-INDEPENDENT (portal
+midpoints) and still breached with what looks like a real validation (338 of ~776 available probes)
+— so "the bank now routes" is a hypothesis under test, and the new rung breach-location line is the
+instrument that names the residual if one remains.
+
+### Pre-designed, NOT shipped — the surface-goal floor (gate in `debug.md`, S116 holdback entry)
+
+If the confirming log still contains `surface-goal: … REJECTED (budget ran out` → ship
+`kSurfaceGoalMinProbes = 512` at `path_search.cpp`'s surface-goal call site only (frontier keeps
+128; sized from the 416–460 measurement). Zero hits → do not ship.
+
+### Verify next play (map 315, south bank x≈38–45 and x≈70–90, y=13; request the North Spur exit)
+
+- `FRONTIER SUPPRESSED for "Exit, Garamsythe Waterway: North Spur Sluiceway"` count == 0; bank
+  presses end `plan=Route` (`pass=mesh` or `pass=surface-goal`).
+- `MESH LABELLING ANOMALY` ≥ 1, every hit inside a 315 epoch, every hit on an `as-labelled` line.
+- `polarity=FLIPPED` == 0, `POLARITY SELF-CHECK` == 0, `pass=seam` == 0 (S99 rule); the entrance
+  route still `pass=mesh`, working routes still `attempts=1`, and repeated from/target pairs print
+  byte-identical `funnel:`/`say=`/`legs=` lines against the previous log.
+- `repair[…]` lines may newly read `ran out of probes (NOT verified)` — rung ORDER per Mend must
+  match the old log for identical requests.
+- Build-2 gate: grep `REJECTED (budget ran out` — see above.
