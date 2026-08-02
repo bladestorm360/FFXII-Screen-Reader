@@ -2065,3 +2065,60 @@ If the confirming log still contains `surface-goal: … REJECTED (budget ran out
 - `repair[…]` lines may newly read `ran out of probes (NOT verified)` — rung ORDER per Mend must
   match the old log for identical requests.
 - Build-2 gate: grep `REJECTED (budget ran out` — see above.
+
+### ✅ PLAY-CONFIRMED (2026-08-02, same day) — every gate passed on the first play
+
+**KEYWORDS ADDENDUM: S124 play-confirmed map 315 south bank poly 1406 routed 24 requests zero no
+path anomaly fired 11 times mirrored 47.6m vs 140.2m two-thirds Build 2 NOT NEEDED gate closed
+surface-goal never invoked invariance byte-identical**
+
+Tester walked the bank from x≈26 to x≈127 requesting directions continuously. **"I was able to
+request directions continuously and the path never fell back to invalid."**
+
+**The problem ground was covered, measured against the pre-fix log's own failure coordinates:**
+start poly **1406** — the poly that answered "No path" three times — was the start poly for two
+requests here and **both returned full routes**; `from=(37.34,13.00,79.94)` sits **0.86 m** from the
+pre-fix `from=(38.20,13.00,79.98)` failure. The second failure band from the 08-01 logs
+((69.98,78.70), (77.14,79.61)) was covered by `(70.55,13.00,78.50)` and `(82.25,13.28,77.75)`.
+
+| Gate | Result |
+|---|---|
+| `say="No path"` / `FRONTIER SUPPRESSED` / `[BEACON] stop` | **0 / 0 / 0** across 24 requests |
+| `polarity=FLIPPED`, `POLARITY SELF-CHECK`, `pass=seam` | **0 / 0 / 0** — all three grep-dead |
+| `MESH LABELLING ANOMALY` | **11**, every one on map 315 (single epoch), every one on an `as-labelled` line, every one ending `plan=Route pass=mesh` |
+| Search health | 21 of 24 validated `checked=N/N … OK` on attempt 1; **no request ever reached attempt 2**; zero re-costs; ladder ran 3× and rung 1 repaired all three |
+| Invariance vs pre-fix log | entrance route identical (`startPoly=39 expands=690 touched=993 volumeRays=1156`); the repaired route's line character-for-character identical (`repair[unpull]: leg 2, 25 -- 18->42 points … probes=345 -> OK`) |
+
+**THE ANOMALY IS FAR LARGER THAN THE 1.6% IT WAS DIAGNOSED AT.** Walking east the mirrored funnel's
+claimed saving grows monotonically: `235.5/231.8` (1.6%) → `195.1/160.2` (18%) → **`140.2/47.6`
+(66%)**. The last one is the bug in one line: the mirrored string claimed a **47.6 m** path where
+the real walk is **140.2 m**, by cutting across the flooded channel — and under the old code that
+number WON and became the route. Corner counts confirm the mechanism: the corrected string-pull
+yields `corners=17/152` where the pre-fix mirrored run yielded 35 (the zigzag signature).
+
+### ❌ BUILD 2 IS NOT NEEDED — the gate returned zero, it is CANCELLED
+
+`REJECTED (budget ran out` == 0, and `surface-goal:` appears **zero times** — the surface-goal path
+was never invoked at all, because the ordinary mesh route validated on attempt 1 every time. The
+128-probe starvation was a SYMPTOM of the ladder burning the budget on an illegal polyline, not an
+independent defect. **`kSurfaceGoalMinProbes = 512` is withdrawn; do not ship it without a NEW log
+that shows the REJECTED line.** (S116's holdback discipline — re-measure before sizing — is what
+stopped a 512 that would have been fixing nothing.)
+
+### Scope of this confirmation — stated exactly, not rounded up
+
+The tester **walked to the problem ground and a short way past it, then stopped**; the log ends at
+x≈127 with the exit at x=153. So what is confirmed is **the defect**: continuous re-requests across
+the ground that produced every recorded "No path" now produce valid routes, with the anomaly
+instrument proving the defect was live at those coordinates. What is **not** in this log is a
+complete traverse to the exit and the map transition. Tester's own read: *"I'm 99% sure it would
+continue to work"* — recorded as their expectation, not as a measurement. A future 315 run that
+reaches the North Spur transition closes that last gap; nothing is owed before then.
+
+### Residual, downgraded
+
+The `repair[full-corridor]` caveat from the build notes (its candidate is polarity-independent and
+still breached pre-fix) **did not materialise**: the ladder ran only 3 times, rung 1 repaired all
+three, and `full-corridor` was never reached. The three leg-2 breaches at (22.98–25.50, y≈10) are
+PRE-EXISTING and unchanged — the identical breach at the identical 63.4 m appears in the pre-fix
+log and repairs identically.
