@@ -122,8 +122,13 @@ release history inside a file that is about RE findings. Releases 0.1 (Session 5
 (Session 67) were logged that way before this rule existed — do not copy them.
 
 Each record states: version, date, the commit the DLL was built from, whether `ReadMe.txt` changed,
-and anything a future reader would need to reproduce or debug that build. **If a shipped feature is
-missing from the readme, say so in the record** — that is how the gap survives to the next release.
+and anything a future reader would need to reproduce or debug that build.
+
+**If a KEY is missing from the readme — a new hotkey, or an existing one whose meaning changed on
+some screen — say so in the record.** Do **not** list features that read on their own. The readme
+documents keys and screen contexts, not the feature set, and a feature with no key has nothing for a
+player to look up. Treating every unlisted feature as a gap is what produced the long lists in the
+V0.2.1–V0.5 records; corrected 2026-08-03 and struck in the V0.6 record.
 
 ### 5. Report
 
@@ -177,38 +182,24 @@ with the same code. Rules unchanged from V0.5, including the paired-code-span un
 zero `#`, zero `*`, zero `](`, zero leftover escapes, no BOM, and **exactly one backtick** — line
 89's literal `` ` `` key name, the same single survivor as the last four releases.
 
-**Readme gaps shipped in this build (flagged, not fixed).** Verified by keyword search of the
-shipped `ReadMe.txt`, not from memory.
+**Readme coverage — and a correction to how every record below measured it.** The readme documents
+**keys**: what a key does, and the screen contexts where its meaning changes. Every mod key is in it,
+including this build's `8`/`9`, the `4`-`9` context switch, the `Home`/`End` page exception and the
+Gambit screen.
 
-*Closed since V0.5:* equipment reading (`equip` ×8, was 0), and Gambits — which had never been
-documented at all despite reading since S94, and which the old readme actively denied by listing the
-Gambit editor as unimplemented.
+**The "gaps shipped" lists in the V0.2.1–V0.5 records were measuring the wrong thing.** They counted
+*features* absent from the readme — Game Over, the battle damage-line element, the leader prompt, the
+notice board, the shop item list, inventory quantity, `LP` on the defeat line — and **not one of those
+has a key.** They read on their own, with no decision for the player, so there is nothing for a reader
+to look up and no entry to be missing. Tester, 2026-08-03: *"none of that matters for end users… they
+only need to know the keys and roughly what does what, with screen contexts. The readme is not a
+changelog… by your logic we should break down the gambits screen for people, and at that point we
+might as well write a walkthrough."* **Stop generating that list.** The only thing worth flagging in a
+future record is a KEY that is missing or wrong.
 
-*New gaps, from this build's own features:*
-- **The Clan Primer surface** — Bestiary, Hunts, Traveller's Tips, Quest Progress and the Sky
-  Pirate's Den all read (S127), and `Up`/`Down`/`Home`/`End`/`o` navigate an open entry. The readme
-  names the Primer only in a Known Issue and in the `Home`/`End` caveat, so a tester has no way to
-  learn the screen reads at all. `bestiary` and `hunt` both occur zero times.
-- **Game Over and the no-list prompts** (S125) — zero mentions. This one was a *reported silence*
-  before it was fixed, so its absence is worth closing next time.
-- **The element on a battle damage line** (S125) — the readme covers elements in item descriptions
-  only; the combat-log append is not mentioned.
-- **The leader-select prompt** (S125) — zero mentions.
-- **Sneak assist REGRESSED out of the readme.** V0.5 shipped a section on it; the tester's edit
-  removed it, so `sneak` and `palace` now occur zero times. It is automatic and needs no player
-  action, so nothing is unusable — but V0.5's standing caution (automatic, no key, `F10` is free
-  again and must never be documented as a sneak key) now has no home in the shipped file.
-
-*Carried over from V0.5, still open:* the shop item list / Buy / Sell / **Bazaar** (`bazaar` = 0,
-now four releases running); **inventory quantity + category switching**; **ground loot as a
-navigation category** (the `-`/`=` keys are documented but no category is ever named); **`LP` on the
-defeat line** (the menu says "defeat and EXP"; the emitted line is `"Dire Rat defeated. 34 EXP,
-2 LP."`); the **notice board**; **in-dialogue choices**; and **party membership on the field menu**.
-
-*One prose artifact, shipped as-is:* Known Issues reads *"Not yet read: the bodies of the full-page
-Handbook tutorials. Both are pre-rendered images…"* — "Both" survives an edit that removed FMV
-subtitles from the sentence. Not corrected here, because readme edits are a separate commit made
-before the release trigger and this file is the tester's own wording.
+Sneak assist came out of the readme in the tester's edit and stays out: it is automatic, has no key
+and needs no player action. V0.5's standing caution — automatic, no key, `F10` free again and never to
+be documented as a sneak key — belongs in `CLAUDE.md` and `Docs\Controls.md`, which both carry it.
 
 **Purpose:** test build of Sessions 124–127. What the tester is exercising: the funnel polarity fix
 that cleared map 315's replan "No path" (S124); element names, the battle damage type, Game Over, the

@@ -415,6 +415,10 @@ the one line of context an existing key needs when its meaning changed — and n
 - **Do NOT create a section per feature.** A key that fits an existing list goes in that list. A new
   section is for a surface with genuinely no home, and one short paragraph is usually the whole entry.
 - **Do not rewrite prose that is already correct.** Touching a working paragraph is not an update.
+- **A feature with no key needs NO entry.** If it reads on its own and the player makes no decision
+  about it, there is nothing to look up: Game Over, the damage-line element, the notice board, the
+  shop item list all just happen. Their absence is not a gap, and `Docs\release_procedure.md` must
+  not be made to list them (corrected 2026-08-03).
 
 **Why (2026-08-03):** asked to document keys `8` and `9`, I added four new sections, a
 design-rationale paragraph per surface, and changelog framing throughout. The tester's verdict:
