@@ -146,6 +146,111 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.5-Sponsor-build — 2026-08-01
+
+**Built from:** `023e58f` (Sessions 84–123). Tree clean before and after; no code change for the
+release. **63 commits** since `V0.2.1-shotgun-build`'s `877ed2a` — the largest gap between two
+releases so far, spanning the audio beacon, the mod menu, the navmesh route rebuild, auto-walk, and
+the palace sneak assist.
+
+**FIRST FIVE-FILE RELEASE.** `SDL3.dll` ships for the first time. It was added to the procedure in
+Session 92; every release before this one predates it and shipped four files. This is the file that
+turns a partial failure into a total one — without it `dinput8.dll` does not load and the game does
+not start, so a zip that omits it is not a degraded release, it is a broken one.
+
+**Zip:** `FFXII-Screen-ReaderV0.5-Sponsor-build.zip`, 1,169,183 bytes, five files, root flat.
+- `dinput8.dll` 720,384 bytes (sha256 `65408386…e9ab64`) — 1.65× V0.2.1's 435,712. The growth is
+  forty sessions of navigation/audio/menu code plus the beacon WAVs embedded as RCDATA
+  (`src\audio\beacon_assets.rc`), **not** a debug build; the deliberate absence of a loose asset
+  folder in the zip is what puts those bytes inside the DLL.
+- `SDL3.dll` 1,748,992 bytes, from `build\SDL3-build\Release\` — our own build, in step with the
+  DLL beside it, never sourced from elsewhere.
+- TTS pair carried over unchanged from `V0.2.1-shotgun-build` (`Tolk.dll` 122,368,
+  `nvdaControllerClient64.dll` 153,600).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: CHANGED** — 16,394 bytes / 191 lines, against V0.2.1's 9,526 / 136. Ten commits touched
+`README.md` in this range (the beacon, the F8 menu, auto-walk, the F9→F11 beacon move, the sneak
+section, and the withdrawal of the false "NVDA keys do not work" note).
+
+**The converter was validated by a real `cmp` this time, and it is worth recording how.** Because
+`README.md` changed heavily, the V0.2.1 method — diff the new conversion against the previous
+`ReadMe.txt` and require the shared lines to match — would have compared two mostly-different files
+and proved little. Instead the converter was run against **`git show 877ed2a:README.md`**, the
+readme as it stood at the *previous* release, and its output compared to the shipped
+`Releases\V0.2.1-shotgun-build\ReadMe.txt`: **byte-identical, 9,526 bytes both, sha256
+`5c845c43…dd340b`.** That reproduces a known-good artifact from its own source and is a stronger
+gate than any diff of the current file. **This is the answer to the V0.2 failure recorded below**
+(a `cmp` written down as passing when it could not have been run) — regenerate the *previous*
+release and match it, then convert the current one with the same code. The current `ReadMe.txt` was
+likewise converted from **`git show HEAD:README.md`**, not the working tree, so the V0.2
+uncommitted-source mistake cannot recur even though the tree was clean.
+
+**Conversion rules — one addition since V0.2.1.** Unchanged: strip heading and bullet markers,
+strip code-fence lines, strip `**`, flatten `[text](url)` → `text (url)`, unescape `\[` `\]` `\-`
+`\\` `\_` `\*`, drop `&#x20;`, collapse doubled spaces, right-trim, drop trailing blank lines, CRLF,
+UTF-8 no BOM. **New:** paired code spans are unwrapped — `` `F11` `` → `F11` — because the readme
+now uses them on the beacon-troubleshooting line, while a **lone** backtick is left alone, since an
+unpaired backtick in this readme is the ` key's own name and therefore content. Output audit: zero
+`#`, zero `*`, zero `](`, zero leftover backslash escapes, and **exactly one backtick** — line 91's
+literal `` ` `` key name, the same single survivor as the last three releases.
+
+**Readme gaps still shipped in this build (flagged, not fixed).** The V0.2.1 record listed four;
+one closed on its own and three did not, and this build adds four more. Verified by keyword search
+of the shipped `ReadMe.txt`, not from memory:
+- **Shop reader** — Buy, Sell and Bazaar (Session 69). Still no entry, now three releases running.
+  The only `buy` in the file is "Buy and install … on Steam".
+- **Inventory quantity + category switching** (Session 70). Still no entry; `quantity` appears zero
+  times.
+- **Ground loot in the navigation Items category** (Session 72). The `-`/`=` category keys are
+  documented but no category is ever named, so a tester has no way to learn ground loot is one.
+- **EXP/LP defeat line** (Session 72) — **partly closed.** The Combat verbosity description now says
+  Normal "speaks enemy defeat and EXP", but `LP` appears nowhere, and the line the mod actually
+  emits is `"Dire Rat defeated. 34 EXP, 2 LP."`
+- **Notice board reader** (Session 87) — new gap. `notice` occurs once and it is the palace guards.
+- **In-dialogue choices** (Session 87) — new gap. Both `choice` hits are "your choices are
+  remembered between sessions" in the beacon/menu sections.
+- **Party membership on the field menu** (Session 93) — new gap. `R` is listed only as a game key.
+- **Equipment reading** — `equip` occurs zero times.
+
+Not fixed here because readme edits are a separate commit made *before* the release trigger (see
+"What this procedure does NOT do"). **These belong in a readme commit ahead of the next release**,
+and the shop reader has now survived three of them.
+
+**Purpose:** sponsor build — the first zip a non-tester audience receives, and the first that is
+playable end-to-end without the tester's own SDL3 in place.
+
+**Play-confirmation status — CLEARED BY THE TESTER, 2026-08-01.** This record first said that
+everything from Session 93 onward was "built and logging but not play-confirmed", because only four
+features (map 315's routes and auto-walk, map 313's dungeon staircase, the sneak assist on map 568,
+map 572's event exit) had a session entry recording a play check. **On 2026-08-01, at this release,
+the tester stated that all of it had in fact been confirmed in play and that the confirmations
+simply were not reported back at the time.** The tester is the only person who plays this game, so
+their word is the primary evidence and it supersedes the silence of the logs: **the whole Session
+84–123 feature set is play-confirmed**, including the notice board, in-dialogue choices, the
+personal-name NPC lookup, the field-menu party list, the mod menu, the beacons, and the navmesh
+route rebuild.
+
+**Note the shape of this evidence, because it changes how a future defect should be read.** It is a
+single blanket attestation covering forty sessions, not forty per-feature checks each recorded
+against the build it was made on. It establishes that these features *worked when played*; it does
+not establish *which build* each was last exercised on, so it cannot by itself localise a
+regression. If something in this range misbehaves in a later build, the correct response is a fresh
+measurement on the current build — not "this was confirmed, therefore the fault is elsewhere."
+That is the same trap as the V0.2 `cmp` recorded above: a status written down once and then leaned
+on as though it were a live check.
+
+**The standing lesson stands unchanged: report confirmations as they happen.** The gap this entry
+repairs cost nothing here only because the tester caught it. Four sessions' worth of "not
+play-confirmed" warnings were carried forward into planning and into this record while the features
+had in fact been working the whole time.
+
+**Two standing cautions carried into this zip.** Auto-walk is the mod's one authorized write to game
+input and is **default OFF** — with the toggle off the injection function returns on its first line,
+so the input path is byte-identical to the read-only mod. And the sneak assist is **automatic with
+no key**, on the palace maps only; `F10`, which an earlier design reserved for it, is free again and
+must not be documented as a sneak key.
+
 ## V0.2.1-shotgun-build — 2026-07-27
 
 **Built from:** `877ed2a` (Sessions 74–83 — the navigation rebuild). Tree clean before and after;

@@ -130,10 +130,16 @@ movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
 - [x] Hotkey cycling through entity list (`[` / `]`)
 - [x] Distance + direction announcement (`\`=route legs, `/`=crow-flies describe)
 - [x] Basic pathfinding (A* over the SQEX walkmap; string-pulled + cardinal-decomposed legs)
-- [~] Auto-walk to selected entity — DROPPED (announce-only)
+- [x] **Auto-walk to selected entity** (Session 100) — ~~DROPPED (announce-only)~~ **UN-DROPPED and
+      BUILT**; the mod's one authorized write to game input (DIK W/A/S/D only, via
+      `AutoWalk::OnDevicePoll`), **default OFF**, `F8` menu toggle. Play-confirmed on map 315.
+      Disengages on a real movement key, combat, route loss, map change, focus loss, menu open, and
+      a 15 s no-progress cap.
 - [x] **Audio beacon** (Session 92) — `\` drops a panned, accelerating ping on each route leg corner;
       silent leg advance, pitched-up arrival cue, silent off-route re-plan. In combat it tracks the
-      committed target instead. `F9` / `F8` menu toggle. SDL3-backed. **Built, not play-confirmed.**
+      committed target instead. `F11` (bare press only — Session 112 moved it off `F9`, which the
+      game owns) / `F8` menu toggle. SDL3-backed. **Play-confirmed** (tester cleared S84–123 on
+      2026-08-01).
 - [x] **Door / Shop categories** (Session 92) — split out of Interactables; Shop is a doorway with a
       same-named text-only sign beside it. **The Shop rule's evidence is one district — validate from
       the log before trusting it** (see `debug.md`).
