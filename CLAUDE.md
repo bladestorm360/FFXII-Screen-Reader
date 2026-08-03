@@ -402,6 +402,30 @@ anyway. Corrected 2026-07-24 — and note the overcorrection made the same day, 
 first written to ban `\\` and `&#x20;` as well and broke the Markdown. The ask was words → symbols,
 nothing more.
 
+### README edits — CONCISE. Keys only. Never a changelog. (CRITICAL)
+
+When asked to update `README.md`, add **only what was asked for** — normally the new hotkeys, plus
+the one line of context an existing key needs when its meaning changed — and nothing else.
+
+- **Do NOT justify a feature, a position, or a design decision.** No "it is on a keypress rather than
+  automatic because…", no "deliberately", no explaining why a surface behaves the way it does. The
+  reader wants to know which key does what. The reasoning belongs in the session log.
+- **Do NOT write it as a changelog.** No "new in this build", no "this used to read X", no
+  before/after framing. The readme describes the mod as it is now; `Docs\sessions_*.md` holds history.
+- **Do NOT create a section per feature.** A key that fits an existing list goes in that list. A new
+  section is for a surface with genuinely no home, and one short paragraph is usually the whole entry.
+- **Do not rewrite prose that is already correct.** Touching a working paragraph is not an update.
+
+**Why (2026-08-03):** asked to document keys `8` and `9`, I added four new sections, a
+design-rationale paragraph per surface, and changelog framing throughout. The tester's verdict:
+*"far, far too many edits… you only needed to add a few new keys and context to others, not create a
+thousand new readme sections."* Every surplus sentence is one a blind player listens through to reach
+the key they were looking for — length in this file has a direct cost.
+
+**This does NOT license leaving a false claim standing.** If a line the edit touches is wrong, fix
+that line against the code rather than carrying it forward: "The Gambit editor is not implemented
+yet" survived several readme updates, and that screen had read since Session 94.
+
 ## Project Structure
 
 ```
