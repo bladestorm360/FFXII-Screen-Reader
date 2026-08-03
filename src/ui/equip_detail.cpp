@@ -66,6 +66,25 @@ bool ReadDescParams(const void* params, int* category, uint16_t* itemId) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+// Every set bit's name, joined with the game's own separator.
+//
+// includeSuppressed: the battle HUD hides KO / Invisible / HP Critical / X-Zone as noise, but an
+// accessory that blocks KO is exactly what a buyer needs to hear, and the game's own panel lists
+// them here (it reads the master name with no suppression check).
+std::wstring JoinNames(uint32_t mask) {
+    std::wstring sep = TextCapture::ResolveStringById(TXT_SEPARATOR);
+    if (sep.empty()) sep = L", ";
+    std::wstring out;
+    for (int bit = 0; bit < 32; ++bit) {
+        if ((mask & (1u << bit)) == 0) continue;
+        const std::wstring nm = BattleState::StatusName(bit, /*includeSuppressed=*/true);
+        if (nm.empty()) continue;
+        if (!out.empty()) out += sep;
+        out += nm;
+    }
+    return out;
+}
+
 } // namespace
 
 namespace EquipDetail {
@@ -82,57 +101,66 @@ bool ExpandCollapsedStatuses(const void* descParams, std::wstring& text) {
     if (!SafeReadU32(const_cast<uint8_t*>(rec), REC_IMMUNE, &immune)) return false;
     if (!SafeReadU32(const_cast<uint8_t*>(rec), REC_EQUIP,  &granted)) return false;
 
-    // Mirror the game's own choice exactly (FUN_00293310:139-185): a non-zero IMMUNE mask wins and
-    // the granted mask is not shown at all; only when immune is empty does the granted one appear.
-    // Reproducing that is what keeps the phrase we are about to replace the one actually on screen.
-    const bool useImmune = (immune != 0);
-    const uint32_t mask  = useImmune ? immune : granted;
-    if (mask == 0) return false;
+    if (immune == 0 && granted == 0) return false;
+    bool changed = false;
 
-    // A second, SEPARATE gap: when both masks are set the game silently drops the granted one. Not
-    // expanded here -- that would invent a row the panel never had. Logged so the decision rests on
-    // evidence if it is ever worth adding.
+    // WHICH ROW THE GAME DREW. All three equipment builders (FUN_00293310, FUN_00293fe0,
+    // FUN_00294b50) share one idiom, checked in all three: `if (immune == 0) { show granted } else
+    // { show immune }` — a non-zero IMMUNE mask wins outright and the granted mask is not drawn at
+    // all. Reproducing that is what keeps the phrase we replace below the one actually on screen.
+    const bool showedImmune  = (immune != 0);
+    const uint32_t shownMask = showedImmune ? immune : granted;
+
+    // (1) The row the game DID draw, but collapsed past three entries. Substitute rather than
+    // append: the needle is the game's own phrase, so the result is locale-correct by construction
+    // and reads "Immune: Sleep, Confuse, ..." instead of saying "Immune" twice.
+    if (PopCount(shownMask) >= kCollapseAt) {
+        const std::wstring needle = TextCapture::ResolveStringById(
+            showedImmune ? TXT_IMMUNE_COLLAPSED : TXT_EQUIP_COLLAPSED);
+        const size_t at = needle.empty() ? std::wstring::npos : text.find(needle);
+        if (at == std::wstring::npos) {
+            // Our mask says "collapsed" but the phrase is not on screen: the two disagree, so the
+            // text is left exactly as the game wrote it. Never patch a string you cannot locate.
+            char hdr[96];
+            snprintf(hdr, sizeof(hdr), "item 0x%04X mask 0x%08X reads collapsed, phrase absent",
+                     itemId, shownMask);
+            Log::Write("DESC", hdr);
+        } else {
+            const std::wstring names = JoinNames(shownMask);
+            if (!names.empty()) {
+                text.replace(at, needle.size(),
+                             TextCapture::ResolveStringById(showedImmune ? TXT_IMMUNE : TXT_EQUIP)
+                             + names);
+                changed = true;
+            }
+        }
+    }
+
+    // (2) The row the game drew NOTHING for. When an item both blocks ailments AND confers statuses
+    // while worn, the builder's either/or means the granted list never appears — at any count, not
+    // just past the collapse threshold. Both facts matter when deciding what to wear, so the hidden
+    // row is restored rather than merely logged.
+    //
+    // Appended rather than substituted, because there is no phrase on screen to replace. The label
+    // and the names are all game text, so nothing here is invented — only un-hidden.
     if (immune != 0 && granted != 0) {
-        char hdr[96];
-        snprintf(hdr, sizeof(hdr), "item 0x%04X hides its granted-status mask 0x%08X behind immune",
-                 itemId, granted);
+        const std::wstring names = JoinNames(granted);
+        const std::wstring label = TextCapture::ResolveStringById(TXT_EQUIP);
+        if (!names.empty() && !label.empty()) {
+            const std::wstring row = label + names;
+            if (text.find(row) == std::wstring::npos) {   // never duplicate a row already present
+                if (!text.empty() && text.back() != L'\n') text += L'\n';
+                text += row;
+                changed = true;
+            }
+        }
+        char hdr[112];
+        snprintf(hdr, sizeof(hdr), "item 0x%04X both masks set (immune 0x%08X, equip 0x%08X)%s",
+                 itemId, immune, granted, changed ? " -- granted row restored" : "");
         Log::Write("DESC", hdr);
     }
 
-    if (PopCount(mask) < kCollapseAt) return false;   // the game already listed them
-
-    const std::wstring needle = TextCapture::ResolveStringById(
-        useImmune ? TXT_IMMUNE_COLLAPSED : TXT_EQUIP_COLLAPSED);
-    if (needle.empty()) return false;
-    const size_t at = text.find(needle);
-    if (at == std::wstring::npos) {
-        // Our mask says "collapsed" but the phrase is not on screen, so the two disagree and the
-        // text is left exactly as the game wrote it. Never patch a string we cannot locate.
-        char hdr[96];
-        snprintf(hdr, sizeof(hdr), "item 0x%04X mask 0x%08X reads collapsed but the phrase is absent",
-                 itemId, mask);
-        Log::Write("DESC", hdr);
-        return false;
-    }
-
-    std::wstring sep = TextCapture::ResolveStringById(TXT_SEPARATOR);
-    if (sep.empty()) sep = L", ";                     // the game's separator, with a plain fallback
-    std::wstring names;
-    for (int bit = 0; bit < 32; ++bit) {
-        if ((mask & (1u << bit)) == 0) continue;
-        // includeSuppressed: the battle HUD hides KO / Invisible / HP Critical / X-Zone as noise,
-        // but an accessory that blocks KO is exactly what a buyer needs to hear, and the game's own
-        // panel lists them here (it reads the master name with no suppression check).
-        const std::wstring nm = BattleState::StatusName(bit, /*includeSuppressed=*/true);
-        if (nm.empty()) continue;
-        if (!names.empty()) names += sep;
-        names += nm;
-    }
-    if (names.empty()) return false;                  // nothing resolved -> leave the game's text
-
-    const std::wstring label = TextCapture::ResolveStringById(useImmune ? TXT_IMMUNE : TXT_EQUIP);
-    text.replace(at, needle.size(), label + names);
-    return true;
+    return changed;
 }
 
 } // namespace EquipDetail

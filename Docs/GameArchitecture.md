@@ -4192,3 +4192,64 @@ every row and never changed — it sounded stale because it was. Now kept in sep
 **The DESC dump is what separated the two candidate causes:** `gated=1` fires once per highlight
 with the correct per-item bytes, proving capture was fine and the loss was downstream. Staring at
 the capture path would never have shown it.
+
+### Charge announce — why the element could not be attached, and the ONE hook that unblocks it
+
+The CHARGE ANNOUNCE is the game's own battle sentence when an actor STARTS an action, before it
+lands. `battle_message.bin` ids `0x0D` / `0x0E` / `0x0F`:
+
+```
+0x0D | style=0x01 | args=[attacker, action, -, -]   "{0} begins casting {1}."
+0x0E | style=0x01 | args=[attacker, action, -, -]   "{0} readies {1}."
+0x0F | style=0x01 | args=[attacker, action, -, -]   "{0} uses {1}."
+```
+
+The mod reads them verbatim (Tier 1) and speaks `0x0D`/`0x0E` only in **Verbose** (`F4` / the `F8`
+menu); `0x0F` stays log-only in both. Attaching the ELEMENT here is the only way the mod can warn
+about incoming damage type BEFORE the hit — the damage line is log-only, so today the element is
+readable after the fact but never spoken during a fight.
+
+**Why it was blocked.** The Tier-1 hook is on `FUN_00536410`, which sees the message id
+(`argBlock+4 & 0x7FFF`) and the finished string, but **not the action id**. And the args cannot
+supply it either: `FUN_002b49f0` consumes the arg block as 8-byte slots (`param_4 = param_4 + 2` on
+an `int*`), and for a `0F 31` STRING slot it `memcpy`s the pointed-to codec (`:214-221`) — so the
+`{1}` arg is a pointer to the action's NAME, not its id. Reverse-matching that name across 543 rows
+is fragile and non-unique.
+
+**How to unblock it — pair with the charge SITE.** `FUN_00304850` is the action-start function and
+already known to this project (it owns the repeat gate that makes an actor announce once per
+action/target pair). It has the actor and the action in hand, and the announce is emitted from
+inside its own path, so the ordering is deterministic:
+
+1. Hook `FUN_00304850` (**RVA `0x1E4850`**) and stash the action id it is starting.
+2. The Tier-1 hook consumes that stash when the next message id is `0x0D`/`0x0E`/`0x0F`, and
+   appends `BattleState::ElementNames(AbilityElements(actionId))`.
+3. Clear the stash on consumption so a message that arrives without a matching charge adds nothing.
+
+Remaining work before building it: confirm `FUN_00304850`'s signature and which argument/field
+carries the action id, and confirm the charge announce is emitted downstream of it rather than in a
+sibling path. Both are decompile questions, no probe needed. **Do NOT hook the emitter
+`FUN_00469af0`** — the repeat gate deliberately declines to call it, and hooking it would cost the
+game's verbatim wording in all 12 locales.
+
+### Equipment status masks — the game shows ONE row; the mod now restores both (S125)
+
+All three equipment builders share one idiom, verified in **all three** (`FUN_00293310:139`,
+`FUN_00293fe0:117`, `FUN_00294b50:113`) rather than inferred from one:
+
+```c
+if (immune /* rec+0x44 */ == 0) { row = granted /* rec+0x48 */, label 0x2334/0x2336 }
+else                            { row = immune,                 label 0x2333/0x2335 }
+```
+
+So a non-zero IMMUNE mask wins outright and **the granted-status row is never drawn at all** — at
+any count, not merely past the collapse threshold. Two separate losses, both fixed in
+`src/ui/equip_detail.cpp`:
+
+1. **Collapsed row** (>= 4 entries) — the drawn row's phrase is SUBSTITUTED with the full list.
+2. **Hidden row** (both masks non-zero) — the granted list is APPENDED, since there is no phrase on
+   screen to replace. Label and names are game text; only the hiding is undone.
+
+An earlier revision of this file claimed the hidden row should be left alone as "inventing a row the
+panel never had". **Struck** — both facts matter when choosing what to wear, and the data is the
+game's own. The `DESC` log still records every item where both masks are set.
