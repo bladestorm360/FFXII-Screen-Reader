@@ -116,8 +116,9 @@ void OnShopHighlight(void* container) {
     if (afterCategory) g_lastItemId = -1;
 
     // The one sanctioned change-check: FUN_0056e5d0 is a redraw handler (~2x per focus). Speak only when
-    // the highlighted item actually changes; the guard resets when the container (surface) changes, so
-    // re-entering the shop always re-announces. NOT a dedup of distinct focuses.
+    // the highlighted item actually changes. What re-arms it is OnListRefreshed below, on the game's own
+    // list-rebuild event -- it clears BOTH halves of the key, so a shop re-entered into a recycled
+    // container still speaks. NOT a dedup of distinct focuses.
     if (container == g_lastContainer && itemId == g_lastItemId) return;
     g_lastContainer = container;
     g_lastItemId    = itemId;
@@ -199,6 +200,25 @@ bool OwnsSurface(void* w) {
     if (!w) return false;
     void* cls = Obj0(w);
     return cls == Hooks::ResolveRva(RVA_CONTAINER) || cls == Hooks::ResolveRva(RVA_PANEL);
+}
+
+// The borrowed open event -- see the header. InventoryReader calls this from its FUN_005655f0 hook
+// AFTER the original has run, which is the first moment the rows exist: FUN_0056e410:54 copies
+// container+0xE0 into panel+0xC8, and until it does OnShopHighlight bails on a null row array.
+void OnListRefreshed(void* container) {
+    if (!container || Obj0(container) != Hooks::ResolveRva(RVA_CONTAINER)) return;
+
+    // BOTH guards reset, not just the item id. A list rebuild is a genuine new event, so whatever is
+    // highlighted now is new information by definition and the redraw guard must not speak for it.
+    // Clearing g_lastContainer is the half that was missing: it was only ever reset at DLL unload, so
+    // a container the engine pooled and handed back at the SAME ADDRESS kept the old key and silenced
+    // the first row of the next visit. That is not hypothetical -- menu_reader.cpp:102 records the
+    // engine recycling pop-up window addresses, which is the same allocator behaviour, and the old
+    // comment here claimed "the guard resets when the container changes" while testing an address
+    // that had not changed.
+    g_lastContainer = nullptr;
+    g_lastItemId    = -1;
+    OnShopHighlight(container);
 }
 
 bool Init() {

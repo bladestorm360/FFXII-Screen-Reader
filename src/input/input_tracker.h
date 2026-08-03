@@ -71,6 +71,10 @@ void SetMenuNavCallback(MenuNavCallback cb);
 // registrant; both callbacks return true only while the menu is open, so with it closed every key
 // behaves exactly as it did before.
 void SetModMenuNavCallback(MenuNavCallback cb);
+
+// The Clan Primer's entry body walk (primer_reader.cpp). A third slot, for the reason given just
+// above: StatusReader holds the MenuNav slot and neither should displace the other.
+void SetPrimerNavCallback(MenuNavCallback cb);
 typedef bool (*DescribeInterceptCallback)();
 void SetModMenuDescribeCallback(DescribeInterceptCallback cb);
 

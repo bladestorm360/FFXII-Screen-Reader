@@ -108,4 +108,17 @@ bool OnFocus(void* window, int visibleIndex);
 bool Init();
 void Shutdown();
 
+// Drop the remembered option cursor, so the next prompt speaks whatever it opens on.
+//
+// The tick's guard is scoped to the prompt on screen, but it had NO re-arm at all -- the key sat in
+// function-local statics that nothing ever cleared, not even Shutdown. Its comment claimed a rebuilt
+// widget would not match, which assumes the engine hands back a fresh address; menu_reader.cpp:102
+// records that it does not. A re-opened prompt at a recycled address, cursor back at its starting
+// index, matched the stale key and stayed silent.
+//
+// Called from DialogueReader on the game's own end-of-message latch (the box that owned the prompt
+// is finished) and from ForgetLivePages when a list screen opens over it -- events, not polls. This
+// only ever ADDS speech.
+void ForgetLastCursor();
+
 } // namespace ChoiceReader

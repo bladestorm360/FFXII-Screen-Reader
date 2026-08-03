@@ -48,7 +48,12 @@ bool g_initialized = false;
 // It has to be per slot, not one global triple: the game lays out several text widgets in a frame,
 // and a single "last seen" key would flip between them every frame and re-emit the dialogue page
 // each time round. The game models these as 8 slots, so we do too.
+//
+// `widget` is part of the key, not decoration. A slot is a RECYCLED index into the game's registry,
+// so slot 3 tomorrow is a different box from slot 3 today; without this the key outlives the box it
+// was guarding and suppresses the next one that lands in the same slot.
 struct PageKey {
+    const void*    widget = nullptr;     // the text widget this key was taken from
     const uint8_t* base = nullptr;
     uint32_t       off  = 0xFFFFFFFFu;   // sentinel: nothing emitted for this slot yet
 };
@@ -93,7 +98,11 @@ int LiveMessageSlot(void* widget) {
 void LogReject(void* widget) {
     static void* s_lastRejected = nullptr;
     static int   s_rejects      = 0;
-    if (widget == s_lastRejected || s_rejects >= 16) return;
+    // Cap raised from 16 in Session 126: a single play session had already burned 13, and once it is
+    // spent this diagnostic is dead for the rest of the process -- so the one rejection you actually
+    // want to see, hours in, is the one it cannot report. The per-widget check above is what does the
+    // real per-frame throttling; the cap is only a backstop against two widgets alternating.
+    if (widget == s_lastRejected || s_rejects >= 64) return;
     s_lastRejected = widget;
     ++s_rejects;
     char m[176];
@@ -141,8 +150,23 @@ void EmitPage(void* widget, const uint8_t* base, uint16_t off) {
 // exception, naming the per-frame function it guards, exactly as choice_reader.cpp's tick names
 // FUN_002a9980.
 //
-// This is a TRANSITION DETECTOR on the game's own cursor, not a speech dedup: the key is dropped the
-// moment the message ends, so re-entering the same conversation announces it again.
+// This is a TRANSITION DETECTOR on the game's own cursor, not a speech dedup. It is scoped to the box
+// currently on screen, and there are now THREE ways it is dropped, because the first one alone was not
+// enough and the gap read as a dedup to the player:
+//   1. `+0xC0` latches end-of-message  -> ForgetSlot (below);
+//   2. a different widget appears in the same registry slot -> the key is stale, dropped in the
+//      change-check itself;
+//   3. a list screen opens over the box -> DialogueReader::ForgetLivePages, from InventoryReader's
+//      FUN_005655f0 hook.
+//
+// WHAT ONLY (1) MISSED (Session 126): exiting a shop and re-entering did not re-speak the clerk. `+0xC0`
+// is read PRE-call, so it is visible only on the call AFTER the message ended -- and when the shop tears
+// the box down, that extra walk never happens, so the latch is never observed and the key never drops.
+// It then collides by construction on the way back: same recycled slot, same `base` (the map's message
+// data is still loaded, so the clerk's text is at the same address), and `off` is 0 for page 1 both
+// times. Equal key -> return -> silence. The old comment here asserted "the key is dropped the moment
+// the message ends" as though (1) were sufficient; it is not, and silence is the failure mode this
+// project cares about most.
 void HookedTextWalk(void* widget, uint8_t stopByte) {
     // Read the end-of-message latch BEFORE the original. `+0xC0` is set to 1 by the codec-0x00 branch
     // and the NEXT call consumes it -- it skips the walk and clears the field back to 0 (`:535-536`)
@@ -165,6 +189,10 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
 
     if (ended == 1) {          // the box finished -- re-arm so a repeat of it speaks again
         ForgetSlot(slot);
+        // The mid-dialogue choice widget IS this box's embedded list block (both readers reach it as
+        // window+0xD0), so a finished message also retires any option cursor that was on it. Its own
+        // guard has no way to see this -- FUN_002a9980 simply stops being called.
+        ChoiceReader::ForgetLastCursor();
         return;
     }
 
@@ -175,9 +203,12 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         PageKey& last = g_lastPage[slot];
+        // Drop (2): this slot is holding a key taken from a DIFFERENT box. Recycled slot, new message.
+        if (widget != last.widget) last = PageKey();
         if (base == last.base && off == last.off) return;   // the cursor did not move: same page
-        last.base = base;
-        last.off  = off;
+        last.widget = widget;
+        last.base   = base;
+        last.off    = off;
     }
 
     STALL_SCOPE("DialogueReader::TextWalk");
@@ -197,6 +228,14 @@ bool Init() {
         ? "DialogueReader initialized (page cursor widget+0x8A via FUN_002a8c50 — every input device)"
         : "DialogueReader: FUN_002a8c50 hook FAILED — dialogue pages will not speak");
     return ok;
+}
+
+void ForgetLivePages() {
+    ForgetAll();
+    // Same event, same reason: a list screen opening over a conversation retires the option cursor
+    // as surely as it retires the page key. Kept here rather than at the call site so the two can
+    // never drift apart -- one event, one meaning.
+    ChoiceReader::ForgetLastCursor();
 }
 
 void Shutdown() {

@@ -414,8 +414,25 @@ to a real area name ⇒ "NOT USED".
 `FUN_00314440(dest, entrance, flags, 1)` → `FUN_003145e0`. In `FUN_00314440`, `flags & 1` selects the
 no-fade path and `(flags >> 1) & 1` is passed to `FUN_002efa70`. `0x0A` is the world-map teleport
 MENU's combination (S64) and is the only value excluded. The old `flags == 0` test therefore filtered
-on how a jump LOOKS, not on what it is; door controllers keep it (play-confirmed on every map that
-lists exits), the group-claiming path does not need it.
+on how a jump LOOKS, not on what it is.
+
+**CORRECTED S126 — "door controllers keep the `flags == 0` test" COST A MAP ITS ONLY WAY ONWARD.**
+That sentence stood here with "play-confirmed on every map that lists exits" behind it, which was
+true and irrelevant: it confirmed the maps that already worked, and said nothing about the maps that
+did not. Map 357 "Lhusu Mines: Shaft Entry" has three controllers — `__MJ_CTRL000` group 1 →
+806 `flags=0x0`, and `__MJ_CTRL001` group 2 / `__MJ_CTRL002` group 3, both → 358 "Lhusu Mines: Oltam
+Span" with **`flags=0x2`**, i.e. bit 1, the alternate fade. Both were refused and the player had no
+exit deeper into the mine. Corroborated three ways: the census read all three; the blob's `+0x84`
+edge table reported `3 edge records vs 1 controllers`; and `exit_scan` logged `surface g2`/`surface
+g3` (30 polys each) as `NO CONTROLLER CLAIMS THIS GROUP`.
+
+**The admission rule now, for both classes:** refuse `0x0A`; beyond that a controller that armed a
+group (`group > 0`) is admitted on any value, and a controller with no group keeps the strict
+`== 0`. This cannot add an exit to a map that is correct today — `exit_scan` still lists a dest only
+when a swept walkmap surface carries that group tag, and a correct map has zero unclaimed surfaces,
+so a new admission can only land on a surface already logged as unclaimed.
+
+**A `flags` value is not a taxonomy. Do not re-derive a kind from it.**
 
 **Structural note for anyone touching `ReadExitDests`:** `ResolveControllerArrivals` binds controller
 *i* to arrival *i* **by position**. Event-bound entries are therefore held in a second vector and
@@ -4274,3 +4291,223 @@ any count, not merely past the collapse threshold. Two separate losses, both fix
 An earlier revision of this file claimed the hidden row should be left alone as "inventing a row the
 panel never had". **Struck** — both facts matter when choosing what to wear, and the data is the
 game's own. The `DESC` log still records every item where both masks are set.
+
+
+## Save-slot preview record + Clan Primer entry record (Session 127)
+
+Both confirmed against a live probe (`probe_save_and_primer.js`) over six real saves and every primer
+sub-screen. `abs = RVA + 0x120000`.
+
+### Save / load slot list
+
+| what | where | conf |
+|---|---|---|
+| slot list window class | `FUN_0057fe80` RVA **`0x45FE80`** | 0.99 |
+| detail pane / record filler | `FUN_0057efe0` RVA **`0x45EFE0`** (`args[1]` IS the record) | 0.99 |
+| row painter | `FUN_0057fb00` RVA **`0x45FB00`** | 0.99 |
+| header builder (write side) | `FUN_00583d60` RVA **`0x463D60`** | 0.99 |
+| preview array | `container+0x590`, **200 × 0xA0**, cached on the list window at **`+0x1C0`** | 0.99 |
+| row → array index | `u8[win + 0xEF + row]` — the list is ordered by RECENCY, so row ≠ slot | 0.99 |
+
+Record fields (offsets into the 0xA0):
+
+| off | type | meaning | conf |
+|---|---|---|---|
+| `+0x10` | u32 | playtime FRAME counter (= h:m:s × 60; used only to validate the split below) | 0.99 |
+| `+0x18` | u16 | playtime **hours** | 0.99 |
+| `+0x1A` | u8 | playtime **minutes** | 0.99 |
+| `+0x1B` | u8 | playtime **seconds** | 0.99 |
+| `+0x20 + n*4` | — | party slot *n*: charId (`0xFF` empty) / **level** / HP+MP gauge nibbles / flags, **bit 0 = PARTY LEADER** | 0.98 |
+| `+0x44` | u32 | **clan rank** 1..12 — rank 2 resolved "Hedge Knight", rank 11 "Knight of the Round" | 0.98 |
+| `+0x4C` | s32 | **map id** — the field that produces the location the row already spoke | 0.99 |
+
+**RESOLVED BY SCREENSHOT — `+0x08` IS GIL** (conf 0.99). The 92-hour save reads 2,782,150 there and
+the panel reads `GIL 2782150G`. `+0x0C` (961,190 on the same record) was the rival candidate and is a
+different counter — it is NOT gil. Do not re-open this. Note why the earlier "confirmation" of the
+mod's gil reader proved nothing: it matched `99999999`, which is also the clamp constant.
+
+**RESOLVED BY THE SAME SCREENSHOT — `+0x40` IS clan points and `+0x44` IS the rank** (conf 0.98). The
+panel reads `CLAN RANK Knight of the Round` / `POINTS 13422868` for the record holding 11 and
+13,422,868. **An earlier note here struck `+0x40` on the grounds that 13.4 million was "absurd for
+clan points"; that was reasoning from taste, not measurement, and it was wrong.**
+
+**`FUN_003153f0` RVA `0x1F53F0` — `(rank) -> const uint8_t*` THE RANK'S NAME, not a string id**
+(conf 0.98, probe-confirmed). Two observations settle it: the argument equalled the focused record's
+`+0x44` (11), and the probe's own hook on `FUN_002f9860` logged `id=1254 -> "Knight of the Round"`
+**before** `FUN_003153f0` returned — i.e. the resolve happens INSIDE it and the pointer that comes
+back is the resolved codec string. Pass it straight to `GameText::Decode`.
+
+**So there is NO rank->string-id table and none should be built.** A "id = 1243 + rank" formula fitted
+to two observed points (rank 2 -> 1245, rank 11 -> 1254) was nearly shipped; the function makes it
+unnecessary.
+
+**RANK 0 = "no clan yet", and the game DRAWS NEITHER ROW** (conf 0.99, screenshot). On a rank-0 save
+the detail panel shows only `LEVEL` and `GIL` — no `CLAN RANK` line, no `POINTS` line. The mod
+suppresses both on rank 0 to match, and never calls `FUN_003153f0(0)`.
+
+**GIL RE-CONFIRMED at the other end of the range** by the same screenshot: the panel reads `GIL 9G`
+and that record holds 9 at `+0x08` (`+0x0C` holds 492). Two confirmations three orders of magnitude
+apart — 2,782,150 and 9. `+0x08` is gil; treat this as closed.
+
+**THE DISPLAYED SLOT NUMBER IS THE ARRAY INDEX** (conf 0.99), NOT `+0x54`. The rows read 004, 005,
+006, 007, `<icon>`, 008 in exactly the order the row map gives (`...04 05 06 07 00 08`), and the
+record at index 8 is the one whose `+0x54` holds `3`. **Index 0 is drawn with an ICON instead of a
+number** — what that icon means is not established, so nothing names it. `+0x54` numbers something
+else; it happens to equal the index on most records, which is why it looked right.
+
+**THERE IS NO SAVE DATE ANYWHERE IN THE RECORD** (conf 0.98). Two saves 77 seconds apart in one
+playthrough differ only in playtime, `+0x50`, the map id and the party gauge nibbles. FFXII's save
+list shows location + playtime + party, not a timestamp. Do not re-derive this.
+
+### Clan Primer ("Handbook")
+
+| what | where | conf |
+|---|---|---|
+| sub-screen select | `FUN_0056f2a0` RVA **`0x44F2A0`** — `args[1]` = mode | 0.99 |
+| entry record builder | `FUN_00576300` RVA **`0x456300`** — `args[0]` = the 0x50-byte record | 0.99 |
+| set page (line-breaks one page) | `FUN_00573be0` RVA **`0x453BE0`** — `args[1]` = page index | 0.99 |
+| page viewer class | `FUN_005742d0` RVA **`0x4542D0`** | 0.99 |
+| entry list pane | `FUN_00571a50` RVA **`0x451A50`** | 0.99 |
+| category panel | `FUN_0056f810` RVA **`0x44F810`** (feeds `FUN_00291d80`, so `o` already read it) | 0.99 |
+| detail pane | `FUN_005701b0` RVA **`0x4501B0`** (record at `+0xE8`) | 0.98 |
+
+Entry record: **`+0x03` u8 page count**, **`+0x08 + i*8` `char*` page *i*`**. Each page is
+`HEADER 0x03 BODY` — the same page-break byte `GameText::DecodePages` splits on. **The body is
+ORDINARY CODEC TEXT**: `FUN_00573be0`'s token measurer `FUN_002b1fb0` calls `FUN_002ac5f0`, the same
+escape parser `game_text.cpp` derives `EscapeParamCount` from. Decoded live on the first probe run.
+
+Sub-screen modes, confirmed by the strings each resolved: **4 = Traveller's Tips, 5 = Bestiary,
+6 = Hunts**, 7 = present but empty on the probe save (almost certainly Sky Pirate's Den).
+
+**AMENDED, NOT STRUCK — the "baked assets / OCR-only" note above.** That measurement holds for
+TUTORIAL PANEL PICTURES. It does NOT cover primer PROSE, which is codec text on a pointer array. The
+note read as a red light for the whole feature and it was not one.
+
+**`FUN_002f9920` RVA `0x1D9920` is a SECOND string resolver** (keyed `id/10000` with a linear key
+match, unlike `FUN_002f9860`'s `id/1000` indexing). Every primer title comes through it — bestiary
+area names, hunt names, tip names, "CLAN RANK", "POINTS". The mod hooks only the first. If a title
+needs resolving by id, **EXTEND `TextCapture::ResolveStringById`; do not duplicate it.**
+
+**`viewer+0xF8` is NOT the page start** — after line-breaking it points at the LAST line laid out
+(`"with a tolerance for needles."`). Read pages from the record, never from the viewer.
+
+
+## Clan Primer round 2 — Hunts, the Den, and the page offset (Session 127)
+
+All probe-confirmed (`probe_primer_screens.js`), `abs = RVA + 0x120000`.
+
+### The page offset that made the Bestiary read one page behind
+
+`FUN_00573be0(viewer, pageIdx)` does **not** index the record by the displayed page:
+
+```c
+bVar9 = param_2 + 1;
+if ((*(uint *)(param_1 + 200) & 1) == 0) { bVar9 = param_2; }   // viewer+0xC8 bit 0
+uVar7 = *(undefined8 *)(*(longlong *)(param_1 + 0xd0) + 8 + bVar9 * 8);
+```
+
+**Record page = displayed page + 1 when `viewer+0xC8` bit 0 is set.** The Bestiary sets it, so its
+record page 0 is the `CLASSIFICATION / GENUS` box — not a page you can turn to. Traveller's Tips has
+the bit CLEAR, which is exactly why Tips read correctly and the Bestiary read one behind.
+
+Also off the viewer, so nothing needs latching: `+0xD0` = the entry record, `+0x8060` = the mode.
+
+### Hunts (sub-screen 6)
+
+| what | where | conf |
+|---|---|---|
+| Hunts LIST window class | `FUN_00579420` RVA **`0x459420`** (cell cb `FUN_005792f0`) | 0.99 |
+| row builder | `FUN_00577c30(kind, cells, rowIndex, ...)` RVA **`0x457C30`** | 0.99 |
+| row struct fill | `FUN_0037e5b0(id, out)` RVA **`0x25E5B0`** | 0.99 |
+| Quest Progress pane | `FUN_00578450` RVA **`0x458450`** (cell cb `FUN_00578310`) | 0.99 |
+
+Row struct (`out`): **`+0x00` char\* mark name**, **`+0x08` u16 the bitfield id**, **`+0x10` char\*
+petitioner + place**. Confirmed verbatim: row 1 gave `"Red & Rotten in the Desert"` /
+`"Tomaj (Rabanastre)"` / id `128`, matching the screen.
+
+**`FUN_0046b1a0(huntId)` is a PURE BITFIELD TEST, so the mod does NOT call it:**
+bit `(id & 7)` of `*(u8*)(BLOCK + 0x1020 + (id >> 3))`. The probe printed BLOCK at `0x2164480`
+absolute = **RVA `0x2044480`**, i.e. `FUN_002ef640`'s base + `0x200` — which is precisely what
+`FUN_002ef2b0` returns, corroborating the earlier note about that pair.
+
+**Quest Progress body: `huntsDetail+0xD0` then `+0x28`.** `FUN_00578450` stores the block it is handed
+at `win+0xD0`, so reading from the WINDOW avoids depending on the caller's argument shape. There is a
+second string slot at `+0x18` on the other branch and it measured **EMPTY** — dumping both rather than
+picking one is the only reason that is known rather than a coin flip.
+
+### Sky Pirate's Den (sub-screen 7) — text located, EVENT NOT located
+
+The tooltip text is ordinary resolvable string data, through the resolver the mod already hooks:
+
+```
+[str] mode 7 id=7016  -> "Balthier"
+[str] mode 7 id=24030 -> "Awarded for {v}Attacking{v} over {v}300 times{v},
+                          earning you the title of {v}Assault Striker{v}."
+```
+
+**But the Den emits NO `0x8000` at all.** Its only class is `FUN_00572e10` RVA **`0x452E10`**, sending
+msgs `0xE`, `0xF`, `0x12`, and it does not paint through the universal list painter either — no
+`[paint]` line for mode 7. Cursor movement between characters is internal to that window, so there is
+no focus event to hang a reader off. **Nothing is built for the Den until that is found; the strings
+being readable is not the same as knowing when to read them.**
+
+### Sky Pirate's Den (sub-screen 7) — SOLVED
+
+| what | where | conf |
+|---|---|---|
+| Den window | `FUN_00572e10` RVA **`0x452E10`** | 0.99 |
+| achievement tooltip | `FUN_00572600` RVA **`0x452600`** — created at `FUN_00572e10:81` | 0.99 |
+| cursor | **`den+0xCB`** u8 achievement index; **`0x1E` = nothing picked** | 0.99 |
+| tooltip's latched index | `tooltip+0xC8` u8 | 0.99 |
+
+**The name and body are `FUN_002f9860(idx + 0x1B68)` and `FUN_002f9860(idx + 0x5DDE)`** — the game's
+own arithmetic, read straight out of `FUN_00572600`'s constructor, not a fitted mapping. Corroborated
+live: index 0 produced ids **7016** ("Balthier") and **24030** ("Awarded for Attacking over 300 times,
+earning you the title of Assault Striker.").
+
+**The Den sends NO `0x8000` and paints through NO list painter** — it is a picture of sprites and the
+cursor is internal. So the reader watches `den+0xCB` for a change after the game's own window proc has
+run. That is the sanctioned per-frame exception, naming `FUN_00572e10`, and it is reset when the
+sub-screen changes so re-entering re-announces.
+
+### Traveller's Tips list — SOLVED, and it was never a primer bug
+
+`InventoryReader::IsEmptyCategory` claims a window by **SHAPE** — null row array, live scroll widget,
+live tab table — and the primer's entry list has exactly that shape. So the inventory reader was
+claiming Traveller's Tips and then going deliberately silent on it:
+
+```
+[READER] pane owner=...2CC899C0 rowOff=0x0
+[INV] empty category -- claimed and SILENT (row array null, scroll count clamped to 1)
+```
+
+That log line was printing on a list that was neither empty nor its own. Fixed by
+`PrimerReader::OwnsSurface`, the same stand-down it already does for the shop.
+
+**A SHAPE TEST CANNOT TELL TWO STRUCTS APART; ONLY IDENTITY CAN.** The shape claim was correct when it
+was written and stayed correct until a second family happened to match it — and its failure mode is
+silence, which is the one this project cares about most. Any future shape-claimed surface needs the
+same stand-down list.
+
+### The paint replay bypassed a claiming reader
+
+`MenuReader::OnMenuPainted` replays a focus by calling `OnFocus` **directly**, not through the
+dispatch chain where `SaveReader::TryFocus` / `PrimerReader::OnHuntFocus` sit. A save slot was
+therefore announced in full and then a second time, bare:
+
+```
+[SPEAK-OUT] Bhujerba: Miners' End, 26 hours 33 minutes, Vaan, Level 11, 134 gil, Hedge Knight, ...
+[SPEAK-OUT] Bhujerba: Miners' End
+```
+
+`OnFocus` now declines any surface with its own reader. **Anything that claims a row in the chain must
+claim it on the replay path too** — there are two ways into that function, not one.
+
+### Traveller's Tips list — the game DOES send focus messages
+
+`[disp] mode 4 class +0x451a50 msg=0x8000 index=1, index=2` — the same class and the same cell
+callback (`+0x451900`) the Bestiary list uses and reads correctly from. So the silence is **mod-side,
+not a missing game event**, and the remaining question is whether `OnFocus` is reached and finds no
+captured text. **CAVEAT on the probe's `(not the focused pane)` label: it is printed from the FIRST
+sample of each (mode, class, msg) triple, which is usually construction-time. It is not evidence
+about later focuses and must not be read as any.**

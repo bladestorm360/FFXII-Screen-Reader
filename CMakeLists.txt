@@ -79,6 +79,8 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/equip_detail.cpp
     src/ui/equip_target_reader.cpp
     src/ui/inventory_reader.cpp
+    src/ui/save_reader.cpp
+    src/ui/primer_reader.cpp
     src/ui/gil_reader.cpp
     src/ui/virtual_buffer.cpp
     src/ui/status_reader.cpp

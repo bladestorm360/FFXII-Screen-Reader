@@ -209,7 +209,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `.` | Combat log: forward one entry, newer | free |
 | `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
-| `Up` / `Down` | **Status Attributes page only:** previous / next entry in the virtual buffer | free on that page |
+| `Up` / `Down` | **Status Attributes page** and **an open Clan Primer entry:** previous / next entry in the virtual buffer | free on those pages |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
 
 > **Party screen — who is in the party (Session 93).** The field menu's first command, **Party**, is a
@@ -223,6 +223,30 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > Status and Equipment share this same portrait grid, and there they still speak name, Level, HP and MP
 > as before — the readout follows the command you came in on.
 
+> **Save / load slot list (Session 127).** Each row speaks its number, location, playtime, party
+> leader and level, gil, and clan points — the row plus the detail panel underneath it, which is what
+> a sighted player sees at a glance. The row the game marks with an icon instead of a number is
+> spoken without one.
+>
+> `4` to `9` read **party members 1 to 6 of the highlighted save** — the same six portraits the panel
+> shows, each as name and level. Away from this screen those keys keep their existing meanings
+> (equipment columns in a shop, live party status elsewhere); the switch is automatic and there is no
+> mode to get stuck in. An empty party slot says nothing.
+>
+> Not spoken: the small HP/MP bars beside each portrait — they carry no number to read, so naming
+> them would mean inventing a scale the screen never states.
+>
+> **Clan Primer entry body (Session 127).** Opening a Bestiary / Hunts / Traveller's Tips entry
+> speaks its page, and **turning the page speaks the new one** — the mod hooks the game's own set-page
+> call, so whichever key or pad button the screen binds, the announcement follows. `Left` / `Right`
+> stay entirely the game's: the mod deliberately does not claim them, because the page announcement
+> already covers what they do and two speakers on one keypress race each other.
+>
+> `Up` / `Down` walk the open page a sentence at a time, `Home` / `End` jump to its start or end, and
+> `o` re-reads the whole page. The page's own heading ("Observations", "The Adventurer's Handbook")
+> is the first entry, so you always know which of an entry's pages you are on. Nothing is claimed
+> once you leave the entry.
+>
 > **Status screen virtual buffer (Session 71).** The Status screen's **Attributes page** is a static
 > display with no in-game cursor, so the mod exposes it as an FF1-style navigable buffer on the arrow
 > keys — Character (name, Level, HP, MP, LP, EXP, Next), the nine Attributes, and Status effects.

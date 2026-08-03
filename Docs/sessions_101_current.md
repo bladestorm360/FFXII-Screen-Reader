@@ -2526,3 +2526,365 @@ objection that killed it was about the GAME, not the code — and it came from t
 The unblock recipe (pair the Tier-1 message with the charge site `FUN_00304850`, RVA `0x1E4850`,
 which holds the action id) stays in `GameArchitecture.md` so it need not be re-derived if the call
 is ever reversed. **Do not put it back on a to-do list.**
+
+## Session 126 — 2026-08-03 — [nav+menus] Four defects that had been printing in the log for sessions
+
+**KEYWORDS: entity_list kFieldContextBits 0x07 0x03 NavSafeFailMask bit2 CondAreaId failMask 0x0C
+areaId areaManifest S93 Bhujerba 805 806 announce mapId map_script MAPJUMP_FLAGS_FIELD_DOOR
+MAPJUMP_FLAGS_WORLDMAP_MENU jumpFlags 0x2 __MJ_CTRL001 __MJ_CTRL002 REJECTED Lhusu Mines 357 Oltam
+Span 358 NO CONTROLLER CLAIMS THIS GROUP shop_reader OnListRefreshed FUN_005655f0 g_lastContainer
+recycled dialogue_reader PageKey widget ForgetLivePages clerk re-entry**
+
+Four tester reports from one Bhujerba / Lhusu Mines session. **Every one of them was already in the
+log, and had been for sessions.** Nobody had grepped for the anomaly lines the mod prints about
+itself — the same lesson as S101/S102 and S124, now on its third repeat.
+
+### 1. A whole city that never announced its sections — and it was NOT the name dedup
+
+Report: *"in this city, entering another section of the city does not fire the map transition
+announcement."*
+
+The obvious suspect is `s_lastArea`, the sanctioned per-frame dedup in `entity_list.cpp`. **The log
+refutes it outright:** Rabanastre announces section-to-section perfectly — Southgate, Southern
+Plaza, East End, Muthru Bazaar, Migelo's Sundries, Amal's Weaponry, all consecutive, all spoken.
+
+The real discriminator was sitting in the routing log the whole time. Across 21 logs, with zero
+exceptions:
+
+* `failMask=0x00` → announced. **11/11** (Rabanastre 290/291/292/295/297/306, Giza 236,
+  Garamsythe 315, Lhusu Mines 357).
+* `failMask=0x0C[areaId(log),areaManifest(log)]` → silent. **3/3** (Bhujerba 805, 806, 806).
+
+`kFieldContextBits = 0x07` includes bit 2, `CondAreaId`. **Session 93 already established that bits
+2/3 are not a readiness signal** — `0x0C` is the engine's TERMINAL "this area has no such resource"
+state written by `FUN_003ea820`, which nothing ever retries — and removed them from
+`IsFieldNavSafe()`. The NAV-ROUTE gate line has been printing *"(bits 2/3 are log-only; routing runs
+regardless)"* ever since. **The announce gate was simply never updated.** Bhujerba is a second family
+of maps in the same terminal state as Ridorana/Pharos, which is the map S93 measured.
+
+Fix: `kFieldContextBits = 0x03`. This is finishing an S93 change, not a new widening.
+
+*Process note:* the tester's phrasing ("in this city") invites the same-region-suppressed
+hypothesis, which is what I formed first. It survived about ninety seconds — until the log was asked
+whether any other city announced. **A report describes a symptom, not a mechanism.**
+
+### 2. No way onward in the mines — a presentation bit read as a kind
+
+Report: *"in the mines, there is no exit to continue on. another cutscene? another exit type we
+missed somehow?"* Neither. The exits were found, then thrown away.
+
+On map 357 "Lhusu Mines: Shaft Entry", **three instruments contradicted the exit builder and all
+three were right**:
+
+1. the container census read all three controllers — `__MJ_CTRL000` group 1 → 806, and
+   `__MJ_CTRL001` group 2 / `__MJ_CTRL002` group 3, both → 358 "Lhusu Mines: Oltam Span";
+2. the blob's own `+0x84` edge table: `door binding: 3 edge records vs 1 controllers`;
+3. `exit_scan`: `surface g2: 30 polys` and `surface g3: 30 polys`, each
+   `<== NO CONTROLLER CLAIMS THIS GROUP -- unreachable exit`.
+
+The builder listed one exit. The two it dropped carry `flags=0x2`, and the controller branch tested
+`jumpFlags != MAPJUMP_FLAGS_FIELD_DOOR` — i.e. `!= 0`. **`map_script_internal.h` has documented since
+S64 that flags is a PRESENTATION bitfield** (bit 0 = no-fade path, bit 1 feeds `FUN_002efa70`) — "how
+a jump looks, not what it is" — and the code filtered on it anyway. `0x2` is an ordinary field door
+with a different fade.
+
+New rule: the world-map teleport MENU value is refused for both classes; beyond that a controller
+that ARMED A GROUP is admitted on any value, which is the standing the non-controller branch has had
+since S105. A controller with no group keeps the strict `== 0`.
+
+**Why this cannot widen onto a working map — structural, not a hope.** `exit_scan` lists a dest only
+when a swept walkmap surface carries that group tag and drops it as `nogroup` otherwise, and
+`map_script.cpp` already asserts that a map which is correct today has ZERO unclaimed surfaces. A
+newly admitted controller can therefore only land on a surface already logged as unclaimed.
+
+**The diagnostic that would have caught this is now written.** Both silent-drop paths — every
+mapjump in the span refused, or no mapjump found at all — now emit an always-logged
+`__MJ_CTRL%03d REJECTED` line beside the existing `SPAN EMPTY` / `SPAN UNREADABLE`. The old
+`span=... | setmapjumpgroup ... | mapjump at` line lives INSIDE the accepted branch, **so a refused
+controller read exactly like a routine that does not exist.** That is the whole reason this took two
+scanners to see.
+
+Maps still logging unclaimed surfaces, for the next play to attribute: **318, 319, 321, 322, 568**.
+**Map 569 is RULED OUT** — it has no `__MJ_CTRL` routines at all and all three of its jumps are
+`flags=0x0`, so the existing `nogroup=3` backlog item has a different cause and stands.
+
+### 3. Shops said nothing until you moved the cursor
+
+`ShopReader` had two hooks and **neither is an open event**: `FUN_0056e5d0` is a highlight/refresh
+handler reached from the cursor mover and the L/R tab handler, and the quantity panel proc returns
+immediately while browsing. `debug.md` recorded the gap outright: *"the shop-open hook point is still
+unestablished."*
+
+Rather than establish one, the open event is **borrowed from the list family the shop already belongs
+to**: `InventoryReader` hooks `FUN_005655f0`, the unified refresh the game runs on screen OPEN as
+well as on category change, and now calls `ShopReader::OnListRefreshed` once the original has rebuilt
+the rows. That is the same mechanism the party-menu lists got for the identical defect ("entering a
+one-item list moves no cursor").
+
+Second half: the guard cleared only `g_lastItemId`, never `g_lastContainer`, which was reset at DLL
+unload alone. The header claimed *"it resets when the surface (container) changes"* — a test on an
+address **the engine is free to hand back**, exactly as `menu_reader.cpp:102` records for pop-up
+windows. Both halves now clear on the refresh event. Comment corrected rather than left standing.
+
+### 4. Re-entering a shop did not re-speak the clerk
+
+`dialogue_reader.cpp`'s `g_lastPage[]` names its per-frame function (`FUN_002a8c50`), so it passes the
+letter of the no-dedup rule. **It fails on its own stated justification:** the comment claimed "the
+key is dropped the moment the message ends", but the `+0xC0` latch is read PRE-call and is therefore
+only visible on the call AFTER the message ended — and when the shop tears the box down, that call
+never comes. The key then collides by construction on the way back: recycled slot, same `base` (the
+map's message data is still resident), `off == 0` for page 1 both times.
+
+Three drops now, where there was one: the `+0xC0` latch; a different widget appearing in the same
+registry slot (`widget` is now part of `PageKey`); and `DialogueReader::ForgetLivePages()` from the
+same `FUN_005655f0` hook — an event, not a poll. All three only ever ADD speech.
+
+Also raised the reject diagnostic's hard cap 16 → 64: one session had already burned 13, and once
+spent it is dead for the process, so the rejection you want to see hours in is the one it cannot
+report.
+
+### 5. The paint replay got exactly one shot — and that lost announcements outright
+
+Found while diagnosing #3, initially deferred, then fixed on the tester's instruction ("if they are
+genuinely bugs, then fix the bugs"). It is genuine, and **the evidence was in the same log as
+everything else here**:
+
+```
+focus owner=…2C2A14C0 index=7 (new surface)
+  (text not ready — awaiting paint)
+focus owner=…2C2A14C0 index=7          <- no "(new surface)"
+  (text not ready — awaiting paint)     <- and never stashed again
+```
+
+`OnFocus` assigns `g_focusOwner = owner` **before** the `text.empty()` test, so on the paint replay
+`ownerChanged` is already false; the re-stash was gated on it, and `OnMenuPainted` had cleared the
+pending slot on its way in. **One paint is not always the right paint** — the paint that fires the
+callback need not be the one that fills THAT owner's item map. When it wasn't, the row was gone for
+good and the player had to move the cursor. Affects **every** menu, not just the save list.
+
+Now retries up to 8 replays. The budget lives in `g_retryOwner`/`g_retryCount`, which deliberately do
+NOT reuse the pending pair — `OnMenuPainted` clears that before re-invoking, so it cannot also serve
+as "have I already retried this". Budget released when text arrives; exhausting it logs
+`TEXT NEVER PAINTED ... this surface is MUTE` **once**, because a surface that never paints is a real
+defect elsewhere and silence is exactly how it stayed invisible.
+
+### 6. The option cursor had no re-arm at all
+
+`choice_reader.cpp`'s guard was two function-local statics that **nothing ever cleared, not even
+`Shutdown()`**. Its comment claimed "re-entering the prompt re-announces, because the widget is
+rebuilt and the remembered cursor no longer matches" — the same false pointer-identity assumption as
+#3 and #4, in a session that now has three instances of it.
+
+Given a real re-arm, `ChoiceReader::ForgetLastCursor()`, from two events: `DialogueReader`'s
+end-of-message latch (the choice widget IS the box's embedded list block — both readers reach it at
+`window+0xD0`, so a finished message retires the cursor on it) and `ForgetLivePages()`. The tick has
+no way to notice either by itself: `FUN_002a9980` simply stops being called.
+
+### The through-line
+
+Defects 1 and 2 were both **fully described in the log for four-plus sessions**. Defect 2 in
+particular had three independent instruments disagreeing with a fourth in the same file, printed
+side by side. The missing piece was never analysis — it was that nobody ran a grep for the mod's own
+anomaly lines before theorising. **Grep the log's own anomaly lines FIRST.**
+
+Second through-line, and it turned up **three** times once looked for: **a guard whose comment
+asserts something false about pointer identity.**
+
+| where | the claim | why it is false |
+|---|---|---|
+| `shop_reader.cpp` | "resets when the container (surface) changes" | compared an address the engine pools and hands back |
+| `dialogue_reader.cpp` | "the key is dropped the moment the message ends" | the latch is read pre-call and is never seen when something else tears the box down |
+| `choice_reader.cpp` | "the widget is rebuilt and the remembered cursor no longer matches" | recycled address + cursor back at its starting index = equal key |
+
+None had ever been tested, and `menu_reader.cpp:102` has recorded the counter-evidence — **the engine
+recycles these addresses** — since S51. All three now re-arm on a real game event instead.
+**A comment is not a measurement. If a guard's safety argument rests on an address changing, prove
+it changes.**
+
+Third, from #5: **a retry budget of one is not a retry.** The replay looked like it handled the
+late-paint case and handled only the first frame of it, and the failure mode was silence, which is
+the one outcome this project treats as worse than any repeat.
+
+
+## Session 127 — 2026-08-03 — [menus] Save slots and the Clan Primer, and the bit-2 replacement
+
+**KEYWORDS: save slot FUN_0057fe80 0x45FE80 win+0x1C0 rowmap +0xEF record 0xA0 playtime +0x18 +0x1A
++0x1B frame counter +0x10 mapId +0x4C party +0x20 leader bit0 gil ambiguous +0x08 +0x0C no date
+clan rank +0x44 Hedge Knight Knight of the Round primer FUN_00576300 FUN_00573be0 FUN_0056f2a0
+pageCount +0x03 pages +0x08+i*8 mode 4 tips 5 bestiary 6 hunts FUN_002f9920 VirtualBuffer
+SetPrimerNavCallback kFieldContextBits 0xA3 CondLeaderPtr CondLeaderObj**
+
+### 1. The bit-2 removal reinstated the pre-title announcement — fixed properly this time
+
+S126 dropped fail-mask bit 2 from the announce gate because it was suppressing all of Bhujerba. It
+was ALSO the only thing suppressing the boot-map announcement the original comment warned about, and
+the log caught the regression within seconds:
+
+```
+[+5468ms] announce: mapId=12 sub="" region="Pharos at Ridorana"
+```
+
+— eight seconds before "Load Game", on boot map 12, with an empty sub-area and a garbage region.
+
+**The gate wants "is a party standing on a field map", and the LEADER ACTOR is that question.**
+`kFieldContextBits` is now bits 0/1/5/7 — field sim live, field module started, leader ptr present,
+leader resolves through the handle table. Unlike the area manifest that is a liveness property, not a
+per-area resource lookup, so it has no terminal-false state to fall into. Bhujerba (`failMask=0x0C`)
+has bits 5 and 7 clear, so the city that started this still announces.
+
+**Lesson: when you delete a gate, find out what it was actually load-bearing for.** Bit 2 was doing
+two jobs — one legitimate (boot suppression), one accidental (silencing Bhujerba) — and removing it
+fixed the second by breaking the first.
+
+### 2. Save slots — the probe settled four questions and refused to settle a fifth
+
+The row paints only region + sub-area as codec text; playtime, levels and gil are SPRITE DIGITS via
+`FUN_00393160` → `FUN_0029f6e0`, which `TextCapture` structurally cannot see. `SaveReader` claims the
+row from the existing 0x8000 focus chain (no new hook) and reads the 0xA0 preview record.
+
+**Confirmed live over six real saves spanning 22 minutes to 92 hours:**
+
+| field | meaning | how it was confirmed |
+|---|---|---|
+| `+0x18` u16 / `+0x1A` u8 / `+0x1B` u8 | playtime h / m / s | cross-checked against the frame counter at `+0x10`, which is h:m:s × 60 on every record (26h34m07s → 5,738,828) |
+| `+0x4C` u32 | map id | 357 → Lhusu Mines, 806 → Bhujerba, 306 → Rabanastre Southgate |
+| `+0x20 + n*4` | charId / level / gauges / flags, **bit 0 = leader** | a 92-hour save reads lv 99 across the party; low-level saves read 5–12. Level is real |
+| `+0x44` u32 | clan rank | rank 2 → the game resolved "Hedge Knight"; rank 11 → "Knight of the Round" |
+
+**Then the tester sent a screenshot of the load screen and it settled all three open questions at
+once** — cursor on `005 Rabanastre Southgate 092:34:00`, the very record the probe had dumped:
+
+* **`+0x08` IS GIL.** Panel reads `GIL 2782150G`; the record holds 2,782,150. `+0x0C` (961,190) is a
+  different counter. Now spoken.
+* **`+0x40` IS clan points, `+0x44` IS the rank.** Panel reads `CLAN RANK Knight of the Round` /
+  `POINTS 13422868` for a record holding 11 and 13,422,868. **I had struck `+0x40` an hour earlier on
+  the grounds that 13.4 million was "absurd for clan points" — that was reasoning from taste rather
+  than measurement, and it was simply wrong.** Un-struck.
+* **The displayed slot number is the ARRAY INDEX**, not `+0x54`: the rows read 004, 005, 006, 007,
+  `<icon>`, 008 in exactly the order the row map gives (`...04 05 06 07 00 08`), and the record at
+  index 8 is the one whose `+0x54` holds 3. Now spoken; index 0 (the icon row) gets no number,
+  because what that icon means is not established.
+
+### 2b. The clan rank name — a second probe run, and the answer was that the question was wrong
+
+The rank name was the one field left unspoken, because turning `11` into "Knight of the Round" looked
+like it needed a rank->string-id map and the only evidence was two points (rank 2 -> 1245,
+rank 11 -> 1254). Two points fit any line, so the probe was extended — **not to collect more points
+and fit a better line, but to test whether `FUN_003153f0` is the rank->id function at all.**
+
+It is not. It is better than that. The probe's own hook ordering gave it away:
+
+```
+[str] id=1254 -> "Knight of the Round"          <- FUN_002f9860 returns...
+[clan] rank=11 -> 748685674  matches +0x44? YES <- ...INSIDE FUN_003153f0, which then returns
+```
+
+`748685674` is `0x2CA2C0EA` — a heap pointer, not a string id. **`FUN_003153f0(rank)` resolves the
+name internally and hands back the codec string.** So the mod calls the game's own resolver and
+passes the result to `GameText::Decode`; there is no table, no formula, and nothing to keep in step
+with the game.
+
+**Why calling an 0.98 function is acceptable here:** if the return were ever not the name, the decode
+fails `IsMostlyPrintable` and the reader says nothing. There is no path from a wrong pointer to a
+wrong LABEL — only to silence.
+
+### 2c. Rank 0, from a third screenshot
+
+A rank-0 save (`001 Nalbina Fortress, 22 minutes`) draws **no CLAN RANK row and no POINTS row at
+all** — just `LEVEL` and `GIL`. So rank 0 is not "a rank whose name is blank", it is "this save has no
+clan", and the mod now suppresses **both** fields on it.
+
+That fixed a latent bug rather than a cosmetic one: points had been gated on `clanPts > 0`, which
+gave the right answer on this save **by luck** (its points are 0) and would have spoken a stray
+points figure on any rank-0 save that had accumulated some. **Gate on the thing the game gates on,
+not on a value that happens to correlate.**
+
+The same screenshot re-confirmed gil at the far end of the range: panel `GIL 9G`, record `+0x08` = 9
+(`+0x0C` = 492). Two confirmations three orders of magnitude apart — 2,782,150 and 9.
+
+**Two lessons, and the second is the useful one:**
+
+* **"That number looks wrong for this field" is not a refutation.** One screenshot beat an hour of
+  inference, and the tester had offered it up front.
+* **When a mapping looks like it needs fitting, check whether the game already computes it.** The
+  "two points fit any line" objection was correct and would have led to collecting a third point;
+  the right move was to stop fitting and ask what the function actually does.
+
+**THERE IS NO SAVE DATE.** Two saves 77 seconds apart in one playthrough differ only in playtime, the
+counter at `+0x50`, the map and the party gauges. FFXII stores playtime, not a timestamp. Do not go
+looking again.
+
+### 3. The Clan Primer was never "baked assets"
+
+`GameArchitecture.md` recorded primer/handbook content as OCR-only. **That was measured on TUTORIAL
+PANEL PICTURES.** The prose is ordinary codec text on a pointer array, and the probe decoded a
+bestiary entry end to end on the first run:
+
+```
+entry id=0 pageCount=3
+  page 0  "Plant
+Cactus"
+  page 1  "Observations |PAGE| Being a mischievous, mean-spirited beastie, mercifully lack-ing..."
+  page 2  "The Adventurer's Handbook |PAGE| Ye adventurers only beginning on your travels..."
+```
+
+One record serves every sub-screen: `+0x03` page count, `+0x08 + i*8` page *i* as `HEADER 0x03 BODY`
+— the same page-break byte `GameText::DecodePages` already splits on. Sub-screen ids confirmed by the
+strings each resolved: **4 = Traveller's Tips, 5 = Bestiary, 6 = Hunts**, 7 = seen but empty.
+
+**Announcements are driven by the GAME's own navigation, not by reading keys.** `FUN_00573be0` is the
+set-page call, so whatever turns the page — left/right in the Bestiary, a pad button, anything —
+the announcement follows. That is what "vocalise what the nav keys do" needed, without the mod
+guessing which screen binds which key.
+
+`VirtualBuffer` holds the open page split into sentences (the game hard-wraps mid-word and
+hyphenates, so raw lines would read " mean-" / "spirited beastie"; the hyphen is rejoined).
+Up/Down/Home/End walk it through a third `SetPrimerNavCallback` slot — the pattern
+`input_tracker.h` already documents for the mod menu, kept separate so neither displaces the other.
+**Left/Right are declined outright**: they are the game's page turn and the hook already speaks the
+result, so one keypress keeps one speaker.
+
+**`FUN_002f9920` (`0x1D9920`) is a SECOND string resolver** the mod does not hook — every primer
+title comes through it. If one ever needs resolving by id, EXTEND `TextCapture::ResolveStringById`.
+
+The primer state is cleared on the sub-screen hook, deliberately: three guards in S126 went silent
+because their state outlived the object it described. The nav callback also re-checks that the
+latched viewer is still a page viewer before answering.
+
+### Phrasebook
+
+Two strings added — `" hours"`, `" minutes"` — on the tester's explicit request for playtime. The
+game draws it as sprite digits with no words anywhere near it, so there is no game-supplied wording
+to read instead; a number with no unit is unspeakable. No plural form, exactly as `" steps"` has none.
+
+
+### S127 addendum — the Clan Primer round two
+
+Four sub-screens, all measured before anything was written (`probe_primer_screens.js`):
+
+* **Bestiary read one page behind.** `FUN_00573be0` offsets the record page by ONE when `viewer+0xC8`
+  bit 0 is set; the Bestiary sets it and record page 0 is the CLASSIFICATION box, not a turnable page.
+  Traveller's Tips has the bit clear — same function, two behaviours, and only one was implemented.
+* **Traveller's Tips was silent, and it was never a primer bug.** `InventoryReader::IsEmptyCategory`
+  claims windows by SHAPE (null row array, live scroll, live table) and the primer entry list has
+  exactly that shape, so the inventory reader claimed Tips and went deliberately quiet on it. **A
+  shape test cannot tell two structs apart; only identity can.**
+* **Hunts** — name/petitioner from `FUN_0037e5b0`, and the COMPLETE flag as a PURE bitfield read
+  (`FUN_0046b1a0`'s whole body is one bit test), so no game call. A screenshot of an incomplete mark
+  settled the state count: the list renders COMPLETE or nothing, **two states, not three.**
+* **Sky Pirate's Den** — no `0x8000`, no list painter. Cursor at `den+0xCB`, tooltip
+  `FUN_00572600(idx + 0x1B68 / + 0x5DDE)`. **The cursor is a POSITION, not an achievement id**: the
+  id lives in the per-achievement record at `den+0xD0 + cursor*0x80`. The tooltip read correctly while
+  navigation read a Chocobo as "Fran", and that split is what named the bug.
+
+**Three bugs this round were mine, found by the tester's ear rather than by the log:**
+
+1. The hunt row logged the right line and SPOKE the wrong one — two speakers in the same millisecond,
+   the generic path second with `interrupt=true`. **`SPEAK-OUT` records what was SENT to speech, not
+   what was HEARD;** a later interrupt cancels an earlier line and the log still shows both.
+2. Claiming rows in the dispatch chain instead of inside `OnFocus` caused the save list to announce
+   twice AND every primer sub-screen to be silent on entry — opposite symptoms, one cause. The claim
+   now sits below the pane gate, so an unfocused pane defers to the replay and a focused one does not.
+3. The buffer liveness check accepted only the page-viewer class, so the Quest Progress and Den
+   buffers were built correctly and then refused every arrow key. **A liveness check has to know every
+   surface it guards.**

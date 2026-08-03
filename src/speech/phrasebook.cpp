@@ -68,6 +68,13 @@ const Row kTable[] = {
     // -- Shop / inventory / gil ---------------------------------------------------------------
     EN(L" gil"), EN(L" in inventory"), EN(L"x"),
 
+    // -- Save slots. No plural form, exactly as " steps" above has none: the phrasebook has no
+    //    plural machinery and inventing one per locale is a worse error than "1 hours".
+    EN(L" hours"), EN(L" minutes"), EN(L" clan points"),
+
+    // -- Clan Primer: the COMPLETE badge is sprite art.
+    EN(L"Complete"),
+
     // -- Interaction target -------------------------------------------------------------------
     EN(L"Talk"), EN(L"Action"),
 

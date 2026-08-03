@@ -10,6 +10,7 @@
 #include "ui/equip_target_reader.h"
 #include "navigation/interact_target.h"
 #include "battle/party_status.h"
+#include "ui/save_reader.h"
 #include "battle/combat_log.h"
 #include "core/logger.h"
 #include "speech/speech.h"
@@ -196,6 +197,10 @@ void OnNavKey(int vk) {
         case '8': case '9': {
             const int n = vk - '4' + 1;                       // 4 -> column 1 ... 9 -> column 6
             if (EquipColumnKey(n)) break;
+            // Save/load slot list: address the HIGHLIGHTED save's party instead of the live one.
+            // Same structural gate as the equipment columns -- a class-validated live window, no
+            // cached flag -- so leaving the screen restores party status with nothing to get stuck.
+            if (SaveReader::PartyMemberKey(n)) break;
             if (vk <= '7') PartyStatus::SpeakSlot(vk - '4');  // 8/9 stay silent outside a shop
             break;
         }

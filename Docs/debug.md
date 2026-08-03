@@ -3537,8 +3537,17 @@ The shop's own NAME is readable: `shopId = *(u8*)(DAT_02ca9790+0xC0)` -> master 
 `probe_shop_name.js` confirms it first.
 
 **STRUCK before it shipped: "`FUN_0057c010` is the shop-open event."** It is a **dialog callback**
-(`local_18 = FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`). The shop-open hook
-point is still unestablished; the probe reads from the confirmed `FUN_0056e5d0` instead.
+(`local_18 = FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`). The probe reads from
+the confirmed `FUN_0056e5d0` instead.
+
+**RESOLVED (S126) — "the shop-open hook point is still unestablished" no longer blocks anything.**
+It was never established, and it did not need to be: the shop is one of the three families served by
+`FUN_005655f0` (`0x4455F0`), the unified list refresh the game runs **on screen OPEN as well as on
+every category change**. `InventoryReader` already hooks it. `ShopReader::OnListRefreshed` now hangs
+off that hook, after the original has rebuilt the rows, and that is what makes a shop announce the
+row it opened on. **Look for an event the game already fires into a hook you already own before
+hunting a new one** — the party-menu item lists were given this exact treatment years of sessions ago
+for the identical symptom ("entering a one-item list moves no cursor").
 
 ### STRUCK PERMANENTLY — the learned NPC->shop binding (S79, tester directive)
 
@@ -4959,3 +4968,88 @@ in its own container — not the map's door1/door3 routines, and not container 0
 maps where it applies, but 569's doors bind through the template. SOLVED instead by the ANCHORED
 template-signature rule: same container + same sorted event nameOffs as a +0x70-proven doorway =>
 Door. Fail closed without an anchor; logged as an inference.
+
+## SOLVED — a whole city that never announced, and exits refused for how they LOOK (Session 126)
+
+### SOLVED — Bhujerba's section changes were silent because the announce gate kept an S93-retired bit
+
+`entity_list.cpp`'s `kFieldContextBits` was `0x07`, which includes fail-mask bit 2 (`CondAreaId`).
+**S93 had already proven that bits 2/3 are not a readiness signal** — `0x0C` is the engine's TERMINAL
+"this area has no such resource" state from `FUN_003ea820`, which never retries — and removed them
+from `IsFieldNavSafe()`. The announce gate was missed, so on any map in that terminal state the
+"Entering &lt;area&gt;" block was skipped silently, before its own log line.
+
+Measured across 21 logs, no exceptions: `failMask=0x00` announced **11/11**;
+`failMask=0x0C` announced **0/3** (Bhujerba 805/806). Now `0x03`.
+
+**TRIED & FAILED — blaming the `s_lastArea` dedup.** The report was "entering another section of the
+CITY does not announce", which makes same-region suppression the obvious cause. It is wrong:
+Rabanastre announces section-to-section perfectly, six consecutive maps in one log. **When a report
+names a place, ask the log whether other places of the same kind behave the same way — before
+reasoning about mechanism.**
+
+### SOLVED — Lhusu Mines had no exit onward: `mapjump` flags is PRESENTATION, not kind
+
+`map_script.cpp` admitted a `__MJ_CTRL` controller only when `jumpFlags == 0`. Map 357's two doors
+deeper into the mine carry `flags=0x2` (bit 1 = the alternate fade) and were refused, leaving
+`surface g2` and `surface g3` — 30 polys each — logged as `NO CONTROLLER CLAIMS THIS GROUP`.
+`map_script_internal.h` had documented flags as a presentation bitfield since S64.
+
+Now: the world-map teleport MENU value (`0x0A`) is refused for both classes; beyond that a controller
+that armed a group is admitted on any value. Cannot widen onto a working map, structurally — a map
+that is correct today has zero unclaimed surfaces, and `exit_scan` still requires a swept surface
+carrying the group tag.
+
+**THE REAL DEFECT WAS THE MISSING LOG LINE.** The builder's `span=... | setmapjumpgroup ... | mapjump
+at` line lives INSIDE the accepted branch, so a refused controller produced **no output whatsoever** —
+indistinguishable from a routine that does not exist. The census could see `__MJ_CTRL001/002`, the
+builder could not, and nothing said why. Now both silent-drop paths emit `__MJ_CTRL%03d REJECTED`
+beside `SPAN EMPTY` / `SPAN UNREADABLE`. **A reader that drops something must say so; "absent from the
+log" must never be able to mean "rejected".**
+
+Still unattributed, for the next play: unclaimed surfaces on maps **318, 319, 321, 322, 568**.
+**Map 569 is ruled out** — no `__MJ_CTRL` routines at all, all jumps `flags=0x0`; its `nogroup=3`
+backlog item has a different cause.
+
+### SOLVED — THREE guards whose COMMENTS asserted something false about pointer identity
+
+All three shipped with a comment claiming the guard self-clears. **None of the claims had ever been
+tested, and `menu_reader.cpp:102` has recorded since S51 that the engine RECYCLES these addresses.**
+
+* **`shop_reader.cpp`** — *"the guard resets when the container (surface) changes, so re-entering the
+  shop always re-announces."* It compared `g_lastContainer`, which was reset only at DLL unload, so a
+  pooled container handed back at the same address kept the key.
+* **`dialogue_reader.cpp`** — *"the key is dropped the moment the message ends."* The `+0xC0`
+  end-of-message latch is read PRE-call, so it is visible only on the call AFTER the message ended —
+  and when a shop tears the box down that call never comes. Recycled slot + resident message data +
+  `off == 0` meant the clerk's greeting collided by construction on re-entry and went silent.
+* **`choice_reader.cpp`** — *"re-entering the prompt re-announces, because the widget is rebuilt and
+  the remembered cursor no longer matches."* Two function-local statics that **nothing ever cleared,
+  not even `Shutdown()`**. A prompt re-opened at a recycled address with its cursor back at the
+  starting index matches the stale key exactly.
+
+Fixed by giving each a real game event to re-arm on: `FUN_005655f0` (the list refresh) for the shop
+and, via `DialogueReader::ForgetLivePages`, for dialogue and choices; plus the end-of-message latch
+for choices; plus making the widget pointer part of the dialogue page key. **A comment is not a
+measurement. If a guard's safety argument rests on an address changing, prove it changes.**
+
+### SOLVED — the paint replay retried exactly once, and lost announcements permanently (S126)
+
+`MenuReader::OnFocus` assigns `g_focusOwner = owner` BEFORE its `text.empty()` test, so on the paint
+replay `ownerChanged` is already false — and the re-stash was gated on `ownerChanged`, while
+`OnMenuPainted` clears the pending slot on its way in. **One paint is not always the right paint:**
+the paint that fires the callback need not be the one that fills THAT owner's item map. When it was
+not, the row was never announced and the player had to move the cursor. Affects every menu.
+
+Observed signature, from the same log as the rest of S126 — two `(text not ready — awaiting paint)`
+for one owner/index, the second WITHOUT `(new surface)`, then nothing.
+
+Now retries up to `kMaxPaintRetries` (8). **The budget deliberately does NOT reuse
+`g_pendingOwner`/`g_pendingIndex`** — those are cleared before the replay runs, so they cannot also
+answer "have I already retried this one"; `g_retryOwner`/`g_retryCount` survive the clear. Released
+when text arrives. Exhausting it logs `TEXT NEVER PAINTED ... this surface is MUTE` **once per
+surface**, because a surface that never paints is a defect elsewhere and going quiet is precisely how
+it stayed invisible.
+
+**A retry budget of one is not a retry.** Any "stash it and replay on the next event" path needs to
+say how many times it will try, and to log the give-up.

@@ -12,6 +12,8 @@
 #include "ui/equip_compare.h"
 #include "ui/equip_target_reader.h"
 #include "ui/inventory_reader.h"
+#include "ui/save_reader.h"
+#include "ui/primer_reader.h"
 #include "ui/gil_reader.h"
 #include "ui/status_reader.h"
 #include "ui/popup_reader.h"
@@ -88,6 +90,17 @@ void* g_focusOwner = nullptr;
 int   g_focusIndex = -1;
 void* g_pendingOwner = nullptr;   // focus whose text wasn't painted yet (menu-entry replay)
 int   g_pendingIndex = -1;
+// THE REPLAY'S RETRY BUDGET, and why it cannot live in g_pendingOwner.
+//
+// OnMenuPainted CLEARS the pending slot before it re-invokes OnFocus, so by the time the replay
+// runs there is nothing left to compare against -- the pending pair cannot also serve as "have I
+// already retried this one". These two survive that clear, which is what makes a bounded retry
+// possible at all. Reset when a different surface appears, or when text finally arrives.
+void* g_retryOwner = nullptr;
+int   g_retryCount = 0;
+// One paint is often not enough: the paint that fires the callback need not be the paint that fills
+// THIS owner's item map. Small, because the honest cases settle in one or two.
+constexpr int kMaxPaintRetries = 8;
 void* g_valueChangeOwner = nullptr;   // Graphics value change awaiting a settled paint to announce
 int   g_valueChangeIndex = -1;
 // Last 0x8000 focus, stashed so the FUN_00244830 focus-change hook can replay the entry item
@@ -171,6 +184,50 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     // (fromPaint) once DAT_0208ebc0 has flipped to the entered pane.
     if (!isPopup && !IsConfigController(owner) && !IsFocusedPane(owner)) return;
 
+    // ONE-PAINT SETTLE, CLAN PRIMER ONLY.
+    //
+    // Its lists are long enough to SCROLL, and wrapping from the top to the bottom moves every
+    // visible row at once. The focus message arrives first, so the captured cells still hold the
+    // rows that were on screen a moment ago and the announcement is stale -- text that is real, and
+    // belongs to a different row. It settles within a frame, which is why it only ever sounded like a
+    // glitch rather than a wrong answer.
+    //
+    // Rather than a timer or a frame counter, this reuses the machinery already here: stash the focus
+    // and let TextCapture's paint callback replay it once the painter has refilled the item map. The
+    // replay arrives with fromPaint=true and does the real work below, so this is a DEFERRAL, not a
+    // second code path.
+    //
+    // SCOPED TO THE PRIMER on purpose. Every other menu in the game reads correctly today and a
+    // deferral is not free: if a focus somehow never triggers a repaint, the announcement waits for a
+    // paint that does not come. A scrolling list always repaints, which is exactly why this is gated
+    // on the surfaces that scroll and not applied globally.
+    if (!fromPaint && PrimerReader::OwnsSurface(owner)) {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_pendingOwner = owner;
+        g_pendingIndex = index;
+        return;
+    }
+
+    // CLAIMING READERS GO HERE, PAST THE PANE GATE ABOVE -- one place, both entry paths.
+    //
+    // There are TWO ways into this function: the 0x8000 dispatch, and a REPLAY (fromPaint) from
+    // OnMenuPainted / HookedFocusSet. Claiming a row in the dispatch chain instead of here got both
+    // halves wrong at once:
+    //   * the save list announced TWICE -- once in full from the chain, once bare from the replay
+    //     ("Bhujerba: Miners' End, 26 hours ..." then "Bhujerba: Miners' End"), because the chain ran
+    //     on a pane that did not yet hold the cursor and the replay then did the job again;
+    //   * and every Clan Primer sub-screen was SILENT ON ENTRY, because the entry 0x8000 arrives
+    //     before the list has painted -- the hunts row cache was still empty, the reader declined, and
+    //     the replay that would have caught it once the cache filled had been told to stand down.
+    //
+    // Putting the claim below the pane gate fixes both by construction: on an unfocused pane this
+    // function returns above and NOBODY speaks, so the replay is the single announcer; on a focused
+    // one the dispatch is. Exactly one speaker either way, and a reader that declines still falls
+    // through to the generic path (an empty save slot must still get the game's own "empty file"
+    // string).
+    if (PrimerReader::OnHuntFocus(owner, index)) return;
+    if (SaveReader::TryFocus(owner, index)) return;
+
     // Build what we'll speak: pop-up button label (code-fixed by index), or the
     // focused row's "name" / "name: value".
     std::wstring text;
@@ -223,10 +280,36 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         // Menu entry can fire the first focus before the painter fills the item
         // map (or before the button id is cached). Stash it; TextCapture's
         // paint callback replays this focus once the text is available.
-        if (ownerChanged) {
+        //
+        // THE REPLAY USED TO GET EXACTLY ONE SHOT, AND THAT LOST ANNOUNCEMENTS OUTRIGHT (S126).
+        // This stash was gated on `ownerChanged`, but `g_focusOwner` is assigned above, BEFORE this
+        // branch -- so on the replay `ownerChanged` is already false, nothing was re-stashed, and
+        // OnMenuPainted had cleared the pending slot on its way in. If that paint had not yet filled
+        // this owner's item map, the row was gone for good and the player had to move the cursor to
+        // get anything. Caught in a live log on the save-slot list: two consecutive
+        // "(text not ready - awaiting paint)" for owner ...2C2A14C0 index 7, the second WITHOUT
+        // "(new surface)", then silence. Retry until the text lands or the budget runs out.
+        bool budgetLeft, firstGiveUp = false;
+        {
             std::lock_guard<std::mutex> lk(g_mutex);
-            g_pendingOwner = owner;
-            g_pendingIndex = index;
+            if (owner != g_retryOwner) { g_retryOwner = owner; g_retryCount = 0; }
+            budgetLeft = (g_retryCount < kMaxPaintRetries);
+            if (budgetLeft) {
+                ++g_retryCount;
+                g_pendingOwner = owner;
+                g_pendingIndex = index;
+            } else if (g_retryCount == kMaxPaintRetries) {
+                ++g_retryCount;              // step past the cap so the notice below logs ONCE
+                firstGiveUp = true;
+            }
+        }
+        if (!budgetLeft) {
+            // Say so ONCE per surface rather than falling silent the way the old code did. A surface
+            // whose text never paints is a real defect somewhere else, and this is the line that
+            // names it instead of leaving a blank where an announcement should be.
+            if (firstGiveUp)
+                Log::Write("READER", "  TEXT NEVER PAINTED: gave up after the replay budget -- this surface is MUTE");
+            return;
         }
         // NO ring dump here. This branch is the NORMAL entry sequence -- the focus routinely beats
         // the painter, which is the entire reason for the replay above -- and TextCapture's dump
@@ -240,6 +323,13 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         // the event, and TextCapture::DumpRingToLog remains callable for deliberate diagnosis.
         Log::Write("READER", "  (text not ready — awaiting paint)");
         return;
+    }
+
+    // The text arrived, so release the retry budget: a LATER slow entry to this same surface must
+    // start from a full budget rather than inherit a spent one.
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (owner == g_retryOwner) { g_retryOwner = nullptr; g_retryCount = 0; }
     }
 
     Log::WriteW("READER", "  item: ", text);

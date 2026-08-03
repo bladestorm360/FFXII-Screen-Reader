@@ -49,6 +49,10 @@ InputTracker::MenuNavCallback g_menuNavCb = nullptr;
 // First refusal on arrows/Home/End and on `o` — see the header. Both decline while the mod menu is
 // closed, which is almost always, so the normal paths are untouched.
 InputTracker::MenuNavCallback g_modMenuNavCb = nullptr;
+// Clan Primer page walk. Its own slot for the same reason the mod menu has one: StatusReader
+// already owns the single MenuNav slot, and arbitrating here keeps both intact rather than one
+// displacing the other. Declines whenever no primer entry is open.
+InputTracker::MenuNavCallback g_primerNavCb = nullptr;
 InputTracker::DescribeInterceptCallback g_modMenuDescribeCb = nullptr;
 
 // Navigation keys (edge-detected independently so auto-repeat is suppressed).
@@ -293,6 +297,10 @@ DWORD WINAPI InputThread(LPVOID) {
             if (mcb) consumed = mcb(vk);
             InputTracker::MenuNavCallback cb = g_menuNavCb;
             if (!consumed && cb) consumed = cb(vk);
+            // Clan Primer entry body. Offered after the status buffer; the two are never open at
+            // once, so the order between them is arbitrary -- what matters is that both get a look.
+            InputTracker::MenuNavCallback pcb = g_primerNavCb;
+            if (!consumed && pcb) consumed = pcb(vk);
             if (!consumed && m.lParam != 0) {
                 InputTracker::NavKeyCallback ncb = g_navKeyCb;
                 if (ncb) ncb(vk);
@@ -365,6 +373,7 @@ void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
 void SetModMenuNavCallback(MenuNavCallback cb) { g_modMenuNavCb = cb; }
+void SetPrimerNavCallback(MenuNavCallback cb) { g_primerNavCb = cb; }
 void SetModMenuDescribeCallback(DescribeInterceptCallback cb) { g_modMenuDescribeCb = cb; }
 
 void FeedDInputKeyboard(const unsigned char* dik) {

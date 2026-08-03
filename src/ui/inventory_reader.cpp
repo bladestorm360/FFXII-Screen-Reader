@@ -1,5 +1,7 @@
 #include "ui/inventory_reader.h"
 #include "ui/shop_reader.h"
+#include "ui/primer_reader.h"
+#include "ui/dialogue_reader.h"
 #include "ui/text_capture.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -155,9 +157,27 @@ void OnCategoryRefresh(void* w) {
     g_categoryOwner = w;                           // ...and let shop_reader prove that item is ITS row
 }
 
+// FUN_005655f0 is the unified list refresh, and the game runs it on screen OPEN as well as on every
+// category change -- which makes it the closest thing the mod has to "a tabbed list screen just
+// appeared". Two readers outside this file need that edge and neither had an event of its own:
+//
+//   ShopReader   -- had no shop-open hook at all (only the cursor-move handler FUN_0056e5d0), so
+//                   entering a shop said nothing until a direction key was pressed;
+//   DialogueReader -- its page guard is re-armed by an end-of-message latch that is never observed
+//                   when a list screen tears the box down, so the clerk went quiet on re-entry.
+//
+// Both are called unconditionally and both stand down on their own if the surface is not theirs.
 void HookedRefresh(void* container, void* tabState, int filter) {
+    // BEFORE the original: whatever conversation was on screen is being covered or torn down right
+    // now, and its page keys must not survive to silence it when it comes back.
+    DialogueReader::ForgetLivePages();
+
     OnCategoryRefresh(container);
     if (s_origRefresh) s_origRefresh(container, tabState, filter);
+
+    // AFTER the original: this is the first instant the rows exist (FUN_0056e410:54 copies
+    // container+0xE0 into panel+0xC8), so a shop can finally read the row it opened on.
+    ShopReader::OnListRefreshed(container);
 }
 
 } // namespace
@@ -178,6 +198,13 @@ bool TryFocus(void* owner, int index) {
     // The shop's container is the same shape, but shop_reader already speaks those rows with their
     // price and inventory. Without this both readers would announce the same row.
     if (ShopReader::OwnsSurface(owner)) return false;
+
+    // ...and the same for the Clan Primer. IsEmptyCategory below matches on SHAPE (null row array,
+    // live scroll, live table) and the primer's entry list has exactly that shape, so this reader was
+    // claiming Traveller's Tips and then deliberately saying nothing -- the log line
+    // "empty category -- claimed and SILENT" was printing on a list that was not empty at all and was
+    // not even ours. A shape test cannot tell two structs apart; only identity can.
+    if (PrimerReader::OwnsSurface(owner)) return false;
 
     ListInfo li{};
     if (!ReadList(owner, &li)) {

@@ -416,19 +416,44 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
 
         // First field-door mapjump inside the routine is its destination. (Templates emit the same
         // call twice — e.g. a faded and an unfaded path — with identical operands, so first wins.)
+        //
+        // These three exist for the REJECTED diagnostic after the loop: a controller can walk out of
+        // here having admitted nothing, and that is an exit the map just lost.
+        bool accepted   = false;
+        int  candidates = 0;
+        int  flagsSeen  = -1;
         for (size_t o = 0; o + 12 <= b.size(); ++o) {
             if (b[o] != OP_PUSH_U16 || b[o + 3] != OP_PUSH_U16 || b[o + 6] != OP_PUSH_U16) continue;
             if (b[o + 9] != OP_CALLACTPOPA || b[o + 10] != NATIVE_MAPJUMP || b[o + 11] != 0) continue;
             const uint16_t jumpFlags = U16(b, o + 7);
+            ++candidates;
+            flagsSeen = static_cast<int>(jumpFlags);
             // THE FLAGS LITERAL IS PRESENTATION, NOT KIND (FUN_00355350 -> FUN_00314440 ->
-            // FUN_003145e0: bit 0 picks the no-fade path, bit 1 feeds FUN_002efa70). Controllers
-            // keep the exact `== 0` test they have always had -- every listed exit on every map
-            // depends on it and it is play-confirmed. A routine that reached here WITHOUT being a
-            // controller has already proved itself by arming a group, so it is admitted on any
-            // value except the world-map teleport menu's, of which every map holds a long run.
-            if (isCtrl ? (jumpFlags != MAPJUMP_FLAGS_FIELD_DOOR)
-                       : (jumpFlags == MAPJUMP_FLAGS_WORLDMAP_MENU))
-                continue;
+            // FUN_003145e0: bit 0 picks the no-fade path, bit 1 feeds FUN_002efa70) -- this file's own
+            // header has said so since S64, and the controller branch filtered on it anyway.
+            //
+            // WHAT THAT COST (Session 126): map 357 "Lhusu Mines: Shaft Entry" lost BOTH doors deeper
+            // into the mine. __MJ_CTRL001 (group 2) and __MJ_CTRL002 (group 3) each carry
+            // `mapjump(dest=358 "Lhusu Mines: Oltam Span", flags=0x2)` -- bit 1, the alternate fade --
+            // and `!= 0` refused them, silently. Three instruments disagreed with the builder and all
+            // three were right: the census read all three controllers; the blob's own +0x84 edge table
+            // said "3 edge records vs 1 controllers"; and exit_scan logged `surface g2: 30 polys` and
+            // `surface g3: 30 polys` as "NO CONTROLLER CLAIMS THIS GROUP". The player had no exit onward.
+            //
+            // The rule now: the world-map teleport MENU value is refused outright, for both classes --
+            // every map holds a long run of those and they are not places you can walk to. Beyond that,
+            // a controller that ARMED A GROUP is vouched for twice, by its own __MJ_CTRL name and by
+            // the group, which is the same standing the non-controller branch has accepted since S105.
+            // A controller with NO group keeps the old strict `== 0`: nothing vouches for it.
+            //
+            // WHY THIS CANNOT WIDEN ONTO A WORKING MAP -- structural, not a hope. exit_scan lists a dest
+            // only when a swept walkmap surface carries that exact group tag and drops it as `nogroup`
+            // otherwise, which is byte-identical to the old outcome. Per the note above, a map that is
+            // correct today has ZERO unclaimed surfaces. So a newly admitted controller can only ever
+            // land on a surface already being logged as unclaimed; no correct map can gain, lose or
+            // move an exit.
+            if (jumpFlags == MAPJUMP_FLAGS_WORLDMAP_MENU) continue;
+            if (isCtrl && group <= 0 && jumpFlags != MAPJUMP_FLAGS_FIELD_DOOR) continue;
 
             // RULE 2 of the gate above: with no `setmapjumpgroup` vouching for it, the DESTINATION
             // has to. A story move to a map the name tables call "NOT USED" is not a place the
@@ -453,6 +478,7 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
             d.codeOff   = start;
             d.destName  = MapNames::ResolveFullAreaName(d.destMapId);
             if (isCtrl) out.push_back(d); else eventBound.push_back(d);
+            accepted = true;
 
             if (!isCtrl) {
                 // ALWAYS logged, not gated on logDetail. A transition the mod could not see is a
@@ -497,6 +523,32 @@ bool ReadExitDests(std::vector<ExitDest>& out, bool logDetail) {
                 Log::Write("NAV-DIAG", m);
             }
             break;
+        }
+
+        // A CONTROLLER THAT LEAVES THAT LOOP WITH NOTHING ADMITTED IS AN EXIT THIS MAP JUST LOST, and
+        // until Session 126 it left no trace at all: the `span=... | setmapjumpgroup ... | mapjump at`
+        // line above lives INSIDE the accepted branch, so a refused controller read exactly like a
+        // routine that does not exist. That is what hid map 357's two onward doors -- the census could
+        // see __MJ_CTRL001/002 and this builder could not, and nothing in the log said why. Four
+        // sessions of logs went past with the answer missing rather than wrong.
+        //
+        // ALWAYS logged, not gated on logDetail, for the same reason the event-bound line below is: a
+        // transition the mod cannot see is a progress block for a blind player, and this line is the
+        // record that one was refused -- or, next to an unclaimed surface, that the refusal is the cause.
+        // Matches SPAN EMPTY / SPAN UNREADABLE above, which cover the other two ways a routine is lost.
+        if (isCtrl && !accepted) {
+            char m[240];
+            if (candidates == 0)
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d REJECTED: group=%d, NO mapjump call found in span "
+                         "+0x%X..+0x%X -- routine dropped, this map loses an exit",
+                         idx, group, start, static_cast<uint32_t>(start + span));
+            else
+                snprintf(m, sizeof(m),
+                         "  __MJ_CTRL%03d REJECTED: group=%d, %d mapjump call(s) in span, last "
+                         "flags=0x%X -- every one refused, routine dropped, this map loses an exit",
+                         idx, group, candidates, flagsSeen);
+            Log::Write("NAV-DIAG", m);
         }
     }
 

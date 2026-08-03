@@ -351,17 +351,44 @@ void OnFieldFrame() {
     // won't re-announce).
     //
     // CONTEXT GATE: IsFieldActive() alone is NOT enough — its 0x10 bit is already set at boot (the log
-    // caught this block running pre-title with "no sub-map index"). NavSafeFailMask bits 0/1/2 = field sim
-    // live + field module STARTED (only 1 after the first field entry) + valid area id (not mid-transition);
-    // all three clear == we are genuinely on a field area. We deliberately do NOT use the full
-    // IsFieldNavSafe(), which also demands the Bullet world — the prologue never builds one, so that would
-    // suppress the announcement entirely.
+    // caught this block running pre-title with "no sub-map index"). We deliberately do NOT use the
+    // full IsFieldNavSafe(), which also demands the Bullet world — the prologue never builds one, so
+    // that would suppress the announcement entirely.
+    //
+    // THE BITS, AND WHY EACH ONE IS HERE — this mask has now been wrong in BOTH directions, so the
+    // reasoning is spelled out rather than left to a bit count:
+    //
+    //   bit 0 CondFieldActive   field sim live
+    //   bit 1 CondFieldStarted  field module STARTED (only 1 after the first field entry)
+    //   bit 5 CondLeaderPtr     the party leader actor exists (zeroed at teardown start)
+    //   bit 7 CondLeaderObj     ...and resolves through the handle table
+    //
+    // BIT 2 (areaId) IS DELIBERATELY ABSENT AND MUST NOT COME BACK. Session 93 established that bits
+    // 2/3 are not a readiness signal — `0x0C` is the engine's TERMINAL "this area has no such
+    // resource" state written by FUN_003ea820, which nothing ever retries — and removed them from
+    // IsFieldNavSafe(); this gate was missed. Measured across 21 logs with no exceptions: every map
+    // reporting failMask=0x00 announced (11/11), every map reporting failMask=0x0C did not (3/3 —
+    // Bhujerba 805, 806, 806). A whole city was silent. Note what that was NOT: Rabanastre announces
+    // section-to-section perfectly, so the s_lastArea check below was never the cause.
+    //
+    // BITS 5/7 ARE WHAT BIT 2 WAS ACTUALLY DOING, DONE HONESTLY. Dropping bit 2 alone reinstated the
+    // pre-title bug the first paragraph warns about, and the log caught it within seconds of boot:
+    //     [+5468ms] announce: mapId=12 sub="" region="Pharos at Ridorana"
+    // — eight seconds before "Load Game", on the boot map, with an empty sub-area and a region name
+    // that is simply a bogus lookup. Bit 2 had been suppressing that as a side effect of areaId being
+    // 0xFFFFFFFF at boot, which is why nobody noticed it was also suppressing Bhujerba.
+    //
+    // "Is a party standing on a field map" is the thing this gate actually wants, and the leader
+    // actor IS that question — it does not exist at boot and it does exist everywhere the player can
+    // walk. Unlike the area manifest it is a liveness property, not a per-area resource lookup, so it
+    // has no terminal-false state to fall into. Bhujerba (failMask=0x0C) has bits 5 and 7 CLEAR, so
+    // the city that started all this still announces.
     //
     // PERMITTED per-frame change-check (the no-dedup rule's one exception; see CLAUDE.md).
     // GUARDS: FUN_0022a770, the per-field-frame tick this whole function hangs off. The area name
     // is ambient state, not an event — without the check there is no "you entered somewhere" edge
     // to announce, only a value that is true on every frame.
-    constexpr uint8_t kFieldContextBits = 0x07;   // 0 field, 1 field-started, 2 areaId
+    constexpr uint8_t kFieldContextBits = 0x01 | 0x02 | 0x20 | 0x80;   // field, started, leader ptr+obj
     if (mask != 0 && (PlayerState::NavSafeFailMask() & kFieldContextBits) == 0) {
         static std::wstring s_lastArea;
         std::wstring area = CurrentAreaName();

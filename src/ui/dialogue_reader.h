@@ -36,4 +36,16 @@ namespace DialogueReader {
 bool Init();
 void Shutdown();
 
+// Drop every remembered page key, so the next box speaks from page 1 whatever it is.
+//
+// The page guard is scoped to the box on screen, but its only self-re-arm is the `+0xC0`
+// end-of-message latch, which is read pre-call and therefore invisible when something ELSE tears the
+// box down. A list screen opening over a conversation is exactly that case, and it is why exiting a
+// shop and re-entering did not re-speak the clerk. Called from InventoryReader's FUN_005655f0 hook --
+// the game's own "a tabbed list screen is refreshing" event, not a poll.
+//
+// This ADDS speech; it can never remove any. Worst case a page repeats, which this project prefers to
+// silence every time (CLAUDE.md, NO DEDUPLICATION OF SPEECH).
+void ForgetLivePages();
+
 } // namespace DialogueReader

@@ -84,6 +84,17 @@ enum class Id {
     // -- Shop / inventory / gil (shop_reader.cpp, gil_reader.cpp) -----------------------------
     GilSuffix, InInventorySuffix, TimesSuffix,
 
+    // -- Save slots (save_reader.cpp) ---------------------------------------------------------
+    // The game draws playtime as SPRITE DIGITS with no words anywhere near it, so there is no
+    // game-supplied wording to read instead. Added on the tester's explicit request for playtime
+    // on the save slots -- the number is unspeakable without a unit.
+    HoursSuffix, MinutesSuffix, ClanPointsSuffix,
+
+    // -- Clan Primer (primer_reader.cpp). The Hunts list draws COMPLETE as SPRITE ART with no string
+    // behind it, exactly like the combat outcome words. There is no word for the incomplete state
+    // because the game draws no badge for one -- nothing is reported rather than inventing "pending".
+    HuntComplete,
+
     // -- Interaction target (interact_target.cpp) ---------------------------------------------
     Talk, Action,
 

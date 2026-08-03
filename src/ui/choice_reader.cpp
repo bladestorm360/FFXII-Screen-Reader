@@ -327,11 +327,27 @@ bool IsChoiceWindow(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_CHOICE_WND);
 }
 
+// The cursor last spoken, for the per-frame guard below. File-scope rather than function-local
+// statics because they now need a RESET EVENT -- see ForgetLastCursor. `static` keeps them internal
+// to this TU; these names are generic enough to collide otherwise. Game thread only.
+static void*   g_lastWidget = nullptr;
+static int16_t g_lastCursor = -1;
+
 // FUN_002a9980(widget): the mid-dialogue choice state machine. PER-FRAME, so it is guarded by a
 // change-check on the cursor -- the sanctioned form of that exception (CLAUDE.md names
 // battle_target_reader's g_lastHandle guarding FUN_002bfd20 as the model). This is a TRANSITION
-// detector on `widget+0x58`, not a speech dedup: re-entering the prompt re-announces, because the
-// widget is rebuilt and the remembered cursor no longer matches.
+// detector on `widget+0x58`, not a speech dedup.
+//
+// WHAT THIS COMMENT USED TO CLAIM, AND WHY IT WAS WRONG (S126): "re-entering the prompt
+// re-announces, because the widget is rebuilt and the remembered cursor no longer matches." Both
+// halves are assumptions about pointer identity, and menu_reader.cpp:102 has recorded since S51 that
+// THE ENGINE RECYCLES THESE ADDRESSES. A prompt torn down and re-opened can land on the same widget
+// address with its cursor back at the same starting index -- key equal, `return`, silent. Same shape
+// as the shop container and the dialogue page key, both fixed in the same session.
+//
+// So the guard now has a real re-arm: ForgetLastCursor, called on the game's own end-of-message
+// latch and when a list screen opens over the box. Nothing was made quieter; a stale key was stopped
+// from outliving the prompt it belonged to.
 uint64_t HookedChoiceTick(void* widget) {
     const uint64_t ret = s_origChoiceTick ? s_origChoiceTick(widget) : 0;
     if (!widget) return ret;
@@ -344,10 +360,8 @@ uint64_t HookedChoiceTick(void* widget) {
     if (!MemRead::SafeReadU16(widget, OFF_W_CURSOR, reinterpret_cast<uint16_t*>(&cursor))) return ret;
     if (!MemRead::SafeReadU8(widget, OFF_W_COUNT, &count) || count == 0) return ret;
 
-    static void*   s_lastWidget = nullptr;
-    static int16_t s_lastCursor = -1;
-    if (widget == s_lastWidget && cursor == s_lastCursor) return ret;   // nothing moved
-    s_lastWidget = widget; s_lastCursor = cursor;
+    if (widget == g_lastWidget && cursor == g_lastCursor) return ret;   // nothing moved
+    g_lastWidget = widget; g_lastCursor = cursor;
 
     STALL_SCOPE("ChoiceReader::HookedChoiceTick");
 
@@ -375,6 +389,11 @@ uint64_t HookedChoiceTick(void* widget) {
     return ret;
 }
 
+void ForgetLastCursor() {
+    g_lastWidget = nullptr;
+    g_lastCursor = -1;
+}
+
 bool Init() {
     const bool ok = Hooks::InstallTyped(RVA_CHOICE_TICK, &HookedChoiceTick, &s_origChoiceTick);
     Log::Write("READER", ok
@@ -383,6 +402,6 @@ bool Init() {
     return ok;
 }
 
-void Shutdown() { Hooks::Uninstall(RVA_CHOICE_TICK); }
+void Shutdown() { Hooks::Uninstall(RVA_CHOICE_TICK); ForgetLastCursor(); }
 
 } // namespace ChoiceReader

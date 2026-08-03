@@ -10,6 +10,7 @@
 #include "ui/title_reader.h"
 #include "ui/message_reader.h"
 #include "ui/dialogue_reader.h"
+#include "ui/primer_reader.h"
 #include "ui/mod_menu.h"
 #include "audio/audio_engine.h"
 #include "navigation/navigation.h"
@@ -101,6 +102,11 @@ static void DeferredInitImpl() {
         // the game's own page cursor so every input device turns the page. Must follow
         // MessageReader::Init — it feeds that module's shared `t` re-read store.
         DialogueReader::Init();
+        // Clan Primer body text (Bestiary / Hunts / Traveller's Tips / Sky Pirate's Den). The entry
+        // LIST rows already spoke through the universal painter; this is the BODY, which has no
+        // cursor and so had nothing to announce it. Also registers the arrow-key page walk.
+        PrimerReader::Init();
+        InputTracker::SetPrimerNavCallback(&PrimerReader::OnMenuNavKey);
         // Field navigation (Phase 4). M0: read-only leader/physics chain self-
         // diagnostic on the `\` key. Installs the map-load ctx-capture hook only —
         // no interpreter/action hooks (announce-only, non-interfering).
@@ -189,6 +195,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             ModMenu::Shutdown();
             Navigation::Shutdown();
             DialogueReader::Shutdown();
+            InputTracker::SetPrimerNavCallback(nullptr);
+            PrimerReader::Shutdown();
             MessageReader::Shutdown();
             TitleReader::Shutdown();
             MenuReader::Shutdown();
