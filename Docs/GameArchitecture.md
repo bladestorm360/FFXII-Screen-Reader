@@ -4198,10 +4198,20 @@ the capture path would never have shown it.
 > **User decision, do not resurrect this as a to-do.** The element at charge time was offered and
 > declined. It is NOT blocked and NOT unfinished — it is unwanted.
 >
-> Note for anyone re-reading the reasoning: the stated reason was "the game does not supply the
-> element until damage is dealt", and that is true of the GAME but not of the MOD — the element
-> sits in the action record at charge time, so `Pain Flare` (the user's own example of a name that
-> implies nothing) would have read as fire. That was pointed out at the time and the decision stood.
+> **THE REASON THAT MATTERS: it is not actionable.** Charge windows are short, the abilities that
+> matter are usually buffs and debuffs prepared in advance, and there is no response a player can
+> execute in the time available. A warning nobody can act on is just more words mid-fight. That is
+> the tester's judgement from actual play and it is the load-bearing argument here.
+>
+> Two secondary points, recorded so neither is mis-remembered:
+> * **The game does NOT draw the element in the charge message.** `battle_message.bin` has zero
+>   `0F 3F` sprite escapes; ids `0x0D`/`0x0E`/`0x0F` are plain `"{0} begins casting {1}."`. So this
+>   was never "read a picture the game shows" — unlike the item panel, where it was.
+> * The MOD could still have supplied it (the element is in the action record at charge time, so
+>   `Pain Flare` would have read as fire). "The data is unavailable" is therefore NOT the reason —
+>   *the data exists and the feature was still not worth having.* Do not re-open this on the
+>   strength of discovering the field.
+>
 > The recipe below is kept only so it need not be re-derived if the call is ever reversed.
 
 #### (Kept for reference) why the element could not be attached, and the ONE hook that unblocks it
