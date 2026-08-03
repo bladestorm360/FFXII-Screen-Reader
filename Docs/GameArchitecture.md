@@ -4193,7 +4193,18 @@ every row and never changed — it sounded stale because it was. Now kept in sep
 with the correct per-item bytes, proving capture was fine and the loss was downstream. Staring at
 the capture path would never have shown it.
 
-### Charge announce — why the element could not be attached, and the ONE hook that unblocks it
+### Charge announce — DECLINED 2026-08-03. Not pending work.
+
+> **User decision, do not resurrect this as a to-do.** The element at charge time was offered and
+> declined. It is NOT blocked and NOT unfinished — it is unwanted.
+>
+> Note for anyone re-reading the reasoning: the stated reason was "the game does not supply the
+> element until damage is dealt", and that is true of the GAME but not of the MOD — the element
+> sits in the action record at charge time, so `Pain Flare` (the user's own example of a name that
+> implies nothing) would have read as fire. That was pointed out at the time and the decision stood.
+> The recipe below is kept only so it need not be re-derived if the call is ever reversed.
+
+#### (Kept for reference) why the element could not be attached, and the ONE hook that unblocks it
 
 The CHARGE ANNOUNCE is the game's own battle sentence when an actor STARTS an action, before it
 lands. `battle_message.bin` ids `0x0D` / `0x0E` / `0x0F`:

@@ -2495,3 +2495,20 @@ Status column.
 **The Equipment screen's automatic line is NOT autodetail already existing.** It is one line about
 one character on a screen whose whole purpose is that comparison. Recorded explicitly because a
 future session will otherwise read it as the feature and skip building the real one.
+
+### Session 125 — the charge-announce element: OFFERED AND DECLINED
+
+Recorded because it was carried as "deferred/blocked" for most of the session and that framing is
+now wrong. **It is not blocked and not unfinished — it is unwanted.** User decision 2026-08-03.
+
+The reasoning given was that the game does not supply the element until damage lands, and that the
+ability name usually implies it ("Firemane begins casting Fire Breath"). Worth keeping the
+distinction on the record: that is true of the GAME, not of the MOD. The element is in the action
+record at charge time, so the user's own counter-example — `Belias begins casting Pain Flare`,
+a name that implies nothing — is exactly the case it would have covered. That was said at the time
+and the decision stood, which is the right way round: the call is theirs, the facts are ours to
+state.
+
+The unblock recipe (pair the Tier-1 message with the charge site `FUN_00304850`, RVA `0x1E4850`,
+which holds the action id) stays in `GameArchitecture.md` so it need not be re-derived if the call
+is ever reversed. **Do not put it back on a to-do list.**
