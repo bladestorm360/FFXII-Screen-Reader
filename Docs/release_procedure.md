@@ -146,6 +146,86 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.6-Test-Build — 2026-08-03
+
+**Built from:** `a5a7900`. Tree clean before and after. **The DLL's code traces to `7f90dff`** — the
+three commits after it (`304e5df`, `73c61aa`, `a5a7900`) are documentation only, so nothing in this
+binary post-dates S126+S127. Covers **Sessions 124–127** since `V0.5-Sponsor-build`'s `023e58f`.
+
+**Directory name normalised.** The user asked for "0.6-Test Build"; the directory and zip are
+`V0.6-Test-Build`, hyphenated to match `V0.5-Sponsor-build` / `V0.2-test-build` and to keep a space
+out of the zip name.
+
+**Zip:** `FFXII-Screen-ReaderV0.6-Test-Build.zip`, 1,196,553 bytes, five files, root flat.
+- `dinput8.dll` 783,360 bytes (sha256 `351806bc…f575d3f6`) — up from V0.5's 720,384; four sessions of
+  menu readers (equip comparison, save slots, Clan Primer, element decoding).
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` — byte-identical to V0.5's, same source.
+- TTS pair carried over unchanged from `V0.5-Sponsor-build` (`Tolk.dll` 122,368,
+  `nvdaControllerClient64.dll` 153,600).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: CHANGED** — 18,527 bytes / 210 lines, against V0.5's 16,394 / 191. One commit touched it
+(`73c61aa`): keys `8`/`9`, the `4`-`9` context switch, the `Home`/`End` page exception, a Gambits
+entry, and the mod-menu setting list. **The final wording is the tester's own edit** — they cut the
+version I wrote back by roughly half and the house rule that came out of it is in `CLAUDE.md`
+("README edits — CONCISE. Keys only. Never a changelog.").
+
+**Converter re-validated the V0.5 way, and it passed.** Run against `git show 023e58f:README.md`, it
+reproduced the shipped `Releases\V0.5-Sponsor-build\ReadMe.txt` **byte-identically** — 16,394 bytes
+both, sha256 `c37e06fc…790aeb`. The current file was then converted from `git show HEAD:README.md`
+with the same code. Rules unchanged from V0.5, including the paired-code-span unwrap. Output audit:
+zero `#`, zero `*`, zero `](`, zero leftover escapes, no BOM, and **exactly one backtick** — line
+89's literal `` ` `` key name, the same single survivor as the last four releases.
+
+**Readme gaps shipped in this build (flagged, not fixed).** Verified by keyword search of the
+shipped `ReadMe.txt`, not from memory.
+
+*Closed since V0.5:* equipment reading (`equip` ×8, was 0), and Gambits — which had never been
+documented at all despite reading since S94, and which the old readme actively denied by listing the
+Gambit editor as unimplemented.
+
+*New gaps, from this build's own features:*
+- **The Clan Primer surface** — Bestiary, Hunts, Traveller's Tips, Quest Progress and the Sky
+  Pirate's Den all read (S127), and `Up`/`Down`/`Home`/`End`/`o` navigate an open entry. The readme
+  names the Primer only in a Known Issue and in the `Home`/`End` caveat, so a tester has no way to
+  learn the screen reads at all. `bestiary` and `hunt` both occur zero times.
+- **Game Over and the no-list prompts** (S125) — zero mentions. This one was a *reported silence*
+  before it was fixed, so its absence is worth closing next time.
+- **The element on a battle damage line** (S125) — the readme covers elements in item descriptions
+  only; the combat-log append is not mentioned.
+- **The leader-select prompt** (S125) — zero mentions.
+- **Sneak assist REGRESSED out of the readme.** V0.5 shipped a section on it; the tester's edit
+  removed it, so `sneak` and `palace` now occur zero times. It is automatic and needs no player
+  action, so nothing is unusable — but V0.5's standing caution (automatic, no key, `F10` is free
+  again and must never be documented as a sneak key) now has no home in the shipped file.
+
+*Carried over from V0.5, still open:* the shop item list / Buy / Sell / **Bazaar** (`bazaar` = 0,
+now four releases running); **inventory quantity + category switching**; **ground loot as a
+navigation category** (the `-`/`=` keys are documented but no category is ever named); **`LP` on the
+defeat line** (the menu says "defeat and EXP"; the emitted line is `"Dire Rat defeated. 34 EXP,
+2 LP."`); the **notice board**; **in-dialogue choices**; and **party membership on the field menu**.
+
+*One prose artifact, shipped as-is:* Known Issues reads *"Not yet read: the bodies of the full-page
+Handbook tutorials. Both are pre-rendered images…"* — "Both" survives an edit that removed FMV
+subtitles from the sentence. Not corrected here, because readme edits are a separate commit made
+before the release trigger and this file is the tester's own wording.
+
+**Purpose:** test build of Sessions 124–127. What the tester is exercising: the funnel polarity fix
+that cleared map 315's replan "No path" (S124); element names, the battle damage type, Game Over, the
+shop/equip comparison on `4`-`9` and the expanded status lists (S125, all play-confirmed on 2026-08-03
+before this build); the four log-visible defects — Bhujerba's section announcements, Lhusu Mines'
+missing onward exits, shops speaking on open, and the clerk re-speaking on re-entry (S126); and save
+slots plus the Clan Primer (S127).
+
+**Two known-unfinished items ship in this zip.** The **Clan Primer wrap-around settle is SILENT** —
+scrolling a list past its end announces nothing on the row it lands on. Tester-accepted as the better
+of the two behaviours (it replaced a *stale-text* read) and documented in Known Issues;
+`Docs\debug.md` holds the four candidate causes and the instruction to add the missing log line
+before attempting a fix, and the warning not to fix it by reverting the deferral. Separately, the
+`__MJ_CTRL` exit-builder widening from S126 means maps **318, 319, 321, 322 and 568** may now list
+exits they previously dropped — those are the maps still logging unclaimed surfaces, and this is the
+first build a player walks them on. **Map 569 is ruled out** of that set.
+
 ## V0.5-Sponsor-build — 2026-08-01
 
 **Built from:** `023e58f` (Sessions 84–123). Tree clean before and after; no code change for the
