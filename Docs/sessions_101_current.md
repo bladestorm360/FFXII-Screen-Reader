@@ -2501,13 +2501,27 @@ future session will otherwise read it as the feature and skip building the real 
 Recorded because it was carried as "deferred/blocked" for most of the session and that framing is
 now wrong. **It is not blocked and not unfinished — it is unwanted.** User decision 2026-08-03.
 
-The reasoning given was that the game does not supply the element until damage lands, and that the
-ability name usually implies it ("Firemane begins casting Fire Breath"). Worth keeping the
-distinction on the record: that is true of the GAME, not of the MOD. The element is in the action
-record at charge time, so the user's own counter-example — `Belias begins casting Pain Flare`,
-a name that implies nothing — is exactly the case it would have covered. That was said at the time
-and the decision stood, which is the right way round: the call is theirs, the facts are ours to
-state.
+**The load-bearing reason is that it is NOT ACTIONABLE.** Charge windows are short, the abilities
+that matter are usually buffs and debuffs prepared in advance, and there is no response a player can
+execute in the window available. A warning nobody can act on is just more words mid-fight. That is
+the tester's judgement from play, and it is a better argument than the one this entry first
+recorded.
+
+Two secondary facts, kept so neither is mis-remembered:
+
+* **The game does NOT draw the element in the charge message.** `battle_message.bin` has zero
+  `0F 3F` sprite escapes; ids `0x0D`/`0x0E`/`0x0F` are plain `"{0} begins casting {1}."`. So unlike
+  the item panel — where the game really was drawing something a sighted player could see and the
+  tester could not — this was never surfacing hidden art. It would have been the mod ADDING
+  information the game never shows, which is a much weaker proposition.
+* The mod COULD still have supplied it: the element is in the action record at charge time, so
+  `Belias begins casting Pain Flare` would have read as fire. **"The data is unavailable" is
+  therefore not the reason — the data exists and the feature was still not worth having.** Do not
+  re-open this on the strength of rediscovering the field.
+
+Process note: the original pitch called the charge announce "where the warning is actionable". That
+was an INFERENCE about how it would be used, never checked against play, and it was wrong. The
+objection that killed it was about the GAME, not the code — and it came from the person who plays it.
 
 The unblock recipe (pair the Tier-1 message with the charge site `FUN_00304850`, RVA `0x1E4850`,
 which holds the action id) stays in `GameArchitecture.md` so it need not be re-derived if the call
