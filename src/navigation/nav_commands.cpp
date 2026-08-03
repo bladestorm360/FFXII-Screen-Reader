@@ -6,6 +6,8 @@
 #include "navigation/nav_probe.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
+#include "ui/equip_compare.h"
+#include "ui/equip_target_reader.h"
 #include "navigation/interact_target.h"
 #include "battle/party_status.h"
 #include "battle/combat_log.h"
@@ -131,6 +133,20 @@ void RouteToLockedTarget() {
 // All of it measured questions that are already answered; none of it measured the ones still open.
 // See nav_probe.h for what the key reports now.
 
+// Column `n` (1-based) of the equipment comparison, if one is on screen. Returns false when there
+// is no live panel, so the caller falls through to whatever the key means elsewhere.
+//
+// Requesting a column that does not exist is SILENT, not "no such character" -- a party of four
+// leaves keys 8 and 9 addressing nothing, and filler there would be worse than nothing.
+bool EquipColumnKey(int n) {
+    if (!EquipCompare::IsLive()) return false;
+    const std::wstring line = EquipCompare::LineFor(n);
+    if (line.empty()) return true;                 // panel is live but that column is not: swallow
+    Log::WriteW("EQUIP", "column:", line);
+    Speech::Output(line, /*interrupt=*/true);
+    return true;
+}
+
 } // namespace
 
 // NOTE: no `shift` parameter. The game binds Left Shift to Toggle Walk/Run and the mod cannot
@@ -171,10 +187,18 @@ void OnNavKey(int vk) {
             if (!BattleTargetReader::SpeakTargetStatus()) InteractTarget::SpeakCurrent();
             break;                                                // ;  target status / interact target
         case VK_OEM_7:      NavProbe::Request();              break;  // '  diagnostic probe (game thread)
-        case '4':           PartyStatus::SpeakSlot(0);        break;  // 4  party slot 1 status
-        case '5':           PartyStatus::SpeakSlot(1);        break;  // 5  party slot 2 status
-        case '6':           PartyStatus::SpeakSlot(2);        break;  // 6  party slot 3 status
-        case '7':           PartyStatus::SpeakSlot(3);        break;  // 7  guest slot (silent if none)
+        // 4-9: CONTEXT-GATED. While an equipment comparison is on screen (a shop list highlight or
+        // the equip-to-whom screen) these address its per-character COLUMNS; everywhere else 4-7
+        // keep their party-slot meaning and 8/9 do nothing. The gate is structural -- a live,
+        // class-validated panel -- not a cached flag, so leaving the shop restores party status
+        // with no state to get stuck.
+        case '4': case '5': case '6': case '7':
+        case '8': case '9': {
+            const int n = vk - '4' + 1;                       // 4 -> column 1 ... 9 -> column 6
+            if (EquipColumnKey(n)) break;
+            if (vk <= '7') PartyStatus::SpeakSlot(vk - '4');  // 8/9 stay silent outside a shop
+            break;
+        }
         case VK_OEM_COMMA:  CombatLog::StepBack();            break;  // ,  combat log: older
         case VK_OEM_PERIOD: CombatLog::StepForward();         break;  // .  combat log: newer
         case VK_HOME:       CombatLog::JumpOldest();          break;  // Home  oldest entry

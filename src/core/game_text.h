@@ -45,4 +45,34 @@ const uint8_t* SkipVariantPrefix(const uint8_t* p);
 // least one letter)? Rejects decoded garbage from stale/non-text pointers.
 bool IsMostlyPrintable(const std::wstring& s);
 
+// ---- inline SPRITE escapes -> words -------------------------------------------------------------
+// Some escapes draw a picture where a word belongs. The eight ELEMENT icons are the ones that
+// matter: an accessory's detail panel reads "Half Damage: " and then draws an icon, so without
+// this the whole affinity block is inaudible and accessories cannot be told apart.
+//
+// core/ must not depend on battle/, so the decoder does not resolve the name itself -- it asks a
+// resolver the owner registers at startup. Same idiom as TextCapture's painted-row callback.
+// `spriteIndex` is the ELEMENT BIT 0..7 (Fire .. Dark). Return an empty string for "unknown", and
+// the decoder drops the sprite rather than inventing anything.
+//
+// With no resolver registered the decoder behaves exactly as it did before this existed.
+using SpriteNameFn = std::wstring (*)(int spriteIndex);
+void SetElementSpriteResolver(SpriteNameFn fn);
+
+// ---- decode diagnostics -------------------------------------------------------------------------
+// The decoder STOPS DEAD on a token whose length it does not know -- it must, because guessing an
+// advance desynchronises the rest of the string. The cost is that everything after that byte is
+// silently discarded, and in a composed item description the affinity rows (Element / Immune /
+// Absorb / Half Damage / Weak / Equip) sit at the END. So one unknown byte reads as "the accessory
+// says nothing about its statuses", with no error anywhere.
+//
+// This records where the last decode on THIS THREAD gave up, so a caller can log it beside the text
+// it got. `reason` is null when the string ran to its natural terminator.
+struct DecodeBail {
+    size_t      offset = 0;      // byte index into the codec source
+    uint8_t     value  = 0;      // the byte that stopped it
+    const char* reason = nullptr;
+};
+DecodeBail LastDecodeBail();
+
 } // namespace GameText

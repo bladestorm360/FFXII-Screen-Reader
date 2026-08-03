@@ -2122,3 +2122,376 @@ still breached pre-fix) **did not materialise**: the ladder ran only 3 times, ru
 three, and `full-corridor` was never reached. The three leg-2 breaches at (22.98–25.50, y≈10) are
 PRE-EXISTING and unchanged — the identical breach at the identical 63.4 m appears in the pre-fix
 log and repairs identically.
+
+## Session 125 — 2026-08-02 — [menus] The element was a codec escape all along; Game Over's silence is structural
+
+**KEYWORDS: element sprite 0F 3F 81 8A-91 attribute_data.bin word.bin chunk 4 idx 23 pool 0x2017
+ElementName ElementNames AbilityElements action row+0x13 damage type SetElementSpriteResolver
+adjacency suppression no-list popup win+0x3C4 bit0 win+0x1B0 FUN_00241d40 Game Over gameover_c.tm2
+DAT_022c83e8 0x21A83E8 leader select FUN_00298250 0x4C6 ResolveStringById probe_equip_compare**
+
+Three tester-reported gaps, all of the same shape: **the game draws a picture where a word belongs,
+or raises a window shaped so that no reader ever sees it.**
+
+### 1. Element affinity — the "picture" is `0F 3F 81 <XX>`, and it was already framed correctly
+
+`Bugs.txt`: *"all of them like said half damage and then like you know immunity to like poison or
+blind but they don't do just like half damage… I believe the element is a picture."* Exactly right,
+and the diagnosis explains the asymmetry: in an equipment detail panel the STATUS list is real
+words (`FUN_0035d330(0x1A, bit) + 0x18`), which is why "poison"/"blind" always read, while the
+ELEMENT is an inline sprite escape.
+
+**`0F 3F 81 <XX>`, XX = `0x8A`..`0x91` = fire, lightning, ice, earth, water, wind, holy, dark.**
+Selector `0x3F` already returned 2 parameter bytes in `EscapeParamCount`, so the FRAMING was never
+wrong — the escape was consumed and nothing emitted. The fix is additive.
+
+Established three independent ways, all offline, **conf 0.99**:
+
+1. `menu_expansion.bin` string ids `0x4B27+n` — the very strings `FUN_00293ce0:41` appends per set
+   element bit — each hold exactly `0f 3c c1 fe | 0f 3f 81 <8A+n> | 0f 3c 81 80`.
+2. `help_action.bin` names every sprite in its OWN PROSE: `"Deal <0F 3F 81 8A> fire damage to one
+   foe."`, once per element. The game put the byte and the word side by side in shipped data.
+3. `word.bin` chunk 4 idx 23..30 = Fire, Lightning, Ice, Earth, Water, Wind, Holy, Dark, and
+   `attribute_data.bin` (st2e, 8 x u16) holds pool ids `0x2017..0x201E` **in bit order** — the
+   game's own binding, so `PoolString(0x2017 + bit)` is not an invented constant.
+
+A scan of all 27 US st2e master-data files found `0x3F` used **only** for these eight, plus one
+stray `0F 3F 46 00` in `battle_pack.bin` that fails the `0x81` test and is left alone.
+
+**NO WIKI AND NO HARDCODED NAMES WERE NEEDED.** The plan allowed a wiki-derived table as a
+fallback; the game supplies every name, so none was written.
+
+Shipped: `BattleState::ElementName(bit)` / `ElementNames(mask)` beside `StatusName`;
+`GameText::SetElementSpriteResolver` (a registered callback, because `core/` must not depend on
+`battle/`), wired once in `dllmain.cpp`; the decoder parks a private-use marker and
+`ResolveSprites` turns markers into words once per page, so `Decode` and `DecodePages` cannot
+diverge.
+
+**ADJACENCY SUPPRESSION, and why it is not the banned dedup.** In ability help the game writes BOTH
+the sprite and the word, so naive substitution gives "fire fire damage"; in the item panel the
+sprite stands alone. A caller-based discriminator is impossible — both strings come out of the same
+formatter, `FUN_00292b70`. So the rule lives in the decoder: emit the name unless the immediately
+adjacent word already IS that name. **This is a within-string RENDERING decision, not cross-event
+suppression** — nothing is cached, no window, no last-spoken state, re-entry always re-speaks in
+full, so the silence-on-re-entry failure the NO-DEDUP rule exists to prevent is structurally
+impossible. The default is to EMIT. **User approved the carve-out explicitly this session.** In a
+locale that declines the noun the match fails and the element is said twice — a stumble, never
+silence.
+
+Written as a general seam because `debug.md:1287-1330`'s `0F 2E <80 90>` tutorial name-slot is the
+same family and should plug in here, not into a second path.
+
+### 2. Damage type in battle — the sprite is NOT there, the action record is
+
+The tester asked for the damage type in combat. **`battle_message.bin` contains zero `0F 3F`
+escapes**, and `combat_system.md` §5.5 already recorded why: no element survives to the apply site
+(the damage math's scratch bank is zeroed per calculation, only the integer is kept). So Task 1's
+decoder buys nothing here.
+
+**Action record `+0x13` is the element mask** — same bit order, **conf 0.99**:
+15/15 named spell families match (Fire/Fira/Firaga `0x01`, Thunder family `0x02`, Blizzard family
+`0x04`, Aero/Aeroga `0x20`, Holy `0x40`, Dark family `0x80`); correct negatives (Cure, Shock,
+Scathe, Bio all `0x00`); and **across all 543 rows the byte only ever holds zero or ONE bit** —
+values are exactly `{0, 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80}`, distribution 447 non-elemental then
+19/11/10/8/13/13/9/13. A byte meaning something else would not fall out that way. That property is
+also the runtime self-check: `ElementNames` logs any multi-bit mask.
+
+Nearly free: `AbilityCategory` already does this exact pure read on this exact table at `+0x1E`, and
+`HookedApply` already carries the action id. `DamageLine` gained an `elementMask` parameter and
+appends the element to both the number branch and the outcome branch ("Immune. Fire" is arguably
+the more useful of the two). Suppressed when the action's own name already spells the element.
+
+**KNOWN GAP, deliberate:** a basic Attack (category 0) takes its element from the WEAPON, not the
+action record, so a flame-sword hit reports none. Better silent than wrong.
+
+> **DEFERRED, not built — the Verbose charge announce.** The plan called for suffixing the element
+> to the charge announce, which is where the warning is actually actionable (before the hit). The
+> charge announce is a **Tier-1 game message** through `HookedSprintf` on `FUN_00536410`, and that
+> hook carries only the **message id** (`argBlock+4 & 0x7FFF`) and the finished string — **not the
+> action id**, so there is nothing to look the element up with. The arg-block layout past `+4` is
+> undocumented; inferring it would be exactly the sub-0.98 guess the project bans. Reverse-matching
+> the decoded action NAME across 543 rows is fragile and non-unique, and hooking the charge site
+> `FUN_00304850` is a new hook that risks double-speaking against the game's own announce.
+> **Consequence: the element is readable in the combat log, but nothing new is spoken mid-fight.**
+> Reopening this needs the arg-block layout established first.
+
+### 3. Game Over was silent for a STRUCTURAL reason, not a missing string
+
+`FUN_0035c660` → `FUN_00241c90` → `FUN_002465f0(win, 0x3D0, FUN_00241d40, ...)` — **the same class
+`PopupReader` already reads at `+0x1B0`.** The creation packet's `+0x2C` lands at `win+0x3C4`, and
+`FUN_00241d40:88` shows the branch: `if ((*(byte*)(win+0x3c4) & 1) == 0) { ... *(win+200) = <list> }`.
+
+**Bit 0 SET means the window builds NO list**, so `win+0xC8` stays 0, no `0x8000` focus is ever
+emitted, `OnFocus` never runs and `BodyText` is never consulted. That is the whole reason Game Over
+says nothing while the Load Game menu reached from it works fine. The two shapes are **disjoint by
+the game's own branch**, so the new construction hook can never double-speak with the focus path
+and needs no latch. **This fixes every no-list prompt in the game, not just Game Over.**
+
+The body text id Ghidra dropped from `FUN_0035c660` turned out to be **unnecessary** — the body is
+readable at `win+0x1B0` for every no-list prompt.
+
+`PopupReader::SpeakBody` is now the single emit point; `menu_reader.cpp`'s existing focus-driven
+body branch was repointed at it so the two cannot drift on wording or interrupt policy.
+
+**"GAME OVER" is baked art** (`PS2Data\...\Tm2_Menu\gameover_c.tm2`), like the title logo — no codec
+text exists. The announce is therefore gated on the game's own STATE, not the picture:
+`DAT_022c83e8 & 0x02` (the body of `FUN_0035c740`, party wipe). Leader-down and guest-wipe variants
+fall through to their own bodies with nothing added. `Phrase::Id::GameOver` — user-approved.
+
+### 4. Leader-select — SHIPPED ON BEST GUESS, no probe (user decision)
+
+Two surfaces can present "choose a new leader" and it is **not settled** which one the player sees:
+`FUN_00298250` hangs off the BATTLE context (`DAT_0209be80`) while the list the mod already reads
+hangs off the PAUSE context (`DAT_0209ac30`). The user declined a probe for it, so **both are wired
+and whichever never appears never fires**:
+
+- **Body:** hook `FUN_00298250` (RVA `0x178250`) case 1, resolving `FUN_002f9860(0x4C6)` (=
+  `menu_command` 222 "Select Leader", used nowhere else in the binary) with `0x4A49` as fallback.
+  Resolving the ids beats chasing the conditional widget chain the function threads them through.
+- **List:** `HookedStatusCursor` gained a leader-down arm gated on a pure read of
+  `DAT_022c83e8 & 0x10` (the body of `FUN_0035c750`), speaking `Phrase::Id::Leader` for the row that
+  is already leader.
+
+**TWO WITNESSES before believing the row flags.** `row+0xFC` bit 3 = in party / bit 4 = leader is
+documented, but the pointer we read it through is the PORTRAIT child and "portrait == row" was never
+measured. Bit 3 has an independent witness the mod already trusts (`ctx+0xB10+charId`, the byte the
+game's own toggle writes), so the leader bit is only believed when the two agree on in-party.
+Otherwise: say nothing extra.
+
+A `LEADER` log line names whichever hook fired, or reports that neither did — that is what the next
+pass tunes against, with the existing log-only unclaimed-pane census (`menu_reader.cpp:452-485`) as
+the fallback instrument if both stay quiet.
+
+### 5. Centralization — `TextCapture::ResolveStringById`
+
+`status_reader.cpp` and `inventory_reader.cpp` had each grown a private `ResolveMsgCodec` + decode
+pair, and the leader prompt was about to add a third. One resolver now: cache-first, falling back to
+the `FUN_002f9860` **trampoline** (so it neither recurses through our own hook nor pollutes the cache
+with ids nothing drew). Game-thread only.
+
+Note `TextCapture::StringById` caches only ids `1000/1001` and `0x46dc..0x4882` — **`0x4A90` and
+`0x4C6` are both outside that band**, so anything keyed on those ids must use the resolving variant.
+The Session-71 confirmation of the five attribute labels came from `status_reader`'s own game call,
+not from the cache.
+
+### Confirmation strategy — ONE probe, for the shop only (user decision)
+
+The user declined probes for Tasks 1 and 3 as too much setup. Both ship on their offline evidence
+plus **log lines the mod writes itself**, and every uncertain path degrades to SILENCE:
+
+| Instead of a probe criterion | The mod now logs |
+|---|---|
+| pool `0x2017..0x201E` = the eight names | `ELEM 0=Fire 1=Lightning ...` once, at first resolve. A blank means that sprite is dropped. |
+| the bytes either side of a sprite | (covered by play: a doubled or missing element word is audible) |
+| Game Over `win+0x3C4 & 1`, `win+0x1B0` | `POPUP nolist flags=... wipe=... spoke=0/1`; `spoke=0` = the body read is wrong and we stayed silent |
+| which leader surface | `LEADER` line naming the hook that fired |
+| action `row+0x13` | any mask with more than one bit set — never happens across the 543 shipped rows |
+
+`frida/probe_equip_compare.js` authored for the SHOP work (Task 2), not yet run. Its criterion 1 is
+the make-or-break one: **`FUN_002ca7c0` computes every delta as `current - new`, so a BETTER item
+should report NEGATIVE.** An inverted "Attack Power up 12" is worse than silence — the player buys
+the wrong sword. Criterion 8 measures whether the keys `8`/`9` are free by watching the game's own
+pad words (`DAT_02f97368/6a/6c`, filled by `FUN_002498b0`) — sight-free, because S112 established
+the Controls config screen is not evidence and the tester cannot read the on-screen keyboard.
+
+**Task 2 (the shop equip comparison) is NOT built** — it is gated on that probe by the approved
+plan's own sequencing.
+
+### RVA arithmetic caught in review
+
+`FUN_002ca7c0` is RVA **`0x1AA7C0`**, not `0x1AC7C0` — an easy digit slip against its neighbours
+`0x1AC4F0` / `0x1AC780`. Every RVA in the probe was re-derived against the decompile filenames
+before it shipped.
+
+
+### Session 125 (continued) — probe results, the Fire-only bug, and the shop comparison
+
+**KEYWORDS: ResolveSprites find bug kSpriteMark range Fire-only probe_equip_compare polarity
+cur-new equip_compare equip_target_reader keys 4-9 collision watch DAT_02ca97a0 null first fire**
+
+#### ⛔ STRIKE — "the element sprite fix works": it worked for FIRE ONLY
+
+`ResolveSprites` early-outed on `s.find(kSpriteMark) == npos`. `kSpriteMark` is `0xE000`, the
+marker for element **bit 0**, so a string carrying any other element (0xE001..0xE007) matched
+nothing and the function **returned before resolving anything**. Fire read; the other seven were
+dropped exactly as before the fix.
+
+Caught from the DESC dump, and the evidence is as clean as it gets — two weapon descriptions whose
+raw bytes differ in exactly one place:
+
+```
+desc #10  ... 0f 3c c1 fe 0f 3f 81 8a 0f 3c 81 80 ...   ->  "Element: Fire"
+desc #11  ... 0f 3c c1 fe 0f 3f 81 8c 0f 3c 81 80 ...   ->  "Element: "
+```
+
+Same shape, same surroundings, `8a` vs `8c`. Fixed by testing the whole mark RANGE
+(`IsSpriteMark`) instead of the base character.
+
+**LESSON: a range encoded as `base + n` cannot be searched for with the base.** The bug survived a
+build, a deploy and a report because the ONE element anybody happens to test first — Fire — is the
+only one that worked. The tester's "not half damage" was the symptom; "half damage" items in that
+save happened to halve something other than Fire.
+
+**And it was invisible without the raw bytes.** The decoded string alone (`"Element: "`) says only
+"nothing came out"; it took the hex beside it to show the sprite WAS present and correctly framed.
+That is what the DESC dump was for.
+
+#### The DESC dump's other finding — budget by gate state, not one shared cap
+
+All 12 of the first run's dumps logged `gated=0`: `FUN_00292b70` also runs for OFF-SCREEN WIDTH
+MEASUREMENT, and those calls exhausted the shared budget before a single display-path call was
+seen. Split into separate caps (10 gated / 4 ungated). **A shared cap silently favours whichever
+path fires first, which is exactly the path you are not investigating.**
+
+#### Probe A results — shop equipment comparison
+
+Full detail in `GameArchitecture.md`; the load-bearing points:
+
+- Structure confirmed exactly as derived: 1 header + 9 column calls per refresh, **zero stray delta
+  targets**, `canEq`/`eq` agreeing with the equip screen's own witness, labels readable straight off
+  the header widgets.
+- **`DAT_02ca97a0` is NULL on the first `FUN_0057b1a0` fire.** A reader keyed on that global misses
+  the screen's entry announcement; `EquipTargetReader` validates the window the hook is handed.
+- **Polarity is `cur - new`, so NEGATIVE = better** — settled at 1.00 from Ghidra's own local
+  declarations (`local_b8[10]` then `local_ae`; `local_8c[10]` then `local_82`), NOT from the log.
+  The log genuinely cannot decide it: delta went 80 -> 0 when the tester equipped the item, which
+  fits both signs. Worth remembering — **a before/after pair that collapses to zero calibrates
+  magnitude, never direction.**
+- Only kind-1 (weapon) passes were captured, so the two-label kinds rest on code alone.
+
+#### Shipped — the shop equipment comparison
+
+`src/ui/equip_compare.{h,cpp}` (two hooks: `FUN_002cc4f0` brackets a refresh, `FUN_002cc780`
+attributes each delta by pointer-matching `target` against the nine columns) and
+`src/ui/equip_target_reader.{h,cpp}` (`FUN_0057b1a0`). `EquipCompare` speaks nothing — it snapshots
+on the game thread and owns the wording; each surface has its own single emit point.
+
+Keys **`4`-`9`** address columns 1-6, context-gated on a live, class-validated panel. Outside that,
+`4`-`7` keep their party-slot meaning and `8`/`9` are silent. The gate is structural, so leaving a
+shop restores party status with no state to unstick.
+
+#### `8` / `9` are NOT proven free — and the probe could not prove it
+
+Criterion 8 was designed wrong: its pass condition was "no new pad value appears", which is
+**indistinguishable from "the key was never pressed"**. That is the S111 lesson again — *an absence
+cannot prove a negative*. The capture shows only ordinary menu-navigation pad values, so it says
+nothing either way.
+
+Rather than assert freedom, `input_tracker.cpp` now WATCHES: on the poll where `8` or `9` goes
+down it reads the game's own pad words (`DAT_02f97368/6a/6c`) and logs `COLLISION?` if a bit moved.
+Absence of that line still is not proof of freedom, but its presence IS proof of collision — and
+that is the direction that costs the player something. The mod cannot swallow keys, so an unnoticed
+collision is exactly the F9 failure of S112.
+
+
+### Session 125 (continued) — the status cap, the field Equipment preview, and two bleed bugs
+
+**KEYWORDS: equip_detail ExpandCollapsedStatuses listhelp_common base 0x2328 StatusName
+includeSuppressed field equipment preview panel+0xEC menuCtx+0x138 FUN_003fe5d0 0x4A90 item desc
+vs description bar g_itemDesc shop surface gate DAT_02ca9798 stale snapshot**
+
+#### The ">=4 statuses" cap — removed
+
+`src/ui/equip_detail.cpp`. The game popcounts the mask and only enumerates below four
+(`FUN_00293310:157-212`), printing "Immune: Various status effects" otherwise — which on an
+accessory is the entire point of the item. The mask is still at record `+0x44`/`+0x48`, so the
+names are recoverable.
+
+**Substitution, not appending.** The needle is the game's own `0x2335`/`0x2336` string, so the
+replacement is locale-correct by construction and reads `"Immune: Sleep, Confuse, Silence, Blind"`
+rather than saying "Immune" twice. If the phrase is not found, nothing is patched and a `DESC` line
+records the disagreement — **never patch a string you cannot locate.**
+
+**listhelp_common string ids: base `0x2328`, verified 18/18** against the shipped file (full table
+in `GameArchitecture.md`). The earlier positional guess happened to be right, but it was a guess;
+this is measured, and it is what makes the substitution safe.
+
+`BattleState::StatusName` gained `includeSuppressed`. KO / Invisible / HP Critical / X-Zone carry
+`rec+0x02 == 0xFF` and are hidden on the battle HUD as noise — but the item panel lists them (it
+reads the master name with no suppression check), and an accessory that blocks KO is exactly what a
+buyer needs to hear. **A suppression rule that is right for one surface is not a property of the
+data.**
+
+STILL HIDDEN, deliberately: when both masks are non-zero the game shows only the immune one. Not
+expanded — that would invent a row the panel never had. Logged when it happens.
+
+#### The field Equipment screen has a preview too — and it is a DIFFERENT mechanism
+
+Confirmed from a tester screenshot: the pause menu's Equipment screen shows
+`Attack Power 108 > 14`, `Evade 30 > 5` — one character, `current > preview`, an **absolute new
+value**, not the shop's per-character signed delta.
+
+That is the S71 attribute panel: `menuCtx+0x138` (class `FUN_003fe5d0`), current at
+`panel+0xC8 + row*4`, preview at `panel+0xEC + row*4`, labels `FUN_002f9860(0x4A90 + row)`, rows
+0-8. `status_reader` reads `+0xC8` and has never read `+0xEC`.
+
+`EquipCompare` now has TWO sources behind one interface. Only one can be showing, and the shop's is
+tested first because its surface test is stricter. On the field screen `ColumnCount()` is 1 (one
+character), so key `4` reads it: `"Balthier: Attack Power 14, down 94, Evade 5, down 25"` — the new
+value plus direction and size, in the shop's vocabulary. Unchanged rows say nothing.
+
+"Is a preview showing" needs no extra state: it is `current != preview`, the same test
+`FUN_003fe490:31` uses to decide whether to draw the arrow at all. On the Status screen the two are
+always equal, so this reports nothing there — which is why that screen shows no arrows either.
+
+#### ⛔ BUG — the shop comparison bled into the pause menu
+
+The compare panel is **parked in menuCtx and survives leaving the shop**, so `IsLive()` (a class
+check on `menuCtx+0x2E0`) stayed true afterwards and the keys kept answering from the last shop
+item while the player browsed their own inventory. A stale comparison against something the player
+is no longer looking at is worse than silence.
+
+Fixed by requiring a surface that actually DRIVES the panel: the live shop list container
+(`DAT_02ca9798`, class-validated) or the equip-target screen. `LineForMember` got the same gate.
+
+**The approved plan had this exact gate written down and the implementation dropped it** — it kept
+only the two cheap checks (`!= 0` and the class test) and lost the third. *An object still existing
+is not the same as its surface still being on screen*, and the plan said so before the code did.
+
+#### ⛔ BUG — `o` read the pane help instead of the item description
+
+On the field Equipment screen, highlighting a weapon formats its detail panel and then the pane
+re-sets the description BAR to its own static help ("Change equipment."). **Both wrote
+`g_helpText`**, so it was last-writer-wins and the bar won on every row — the `o` key read the same
+sentence forever, which sounded stale because it was.
+
+The DESC dump is what separated the two candidates: `gated=1` fires once per highlight, seconds
+apart, with the correct per-item bytes. So capture was never the problem — *the text was being
+captured and then overwritten*, which no amount of staring at the capture path would have shown.
+
+Fixed with a second slot (`g_itemDesc`) and arbitration in `CurrentHelpText`: the ITEM detail wins
+over the BAR when both belong to the current focus, falling back to the bar so every surface with
+only one of the two behaves exactly as before. Two texts that mean different things must not share
+one variable.
+
+#### Keys 8 and 9 — confirmed free in play
+
+Tester report, and zero `COLLISION?` lines in the log. The watcher stays in: it costs nothing and
+its evidence runs the other way (a line proves collision; silence never proved freedom).
+
+
+### Session 125 — PLAY RESULT: all confirmed working
+
+Tester, 2026-08-03: element sprites, the battle damage type, Game Over, the leader popup, the shop
+comparison on `4`-`9`, the equip-target screen, the expanded status lists, the `o` fix, the
+shop-context gate, and the field Equipment preview on highlight — **all confirmed working in one
+pass**. Keys `8` and `9` confirmed free; zero `COLLISION?` lines in the log.
+
+**Two surfaces, two behaviours, deliberately.** The shop comparison stays on KEYPRESS (six
+characters x two stats is too much for every cursor move); the field Equipment screen volunteers its
+line automatically (one character, usually one or two changed stats). Tester: *"you put the delta
+reader on keypress which is perfect."*
+
+**AUTODETAIL (F7) now has its first defined consumer** — written up in `Docs/Controls.md` under
+"Equipment comparison — and the AUTODETAIL mode it is waiting for". The short version: when the
+toggle is built, ON makes the SHOP comparison volunteer itself per highlight, queued behind the item
+name; OFF is today's behaviour. `EquipCompare::LineFor` already produces the text, so only the
+trigger and the toggle are missing. Two constraints recorded there because both are easy to get
+wrong: the keys must keep working in BOTH modes (a toggle that removes a way to ASK is a regression,
+not a setting), and the announce must go through the surface's existing choke point rather than a
+new speaker — two speakers on one surface race, and that is exactly how the notice board lost its
+Status column.
+
+**The Equipment screen's automatic line is NOT autodetail already existing.** It is one line about
+one character on a screen whose whole purpose is that comparison. Recorded explicitly because a
+future session will otherwise read it as the feature and skip building the real one.

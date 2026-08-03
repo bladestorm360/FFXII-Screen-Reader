@@ -9,6 +9,8 @@
 #include "ui/gambit_reader.h"
 #include "ui/ability_summary_reader.h"
 #include "ui/shop_reader.h"
+#include "ui/equip_compare.h"
+#include "ui/equip_target_reader.h"
 #include "ui/inventory_reader.h"
 #include "ui/gil_reader.h"
 #include "ui/status_reader.h"
@@ -212,12 +214,9 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         g_popupEntryArmed = false;
     }
     if (isPopup && (ownerChanged || popupEntry)) {
-        std::wstring body = PopupReader::BodyText(owner);
-        if (!body.empty()) {
-            Log::WriteW("READER", "  body: ", body);
-            Speech::Output(body, /*interrupt=*/true);
-            preambleSpoken = true;
-        }
+        // One emit point for pop-up bodies, shared with PopupReader's no-list construction hook so
+        // the two paths cannot drift apart on wording or interrupt policy.
+        preambleSpoken = PopupReader::SpeakBody(owner);
     }
 
     if (text.empty()) {
@@ -565,10 +564,15 @@ bool Init() {
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
+    // BEFORE ShopReader: its FUN_002cc4f0 hook must be live so a snapshot already exists by the
+    // time the shop's highlight handler runs (the game refreshes the panel inside FUN_0056e5d0).
+    ok     &= EquipCompare::Init();       // per-character stat deltas behind the 4-9 keys
+    ok     &= EquipTargetReader::Init();  // the post-purchase "equip it to whom?" screen
     ok     &= ShopReader::Init();         // shop Buy/Sell/Bazaar item name+price+inventory on highlight
     ok     &= InventoryReader::Init();    // pause item lists: row quantity + active category name
     ok     &= GilReader::Init();          // `g` -> party gil total (field / shop / menus)
     ok     &= StatusReader::Init();       // Status screen: 3-page virtual buffer on the arrow keys
+    PopupReader::Init();                  // NO-LIST confirm prompts (Game Over): no 0x8000 to hook
     g_initialized = true;
     Log::Write("READER", ok
         ? "MenuReader initialized (0x8000 -> row name+value; config value-on-change via "
@@ -590,7 +594,10 @@ void Shutdown() {
     StatusReader::Shutdown();
     InventoryReader::Shutdown();
     ShopReader::Shutdown();
+    EquipTargetReader::Shutdown();
+    EquipCompare::Shutdown();
     GilReader::Shutdown();
+    PopupReader::Shutdown();
     Hooks::Uninstall(RVA_FOCUS_SET);
     Hooks::Uninstall(RVA_GFX_WRITE);
     Hooks::Uninstall(RVA_STORE_WRITE);

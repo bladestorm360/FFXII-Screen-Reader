@@ -5,6 +5,33 @@
 namespace GameText {
 namespace {
 
+SpriteNameFn g_spriteResolver = nullptr;
+
+// Where the last decode on this thread gave up. See DecodeBail in the header for why this matters.
+thread_local DecodeBail g_bail;
+
+// ---- inline element sprites ---------------------------------------------------------------------
+// `0F 3F 81 <XX>`, XX = 0x8A..0x91, is the eight-element icon insert. Selector 0x3F already takes
+// 2 parameter bytes in EscapeParamCount, so the framing was never wrong -- the escape was simply
+// consumed and nothing emitted, which is why "Half Damage: " was followed by silence.
+//
+// The mapping is the game's own, established three independent ways (all offline, conf 0.99):
+//   1. menu_expansion.bin string ids 0x4B27+n -- the very strings FUN_00293ce0:41 appends per set
+//      element bit -- each hold exactly `0f 3c c1 fe | 0f 3f 81 <8A+n> | 0f 3c 81 80`.
+//   2. help_action.bin names every sprite in its own prose: "Deal <0F 3F 81 8A> fire damage to one
+//      foe.", once per element, so the byte and the word sit side by side in shipped data.
+//   3. word.bin chunk 4 idx 23..30 and attribute_data.bin's eight u16s (0x2017..0x201E) agree on
+//      the same order: Fire, Lightning, Ice, Earth, Water, Wind, Holy, Dark.
+// A scan of all 27 US st2e master-data files found 0x3F used ONLY for these eight, plus one stray
+// `0F 3F 46 00` in battle_pack.bin which fails the 0x81 test below and is left alone.
+constexpr uint8_t kSpriteSel = 0x3F, kSpriteP1 = 0x81, kSpriteLo = 0x8A, kSpriteHi = 0x91;
+
+// Marker parked in the Unicode private-use area while decoding, resolved to a word afterwards.
+// Deferring the lookup keeps the decode loop free of std::wstring building and, more importantly,
+// lets the adjacency rule below see the text on BOTH sides of the sprite.
+constexpr wchar_t kSpriteMark = 0xE000;
+inline bool IsSpriteMark(wchar_t ch) { return ch >= kSpriteMark && ch < kSpriteMark + 8; }
+
 // Copy up to maxBytes codec bytes (until a 0x00 terminator) out of a possibly-
 // transient game buffer. SEH-guarded and object-free so it can use __try.
 bool SafeCopy(const uint8_t* p, size_t maxBytes, uint8_t* out, size_t* outLen) {
@@ -116,6 +143,102 @@ inline bool IsSpaceControl(uint8_t c) {
     return c == 0x01 || c == 0x04 || c == 0x06 || c == 0x07;
 }
 
+inline bool IsAsciiAlpha(wchar_t ch) {
+    return (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z');
+}
+
+inline wchar_t LowerAscii(wchar_t ch) {
+    return (ch >= L'A' && ch <= L'Z') ? static_cast<wchar_t>(ch - L'A' + L'a') : ch;
+}
+
+// Does the run of letters starting at `at` (scanning `dir`) spell exactly `word`, case-insensitively
+// and with nothing else attached? `at` must already be past any spaces.
+bool WordAt(const std::wstring& s, size_t at, int dir, const std::wstring& word) {
+    if (word.empty()) return false;
+    const size_t len = word.size();
+    if (dir > 0) {
+        if (at + len > s.size()) return false;
+        for (size_t k = 0; k < len; ++k)
+            if (LowerAscii(s[at + k]) != LowerAscii(word[k])) return false;
+        // Reject a longer word that merely starts with it ("firearm" is not "fire").
+        return (at + len >= s.size()) || !IsAsciiAlpha(s[at + len]);
+    }
+    // Walking left, `at` is the run's LAST character, so compare the word backwards too.
+    if (at + 1 < len) return false;
+    for (size_t k = 0; k < len; ++k)
+        if (LowerAscii(s[at - k]) != LowerAscii(word[len - 1 - k])) return false;
+    const size_t before = at + 1 - len;           // first char of the matched run
+    return (before == 0) || !IsAsciiAlpha(s[before - 1]);
+}
+
+// Turn sprite markers into words.
+//
+// ADJACENCY SUPPRESSION -- and why this is NOT the banned kind of dedup.
+//
+// The NO-DEDUPLICATION rule bans CROSS-EVENT suppression: a "same as last time, stay quiet" filter
+// that makes a re-entered surface silent. This is not that. It is a within-string RENDERING
+// decision inside the codec decoder. The game writes both an icon and the word for one token --
+// help_action.bin literally reads "Deal <fire sprite> fire damage to one foe." -- so emitting both
+// yields "fire fire damage", a decoding artifact rather than information. In the item panel the
+// same sprite stands alone after "Half Damage: " and there is no word to collide with, which is
+// why a caller-based discriminator is impossible: both strings come out of the same formatter.
+//
+// No event is suppressed. The string is spoken in full every time, re-entry always re-speaks,
+// nothing is cached across calls, there is no time window and no last-spoken state. The decision is
+// a pure function of the single string being decoded, so the failure the rule exists to prevent --
+// silence on re-entry -- is structurally impossible here.
+//
+// The DEFAULT IS TO EMIT; suppression requires an exact adjacent-word match. In a locale that
+// declines or displaces the noun the match simply fails and the element is said twice: a stumble,
+// never silence. If a future locale bug reports a doubled element word, this is the reason.
+void ResolveSprites(std::wstring& s) {
+    // Early-out must test the whole MARK RANGE, not the literal base character. This read
+    // `s.find(kSpriteMark)` for one build, which matches only 0xE000 -- element bit 0 -- so Fire
+    // resolved and the other seven were dropped without a trace. Caught from the DESC dump: two
+    // byte-identical weapon descriptions differing only in the sprite id gave "Element: Fire" and
+    // "Element: " (S125). A range check reads the same but is not the same.
+    bool any = false;
+    for (const wchar_t ch : s) { if (IsSpriteMark(ch)) { any = true; break; } }
+    if (!any) return;
+
+    std::wstring out;
+    out.reserve(s.size() + 16);
+    for (size_t i = 0; i < s.size(); ++i) {
+        const wchar_t ch = s[i];
+        if (!IsSpriteMark(ch)) { out.push_back(ch); continue; }
+
+        std::wstring name = g_spriteResolver ? g_spriteResolver(static_cast<int>(ch - kSpriteMark))
+                                             : std::wstring();
+        if (!name.empty()) {
+            // Right: skip spaces, then compare the letter run.
+            size_t r = i + 1;
+            while (r < s.size() && s[r] == L' ') ++r;
+            bool dupe = (r < s.size()) && WordAt(s, r, +1, name);
+            if (!dupe && i > 0) {
+                // Left: same, walking backwards from the last non-space before the marker.
+                size_t l = i;
+                while (l > 0 && s[l - 1] == L' ') --l;
+                dupe = (l > 0) && WordAt(s, l - 1, -1, name);
+            }
+            if (dupe) name.clear();
+        }
+
+        if (name.empty()) {
+            // Dropped (unresolved, or the word is already there). Collapse the space the sprite
+            // was sitting between so the line does not read with a hole in it.
+            if (!out.empty() && out.back() == L' ' && i + 1 < s.size() && s[i + 1] == L' ') ++i;
+            continue;
+        }
+
+        // A run of sprites is a LIST -- "Half Damage: <fire><ice>" is two elements, and the game
+        // separates its own visible list with ", " (listhelp_common.bin entry 10).
+        if (!out.empty() && (IsAsciiAlpha(out.back()) || (out.back() >= L'0' && out.back() <= L'9')))
+            out += L", ";
+        out += name;
+    }
+    s.swap(out);
+}
+
 // Shared decode loop, used by BOTH Decode and DecodePages so the codec is understood in exactly
 // one place. Always splits at the 0x03 page break.
 //
@@ -134,6 +257,7 @@ inline bool IsSpaceControl(uint8_t c) {
 // fall through the `default: return 1` arm and emit nothing.
 bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>& pages) {
     pages.clear();
+    g_bail = DecodeBail{};
     if (!p) return false;
     if (maxBytes > kMaxCodecBytes) maxBytes = kMaxCodecBytes;
 
@@ -150,9 +274,20 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         const uint8_t c = buf[i];
 
         if (c == 0x0F) {                                  // inline format escape
-            if (i + 1 >= n) break;
+            if (i + 1 >= n) { g_bail = { i, c, "truncated escape" }; break; }
             const int params = EscapeParamCount(buf, n, i + 1);
-            if (params < 0) break;                        // unknown selector: stop, never guess
+            if (params < 0) {                             // unknown selector: stop, never guess
+                g_bail = { i + 1, buf[i + 1], "unknown escape selector" };
+                break;
+            }
+            // Escapes that YIELD TEXT drop a marker here; the advance below is unchanged for all
+            // of them. Only the element-icon insert qualifies today. `0F 2E <80 90>`, the tutorial
+            // name-substitution slot (debug.md "full-screen SYSTEM NOTIFICATION banners"), is the
+            // known next candidate -- add it to this test, not to a second decode path.
+            if (buf[i + 1] == kSpriteSel && i + 3 < n && buf[i + 2] == kSpriteP1 &&
+                buf[i + 3] >= kSpriteLo && buf[i + 3] <= kSpriteHi) {
+                cur->push_back(static_cast<wchar_t>(kSpriteMark + (buf[i + 3] - kSpriteLo)));
+            }
             i += 2 + static_cast<size_t>(params);
             continue;
         }
@@ -165,7 +300,8 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 cur = &pages.back();                      // re-seat: emplace_back may reallocate
             }
             const int len = ControlLength(c);
-            if (len <= 0) break;                          // terminator, or length unknown
+            if (len < 0) { g_bail = { i, c, "unknown control length" }; break; }
+            if (len == 0) break;                          // genuine terminator, not a failure
             i += static_cast<size_t>(len);
             continue;
         }
@@ -229,8 +365,12 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         }
         ++i;
     }
+    // One place, so Decode and DecodePages cannot diverge. Cheap: returns immediately unless the
+    // page actually carried a sprite marker.
+    for (auto& pg : pages) ResolveSprites(pg);
     return true;
 }
+
 
 // Trim leading/trailing whitespace. A page routinely starts with the newline that followed the
 // previous page's break, and a lone blank line read aloud is just a stumble.
@@ -282,6 +422,12 @@ const uint8_t* SkipVariantPrefix(const uint8_t* p) {
     }
     return p;
 }
+
+void SetElementSpriteResolver(SpriteNameFn fn) {
+    g_spriteResolver = fn;
+}
+
+DecodeBail LastDecodeBail() { return g_bail; }
 
 bool IsMostlyPrintable(const std::wstring& s) {
     if (s.empty()) return false;

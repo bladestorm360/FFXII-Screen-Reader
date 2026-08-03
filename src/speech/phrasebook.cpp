@@ -111,6 +111,14 @@ const Row kTable[] = {
     // (S106's four sneak-assist rows were removed in S115. The feature became automatic on the
     // danger-table maps, so it has no menu row and no words -- and an unused row here would be an
     // invented label waiting to be re-used for something it was not written for.)
+    // Equipment comparison + art-only screens. User-approved this session; see phrasebook.h for
+    // what each one stands in for and why the game supplies no text.
+    EN(L"up"),
+    EN(L"down"),
+    EN(L"cannot equip"),
+    EN(L"already equipped"),
+    EN(L"Leader"),
+    EN(L"Game Over"),
 };
 
 #undef EN

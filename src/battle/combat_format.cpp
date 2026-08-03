@@ -1,7 +1,10 @@
 #include "battle/combat_format.h"
 
+#include "battle/battle_state.h"
 #include "speech/phrasebook.h"
 #include "ui/mod_menu.h"
+
+#include <cwctype>
 
 namespace CombatFormat {
 namespace {
@@ -104,12 +107,41 @@ std::wstring DefeatedLine(const std::wstring& who, uint32_t expGain, uint32_t lp
                + std::to_wstring(lpGain)  + Phrase::Get(Phrase::Id::LpSuffix);
 }
 
+// The element the game never says out loud.
+//
+// FFXII draws elemental affinity as an icon and nothing else, and no element signal survives to the
+// damage-apply site at all (combat_system.md 5.5: the damage math's scratch bank is zeroed per
+// calculation and only the final integer is kept). It comes from the ACTION RECORD instead --
+// BattleState::AbilityElements, row+0x13.
+//
+// Suppressed when the action's own name already carries the word, so "casts Fire ... 42 Fire" and
+// "casts Firaga ... 42 Fire" collapse back to just the number. Same reasoning as the codec
+// decoder's adjacency rule: the element and the name are one token said twice, and saying it twice
+// is a rendering artifact rather than information. Nothing is suppressed across events -- this is a
+// pure function of one line's own words.
+//
+// KNOWN GAP, deliberate: a basic Attack (category 0) gets its element from the WEAPON, not the
+// action record, so a flame-sword hit reports no element. Better silent than wrong.
+std::wstring ElementSuffix(const std::wstring& action, uint8_t elementMask) {
+    const std::wstring elem = BattleState::ElementNames(elementMask);
+    if (elem.empty()) return std::wstring();
+
+    std::wstring lowerAction = action, lowerElem = elem;
+    for (auto& ch : lowerAction) ch = towlower(ch);
+    for (auto& ch : lowerElem)   ch = towlower(ch);
+    if (!lowerAction.empty() && lowerAction.find(lowerElem) != std::wstring::npos)
+        return std::wstring();
+
+    return L" " + elem;
+}
+
 std::wstring DamageLine(const std::wstring& attacker,
                         const std::wstring& target,
                         const std::wstring& action,
                         uint16_t actionCategory,
                         int32_t  hpDelta,
-                        uint8_t  outcome) {
+                        uint8_t  outcome,
+                        uint8_t  elementMask) {
     if (attacker.empty() && target.empty()) return std::wstring();
 
     // EXECUTION vocabulary, from the action record's category byte (row+0x1E). Deliberately NOT the
@@ -148,11 +180,17 @@ std::wstring DamageLine(const std::wstring& attacker,
         s += target;
     }
 
+    // Computed once and appended to whichever branch ends the line. "Immune. Fire" is as useful as
+    // "42 Fire" -- arguably more so, since knowing WHICH element was nullified is the actionable
+    // half. Empty for the 447 non-elemental rows, which add nothing at all.
+    const std::wstring elem = ElementSuffix(action, elementMask);
+
     const std::wstring word = OutcomeWord(outcome);
     if (!word.empty()) {
         // A defensive outcome replaces the number -- there is no number to report.
         s += L". ";
         s += word;
+        s += elem;
         return s;
     }
 
@@ -163,6 +201,7 @@ std::wstring DamageLine(const std::wstring& attacker,
         s += L". ";
         if (hpDelta > 0) s += Phrase::Get(Phrase::Id::Heals);
         s += std::to_wstring(mag);
+        s += elem;
     }
     return s;
 }

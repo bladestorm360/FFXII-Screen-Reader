@@ -29,6 +29,18 @@ std::wstring FocusedItemText(void* owner, int index);
 // the game has drawn that id at least once this session.
 std::wstring StringById(int id);
 
+// Same, but falls back to CALLING FUN_002f9860 when the id has not been captured yet -- the cache
+// only holds ids the game happened to draw, and it is deliberately narrow (Yes/No plus one help
+// band), so any id outside that band reads empty from StringById forever.
+//
+// GAME THREAD ONLY: it makes a game call on the miss path. Reach for StringById first if you are
+// on the input thread and can tolerate a miss.
+//
+// This exists so there is ONE resolver. status_reader.cpp and inventory_reader.cpp had each grown
+// a private `ResolveMsgCodec` + decode pair; a third copy was about to appear for the leader-select
+// prompt. If you need a variant, extend this.
+std::wstring ResolveStringById(int id);
+
 // The help/description text currently shown for the focused item, captured from
 // the game's description-bar setters — FUN_00291d80 (RVA 0x171D80) for field
 // menus, FUN_0028fcb0 (RVA 0x16FCB0) for the battle menu. Both write the same

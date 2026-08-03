@@ -1,7 +1,9 @@
 #include "ui/char_select_reader.h"
+#include "ui/text_capture.h"
 #include "battle/battle_state.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "core/mem_read.h"
 #include "core/stall_probe.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
@@ -29,6 +31,14 @@ constexpr uint32_t OFF_CTRL_PORTRAITS  = 0xC0;     // controller+0xc0 + slot*8 =
 constexpr uint32_t OFF_PORTRAIT_BLKIDX = 0xC0;     // portrait+0xc0 = index into ctx+0xac8 (int)
 constexpr uint32_t OFF_ROW_FLAGS       = 0xFC;     // row+0xfc: bit 3 = in party, bit 4 = leader
 constexpr uint32_t ROW_FLAG_INPARTY    = 0x08;
+constexpr uint32_t ROW_FLAG_LEADER     = 0x10;
+
+// DAT_022c83e8 -- the game-over state bitfield. Bit 4 is "leader incapacitated"; this is the body
+// of the game's own getter FUN_0035c750 (`return DAT_022c83e8 >> 4 & 1`), so it is a read of a
+// documented global rather than an inference. Set on the death edge in FUN_00300fc0 when the dying
+// actor IS the leader handle, cleared by FUN_0035c8e0(0x17).
+constexpr uint32_t RVA_GAMEOVER_STATE  = 0x21A83E8;
+constexpr uint32_t GO_BIT_LEADER_DOWN  = 0x10;
 constexpr uint32_t OFF_BLK_CHARID      = 0x60;     // block+0x60 = char id (i16; < 0 = empty slot)
 constexpr uint32_t OFF_BLK_FLAGS       = 0x00;     // block+0x00 bit 1 = GUEST (cannot be toggled)
 constexpr uint32_t BLK_FLAG_GUEST      = 0x02;
@@ -51,7 +61,30 @@ struct SlotInfo {
     int  curHP = 0, maxHP = 0, curMP = 0, maxMP = 0, level = 0;
     bool inParty = false;
     bool guest   = false;
+    // The chooser ROW's own flag word, read off the portrait child. Whether the portrait IS the row
+    // that FUN_00284c90 receives is an inference, so it is never trusted on its own -- see
+    // `rowWitnessAgrees` below.
+    bool     haveRowFlags = false;
+    uint32_t rowFlags     = 0;
 };
+
+// Is the leader currently down, i.e. is the game asking for a replacement?
+bool LeaderIsDown() {
+    uint32_t state = 0;
+    if (!MemRead::SafeReadU32(Hooks::ResolveRva(RVA_GAMEOVER_STATE), 0, &state)) return false;
+    return (state & GO_BIT_LEADER_DOWN) != 0;
+}
+
+// TWO WITNESSES before believing the row flags. `row+0xfc` bit 3 is in-party and bit 4 is leader,
+// but the pointer we read it through is the PORTRAIT child, and "portrait == row" was never
+// measured -- FUN_00284c90 gets its row from the controller by another path. Bit 3 has an
+// independent witness the mod already trusts (the ctx+0xb10 byte the game's own toggle writes), so
+// if the two agree on in-party, this pointer really is the row and bit 4 can be believed. If they
+// disagree we say nothing extra rather than announce a leader that may not be one.
+bool RowWitnessAgrees(const SlotInfo& v) {
+    if (!v.haveRowFlags) return false;
+    return ((v.rowFlags & ROW_FLAG_INPARTY) != 0) == v.inParty;
+}
 
 // Which field-menu command is active. Empty-handed answer is -1, which makes every caller fall through
 // to the stat readout -- the pre-existing behaviour, so an unreadable chain degrades to what shipped
@@ -101,6 +134,9 @@ bool ReadSlot(int slot, SlotInfo* out) {
         // roster list 3, and that remains true of the COMMITTED state -- but while this screen is open
         // the edit is staged here, so this is the byte that matches what the player just did.
         out->inParty = *reinterpret_cast<uint8_t*>(c + OFF_CTX_INPARTY + static_cast<size_t>(charId)) != 0;
+        out->rowFlags     = *reinterpret_cast<uint32_t*>(
+            reinterpret_cast<char*>(portrait) + OFF_ROW_FLAGS);
+        out->haveRowFlags = true;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -159,6 +195,18 @@ void HookedStatusCursor(int slot) {
         line += std::wstring(L", ") + Phrase::Get(Phrase::Id::MPPrefix)
               + std::to_wstring(v.curMP) + L"/" + std::to_wstring(v.maxMP);
     }
+
+    // STRICTLY ADDITIVE. An earlier cut of this made the leader-down case REPLACE the readout above,
+    // which would have stripped the Lv/HP/MP the chooser already spoke -- and HP is exactly what you
+    // want when picking who takes over. The marker only ever appends.
+    //
+    // Low value on its own (the game starts the cursor on the current leader, so it is inferable),
+    // so it stays a quiet suffix and never costs the line anything when the witnesses disagree.
+    if (LeaderIsDown() && RowWitnessAgrees(v) && (v.rowFlags & ROW_FLAG_LEADER)) {
+        line += L", ";
+        line += Phrase::Get(Phrase::Id::Leader);
+    }
+
     char tag[48];
     snprintf(tag, sizeof(tag), "chooser cmd=0x%X:", cmd);
     Speak(line, nullptr, tag);
@@ -241,6 +289,53 @@ void HookedPartyToggle(void* ctrl, void* row) {
     Speak(MembershipWord(st.ctxSaysIn), nullptr, "party toggle:");
 }
 
+// ---- "choose a new leader" -----------------------------------------------------------------------
+// When the party leader is KO'd the game raises a chooser and waits for a replacement. The
+// character LIST already reads (HookedStatusCursor above); what never reads is the SENTENCE that
+// explains what the player is being asked to do, so the screen arrives unexplained.
+//
+// TWO surfaces can present this and it is NOT settled offline which one the player actually sees:
+// this one hangs off the BATTLE context (DAT_0209be80) while the list the mod already reads hangs
+// off the PAUSE context (DAT_0209ac30). Rather than spend a probe on it, both are wired and
+// whichever never appears simply never fires -- the log line below names the one that did.
+//
+// FUN_00298250 case 1 builds the window's two labels from FUN_002f9860(0x4A49) (header) and
+// FUN_002f9860(0x4C6) (body). 0x4C6 is `menu_command` index 222, "Select Leader", and appears
+// nowhere else in the binary. Resolving the ids directly beats chasing the widget chain the
+// function threads them through -- that chain is conditional and would be a guess.
+constexpr uint32_t RVA_LEADERSEL_PROC = 0x178250;  // FUN_00298250(win, packet)
+constexpr int MSG_CONSTRUCT           = 1;
+constexpr int TEXTID_LEADERSEL_HDR    = 0x4A49;
+constexpr int TEXTID_LEADERSEL_BODY   = 0x4C6;
+
+typedef uint64_t (*Pfn_LeaderSelProc)(void*, int*);
+Pfn_LeaderSelProc s_origLeaderSel = nullptr;
+
+// POD-only: __try cannot live in a function that needs object unwinding, and the caller builds a
+// std::wstring.
+bool PacketIs(int* packet, int want) {
+    if (!packet) return false;
+    __try { return *packet == want; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+uint64_t HookedLeaderSelect(void* win, int* packet) {
+    const uint64_t ret = s_origLeaderSel ? s_origLeaderSel(win, packet) : 0;
+    STALL_SCOPE("CharSelect::HookedLeaderSelect");
+
+    if (!PacketIs(packet, MSG_CONSTRUCT)) return ret;
+
+    // Game thread, so the resolver's game-call fallback is legal here.
+    std::wstring body = TextCapture::ResolveStringById(TEXTID_LEADERSEL_BODY);
+    if (body.empty()) body = TextCapture::ResolveStringById(TEXTID_LEADERSEL_HDR);
+
+    Log::Write("LEADER", body.empty() ? "battle-HUD leader select: NO body text resolved"
+                                      : "battle-HUD leader select fired");
+    // Through the one emit function for this surface, so the prompt and the list rows that follow
+    // share an interrupt policy instead of racing.
+    Speak(body, win, "leader prompt:");
+    return ret;
+}
+
 } // namespace
 
 namespace CharSelectReader {
@@ -248,12 +343,18 @@ namespace CharSelectReader {
 bool Init() {
     bool ok = Hooks::InstallTyped(RVA_STATUS_CURSOR, &HookedStatusCursor, &s_origStatusCursor);
     ok    &= Hooks::InstallTyped(RVA_PARTY_TOGGLE,  &HookedPartyToggle,  &s_origPartyToggle);
+    // Best-guess, no probe (user decision this session): if this surface is not the one the player
+    // sees, the hook simply never fires and nothing regresses.
+    Hooks::InstallTyped(RVA_LEADERSEL_PROC, &HookedLeaderSelect, &s_origLeaderSel);
     Log::Write("INGAME", ok
         ? "CharSelectReader: chooser cursor + Party membership toggle hooks installed"
         : "CharSelectReader: a chooser hook FAILED to install");
     return ok;
 }
 
-void Shutdown() {}
+void Shutdown() {
+    Hooks::Uninstall(RVA_LEADERSEL_PROC);
+    s_origLeaderSel = nullptr;
+}
 
 } // namespace CharSelectReader

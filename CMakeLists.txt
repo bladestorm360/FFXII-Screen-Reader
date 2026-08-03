@@ -75,6 +75,9 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/license_reader.cpp
     src/ui/ability_summary_reader.cpp
     src/ui/shop_reader.cpp
+    src/ui/equip_compare.cpp
+    src/ui/equip_detail.cpp
+    src/ui/equip_target_reader.cpp
     src/ui/inventory_reader.cpp
     src/ui/gil_reader.cpp
     src/ui/virtual_buffer.cpp

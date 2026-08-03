@@ -15,8 +15,17 @@
 // TextCapture, so the labels are the game's own localized text.
 namespace PopupReader {
 
+// Installs the FUN_00241d40 construction hook that covers NO-LIST prompts (see SpeakBody).
+void Init();
+void Shutdown();
+
 // The prompt's body text; empty when `owner` is not a prompt or the text is unreadable.
 std::wstring BodyText(void* owner);
+
+// THE single emit point for a pop-up body. Both paths funnel here -- menu_reader's focus-driven
+// one for prompts that have a button list, and the construction hook for the ones that do not --
+// so there is exactly one wording and one interrupt policy. Returns true if it spoke.
+bool SpeakBody(void* owner);
 
 // Label of the prompt's button at `index` (0 = Yes, anything else = No).
 std::wstring ButtonText(int index);

@@ -229,7 +229,8 @@ void OnRealHit(void* result, void* atkBc, void* tgtBc, uint16_t actionId) {
         BattleState::AbilityName(actionId),
         BattleState::AbilityCategory(actionId),
         hpDelta,
-        outcome);
+        outcome,
+        BattleState::AbilityElements(actionId));
 
     // Log-only: this is the stream that made linear narration unusable, and it is why the log
     // exists at all. Critical events below get their own realtime treatment.

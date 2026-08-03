@@ -118,6 +118,17 @@ enum class Id {
     // (S106's four sneak-assist ids were removed in S115 with the setting they named. The feature is
     // automatic on the maps `path_danger.cpp` lists, so it has no menu row and speaks nothing.)
 
+    // -- Equipment comparison and screens the game draws as ART (user-approved this session) ------
+    // Every one of these names something FFXII renders with no text behind it, so there is nothing
+    // to read back:
+    //   StatUp/StatDown  -- the up/down arrow GLYPH beside a stat delta (FUN_002cc780 picks the
+    //                       glyph off the sign bit; the number is drawn as its absolute value).
+    //   CannotEquip      -- a greyed-out character column; the game says nothing, it just dims.
+    //   AlreadyEquipped  -- the "this character is already wearing it" flag at colB+0xE0.
+    //   Leader           -- the party-leader bit on a chooser row (row+0xFC bit 4).
+    //   GameOver         -- baked texture art (`gameover_c.tm2`), like the title logo.
+    StatUp, StatDown, CannotEquip, AlreadyEquipped, Leader, GameOver,
+
     Count
 };
 

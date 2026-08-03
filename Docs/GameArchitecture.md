@@ -3923,3 +3923,272 @@ This is a **third** suppressor, alongside the two already recorded — the `~24`
 all 12 locales, but "the mod speaks every enemy cast" is not achievable through the message bus. The
 announce fires when the game decides to announce. Do not attempt to compensate by hooking
 `FUN_00469af0` — the emitter is precisely what the gate above declined to call.
+
+## Element sprites, damage type, no-list pop-ups (Session 125, 2026-08-02)
+
+**KEYWORDS: element sprite escape 0F 3F 81 attribute_data word.bin chunk 4 pool 0x2017 ElementName
+action row+0x13 AbilityElements no-list popup win+0x3C4 win+0x1B0 FUN_00241d40 game-over bitfield
+DAT_022c83e8 leader select FUN_00298250 0x4C6 compare panel FUN_002cc4f0 FUN_002ca7c0 FUN_002cc780**
+
+### The inline ELEMENT sprite — `0F 3F 81 <XX>` (SHIPPED, conf 0.99)
+
+| Fact | Value |
+|---|---|
+| Escape | `0F 3F 81 <XX>`, `XX` = `0x8A`..`0x91`, 4 bytes total (selector `0x3F` already takes 2 params) |
+| Bit order | `XX - 0x8A` = 0 Fire · 1 Lightning · 2 Ice · 3 Earth · 4 Water · 5 Wind · 6 Holy · 7 Dark |
+| Name source | shared pool index **`0x2017 + bit`** = `(4 << 11) | (23 + bit)`, i.e. `word.bin` chunk 4 idx 23..30 |
+| Binding authority | `attribute_data.bin` — st2e, 8 records x u16, values literally `0x2017..0x201E` in bit order |
+| Emitter in-game | `FUN_00293ce0:41` -> `FUN_002f9860(0x4B27 + bit)` per set element bit; those 8 strings each hold `0f 3c c1 fe \| 0f 3f 81 <8A+bit> \| 0f 3c 81 80` |
+| Corroboration | `help_action.bin` prose names each sprite in the adjacent word ("Deal `<0F 3F 81 8A>` fire damage to one foe.") |
+| Coverage | across all 27 US st2e master-data files, `0x3F` is used ONLY for these 8. One stray `0F 3F 46 00` in `battle_pack.bin` fails the `0x81` test |
+
+Mod side: `BattleState::ElementName(bit)` / `ElementNames(mask)`; `GameText::SetElementSpriteResolver`
+(registered in `dllmain.cpp` — `core/` must not include `battle/`). The decoder emits a private-use
+marker and resolves it once per page, suppressing the name when the adjacent word already spells it.
+
+**Equipment detail panel row labels** (`FUN_002f9860` ids, from `FUN_00293310`): `0x232A` License
+Needed · `0x232E`/`0x232F`/`0x2330`/`0x2331` the four element-affinity rows (masks at equipment
+record `+0x3F`/`+0x3D`/`+0x3E`/`+0x3C` respectively) · `0x2332` list separator · `0x2333`/`0x2335`
+immune (<4 / >=4 statuses) · `0x2334`/`0x2336` equip · status masks u32 at record `+0x44` (immune)
+and `+0x48` (equip). Statuses in that panel are already WORDS via `FUN_0035d330(0x1A, bit) + 0x18`,
+which is why they always read and only the element was silent.
+
+### STATUS EFFECTS ARE NOT SPRITES IN TEXT — with one gap (Session 125)
+
+A census of every `0x0F` escape across all shipped US st2e text found exactly **two** glyph-inserting
+families: `0x3F` (the eight elements) and `0x40..0x6B` (controller/keyboard button prompts,
+`GameArchitecture` "button-icon inserts"). **There is no status-sprite escape.** Statuses reach the
+player as words everywhere text is involved, and where they genuinely ARE icons — the Status
+screen's ailment grid `FUN_002c59d0` and the battle HUD — the mod already resolves them from the
+status-bit table via `BattleState::StatusName`. So the element fix has no status counterpart to make.
+
+**THE ONE REAL GAP — the game itself hides them past a threshold.** `FUN_00293310:139-212`:
+
+```c
+... popcount the mask ...
+uVar10 = 0x2333; if (3 < iVar35) uVar10 = 0x2335;   // immune: <4 -> label, >=4 -> "Various"
+if (iVar35 < 4) { ...list each name via FUN_0035d330(0x1a, bit)... }
+```
+
+With **4 or more** statuses set the panel prints `"Immune: Various status effects"` (id `0x2335`) or
+`"Equip: Various status effects"` (`0x2336`) and **lists no names at all** — sighted players lose
+them too. An accessory that blocks many ailments therefore tells you nothing specific.
+
+**FIXED (S125) — `src/ui/equip_detail.cpp`.** The mask is still at record `+0x44` / `+0x48`, so the
+names are recoverable. `ExpandCollapsedStatuses` mirrors the game's own selection
+(`FUN_00293310:139-185`: a non-zero IMMUNE mask wins outright and the granted mask is not shown;
+only when immune is empty does granted appear), popcounts it, and when the game collapsed the list
+**replaces the collapsed phrase with the full one**. Every word is game-supplied — the row label
+(`0x2333`/`0x2334`), the separator (`0x2332`) and each status name.
+
+Substitution, not appending: the needle is the game's own `0x2335`/`0x2336` string, so it is
+locale-correct by construction and the result reads `"Immune: Sleep, Confuse, Silence, Blind"`
+rather than saying "Immune" twice. If the phrase is not found the text is left exactly as the game
+wrote it and a `DESC` line records the disagreement — never patch a string you cannot locate.
+
+Item id / category at the formatter hook: `params[0]` = category (**3** = equipment, before
+`FUN_00292b70` remaps it per slot) and `params[1] >> 16` = the id. Note the record getter wants
+`FUN_0035d330(6, id << 16)` — `FUN_0031c5d0` case 6 reads the id as `*(u16*)(arg + 6)`, i.e. the
+HIGH half of the second argument, which is why every caller shifts.
+
+`BattleState::StatusName` gained `includeSuppressed`: KO / Invisible / HP Critical / X-Zone carry
+`rec+0x02 == 0xFF` and are hidden on the battle HUD as noise, but the item panel lists them (it
+reads the master name with no suppression check) and an accessory that blocks KO is exactly what a
+buyer needs to hear.
+
+**STILL HIDDEN, a separate gap:** when BOTH masks are non-zero the game shows only the immune one
+and silently drops the granted one. Not expanded — that would invent a row the panel never had.
+`equip_detail.cpp` logs it when it happens so the decision can rest on evidence.
+
+### listhelp_common string ids — base `0x2328` (conf 1.00)
+
+`FUN_002f9860(0x2328 + i)` is entry `i` of `listhelp_common.bin`. Verified against the shipped file
+on **all 18 ids the panel builders use**, 18/18:
+
+| id | i | text | | id | i | text |
+|---|---|---|---|---|---|---|
+| `0x232A` | 2 | `License Needed: ` | | `0x2333` | 11 | `Immune: ` |
+| `0x232C` | 4 | `On Hit: ` | | `0x2334` | 12 | `Equip: ` |
+| `0x232D` | 5 | `None` | | `0x2335` | 13 | `Immune: Various status effects` |
+| `0x232E` | 6 | `Immune: ` (element) | | `0x2336` | 14 | `Equip: Various status effects` |
+| `0x232F` | 7 | `Absorb: ` | | `0x233B` | 19 | `Attack Power ` |
+| `0x2330` | 8 | `Half Damage: ` | | `0x233C` | 20 | `Defense ` |
+| `0x2331` | 9 | `Weak: ` | | `0x233D` | 21 | `Magick Resist ` |
+| `0x2332` | 10 | `, ` | | `0x233E`/`0x233F` | 22/23 | `Evade ` / `Magick Evade ` |
+| | | | | `0x2340` | 24 | `Element: None` |
+
+This also settles which element mask is which row: `+0x3F` → `0x232E` Immune · `+0x3D` → `0x232F`
+Absorb · `+0x3E` → `0x2330` Half Damage · `+0x3C` → `0x2331` Weak.
+
+### Action record `+0x13` = ELEMENT MASK (SHIPPED, conf 0.99)
+
+`BattleState::AbilityElements(actionId)` — same table and technique as `AbilityCategory`'s
+`row+0x1E` read (`Internal::MasterRecord(RVA_ACTIONTBL, id)`), different offset.
+
+Derivation against the shipped `action_data.bin` (543 rows, stride 60): 15/15 named elemental spell
+families match; Cure / Shock / Scathe / Bio are all `0x00`; and **every row holds zero or exactly
+one bit** — only `{0,1,2,4,8,0x10,0x20,0x40,0x80}` occur, 447 non-elemental then 19/11/10/8/13/13/9/13.
+A multi-bit mask therefore means the offset is wrong, and `ElementNames` logs one if it ever sees it.
+
+**No element survives to the damage-apply site** (`combat_system.md` §5.5) and `battle_message.bin`
+carries zero `0F 3F` escapes, so the action record is the ONLY source. `DamageLine` consumes it.
+
+> **NOT AVAILABLE: the element at the Tier-1 charge announce.** `HookedSprintf` on `FUN_00536410`
+> receives the message id (`argBlock+4 & 0x7FFF`) and the finished string, **not the action id**, and
+> the arg-block layout past `+4` is undocumented. Establish that layout before attempting to annotate
+> the charge announce. Do not infer it.
+>
+> **KNOWN GAP:** a basic Attack (category 0) takes its element from the WEAPON, not the action
+> record, so weapon-elemental hits report no element.
+
+### NO-LIST confirm pop-ups — why Game Over was silent (SHIPPED, conf 0.99)
+
+`FUN_00241d40` builds two shapes, and the game's own branch at `:88` decides which:
+
+```c
+*(uint *)(param_1 + 0x3c4) = uVar3;              // from the creation packet's +0x2C
+if ((*(byte *)(param_1 + 0x3c4) & 1) == 0) {     // bit 0 CLEAR -> build the button list
+    *(longlong *)(param_1 + 200) = FUN_002d14e0(...);   // win+0xC8
+}
+```
+
+- **bit 0 CLEAR** — list at `win+0xC8`, cursor lands on it, `FUN_00247510` emits focus `0x8000`.
+  This is the path `menu_reader` already covers.
+- **bit 0 SET** — no list, `win+0xC8` stays 0, **no `0x8000` is ever emitted**, so `OnFocus` never
+  runs and `PopupReader::BodyText` is never consulted. The window is completely silent.
+
+The body is at `win+0x1B0` for BOTH shapes (`case 1` does `FUN_00254f30(win+0x1b0, *packet2, 0x200)`),
+so a construction hook on `FUN_00241d40` covers every no-list prompt in the game. The two shapes are
+disjoint by the game's own branch — no latch or dedup is needed, and they cannot double-speak.
+
+Game Over reaches it via `FUN_0035c660` -> `FUN_00241c90` -> `FUN_002465f0(win, 0x3D0, FUN_00241d40, ...)`
+with the constant pair `0x4FB` / `0x102`. **The `FUN_002f9860` id Ghidra dropped from `FUN_0035c660`
+is NOT needed** — reading `win+0x1B0` covers it.
+
+### Game-over state bitfield `DAT_022c83e8` — RVA `0x21A83E8`
+
+Bit meanings taken from the bodies of the game's own getters, so these are reads of a documented
+global rather than inference:
+
+| Bit | Meaning | Getter |
+|---|---|---|
+| `0x01` | guest wipe | `FUN_0035c760` (`0x23C760`) `return DAT_022c83e8 & 1` |
+| `0x02` | **party wipe / GAME OVER** | `FUN_0035c740` (`0x23C740`) `return DAT_022c83e8 >> 1 & 1` |
+| `0x10` | **leader incapacitated** | `FUN_0035c750` (`0x23C750`) `return DAT_022c83e8 >> 4 & 1` |
+| `0x40` | continue-menu variant | branch in `FUN_0035d980` |
+
+Set on the death edge in `FUN_00300fc0` (`0x1E0FC0`) when the dying actor is the leader handle;
+cleared by `FUN_0035c8e0(0x17)` (`0x23C8E0`). Set-leader is `FUN_00327850(charId)` (`0x207850`).
+
+**"GAME OVER" itself is baked art** — `PS2Data\image\FF12\myoshiok\<loc>\Tm2_Menu\gameover_c.tm2`,
+the same class of problem as the title logo. There is no codec text anywhere in the binary, so the
+mod's announce is gated on bit `0x02` rather than on the picture.
+
+### Leader-select prompt — TWO candidate surfaces, both wired (offline, NOT probe-confirmed)
+
+| Surface | Where | Text |
+|---|---|---|
+| Battle HUD | `FUN_002906d0` (`0x1706D0`) opens at `DAT_0209be80 + 0xAB30`; proc `FUN_002985d0` (`0x1785D0`); **`FUN_00298250` (`0x178250`) case 1 builds the labels** | header `FUN_002f9860(0x4A49)`, body `FUN_002f9860(0x4C6)` = `menu_command` 222 "Select Leader", used nowhere else in the binary |
+| Field / pause chooser | `FUN_00280b70` (`0x160B70`), gated on `!FUN_0035c760() && FUN_0035c750()`; commits the row whose `row+0xFC & 0x10` (LEADER) is set | the list rows the mod already reads |
+
+The user declined a probe, so both are hooked and the one that never appears never fires. A `LEADER`
+log line names whichever did. **`row+0xFC` bit 4 = leader is only believed when bit 3 (in party)
+agrees with the independent `ctx+0xB10+charId` witness** — the pointer it is read through is the
+PORTRAIT child and "portrait == row" has never been measured.
+
+### Shop equip COMPARE panel + equip-target screen — PROBE-CONFIRMED 2026-08-03, SHIPPED
+
+`probe_equip_compare.js` run by the user; output in `..\FFXII-Decompile\notes\
+probe_equip_compare_output.log`. Every structural criterion passed:
+
+- `clsOk=1` on every pass; **exactly 1 header call + 9 column calls** per refresh, as predicted.
+- **Zero stray delta targets** across all passes — `target` is always `colA+0xD8` or `colA+0xE8`.
+- Labels read straight off the header widgets (`Attack Power(on)` / second slot `(off)` for a
+  weapon). *Only kind 1 was exercised — no armour/accessory pass appears in the capture, so the
+  two-label kinds are confirmed by code, not yet by play.*
+- `canEq`/`eq` agree with the equip screen's own notice widget on every character.
+- `vis=6`, member index != char id (mem 0..5 -> char 0,3,2,4,1,5), so `CharacterName(charId)` is
+  the right lookup.
+- Equip-target screen fires on entry, on **every** Left/Right, and after the equip; `slotItem`
+  decoded correctly every time ("Whale Whisker", "Sagittarius", "Masamune", "Golden Axe",
+  "Chopper"), `remaining` counted 1 -> 0.
+
+**TRAP, measured:** the FIRST `FUN_0057b1a0` fires while **`DAT_02ca97a0` is still null**
+(`[equip] FUN_0057b1a0 fired but DAT_02ca97a0 is null`). A reader keyed on that global misses the
+screen's own entry announcement — validate the window handed to the hook instead.
+
+**POLARITY — settled at 1.00, from Ghidra's own declarations rather than the log.** The log cannot
+disambiguate it (delta 80 -> 0 on equipping fits both signs), but `FUN_002ca7c0`'s locals do:
+`undefined1 local_b8[10]` is followed by `byte local_ae` (= `local_b8 + 0x0A`) and
+`undefined1 local_8c[10]` by `byte local_82`, with `FUN_0030a4e0(member, 0, local_b8)` filling
+CURRENT and `(member, slotsWithNewItem, local_8c)` filling NEW. So `delta = cur - new` and
+**NEGATIVE = the new item is BETTER**. `EquipCompare` stores `improve = -delta` and never exposes
+the raw value.
+
+Stat slots, same source: kind 1 -> slot 0 = Attack Power (`+0x0A`) · kind 2 -> slot 0 = Evade
+(`+0x11`), slot 1 = Magick Evade (`+0x12`) · kind 3 -> slot 0 = Defense (`+0x0B`), slot 1 = Magick
+Resist (`+0x0C`). The mod does not use this mapping — it reads the labels off the widgets — but it
+is recorded because it is what makes those labels trustworthy.
+
+Shipped as `src/ui/equip_compare.{h,cpp}` + `src/ui/equip_target_reader.{h,cpp}`, keys `4`-`9`.
+
+| Thing | Value |
+|---|---|
+| Compare panel | class `FUN_002cbf80` (`0x1ABF80`), size 0x170, parked at `menuCtx + 0x2E0` (`menuCtx` = `DAT_0209ac30`, RVA `0x1F7AC30`) |
+| Refresh | `FUN_002cc4f0(itemId)` (`0x1AC4F0`) -> 1x `FUN_002cb1f0` + 9x `FUN_002ca7c0` (**RVA `0x1AA7C0`**, not `0x1AC7C0`), then `FUN_002cc2a0` (`0x1AC2A0`) lays out / hides |
+| Called from | `FUN_0056e5d0:44-47` (EVERY shop highlight, unless `container+0x191 == 0x0B`), `FUN_0056d370:118` (confirm), `FUN_0057b1a0:95` (equip-target screen) |
+| Columns | `colA[i] = *(panel + 0xD0 + i*8)`, `colB[i] = *(panel + 0x118 + i*8)`, i = 0..8; `colA+0xD4` = member index -> `*(menuCtx + 0xAC8 + idx*8)` = block, `block+0x60` = char id (i16, <0 = absent); visible count = low byte of `panel+0x168` |
+| Flags | `colB+0xE0` = 1 already wearing this exact item · `colB+0xE4` = 0 CANNOT equip (`FUN_002cb360` clears it on `!canEquip`) |
+| Labels | `header = *(panel+0xC8)`, `arr = *(header+0x60)`, label k codec at `arr[k]+0x18`, live iff `*(u32*)(arr[k]+8) & 1`. **A pure read — `FUN_002cb1f0` already resolved them, so no game call and no label ids are needed.** |
+| Deltas | `FUN_002cc780(pair, delta, target, style)` (`0x1AC780`); `target` is `colA+0xD8` (stat slot 0) or `colA+0xE8` (slot 1); draws `abs(delta)` plus an arrow glyph chosen by `delta >> 0x1f & 1` |
+| **POLARITY** | `FUN_002ca7c0:115-116` computes `FUN_0030a4e0(member, 0, cur)` then `(member, slotsWithNewItem, new)`, and every delta is **`cur - new`** — so a **NEGATIVE delta means the new item is BETTER**. Same polarity as the Equipment screen's twin renderer `FUN_003fe490:31-51`. **This is the make-or-break fact; do not ship a delta announce before it is confirmed live.** |
+| Stat bytes | kind 1 -> `+0x0A` Attack Power · kind 2 -> `+0x11` Evade, `+0x12` Magick Evade · kind 3 -> `+0x0B` Defense, `+0x0C` Magick Resist (kind = item record `+0x50`; slot = `+0x4C`). Labels `FUN_002f9860(0x4A90..0x4A94)` |
+| Equip-target screen | class `FUN_0057ac10` (`0x45AC10`), live at `DAT_02ca97a0` (RVA `0x2B897A0`); refresh **`FUN_0057b1a0` (`0x45B1A0`)** fires on entry (case `0xE`), every Left/Right, and every equip. Selected member = `*(i16*)(menuCtx + 0xDE0)`; L/R writers `FUN_0027f360` (`0x15F360`) / `FUN_0027ed10` (`0x15ED10`); footer help `FUN_002f9860(0xC70)` already goes through `FUN_00291d80`, which `TextCapture` hooks |
+| Bound it yourself | `colA+0xD4` indexes `menuCtx+0xAC8` with **no bound check in the game** — clamp to 0..8 before dereferencing |
+
+### `TextCapture::StringById` id-cache band — a trap
+
+The passive cache holds ONLY ids `1000`/`1001` and `0x46dc..0x4882` (`text_capture.cpp:182`).
+**`0x4A90..0x4A94` (the attribute labels) and `0x4C6` (Select Leader) are outside it** and read empty
+forever. Use `TextCapture::ResolveStringById(id)` (added S125), which falls back to the
+`FUN_002f9860` trampoline. **Game thread only.**
+
+
+### Field Equipment screen — the per-highlight attribute PREVIEW (S125, shipped)
+
+A SECOND comparison mechanism, unrelated to the shop's compare panel. The pause menu's Equipment
+screen shows ONE character's nine attributes as `current > preview` — an absolute new value, not a
+signed delta. Confirmed from a tester screenshot: `Attack Power 108 > 14`, `Evade 30 > 5`.
+
+| Fact | Value |
+|---|---|
+| Panel | `menuCtx + 0x138`, class `FUN_003fe5d0` (`0x2DE5D0`) |
+| Current / preview | `panel + 0xC8 + row*4` / `panel + 0xEC + row*4`, rows 0..8 |
+| Labels | `FUN_002f9860(0x4A90 + row)` — outside TextCapture's cache band, so `ResolveStringById` |
+| Fill | `FUN_003fead0(slotOverride)` (`0x2DEAD0`) — writes **2 iterations x 9 dwords at stride 0x24** from `panel+0xC8`, so iteration 0 lands on `+0xC8` (current) and iteration 1 on `+0xEC` (preview). `slotOverride == 0` copies current into preview, which is why Status shows no arrows. |
+| **Per-highlight event** | **`FUN_003fe720(cmdId, arg)` — RVA `0x2DE720`** |
+
+**`FUN_003fe720` is the hook point and it is NOT per-frame** — established, not assumed: its call
+site sits inside `FUN_002c2320` **case 0xC**, the child-list event (S71: `0xC` list event, `0x8000`
+cursor move at `packet+8`), immediately after `FUN_00291d80` sets the description bar for the
+newly-highlighted row. One call per highlight.
+
+Reader: `src/ui/equip_compare.cpp` `HookedAttrFill`. Speaks **queued**, never interrupting — the
+row's own name is announced first off the 0x8000 and interrupting would cut it off. Needs no dedup:
+on Status `current == preview` so the composer returns empty and it is silent there by itself.
+
+### Description text has TWO independent sources — do not let them share a slot
+
+| Source | Hook | What it is |
+|---|---|---|
+| Description BAR | `FUN_00291d80` (`0x171D80`) | the pane's help line ("Change equipment.") |
+| ITEM DETAIL panel | `FUN_00292b70` (`0x172B70`) | the highlighted item's own stats/description |
+
+Both used to write `TextCapture`'s single `g_helpText`, so it was last-writer-wins. On the field
+Equipment screen the bar is re-set AFTER the item panel is formatted, so `o` read the pane help on
+every row and never changed — it sounded stale because it was. Now kept in separate slots with
+`CurrentHelpText()` preferring the ITEM detail when both belong to the current focus.
+
+**The DESC dump is what separated the two candidate causes:** `gated=1` fires once per highlight
+with the correct per-item bytes, proving capture was fine and the loss was downstream. Staring at
+the capture path would never have shown it.

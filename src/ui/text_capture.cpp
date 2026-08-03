@@ -1,4 +1,5 @@
 #include "ui/text_capture.h"
+#include "ui/equip_detail.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/logger.h"
@@ -103,6 +104,17 @@ std::wstring g_helpText;
 uint32_t g_helpGen = 0;
 uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is set for a focus
 
+// The ITEM DETAIL PANEL's text, kept SEPARATE from the description bar above.
+//
+// Both used to write g_helpText, so it was last-writer-wins -- and on the field Equipment screen
+// the loser was the one that mattered. Highlighting a weapon there formats its detail panel
+// ("Attack Power 14  Element: None / Sword (1H) / License Needed: Swords 1") and then the pane
+// re-sets the description BAR to its own static help ("Change equipment."), which overwrote it.
+// The `o` key then read the pane help on every row, and it never changed, so it sounded stale --
+// because it was. Two different texts, two slots, and `o` arbitrates (see CurrentHelpText).
+std::wstring g_itemDesc;
+uint32_t g_itemDescGen = 0xffffffffu;
+
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
 bool g_initialized = false;
@@ -189,6 +201,14 @@ const uint8_t* HookResolve(int id) {
     return ret;
 }
 
+// Call the game's own string resolver for an id the cache never saw. Goes through the TRAMPOLINE,
+// not the hook, so it neither recurses nor pollutes the cache with ids nothing drew. POD-only so it
+// can sit under __try.
+const uint8_t* ResolveIdCodec(int id) {
+    if (!s_origResolve) return nullptr;
+    __try { return s_origResolve(id); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
 // FUN_00291d80(codecText, flag): the game sets the description-bar text here on
 // each focus — config rows resolve their per-row help id, and the New Game+/- mode
 // buttons feed their descriptions the same way. Cache it, tagged with the current
@@ -242,16 +262,68 @@ void HookedItemDescDisplay(int p1, uint32_t p2, int p3, int p4) {
 // FUN_00292b70(outBuf, params): the shared description formatter — writes the finished codec to
 // outBuf+8 and returns 1 on success. When invoked from the display path, capture that codec as the
 // focused item's description (for the `o` key), tagged with the current focus generation.
+// DIAGNOSTIC (S125). Accessory descriptions reportedly read their labels but NOT the status
+// effects the accessory grants -- "Immune: " and then nothing. Two candidate causes could not be
+// separated offline:
+//   (a) the decoder BAILS partway. It stops dead on a token whose length it does not know, and the
+//       affinity rows sit at the END of a composed description, so one unknown byte silently
+//       discards all of them. FUN_002b49f0 (the codec-sprintf) WRITES escapes of its own into the
+//       output at :106-111 (0F 2B ...) and :130-143 (0F 29 + four |0x80 bytes), and 0x29's length
+//       is data-dependent (`b1 & 7`) -- exactly the shape that can desynchronise.
+//   (b) the accessory description never reaches this hook at all (the s_inItemDesc gate).
+// This dump answers both in one keypress: it logs the RAW BYTES, so we can read what the game
+// actually produced, plus where the decoder stopped and whether the gate was set.
+//
+// Log-only, speaks nothing, and hard-capped -- FUN_00292b70 also runs for off-screen width
+// measurement, so an uncapped dump would flood the log.
+// Separate budgets per gate state. The first run spent all 12 on OFF-SCREEN MEASUREMENT passes
+// (every one logged `gated=0`), so the display-path captures -- the ones the `o` key actually
+// speaks -- never appeared. A shared cap silently favours whichever fires first.
+int s_descDumpsGated = 0, s_descDumpsUngated = 0;
+constexpr int kMaxGated = 10, kMaxUngated = 4;
+
+void LogDescBytes(const uint8_t* codec, const std::wstring& decoded, bool gated) {
+    int& budget = gated ? s_descDumpsGated : s_descDumpsUngated;
+    const int cap = gated ? kMaxGated : kMaxUngated;
+    if (budget >= cap) return;
+    ++budget;
+    const int s_descDumps = budget;
+
+    char hex[3 * 96 + 1];
+    size_t h = 0, n = 0;
+    __try {
+        for (; n < 96; ++n) {
+            const uint8_t b = codec[n];
+            static const char* kD = "0123456789abcdef";
+            hex[h++] = kD[b >> 4]; hex[h++] = kD[b & 0xF]; hex[h++] = ' ';
+            if (b == 0x00) { ++n; break; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    hex[h] = '\0';
+
+    const GameText::DecodeBail bail = GameText::LastDecodeBail();
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr), "desc #%d gated=%d bytes=%zu bail=%s@%zu(0x%02X) raw: %s",
+             s_descDumps, gated ? 1 : 0, n,
+             bail.reason ? bail.reason : "none", bail.offset, bail.value, hex);
+    Log::Write("DESC", hdr);
+    Log::WriteW("DESC", "  decoded: ", decoded);
+}
+
 uint64_t HookedItemDescFmt(void* outBuf, void* params) {
     uint64_t r = s_origItemDescFmt ? s_origItemDescFmt(outBuf, params) : 0;
     STALL_SCOPE("TextCapture::HookedItemDescFmt");
-    if (s_inItemDesc && r && outBuf) {
+    if (r && outBuf) {
         const uint8_t* codec = reinterpret_cast<const uint8_t*>(outBuf) + OFF_ITEMDESC_TEXT;
         std::wstring s = GameText::Decode(codec);   // SEH-guarded inside
-        if (GameText::IsMostlyPrintable(s)) {
+        LogDescBytes(codec, s, s_inItemDesc);       // diagnostic: runs whether or not the gate is set
+        // Past three statuses the game stops listing them and prints "Various status effects".
+        // Put the names back — the mask is still in the item record. See ui/equip_detail.h.
+        if (s_inItemDesc) EquipDetail::ExpandCollapsedStatuses(params, s);
+        if (s_inItemDesc && GameText::IsMostlyPrintable(s)) {
             std::lock_guard<std::mutex> lk(g_mutex);
-            g_helpText = std::move(s);
-            g_helpTextGen = g_helpGen;
+            g_itemDesc = std::move(s);
+            g_itemDescGen = g_helpGen;
         }
     }
     return r;
@@ -388,6 +460,7 @@ void Shutdown() {
     g_head = 0; g_count = 0; g_itemsByOwner.clear(); g_idCache.clear();
     g_paintOwner = nullptr; g_curIdx = -1; g_intercepting = false;
     g_helpText.clear(); g_helpGen = 0; g_helpTextGen = 0xffffffffu;
+    g_itemDesc.clear(); g_itemDescGen = 0xffffffffu;
     g_initialized = false;
     Log::Write("TEXT", "TextCapture shut down");
 }
@@ -407,8 +480,21 @@ std::wstring StringById(int id) {
     return it != g_idCache.end() ? it->second : std::wstring();
 }
 
+std::wstring ResolveStringById(int id) {
+    std::wstring cached = StringById(id);
+    if (!cached.empty()) return cached;               // common path: no game call at all
+    const uint8_t* codec = ResolveIdCodec(id);
+    if (!codec) return std::wstring();
+    std::wstring s = GameText::Decode(codec, 512);
+    return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
 std::wstring CurrentHelpText() {
     std::lock_guard<std::mutex> lk(g_mutex);
+    // The ITEM detail panel wins over the description BAR when both belong to this focus: it is the
+    // specific thing the cursor is on, while the bar is usually the pane's static help. Falling
+    // back to the bar keeps every surface that only has one of the two working exactly as before.
+    if (g_itemDescGen == g_helpGen && !g_itemDesc.empty()) return g_itemDesc;
     return (g_helpTextGen == g_helpGen) ? g_helpText : std::wstring();
 }
 

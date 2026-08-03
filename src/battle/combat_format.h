@@ -20,15 +20,20 @@ namespace CombatFormat {
 // since the ticker never receives the id.
 bool ShouldSpeakNow(uint16_t msgId);
 
-// Tier 2: "Vaan attacks Dire Rat B. 40"
+// Tier 2: "Vaan attacks Dire Rat B. 40", "Zombie casts Sludge on Vaan. 42 Dark"
 // `verb` comes from the action record's category byte, mirroring the game's own vocabulary so our
 // wording matches the game's when both appear.
+//
+// `elementMask` is BattleState::AbilityElements(actionId) -- the element FFXII only ever draws as
+// an icon. 0 (447 of 543 action rows) adds nothing, and an element the action's own name already
+// spells out is dropped rather than said twice. See ElementSuffix in the .cpp.
 std::wstring DamageLine(const std::wstring& attacker,
                         const std::wstring& target,
                         const std::wstring& action,
                         uint16_t actionCategory,
                         int32_t  hpDelta,
-                        uint8_t  outcome);
+                        uint8_t  outcome,
+                        uint8_t  elementMask);
 
 // Mechanic name for a result outcome code, or empty for an ordinary hit.
 // Derived from the processing code, NOT from the on-screen sprite: the outcome is decided by which

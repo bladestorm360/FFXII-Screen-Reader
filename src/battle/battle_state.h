@@ -151,8 +151,27 @@ std::wstring AbilityName(uint16_t actionId);
 //   10 Esper attack (16)  13/14/16/17 unidentified (6)  255 Reserve (56)
 uint8_t AbilityCategory(uint16_t actionId);
 
+// The action's ELEMENT mask (row+0x13), one bit per element in the standard order
+// (0 Fire .. 7 Dark). 0 = non-elemental, which is 447 of the 543 shipped rows. See the .cpp for
+// the derivation; feed set bits to ElementName.
+uint8_t AbilityElements(uint16_t actionId);
+
 // Battle status name for a status bit 0..31 (KO, Stone, Poison, Confuse, ...).
-std::wstring StatusName(int bitIndex);
+//
+// Four statuses carry a SUPPRESS marker (rec+0x02 == 0xFF): KO, Invisible, HP Critical and X-Zone.
+// They are hidden by default because on the battle HUD they are noise — KO is already announced as
+// a death, HP Critical as a warning. `includeSuppressed` turns them back on for surfaces where
+// they are the whole point: an accessory that blocks KO is exactly what a buyer needs to hear, and
+// the game's own item panel lists them there (it reads the master name with no suppression check).
+std::wstring StatusName(int bitIndex, bool includeSuppressed = false);
+
+// Element name for an element bit 0..7 -- Fire, Lightning, Ice, Earth, Water, Wind, Holy, Dark.
+// Game-supplied, never hardcoded; empty when it cannot be resolved. See the .cpp for the binding.
+std::wstring ElementName(int bitIndex);
+
+// Names of every set bit in an 8-bit element mask, comma-joined. Empty for a zero mask -- a
+// non-elemental action must add NOTHING to a line, not the word "non-elemental".
+std::wstring ElementNames(uint8_t elementMask);
 
 // Names of every set bit in a status word, comma-joined. `statusWord` is BtlChr+0x3c | +0x64.
 std::wstring StatusNames(uint32_t statusWord);

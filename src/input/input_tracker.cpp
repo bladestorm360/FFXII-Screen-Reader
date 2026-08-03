@@ -1,5 +1,7 @@
 #include "input/input_tracker.h"
+#include "core/hooks.h"
 #include "core/logger.h"
+#include "core/mem_read.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -79,6 +81,14 @@ constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x
 // Free in this game: it binds 1/2/3 to Game Speed and nothing to 4-7 (Docs/Controls.md).
 // 7 reads roster slot 3, the GUEST slot (list 3 has nine slots: 0-2 active, 3 guest, 4-8 reserve).
 constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07, DIK_7 = 0x08;
+// 8 and 9 join them for the shop's per-character equipment comparison, which can show six columns.
+//
+// THEIR FREEDOM IS NOT PROVEN. Session 112's lesson is that the game's Controls screen omits
+// bindings it really has (it never listed F9 = Hide On-Screen Keyboard), and probe_equip_compare's
+// pad-word test could not settle these two: its pass condition was "no new pad value appears",
+// which is indistinguishable from "the key was never pressed". So instead of claiming they are
+// free, the poll below WATCHES for a collision and logs it -- see the note there.
+constexpr int DIK_8 = 0x09, DIK_9 = 0x0A;
 // Combat-log navigation. Shift is deliberately NOT used: the game binds Left Shift to Toggle
 // Walk/Run and the mod cannot swallow keys, so a Shift chord would silently flip walk/run on every
 // press. Home/End are unbound and have no side effects.
@@ -128,7 +138,7 @@ constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0x
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[23]{};   // 0-15 + 20-22 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[25]{};   // 0-15 + 20-24 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -136,6 +146,37 @@ std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 // No `shift` parameter -- it was passed `false` by every caller and could never be honoured: the
 // game binds Left Shift to Toggle Walk/Run and the mod cannot swallow keys, so a Shift chord would
 // silently flip walk/run on every press. Diagnostic keys must be plain and unbound.
+// Collision watch for the two keys whose freedom was never measured (8 and 9).
+//
+// The game funnels keyboard input into its own pad words DAT_02f97368/6a/6c (RVA 0x2E77368/6a/6c,
+// filled by FUN_002498b0), so if it binds one of these keys a bit moves there on the same poll.
+// The mod cannot swallow keys, so a collision means the game's action fires too -- exactly the F9
+// failure of Session 112, which went unnoticed because nothing was watching.
+//
+// Log-only and deduped per distinct pad value, so a held key writes one line, not thousands.
+// Absence of a line is NOT proof of freedom (the key may simply not have been pressed) -- but a
+// line IS proof of collision, which is the direction that matters.
+void LogPadOnKey(bool down8, bool down9) {
+    static uint32_t s_lastLogged = 0xFFFFFFFF;
+    if (!down8 && !down9) { s_lastLogged = 0xFFFFFFFF; return; }
+
+    uint16_t w0 = 0, w1 = 0, w2 = 0;
+    if (!MemRead::SafeReadU16(Hooks::ResolveRva(0x2E77368), 0, &w0) ||
+        !MemRead::SafeReadU16(Hooks::ResolveRva(0x2E7736A), 0, &w1) ||
+        !MemRead::SafeReadU16(Hooks::ResolveRva(0x2E7736C), 0, &w2)) return;
+    if (w0 == 0 && w1 == 0 && w2 == 0) return;          // nothing moved: the key looks free
+
+    const uint32_t sig = (static_cast<uint32_t>(w0) << 16) ^ (static_cast<uint32_t>(w1) << 8) ^ w2;
+    if (sig == s_lastLogged) return;
+    s_lastLogged = sig;
+
+    char hdr[112];
+    snprintf(hdr, sizeof(hdr),
+             "COLLISION? key=%s pad=0x%04X/0x%04X/0x%04X -- the game moved a pad bit for this key",
+             down8 ? "8" : "9", w0, w1, w2);
+    Log::Write("INPUT", hdr);
+}
+
 void DInputEdge(DWORD vk, std::atomic<bool>& downFlag, bool down, bool isNav) {
     if (down) {
         if (!downFlag.exchange(true) && GameIsForeground()) {
@@ -392,6 +433,14 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true);  // 5  party slot 2 status
     DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true);  // 6  party slot 3 status
     DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true);  // 7  guest slot status
+    DInputEdge('8',           g_extraDown[23],(dik[DIK_8]         & 0x80) != 0, true);  // 8  equip column 5
+    DInputEdge('9',           g_extraDown[24],(dik[DIK_9]         & 0x80) != 0, true);  // 9  equip column 6
+    // COLLISION WATCH for 8/9 (see their DIK note above). The mod cannot swallow a key, so if the
+    // game also binds one, BOTH happen and the player gets a surprise action. Rather than assert
+    // they are free, record the game's own pad words on the frame the key goes down: the pad is
+    // where the game funnels keyboard input, so a bit moving here names the collision. Log-only,
+    // deduped per distinct pad value so a held key cannot flood the file.
+    LogPadOnKey((dik[DIK_8] & 0x80) != 0, (dik[DIK_9] & 0x80) != 0);
     DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true);  // ,  log: older
     DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true);  // .  log: newer
     // Home/End: status buffer first (top/bottom of stats), else the combat log (oldest/newest). The

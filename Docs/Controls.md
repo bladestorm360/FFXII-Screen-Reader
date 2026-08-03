@@ -163,7 +163,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
-| `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key | reserved |
+| `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key. **See the autodetail note below — Session 125 established what its first consumer should be** | reserved |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
 | `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY (S112):** with Shift, Ctrl or Alt held it does nothing, because **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys. **Moved off `F9`, which belongs to the game** | free |
 | `F9` | **NOT A MOD KEY — the GAME uses it** for *Hide On-Screen Keyboard* (S112). Left alone deliberately | game-owned |
@@ -177,10 +177,12 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `;` | **Context-gated target readout.** In battle: **committed** target status (name + instance letter + HP), silent on a merely browsed cursor — see below. In the field: **who Confirm will address**, e.g. "Talk: Montblanc" / "Action: Save Crystal", silent when nothing is in reach | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
 | `'` | Nav: diagnostic probe (speaks "Diagnostic logged") | free |
-| `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) | free |
-| `5` | Party: slot 2 status | free |
-| `6` | Party: slot 3 status | free |
-| `7` | Party: **guest** slot status (silent when there is no guest) | free |
+| `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) — **and, in a shop or on an equip screen, the equipment comparison for character 1** (see below) | free |
+| `5` | Party: slot 2 status — or comparison character 2 | free |
+| `6` | Party: slot 3 status — or comparison character 3 | free |
+| `7` | Party: **guest** slot status (silent when there is no guest) — or comparison character 4 | free |
+| `8` | Equipment comparison, character 5. Does nothing outside a shop / equip screen | free — measured in play (S125) |
+| `9` | Equipment comparison, character 6. Does nothing outside a shop / equip screen | free — measured in play (S125) |
 | `U` | License board: current License Points (also announced on board entry) | free |
 | `g` | Party **gil** total (field / shop / menus; silent on the title screen) | free — no game/mod binding uses G |
 
@@ -369,3 +371,45 @@ why labelling entities (**F6**) reads the CLIPBOARD instead of capturing typing.
 > still fading in) it retries for about a second and a half and then says "Diagnostic unavailable"; if
 > the field tick is not running at all, the request simply waits and fires when you are next on the
 > field. **Press it while standing in the area you want measured.**
+
+## Equipment comparison — and the AUTODETAIL mode it is waiting for
+
+Keys `4`-`9` read the game's per-character equipment comparison while a shop item or an equip
+screen is highlighted, and fall back to their party-status meaning everywhere else. The gate is
+structural (a live, class-validated comparison panel **plus** the surface that drives it), so
+leaving a shop restores party status with nothing to unstick.
+
+### The two surfaces do NOT behave the same, and that is deliberate for now
+
+| Surface | Mechanism | How it reads |
+|---|---|---|
+| Shop list / equip-to-whom | up to **6 characters**, signed delta + arrow | **On keypress** (`4`-`9`) |
+| Pause menu -> Equipment | **1 character**, `current > preview` absolutes | **Automatically on highlight**, plus `4` to re-read |
+
+The split is not an oversight. Six characters x two stats is far too much to hear on every cursor
+move, so the shop stays on demand; the Equipment screen concerns one character and usually one or
+two changed stats, which is short enough to volunteer. Tester-confirmed 2026-08-03: *"you put the
+delta reader on keypress which is perfect."*
+
+### What AUTODETAIL should do with this (F7, still unbuilt)
+
+Autodetail is the planned **toggle** that reads the relevant stats on highlight instead of on
+keypress. When it is built, this is its first and best-defined consumer:
+
+- **OFF (default, today's behaviour):** shop comparison on `4`-`9` only; the Equipment screen keeps
+  its automatic single-character line, which is already short enough to be welcome.
+- **ON:** the shop comparison volunteers itself on each highlight too — **queued, never
+  interrupting**, so the item name and price are heard first. `EquipCompare::LineFor` already
+  produces exactly the per-column text this needs; the only new work is the trigger and the toggle.
+- The keys must keep working in BOTH modes. Autodetail changes what is *volunteered*, never what is
+  *reachable* — a toggle that removed a way to ask is a regression, not a setting.
+- Emit through the surface's existing choke point (`ShopReader` for the list,
+  `EquipTargetReader` for the equip screen), not a new speaker. Two speakers on one surface race,
+  and the plainer line wins — that is exactly how the notice board lost its Status column.
+- Follow the existing pattern for a toggle of this kind: a `ModMenu` row plus a bare-key shortcut,
+  the way Combat verbosity pairs the `F8` menu with `F4`.
+
+Worth stating plainly because it will be tempting: the Equipment screen's automatic line is **not**
+autodetail already existing. It is one line about one character on a screen whose whole purpose is
+that comparison. Autodetail is the general "volunteer the detail everywhere" switch, and the shop
+is what it is for.
