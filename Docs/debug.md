@@ -5053,3 +5053,60 @@ it stayed invisible.
 
 **A retry budget of one is not a retry.** Any "stash it and replay on the next event" path needs to
 say how many times it will try, and to log the give-up.
+
+
+## OPEN — the Clan Primer wrap-around settle is SILENT instead of stale (Session 127)
+
+**Status: partially fixed, shipped, and NOT finished. Tester-confirmed 2026-08-03.**
+
+Scrolling a Clan Primer list until it WRAPS (top to bottom, or bottom to top) used to announce stale
+text: the focus message arrives before the painter has refilled the item map, so the captured cells
+still held the rows that were on screen a moment earlier. The row spoken was real text belonging to a
+different row.
+
+The one-paint settle in `MenuReader::OnFocus` fixed the wrong text — **and replaced it with silence.**
+The wrapped-to row now announces nothing at all. That is strictly better (a blind player is not told
+a lie about where the cursor is) but it is NOT the intended behaviour: the row that finally settles
+on screen should be spoken.
+
+```cpp
+// menu_reader.cpp, OnFocus, gated on PrimerReader::OwnsSurface
+if (!fromPaint && PrimerReader::OwnsSurface(owner)) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_pendingOwner = owner;
+    g_pendingIndex = index;
+    return;                       // <-- deferred; OnMenuPainted is expected to replay it
+}
+```
+
+### FIX THE DIAGNOSTIC FIRST — this path drops a focus with NO LOG LINE
+
+That early `return` happens **before any logging**, so the log cannot currently tell apart:
+
+1. the focus was deferred and `OnMenuPainted` never replayed it (the stash sits there forever);
+2. `OnMenuPainted` replayed it but `OnFocus` returned at the pane gate (`IsFocusedPane` false while
+   the list is mid-scroll);
+3. the replay ran, found the item map still unfilled, and the retry budget swallowed it;
+4. the game never sent a second focus at all.
+
+**Those four need different fixes and the log distinguishes none of them.** Add a
+`"focus deferred (settle)"` line at the deferral and a matching one on the replay before touching
+anything else. This is the THIRD time this session a silent-drop path cost real time --
+`map_script.cpp`'s refused `__MJ_CTRL` controllers and `MenuReader`'s one-shot paint retry were both
+invisible for exactly the same reason. **A path that drops something must say so.**
+
+### Leading hypothesis, to be confirmed not assumed
+
+`OnMenuPainted` only replays when the painted owner matches the stashed one
+(`if (owner == pend && idx >= 0)`), and it CLEARS the stash on its way in. If the wrap triggers a
+paint whose owner key differs -- or triggers no further paint for that owner -- the stash is never
+consumed and nothing ever speaks. The retry budget (`g_retryOwner` / `kMaxPaintRetries`) does not
+help here: it only re-stashes when the text came back EMPTY, and in the settle case the deferral
+returns before any text is read at all.
+
+### Do not "fix" it by reverting the deferral
+
+Removing the settle restores the stale-text read, which is worse. The two candidate directions are
+(a) make the deferral survive until a paint for that owner actually arrives (a bounded re-stash, the
+way the empty-text path already does), or (b) find the game's own "the list has settled" signal and
+replay off that instead of off the painter.

@@ -2888,3 +2888,17 @@ Four sub-screens, all measured before anything was written (`probe_primer_screen
 3. The buffer liveness check accepted only the page-viewer class, so the Quest Progress and Den
    buffers were built correctly and then refused every arrow key. **A liveness check has to know every
    surface it guards.**
+
+
+### S127 closing note — one thing shipped unfinished
+
+The Clan Primer wrap-around settle **fixed the wrong-text read and replaced it with silence**;
+the row that settles on screen is not announced. Tester-confirmed after the commit, accepted as the
+better of the two behaviours and left for a later session. Full write-up, the four candidate causes,
+and the warning not to fix it by reverting: `Docs\debug.md`, "OPEN -- the Clan Primer wrap-around
+settle is SILENT instead of stale".
+
+**Fix the diagnostic before the bug.** The deferral returns before any logging, so the log cannot
+tell "deferred and never replayed" from "never got the focus". That is the third silent-drop path
+this session -- after the refused `__MJ_CTRL` controllers and the one-shot paint retry -- and all
+three cost time for the same reason.
