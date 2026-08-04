@@ -3302,9 +3302,19 @@ the cause — it simply never reached a machine where the hooks were installed.
 
 ### Not verified in play
 
-All three are built, deployed and compile clean, and items 1 and 3 carry offline proofs (the 63-slot
-arithmetic; 80/80 cross-check plus a 0-regression diff). **Item 1's real proof is the tester's next
-log** — the dev machine never reproduced it. Ship him a build: he has never run one containing the
+**Item 4 (`t`) is PLAY-CONFIRMED, 2026-08-04.** The key reads the current dialogue, prompt or toast
+and is silent otherwise.
+
+Note what that does and does not settle: it confirms the BEHAVIOUR, not which of the two guards is
+producing it. The open question — whether the game nulls its `DAT_0215f200` slots when a
+conversation ends, or leaves them standing the way it leaves `DAT_0208ebc0` — is still open, and the
+`t` log line is what answers it. If a later change ever needs `IsBoxLive()` on its own, read that
+line first rather than assuming the gate is load-bearing.
+
+Items 1 and 3 are built, deployed and compile clean, and both carry offline proofs (the 63-slot
+arithmetic; 80/80 cross-check plus a 0-regression diff, and for the Polish table 1,351 names with a
+zero residual). **Item 1's real proof is the tester's next log** — the dev machine never reproduced
+it, and as of this entry we are waiting on it. Ship him a build: he has never run one containing the
 S128 counters, and he does not have S129's shop-crash fix either.
 
 ### 5. The Polish fan translation — its font metadata lies, so the mapping came from its text
