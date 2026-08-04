@@ -13,6 +13,13 @@ std::unordered_map<uint32_t, void*> g_installed;  // rva -> target absolute addr
 bool g_initialized = false;
 uintptr_t g_imageBase = 0;
 
+// Install census -- see Hooks::LogInstallCensus in the header for why. All three are written only
+// under g_mutex from Install(), so they need no atomics.
+int g_attempted = 0;
+int g_succeeded = 0;
+int g_failedAlloc = 0;   // MEMORY_ALLOC specifically: the trampoline pool ran dry
+uint32_t g_firstFailedRva = 0;
+
 uintptr_t ResolveImageBase() {
     HMODULE h = GetModuleHandleA(nullptr);
     return reinterpret_cast<uintptr_t>(h);
@@ -108,9 +115,12 @@ bool Install(uint32_t rva, void* detour, void** original_out) {
     }
 
     void* target = reinterpret_cast<void*>(g_imageBase + rva);
+    ++g_attempted;
 
     MH_STATUS s = MH_CreateHook(target, detour, original_out);
     if (s != MH_OK) {
+        if (!g_firstFailedRva) g_firstFailedRva = rva;
+        if (s == MH_ERROR_MEMORY_ALLOC) ++g_failedAlloc;
         char msg[160];
         snprintf(msg, sizeof(msg),
                  "MH_CreateHook failed at RVA 0x%X (abs 0x%llx): %s",
@@ -122,6 +132,7 @@ bool Install(uint32_t rva, void* detour, void** original_out) {
 
     s = MH_EnableHook(target);
     if (s != MH_OK) {
+        if (!g_firstFailedRva) g_firstFailedRva = rva;
         char msg[160];
         snprintf(msg, sizeof(msg),
                  "MH_EnableHook failed at RVA 0x%X: %s — removing", rva, MhStatusName(s));
@@ -130,6 +141,7 @@ bool Install(uint32_t rva, void* detour, void** original_out) {
         return false;
     }
 
+    ++g_succeeded;
     g_installed[rva] = target;
     char msg[160];
     snprintf(msg, sizeof(msg),
@@ -138,6 +150,31 @@ bool Install(uint32_t rva, void* detour, void** original_out) {
              (unsigned long long)reinterpret_cast<uintptr_t>(detour));
     Log::Write("HOOKS", msg);
     return true;
+}
+
+void LogInstallCensus() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const int failed = g_attempted - g_succeeded;
+    char msg[256];
+    if (failed == 0) {
+        snprintf(msg, sizeof(msg), "install census: %d attempted, %d installed, 0 failed",
+                 g_attempted, g_succeeded);
+        Log::Write("HOOKS", msg);
+        return;
+    }
+    snprintf(msg, sizeof(msg),
+             "install census: %d attempted, %d installed, %d FAILED (%d of them MEMORY_ALLOC); "
+             "first failure at RVA 0x%X",
+             g_attempted, g_succeeded, failed, g_failedAlloc, g_firstFailedRva);
+    Log::Write("HOOKS", msg);
+    if (g_failedAlloc > 0) {
+        // Naming the cause in the log, because the raw MinHook status does not: MEMORY_ALLOC here
+        // means the trampoline pool could not place a block within +/-1GB of the target, NOT that
+        // the machine is out of memory. See the [LOCAL] note in include/MinHook/buffer.c.
+        Log::Write("HOOKS",
+                   "MEMORY_ALLOC = MinHook could not place a trampoline block within +/-1GB of the "
+                   "target. Every feature behind a failed hook is silently dead this session.");
+    }
 }
 
 bool Uninstall(uint32_t rva) {

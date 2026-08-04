@@ -10,6 +10,15 @@
 #include <algorithm>
 #include <mutex>
 
+// Defined by CMake (see the build-stamp block in CMakeLists.txt). Defaulted here so the file still
+// compiles under any other build system rather than failing on a missing macro.
+#ifndef FFXII_SR_VERSION
+#define FFXII_SR_VERSION "unknown"
+#endif
+#ifndef FFXII_SR_GIT_HASH
+#define FFXII_SR_GIT_HASH "nogit"
+#endif
+
 static FILE* g_logFile = nullptr;
 static std::string g_logPath;
 static std::string g_gameDir;
@@ -147,6 +156,15 @@ void Init(const std::string& gameDir) {
         fflush(g_logFile);
 
         Write("INIT", "=== FFXII Screen Reader Mod Starting ===");
+
+        // BUILD STAMP. Every log names the build that wrote it. Before this, identifying a
+        // tester's build meant counting his hook-install lines, and a stale build was
+        // indistinguishable from a broken feature — which is exactly how a hook-allocation failure
+        // got hunted as a combat-log regression for two sessions.
+        char stamp[256];
+        snprintf(stamp, sizeof(stamp), "Build: V%s (%s) compiled %s %s",
+                 FFXII_SR_VERSION, FFXII_SR_GIT_HASH, __DATE__, __TIME__);
+        Write("INIT", stamp);
 
         char msg[512];
         snprintf(msg, sizeof(msg), "Game directory: %s", gameDir.c_str());

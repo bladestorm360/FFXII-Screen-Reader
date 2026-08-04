@@ -160,6 +160,31 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # Source files are UTF-8 — tell MSVC explicitly
 target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 
+# ---- Build stamp -------------------------------------------------------------------------------
+# WHY: no log this mod has ever written carried a version. When a tester reported the combat log
+# silent, the only way to work out which build he was running was to COUNT the hook-install lines
+# (43 / 52 / 66 across three logs). Every log now names its own build on line 3.
+#
+# The version string is bumped by hand at release time and must match Docs\release_procedure.md's
+# Release Records. The git hash is best-effort: a source drop with no .git still builds, it just
+# stamps "nogit".
+set(FFXII_SR_VERSION "0.6" CACHE STRING "Mod version, as it appears in the release zip name")
+
+execute_process(
+    COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short HEAD
+    OUTPUT_VARIABLE FFXII_SR_GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT FFXII_SR_GIT_HASH)
+    set(FFXII_SR_GIT_HASH "nogit")
+endif()
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    FFXII_SR_VERSION="${FFXII_SR_VERSION}"
+    FFXII_SR_GIT_HASH="${FFXII_SR_GIT_HASH}"
+)
+
 # Module definition file: declares which symbols this DLL exports (the dinput8 set).
 target_sources(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/src/proxy/dinput8.def

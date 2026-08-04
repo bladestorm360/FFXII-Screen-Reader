@@ -205,7 +205,7 @@ Two things worth knowing. The mod cannot take keys away from the game, so while 
 #### Reading
 
 * O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help, which is what it used to read on the Equipment screen. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on.
-* T: repeat the last thing spoken.
+* T: repeat the last line of dialogue — a conversation page, a prompt, or an obtained-item message. Silent when none of those is on screen.
 * U: current License Points, on the License Board.
 * ': write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.
 

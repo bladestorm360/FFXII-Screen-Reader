@@ -26,6 +26,21 @@ void Shutdown();
 // re-read key has ONE store behind it rather than one per surface. Game thread.
 void NoteSpoken(const std::wstring& text);
 
+// Drop the `t` store, so the key falls silent until something new is spoken to it.
+//
+// WHY IT HAD TO EXIST. `g_lastLine` had no lifetime at all -- nothing cleared it on end-of-message,
+// on a recycled window slot, on a list screen opening over the box, on a map change, or even in
+// Shutdown. So `t` went on repeating a finished conversation indefinitely, anywhere in the game.
+// `OnRereadKey` now also gates on a live surface, and these two together are the fix: the gate stops
+// the key speaking when nothing is open, and this stops a stale line surviving to be spoken if some
+// future surface is added whose liveness we cannot test.
+//
+// Called from the SAME events DialogueReader already drops its page key on -- see
+// DialogueReader::ForgetLivePages and the `+0xC0` end-of-message latch. Three guards in this
+// codebase have gone silent by outliving the object they described; this one is deliberately tied to
+// the events that were already proven to bound a box's life, rather than getting a fourth of its own.
+void ForgetLastLine();
+
 // Body text of the most recent yes/no confirm surface ("Obtain Accessories 1?", "Choose this
 // license board?"), captured at its case-1 BIRTH — the only moment the composed string, with its
 // substituted parameter, is readable. Returns AND clears it, so one prompt speaks once.

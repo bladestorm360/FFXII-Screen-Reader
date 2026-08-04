@@ -747,9 +747,22 @@ positioning system**: every scanned entity emits its type's sound from its own w
 sound *moves with the entity*. That is a much larger feature than the beacon — many simultaneous
 sources instead of one, live per-source tracking, and a real distance model.
 
-**Asset inventory** (verified 2026-07-29 — **all nine are mono, 44,100 Hz, 16-bit PCM**, so one loader
-path covers every one; the originals are DAW-library exports that are 60–90% metadata and must be
-stripped as `assets\*.wav` already are):
+**Asset inventory** (verified 2026-07-29 — ~~**all nine are mono, 44,100 Hz, 16-bit PCM**~~, so one
+loader path covers every one; the originals are DAW-library exports that are 60–90% metadata and must
+be stripped as `assets\*.wav` already are):
+
+> **CORRECTED 2026-08-04 (Session 130).** The table below is stale in three ways, all measured from
+> the WAV headers with the stdlib `wave` module rather than from file size:
+> 1. There are now **twelve** files, not nine. `Gate_crystal.wav` (1.834 s), `save_crystal.wav`
+>    (1.480 s) and `item.wav` (0.284 s) arrived 2026-08-03 and close the three gaps this section
+>    calls pending — **every one of the ten real categories now has a sound.**
+> 2. **`Gate_crystal.wav` and `save_crystal.wav` are STEREO.** "All nine are mono" is false. The
+>    loader survives it — `audio_clips.cpp` passes `want.channels = 1` to `SDL_ConvertAudioSamples`
+>    — but the two crystals are down-mixed, which is a fact about the assets, not a property of the
+>    loader to rely on silently.
+> 3. Durations are **highly non-uniform: 0.251 s to 1.834 s, a 7.3x spread.** `npc.wav` is 1.307 s.
+>    A loop period must be derived from each clip's own length; a single shared period would either
+>    truncate the long ones or leave the short ones silent. Full table in the Session 130 plan.
 
 | File | Bytes | Category |
 |---|---|---|
@@ -5144,3 +5157,195 @@ Removing the settle restores the stale-text read, which is worse. The two candid
 (a) make the deferral survive until a paint for that owner actually arrives (a bounded re-stash, the
 way the empty-text path already does), or (b) find the game's own "the list has settled" signal and
 replay off that instead of off the painter.
+
+## "The combat log logs nothing" — NOT a regression; the log could not tell (Session 128, 2026-08-03)
+
+**Reported:** combat log completely broken, logging nothing, suspected broken by a recent session.
+
+### Tried & Failed — the theories the evidence killed
+
+* **"S125 broke it with the element suffix."** REFUTED by `git diff ab99988 HEAD -- src/battle/`.
+  `combat_log.cpp` is byte-identical to the last-known-working build. The one functional change is
+  the added `elementMask` argument to `DamageLine`; `ElementSuffix` returns `""` for the 447
+  non-elemental action rows and otherwise appends at most `" Fire"`. It cannot empty a line.
+  **S126+S127 (`7f90dff`) touched no file under `src/battle/` at all.**
+* **"A hook failed or was displaced by the 14 new S126/S127 hooks."** REFUTED. All three combat RVAs
+  (`0x416410` Tier-1, `0x1F12F0` applier, `0x1F2280` reward) install in the current log at the same
+  addresses as the working build, and `uniq -d` across all 66 installed RVAs shows no duplicate.
+* **"The ring is being cleared."** REFUTED. `CombatEvents::Init` has exactly one call site
+  (`dllmain.cpp:116`) and each log holds exactly one `CombatLog initialized` line.
+* **"`CombatEvents::HookedApply calls=1340` proves a battle produced no entries."** REFUTED — and
+  this is the trap. That is the **status-tick path** (`actionId == 0xFFFF`), which runs per BtlChr
+  per frame **on the field**, not only in battle. It is not evidence of combat.
+* **The input path was cleared too:** `,` / `.` / Home / End are registered and dispatched
+  correctly, and `g_extraDown[25]` still bounds the highest index used (24), so S127's keys 8/9 did
+  not overrun it.
+
+### What was actually true
+
+**No battle occurred in ANY of the fourteen 2026-08-03 logs.** Every rescan reports `Enemy=0`,
+`[TARGET]` contains only its install line (the working 08-01 log has 743 readouts), and no battle UI
+is drawn. The producers were never given anything to log.
+
+**An absent log entry means nobody wrote one, not that the feature failed** — and here it also could
+not mean the opposite, which was the real problem.
+
+### Solved — the defect that was fixable
+
+A battle that logged nothing and a battle that never happened wrote the SAME file, because every
+early exit in the combat path returned silently: the applier's unarmed `+0x1c` gate, an empty
+formatted line, the Tier-1 sprintf's missing buffer and its decoded-to-nothing case, and
+`CombatLog::Append`'s own empty-text guard. All five now report, and a **positive control**
+(`realhit xN`) was added so "no drops, no entries" cannot mean both "the gate rejected everything"
+and "nothing reached the gate".
+
+Counted on the hot path, **reported only at powers of two** — `HookedApply` runs ~20×/sec per actor,
+so O(N) logging would flood the file the console-output budget protects. `1` is a power of two, so
+the first of each kind always prints.
+
+**Reading the next battle log:** `realhit xN` with no `DMG |` lines ⇒ the formatter or the name
+chain (check `atkNamed`/`tgtNamed` on the `drop[empty-line]` line). No `realhit` at all ⇒ the
+applier gate, see `drop[apply-not-valid]`. No lines whatsoever ⇒ the applier is not being reached.
+
+**Rule reinforced (fourth silent-drop path in two sessions):** an early `return` with no log is a
+defect in itself — it destroys the evidence that names the next bug. And **do not revert working
+code to chase a report the log cannot see**: a revert justified by ABSENCE needs a log in which the
+change COULD have fired.
+
+### Session 130 — SOLVED: the combat log was silent because MinHook ran out of trampoline slots
+
+**Symptom:** a tester reported the combat log "not logging anything". It works on the developer's
+machine. Session 128 proved the producers byte-identical to the last-known-working build and could
+find no cause — correctly, because there is no defect in our combat code.
+
+**Cause:** `include/MinHook/buffer.c` had `MEMORY_BLOCK_SIZE 0x1000`; `buffer.h` has
+`MEMORY_SLOT_SIZE 64`; the block header consumes the first slot. That is **exactly 63 trampolines
+per block**. The mod installs 66 hooks. On the tester's machine MinHook could not place a second
+block within ±1 GB of the target and the last three installs failed:
+
+```
+[HOOKS] MH_CreateHook failed at RVA 0x416410 (abs 0x536410): MEMORY_ALLOC
+[HOOKS] MH_CreateHook failed at RVA 0x1F12F0 (abs 0x3112f0): MEMORY_ALLOC
+[HOOKS] MH_CreateHook failed at RVA 0x1F2280 (abs 0x312280): MEMORY_ALLOC
+```
+
+Those three ARE the combat hooks, because `CombatEvents::Init()` is the last subsystem initialised
+in `dllmain.cpp`. Everything else installed and worked, so the session looked healthy.
+
+Why it is machine-dependent: the exe's image base is `0x120000`, very low, so `FindPrevFreeRegion`
+has almost nothing below it and the ±1 GB window is largely the exe's own address space. Whether a
+second block fits depends on that process's virtual-address map — other injected DLLs, overlays,
+ASLR. Nothing else in the combat path differs between machines.
+
+**Fix:** `MEMORY_BLOCK_SIZE` -> `0x10000`, marked `[LOCAL]` in the vendored file. Free: on x64 the
+blocks are placed by `FindPrevFreeRegion`/`FindNextFreeRegion` stepping by
+`si.dwAllocationGranularity` (64 KB), so Windows already reserved 64 KB per block and MinHook was
+asking for one page of it. 1023 slots per block instead of 63, zero extra address space.
+`FreeBuffer`'s `(p / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE` still resolves, because a 64 KB-aligned
+block is aligned to the larger size too.
+
+**Two instruments added, because the failure was invisible:**
+* `Hooks::LogInstallCensus()` — one line at the end of deferred init: attempted / installed / failed,
+  the first failing RVA, and a note that `MEMORY_ALLOC` means the trampoline pool, not RAM. Before
+  this there was no total anywhere and no caller but `CombatEvents::Init` checked a return value.
+* A **build stamp** in the log banner. No log this mod ever wrote carried a version; identifying the
+  tester's build meant counting hook-install lines.
+
+**KEYWORDS: MinHook MEMORY_ALLOC MH_CreateHook failed trampoline pool 63 slots MEMORY_BLOCK_SIZE
+MEMORY_SLOT_SIZE hook census build stamp combat log silent tester machine works here not there**
+
+---
+
+### Session 130 — STRIKES `Enemy=N` as a battle predicate
+
+`Enemy=` in the log comes from `src/navigation/entity_scan.cpp` — the **field-object rescan** count.
+It is not, and never was, evidence about whether a battle occurred.
+
+Session 128 concluded "no battle ever happened" in fourteen logs on the strength of `Enemy=0` on
+every rescan. The tester's 2026-07-28 log has `Enemy=0` on all **361** rescans **and** a complete
+Dire Rat fight with kills, EXP/LP and speech; his 08-03 07:31 log has 248 `[COMBAT]` lines. The
+inference was wrong, and it made a real report look unfalsifiable.
+
+To ask whether a battle is running, use `BattleState::PartyEngagement()`.
+
+**KEYWORDS: Enemy=0 battle predicate entity_scan field object rescan false inference S128**
+
+---
+
+### Session 130 — a defect reported on another machine cannot be diagnosed from your own logs
+
+Session 128 read the developer's logs throughout and reasoned "over all 66 installed RVAs" — a
+number only the developer's machine produces. Every check it made was correct and every one proved
+our code innocent, which it is. The answer was in a file nobody had opened.
+
+Before theorising about a tester-only defect: **open the tester's log and grep it for `fail`,
+`FAIL`, `error` and `MH_CreateHook` first.** In this case the cause was printed at startup, 2.6
+seconds in, in plain text, and had been sitting there for two sessions.
+
+**KEYWORDS: tester log works on my machine dev log 66 hooks unfalsifiable read the log first**
+
+---
+
+### Session 130 — SOLVED: accented characters were DELETED by the codec, not flattened
+
+**Symptom, as reported:** "a bare n instead of an n-tilde".
+
+**What the code actually did:** `game_text.cpp` ended its glyph handling with
+`default: break;  // unmapped extended glyph: drop`. An unmapped byte emitted **nothing**, so
+"Senor" (with the tilde) decoded as "Seor" — the same way "Cuchulainn" read as "Cchulainn" before
+`0x81` = u-acute was added by hand. **The mod could not turn an accented letter into a plain one.**
+Worth recording because the report and the mechanism disagree, and chasing the report's wording
+would have led to a conversion bug that does not exist.
+
+**Refuted at 1.00 while looking:** no `CP_ACP` anywhere in `src/`; no `MultiByteToWideChar` anywhere;
+no default-char argument at either `WideCharToMultiByte` call (both `CP_UTF8`, both log-only, both
+narrowing a *separate copy* after speaking); no transliterate/strip-accent helper; `/utf-8` is set
+(`CMakeLists.txt`). The speech path is `std::wstring` from `GameText::Decode` all the way to
+`Tolk_Output(const wchar_t*)`.
+
+**Cause and fix:** the mod only ever mapped 62 characters structurally plus 17 hand-won punctuation
+marks plus one accented letter. `font00.dat` — the game's own glyph table, beside the font texture —
+carries the character for every slot, and `codec byte = slot + 0x20`. Generated into
+`src/core/game_glyphs.h`. See `GameArchitecture.md` for the record layout.
+
+**Two traps in that file:** the character field is **UTF-8 bytes packed little-endian into a u32**,
+not a codepoint (it reads as a codepoint for ASCII and then goes strange); and the map is
+**per-locale** — there are five font directories, not twelve, and all 224 single-byte slots differ
+between them.
+
+**`IsMostlyPrintable` had to widen in the same change.** It required 60% ASCII and one `A-Z`/`a-z`
+letter, which held only *because* accents were dropped — whatever survived was ASCII by
+construction. With accents decoding, a short accented string could fail the gate at ~30 call sites
+and go **silent**. A fix that turns partial speech into none is worse than the bug.
+
+**KEYWORDS: diacritics accents n-tilde e-acute dropped glyph unmapped extended glyph font00.dat
+glyph table game_glyphs.h codec byte slot 0x20 UTF-8 packed per-locale IsMostlyPrintable silence**
+
+---
+
+### Session 130 — SOLVED: `t` spoke a conversation that had ended hours earlier
+
+**Not a scope bug.** `t` was already dialogue-scoped: only three call sites ever wrote `g_lastLine`
+(the obtained-item toast, the menu system-message panel, and each dialogue page, all through
+`MessageReader::NoteSpoken`). Menu rows, entity descriptions, the combat log, gil, LP and party
+status never touched it.
+
+**A lifetime bug.** Nothing cleared the string — not end-of-message, not a map change, not
+`Shutdown()` (which clears `g_confirmPrompt` and not this). So `t` repeated a finished conversation
+forever, anywhere.
+
+**Fix — two independent guards.** A gate (`DialogueReader::IsBoxLive()`, the message-window registry
+`DAT_0215f200` asked "does any slot hold a window", OR-ed with `MenuState::IsChoicePopup` /
+`IsConfirmWindow`, plus a birth/destruct latch for the toast, which has no state left to query), and
+a clear (`MessageReader::ForgetLastLine()`) hung on the SAME events `DialogueReader` already drops
+its page key on.
+
+**`MenuState::IsAnyMenuOpen()` was NOT used and must not be** — `*DAT_0208ebc0` is written once and
+never cleared, so it answers "open" forever after the first menu.
+
+**Open, unmeasured:** whether the game nulls its `DAT_0215f200` slots when a conversation ends. If
+it does not, the gate answers "live" forever and only the clear is doing the work. The `t` log line
+distinguishes the two — press it in the field after a conversation and read which guard it names.
+
+**KEYWORDS: t key re-read last spoken line lifetime g_lastLine ForgetLastLine IsBoxLive
+message window registry DAT_0215f200 IsAnyMenuOpen unusable stale guard outlived its object**

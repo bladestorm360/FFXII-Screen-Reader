@@ -112,8 +112,17 @@ static void DeferredInitImpl() {
         // no interpreter/action hooks (announce-only, non-interfering).
         Navigation::Init();
         // Combat log: the game's own battle sentences (Tier 1) plus synthesized
-        // damage lines (Tier 2). Installs exactly two hooks.
-        CombatEvents::Init();
+        // damage lines (Tier 2). Installs three hooks — the codec-sprintf, the result applier and
+        // the reward/death batch.
+        //
+        // IT IS LAST, AND THAT MATTERS. When MinHook's trampoline pool ran dry on a tester's
+        // machine, these three were the ones that fell off the end. The census below is what makes
+        // that visible; do not move this call without reading Hooks::LogInstallCensus first.
+        if (!CombatEvents::Init())
+            Log::Write("INIT", "combat log is DEAD this session — see the hook census below");
+
+        // Every hook the mod installs has now been attempted. One line saying how many took.
+        Hooks::LogInstallCensus();
     } else {
         Log::Write("INIT", "MinHook init failed — menu reading disabled this session");
     }

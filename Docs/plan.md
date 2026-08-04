@@ -143,9 +143,13 @@ movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
 - [x] **Door / Shop categories** (Session 92) — split out of Interactables; Shop is a doorway with a
       same-named text-only sign beside it. **The Shop rule's evidence is one district — validate from
       the log before trusting it** (see `debug.md`).
-- [ ] Entity spatialization — every entity emitting its type's sound from its own position.
-      Sounds exist for 7 of the categories; `SaveCrystal`/`GateCrystal`/`Items` still needed.
-      Designed and documented in `debug.md`, **not built**.
+- [ ] Entity spatialization ("the soundscape") — every entity emitting its type's sound from its own
+      position. ~~Sounds exist for 7 of the categories; `SaveCrystal`/`GateCrystal`/`Items` still
+      needed.~~ **ALL TEN categories now have a sound** (2026-08-03). Designed in `debug.md` and, in
+      full, in the Session 130 plan; **not built**. Blockers, both real: `AudioEngine` is a SINGLE
+      voice (retrigger, no overlap, no looping, no distance gain) and needs a software mixer; and the
+      mod menu is a FLAT list whose cursor IS the `SettingId`, so the per-category toggles and volume
+      sliders need submenu support first. Radius 15 steps = 11.25 world units.
 - [ ] Map menu reading
 - [ ] Locale detection finalized via `GetUserDefaultLangID` hook
 - [ ] Phrasebook live across all 12 locales

@@ -193,6 +193,9 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
         // window+0xD0), so a finished message also retires any option cursor that was on it. Its own
         // guard has no way to see this -- FUN_002a9980 simply stops being called.
         ChoiceReader::ForgetLastCursor();
+        // Same event, third consumer: the `t` re-read line belonged to THIS message. Without this it
+        // outlived the box and `t` went on speaking a finished conversation anywhere in the game.
+        MessageReader::ForgetLastLine();
         return;
     }
 
@@ -230,12 +233,23 @@ bool Init() {
     return ok;
 }
 
+bool IsBoxLive() {
+    void* reg = Hooks::ResolveRva(RVA_MSGWIN_REG);
+    if (!reg) return false;
+    for (int i = 0; i < MSGWIN_SLOTS; ++i) {
+        if (MemRead::PtrAt(reg, static_cast<uint32_t>(i) * MSGWIN_STRIDE)) return true;
+    }
+    return false;
+}
+
 void ForgetLivePages() {
     ForgetAll();
     // Same event, same reason: a list screen opening over a conversation retires the option cursor
     // as surely as it retires the page key. Kept here rather than at the call site so the two can
     // never drift apart -- one event, one meaning.
     ChoiceReader::ForgetLastCursor();
+    // And the `t` re-read line, for the same reason again: the box it came from is gone.
+    MessageReader::ForgetLastLine();
 }
 
 void Shutdown() {

@@ -34,4 +34,16 @@ bool Uninstall(uint32_t rva);
 // hook, just read.
 void* ResolveRva(uint32_t rva);
 
+// One line, at the end of deferred init, saying how many hooks were attempted and how many took.
+//
+// WHY THIS EXISTS. Install() has always logged each failure, but nothing ever logged a TOTAL, and
+// no caller but CombatEvents::Init checked a return value. A tester ran a build in which MinHook
+// ran out of trampoline slots at hook 63 of 66; the three that failed were the combat hooks, and
+// the session looked completely normal unless you happened to grep for MH_CreateHook. The bug was
+// hunted as a combat-log regression for two sessions. A partial-hook session must announce itself.
+//
+// Log only -- never speech. A failed hook is a diagnostic, and CLAUDE.md's "never speak filler"
+// rule applies: the player has nothing to do with this information.
+void LogInstallCensus();
+
 } // namespace Hooks

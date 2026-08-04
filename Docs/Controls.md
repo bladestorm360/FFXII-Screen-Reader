@@ -158,7 +158,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | Key | Mod function | Conflict status |
 |---|---|---|
 | `o` | Describe / read focused tooltip | free |
-| `t` | Re-read last spoken line | free |
+| `t` | **Re-read the last line of DIALOGUE** — a conversation page, a prompt, or an obtained-item toast. **Silent unless one of those is actually on screen** (Session 130). It was never "repeat whatever the reader last said" — only those three surfaces ever fed it — but nothing cleared the line when the box closed, so it went on repeating a finished conversation in the field, in menus and mid-battle | free |
 | `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim. **With Auto-walk On in the `F8` menu (Session 100) it also WALKS you there** — see the Auto-walk section | free |
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |

@@ -3912,6 +3912,25 @@ Still unmapped, deliberately: `0xA3` (only in dev strings marked `NOT USED`, e.g
 `/` vs `-` cannot be chosen) and `0xAD` (a single dev string, `Team wanted an <ad>ark<ad> immage`,
 which looks like a double quote on one witness — not enough).
 
+> **SUPERSEDED 2026-08-04 (Session 130) — but every conclusion above SURVIVED.** The whole table is
+> now generated from the game's own glyph table (`font00.dat`; see the section at the end of this
+> file), which gives all 224 single-byte slots as data instead of one witness at a time.
+>
+> **This section is the reason to trust that.** The generator cross-checks its output against all 80
+> mappings derived here, by hand, from shipped text — a completely different method — and refuses to
+> emit if one disagrees. **None does.** `0x81` = `ú` in particular is reproduced exactly.
+>
+> The two bytes left deliberately unmapped here are now settled, and one of them was going to be
+> guessed wrong: **`0xA3` is `_`**, not the `/` or `-` this section was choosing between — which
+> makes the dev string `all<a3>cancel` read as `all_cancel`, an identifier, exactly as it should.
+> **`0xAD` is `"`**, confirming the single witness `Team wanted an "ark" immage`. Declining to guess
+> was the right call twice over.
+>
+> What this section could never have reached: the accented Latin block `0x54`-`0x84` (**`0x72` is
+> `ñ`**), which no US-locale string exercises, and roughly forty punctuation marks that were being
+> dropped silently. `game_text.cpp` used to end with `default: break; // unmapped extended glyph:
+> drop` — so an accented byte emitted **nothing**, and "Señor" spoke as "Seor".
+
 
 ## The announce is SUPPRESSED ON REPEAT — `FUN_00304850` (Session 90, 0.97)
 
@@ -4512,3 +4531,121 @@ not a missing game event**, and the remaining question is whether `OnFocus` is r
 captured text. **CAVEAT on the probe's `(not the focused pane)` label: it is printed from the FIRST
 sample of each (mode, class, msg) triple, which is usually construction-time. It is not evidence
 about later focuses and must not be read as any.**
+
+## `font00.dat` — the glyph table, and therefore the byte → character map (Session 130, conf 0.99)
+
+**The font atlas IS the character map.** `FUN_002ac2f0:75` computes a glyph slot as `byte - 0x20`,
+and `gamedata/d3d11/artdata/font/<locale>/font00.dat` carries the character for every slot. So:
+
+```
+codec byte = slot + 0x20
+```
+
+This replaced years of empirical byte-by-byte discovery. It is DATA, not inference.
+
+### Record layout
+
+```
++0x00  u32   version              (1)
++0x04  u32   glyph count          (us: 1301)
++0x08  u32   texture width        (us: 2048)
++0x0C  u32   texture height       (us: 1980)
++0x10  glyph records, stride 0x24 (36 bytes), `count` of them, then 24 trailing bytes
+
+  within a record:
+    +0x00  u32    kerning-class / group id (0 for the first run, then 0x37, 0x6E, 0xA5 ... )
+    +0x04  u32    0x30      cell width
+    +0x08  u32    0x37      cell height
+    +0x0C  u32    advance
+    +0x10  u32    advance (duplicate)
+    +0x14  u32    0xFFFFFFFF on most records
+    +0x18  u32    SLOT INDEX  -- equals the record's own ordinal, which is the parse check
+    +0x1C  u32    THE CHARACTER, as its UTF-8 BYTES packed little-endian
+    +0x20  u32    atlas U offset
+```
+
+### ⚠ THE CHARACTER FIELD IS UTF-8, NOT A CODEPOINT
+
+It reads as a codepoint for ASCII and then stops making sense, which is the trap:
+
+```
+0x00000042  ->  bytes 42        ->  'B'        U+0042
+0x000089C3  ->  bytes C3 89     ->  E-acute    U+00C9
+0x0000BAC3  ->  bytes C3 BA     ->  u-acute    U+00FA
+0x00A789E2  ->  bytes E2 89 A7  ->             U+2267
+```
+
+### ⚠ THE MAP IS PER-LOCALE
+
+There are **five** font directories, not twelve — `us` (shared by the seven Western locales), `jp`,
+`cn`, `ch`, `kr`. All 224 single-byte slots differ between them. In the `jp` atlas slot 0 is a
+mathematical symbol, not `A`:
+
+```
+us  0x20-0x2F: ABCDEFGHIJKLMNOP
+jp  0x20-0x2F: (2 math symbols, a colon, a kanji, ? ! / ( ) + = < > and two more kanji)
+kr  0x20-0x2F: (CJK punctuation)
+```
+
+The mod ships the `us` table (`src/core/game_glyphs.h`), which is correct for every Western locale
+and is what the codec was always implicitly built for. **A locale-detection hook is what would let
+the mod pick the right one**; it does not exist (`plan.md` Phase 4 still lists it).
+
+Fan translations matter here too: the Polish patch `PL_ff12_v1.3` ships its own `us/font00.dat`,
+differing from stock in **20 bytes** — a handful of remapped slots. A translation that repaints the
+atlas invalidates the shipped table for that install.
+
+### The single-byte ranges, from the `us` table
+
+| bytes | content |
+|---|---|
+| `0x20-0x39` | `A-Z` |
+| `0x3A-0x53` | `a-z` |
+| **`0x54-0x84`** | **accented Latin** — À Á Â Ä Æ Ç È É Ê Ë Ì Í Î Ï Ñ Ò Ó Ô Ö Œ Ù Ú Û Ü à á â ä æ ç è é ê ë ì í î ï **ñ (0x72)** ò ó ô ö œ ù ú û ü ß |
+| `0x85-0x8E` | `0-9` |
+| `0x8F` | em-dash U+2014 |
+| `0x90-0xB7` | « » ¡ ¿ „ ~ ` ! ? @ # $ % ^ & * / _ + - = , . ; : \ ' " ( ) [ ] < > { } &#124; |
+| `0xB8-0xFF` | arrows, circled marks, full-width forms — the shared-atlas CJK tail |
+
+### The 2-byte extended banks — arithmetic known, NOT implemented
+
+`FUN_002ac2f0:25-32`, for a lead byte below 0x20:
+
+```
+bank  = (DAT_0209cc38 == 0) ? DAT_00916570 : DAT_009165b0     // 16 ints each
+slot  = bank[lead & 0xF] + (trail - 0x20)
+advance 2
+```
+
+Read from the exe (`pefile`, RVA `0x7F6570` / `0x7F65B0`):
+
+```
+DAT_00916570 = 224 448 672 896 1120 1344 1568 1792 | 0 224 448 672 1120 1344 1568 1792
+DAT_009165b0 = 224 448 672 896 1120 1344 1568 1792 | 2016 2240 2464 2688 0 224 448 672
+```
+
+So `bank[i] = 224 * (i + 1)` for `i` in 0..7 — leads `0x10`-`0x17` — where the two tables agree.
+They diverge from index 8 on the runtime flag `DAT_0209cc38`, which the mod does not read.
+
+**Deliberately not implemented.** In the `us` atlas slots 224+ are full-width Latin, kana and kanji,
+which cannot appear in Western text; shipping a 1077-entry table of them would be dead weight and,
+because the map is per-locale, actively wrong for a `jp` install. `game_text.cpp` still consumes
+both bytes and emits nothing, which is correct behaviour for the audience the mod serves.
+
+### Tooling
+
+`FFXII-Decompile/tools/parse_font_dat.py`
+
+```
+python parse_font_dat.py <font00.dat> --check       # cross-check + summary
+python parse_font_dat.py <font00.dat> --emit-cpp    # generate src/core/game_glyphs.h
+python parse_font_dat.py <a.dat> --diff <b.dat>     # what a fan translation remapped
+```
+
+**`--check` is the ship gate.** It re-derives all **80** mappings `game_text.cpp` had established
+independently — 62 structural plus 18 hand-won punctuation marks, each originally read out of
+shipped text — and refuses to emit if one disagrees. On the stock `us` table, **0 disagree**. That
+agreement between two unrelated methods is what puts this at 0.99 rather than at "a plausible
+struct".
+
+Extract the input with `tools/extract_vbf.py "*artdata/font/*/font00.dat"`.

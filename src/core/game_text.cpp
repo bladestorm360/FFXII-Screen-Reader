@@ -1,6 +1,9 @@
 #include "core/game_text.h"
+#include "core/game_glyphs.h"
 
 #include <Windows.h>
+
+#include <cwctype>
 
 namespace GameText {
 namespace {
@@ -314,55 +317,30 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
             continue;
         }
 
-        if (c >= 0x20 && c <= 0x39)      cur->push_back(static_cast<wchar_t>(L'A' + (c - 0x20)));
-        else if (c >= 0x3A && c <= 0x53) cur->push_back(static_cast<wchar_t>(L'a' + (c - 0x3A)));
-        else if (c >= 0x85 && c <= 0x8E) cur->push_back(static_cast<wchar_t>(L'0' + (c - 0x85)));
-        else {
-            // Extended glyphs. The font atlas IS the character map (FUN_002ac2f0:75 computes the
-            // glyph slot as `byte - 0x20`), so these can only ever be established empirically.
-            // A-Z/a-z and ! ? , . ' are corroborated at 0.99 by the shipped battle messages; the
-            // rest carry their prior observational status. Unmapped bytes are dropped, never
-            // guessed.
-            switch (c) {
-                case 0x99: cur->push_back(L'!');  break;
-                case 0x9A: cur->push_back(L'?');  break;
-                case 0xA4: cur->push_back(L'+');  break;   // "New Game+" glyph
-                case 0xA5: cur->push_back(L'-');  break;
-                case 0xA7: cur->push_back(L',');  break;
-                case 0xA8: cur->push_back(L'.');  break;
-                case 0xAA: cur->push_back(L':');  break;
-                case 0xAC: cur->push_back(L'\''); break;
-                case 0xAE: cur->push_back(L'(');  break;
-                case 0xAF: cur->push_back(L')');  break;
-                case 0xA2: cur->push_back(L'/');  break;
-                case 0xA0: cur->push_back(L'&');  break;   // "Magicks & Technicks"
-                case 0x9E: cur->push_back(L'%');  break;
-                case 0x8F: cur->push_back(L'-');  break;   // em-dash
-                // ---- COMPARISON OPERATORS (S94) ----------------------------------------------
-                // Dropped until now, so every threshold gambit spoke as "Foe: HP  90%" -- the
-                // operator, which is the whole meaning of the condition, was inaudible.
-                //
-                // Pinned from the game's own data rather than from the atlas. Surveying the 9,518
-                // NUL-separated strings in `us/binaryfile/word.bin` shows each byte in exactly one
-                // syntactic slot: 0xA6 only in `status = <name>` (86x) and `HP/MP = 100%`; 0xB2 only
-                // in `HP/MP < 10%..100%` and `< 500..100,000`; 0xC4 in those same thresholds MINUS
-                // 100%. Then `listhelp_targetchip.bin` -- the help line for each of these very chips
-                // -- states two of them IN WORDS:
-                //     "Target any ally with less than 10% HP."                        -> 0xB2 is <
-                //     "Target any foe with HP greater than or equal to 1,000."        -> 0xC4 is >=
-                // That is what settles `<` vs `<=` and `>` vs `>=`; structure alone could not, and
-                // 0xB2 pairing with 100% independently rules out `<=` (a tautology). 0xA6 stands on
-                // the survey: between "status" and a status name only equality is meaningful, and
-                // 0xAA is already ':' in the same strings, so it is not that. conf 1.00 / 1.00 / 0.99.
-                case 0xA6: cur->push_back(L'=');  break;
-                case 0xB2: cur->push_back(L'<');  break;
-                case 0xC4: cur->push_back(L'\x2265'); break;  // >=  (>= 60% ASCII still holds)
-                // Sole observed use across the whole pool is "Cuchulainn" / "Cuchulainn, the
-                // Impure", which without this said "Cchulainn". Not generalised beyond that.
-                case 0x81: cur->push_back(L'\x00FA'); break;  // u-acute
-                default:   break;                         // unmapped extended glyph: drop
-            }
-        }
+        // ONE TABLE, generated from the game's own glyph table -- see game_glyphs.h. This
+        // replaced range arithmetic for A-Z / a-z / 0-9 plus a hand-written switch of the
+        // seventeen punctuation marks that had been won empirically, one session at a time. The
+        // generator reproduces all eighty of those mappings before it will emit, so nothing that
+        // was established by reading shipped text has been given up; what changed is that the
+        // bytes NOBODY had got to yet now decode instead of vanishing.
+        //
+        // What was being dropped: the whole accented Latin block 0x54-0x84
+        // (A-grave through eszett -- 0x72 is n-tilde), and a surprising amount of plain ASCII
+        // (@ # $ ^ * _ ; \ " [ ] > { } |). "Senor" was not becoming "Senor"; it was becoming
+        // "Seor", exactly the way "Cuchulainn" read as "Cchulainn" before 0x81 was added by hand.
+        //
+        // A ZERO ENTRY STILL MEANS DROP. The table is the atlas, so a slot the atlas does not
+        // fill has no character to speak -- silence beats a guess, unchanged.
+        wchar_t glyph = kGlyph[c];
+
+        // The two places the mod deliberately speaks something other than what the atlas draws.
+        // Both predate this table, both were chosen for the screen reader rather than for
+        // fidelity, and both are play-confirmed -- so they are applied here rather than baked
+        // into the generated file, where they would look like parser bugs.
+        if (c == 0x8F) glyph = L'-';          // atlas draws U+2014 em-dash
+        else if (c == 0xC4) glyph = L'\x2265';  // atlas draws U+2267; U+2265 is the one readers voice
+
+        if (glyph) cur->push_back(glyph);
         ++i;
     }
     // One place, so Decode and DecodePages cannot diverge. Cheap: returns immediately unless the
@@ -431,12 +409,28 @@ DecodeBail LastDecodeBail() { return g_bail; }
 
 bool IsMostlyPrintable(const std::wstring& s) {
     if (s.empty()) return false;
-    size_t ascii = 0, alpha = 0;
+    // WHY THIS COUNTS ACCENTED LETTERS. It used to require >=60% of the string to be ASCII 0x20-0x7E
+    // and >=1 character in A-Z/a-z. That held only because the decoder DROPPED every accented byte:
+    // whatever survived was ASCII by construction, so the test could not fail on real text.
+    //
+    // The generated glyph table (game_glyphs.h) ended that. A French item name or a Polish line now
+    // decodes with its accents intact -- and under the old test a short, heavily-accented string
+    // could fall under 60% ASCII, or contain no A-Z at all, and be judged garbage. Roughly thirty
+    // call sites gate on this function, so that is not a wrong reading, it is SILENCE: a fix that
+    // turned partial speech into none.
+    //
+    // The job here is still to reject binary rubbish read out of a stale pointer, so the shape is
+    // unchanged -- it is the alphabet that widened. Letters are counted with iswalpha (any script),
+    // and the printable share now admits the Latin-1 and Latin Extended-A ranges the atlas actually
+    // contains, which is what "printable" was always trying to mean.
+    size_t printable = 0, alpha = 0;
     for (wchar_t ch : s) {
-        if (ch >= 0x20 && ch < 0x7f) ++ascii;
-        if ((ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z')) ++alpha;
+        const bool asciiPrintable = (ch >= 0x20 && ch < 0x7f);
+        const bool latinAccented  = (ch >= 0x00A0 && ch <= 0x024F);  // Latin-1 Supplement + Ext-A/B
+        if (asciiPrintable || latinAccented || ch == L'\n') ++printable;
+        if (iswalpha(static_cast<wint_t>(ch))) ++alpha;
     }
-    return alpha >= 1 && ascii >= (s.size() * 3 + 4) / 5;  // >= 60%
+    return alpha >= 1 && printable >= (s.size() * 3 + 4) / 5;  // >= 60%
 }
 
 } // namespace GameText

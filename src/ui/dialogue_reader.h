@@ -48,4 +48,20 @@ void Shutdown();
 // silence every time (CLAUDE.md, NO DEDUPLICATION OF SPEECH).
 void ForgetLivePages();
 
+// Is a paginated message box on screen RIGHT NOW? The `t` re-read key's gate.
+//
+// It is the same registry `LiveMessageSlot` uses to decide whether a text widget is a dialogue page
+// -- `DAT_0215f200`, 8 slots, stride 0x68 -- asked the other way round: not "which slot owns this
+// widget" but "does any slot hold a window". Membership in that registry is the game's own
+// definition of a message it paginates, so this is the game's answer, not a mod-side guess.
+//
+// DO NOT REPLACE THIS WITH `MenuState::IsAnyMenuOpen()`. That reads `*DAT_0208ebc0`, which the whole
+// decompile writes once and never clears (1 write, 0 clears), so after the first menu it answers
+// "open" forever -- during field roam, during battle. A gate built on it once killed the field object
+// scan for an entire fight (entity_list.cpp:254, debug.md). It is not a menu/field discriminator and
+// it never was.
+//
+// Cheap: 8 guarded pointer reads, and it is only called from the input thread on a keypress.
+bool IsBoxLive();
+
 } // namespace DialogueReader

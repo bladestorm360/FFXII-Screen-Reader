@@ -6,8 +6,11 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "input/input_tracker.h"
+#include "ui/dialogue_reader.h"
+#include "ui/menu_state.h"
 
 #include <Windows.h>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -93,6 +96,13 @@ std::wstring g_lastLine;
 std::mutex   g_confirmMutex;
 std::wstring g_confirmPrompt;
 
+// Is the obtained-item toast on screen? Set on FUN_0035e070 case 1 (birth), cleared on case 2 (the
+// animation ends and the widget destroys itself). The toast is the one `t` surface with no state
+// left to query afterwards, so this latch stands in for the predicate the others have -- and it
+// dies with the widget rather than outliving it, which is the whole point of the exercise.
+// Written on the game thread, read on the input thread.
+std::atomic<bool> g_toastLive{false};
+
 bool g_initialized = false;
 
 void SpeakAndStash(const std::wstring& text, const char* logPrefix) {
@@ -161,8 +171,14 @@ uintptr_t HookedItemPopup(void* widget, void* msg) {
     static bool s_firstFire = true;
     if (s_firstFire) { s_firstFire = false; Log::Write("MSGTEXT", "diag: item popup proc FUN_0035e070 fired"); }
     int msgCase = 0;
-    if (msg && MemRead::SafeReadInt(msg, &msgCase) && msgCase == 1)   // case 1 = build/compose
-        OnItemPopup(widget);
+    if (msg && MemRead::SafeReadInt(msg, &msgCase)) {
+        if (msgCase == 1) {                       // case 1 = build/compose
+            g_toastLive.store(true, std::memory_order_relaxed);
+            OnItemPopup(widget);
+        } else if (msgCase == 2) {                // case 2 = the animation ended, widget self-destructs
+            g_toastLive.store(false, std::memory_order_relaxed);
+        }
+    }
     return ret;
 }
 
@@ -175,14 +191,61 @@ uintptr_t HookedPanel(void* surface, void* msg) {
     return ret;
 }
 
-// Re-read key (`t`) — runs on the input thread. Repeats the last spoken line.
+// Is one of the surfaces `g_lastLine` can come from actually on screen right now?
+//
+// THE BUG THIS CLOSES. `t` was never "repeat whatever the screen reader last said" -- only three
+// call sites ever wrote `g_lastLine` (the item toast, the menu system-message panel, and each
+// dialogue page), so its SCOPE was right from the start. What it had no notion of was a LIFETIME.
+// Nothing cleared the string: not the end of a message, not a map change, not Shutdown. So a
+// conversation that ended an hour ago was still what `t` spoke, in the field, in menus, mid-battle.
+//
+// Three sources, three answers:
+//   * a paginated message box -- DialogueReader::IsBoxLive, the game's own message-window registry;
+//   * a choice / confirm prompt -- MenuState's already-validated class checks;
+//   * the obtained-item toast -- it has NO predicate to ask. FUN_0035e070's widget self-destructs
+//     on its case-2 animation end, so there is nothing left to interrogate; the toast arms a latch
+//     at birth and the destruct clears it. That is the only one of the three that needs state, and
+//     it is state with a defined death rather than a string that lives forever.
+bool ASurfaceIsLive() {
+    if (DialogueReader::IsBoxLive()) return true;
+    if (g_toastLive.load(std::memory_order_relaxed)) return true;
+    void* owner = MenuState::FocusedOwner();
+    return owner && (MenuState::IsChoicePopup(owner) || MenuState::IsConfirmWindow(owner));
+}
+
+// Re-read key (`t`) — runs on the input thread. Speaks the last DIALOGUE or PROMPT line, and only
+// while that dialogue or prompt is still up.
+//
+// SILENCE IS THE CORRECT ANSWER when nothing is open. CLAUDE.md: never speak filler, be silent --
+// the reason goes to the log, never to speech.
+// TWO INDEPENDENT GUARDS, and the log says which one fired. That is deliberate.
+//
+// The gate is the live-surface test; the backstop is that `g_lastLine` is now cleared when a box
+// ends. Either alone would produce the right silence, and if only one of them is doing the work
+// that is worth knowing -- particularly for the gate, whose weak point is unmeasured: if the game
+// leaves stale window pointers in `DAT_0215f200` the way it leaves one in `DAT_0208ebc0`, the gate
+// would answer "live" forever and only the cleared store would be holding the line. A play log with
+// `t` pressed in the field after a conversation distinguishes them in one press.
 void OnRereadKey() {
+    const bool live = ASurfaceIsLive();
     std::wstring line;
     {
         std::lock_guard<std::mutex> lk(g_lastMutex);
         line = g_lastLine;
     }
-    if (!line.empty()) Speech::Output(line, /*interrupt=*/true);
+    if (!live) {
+        Log::Write("MSGTEXT", line.empty()
+            ? "'t': silent — no live surface, and the store is empty (both guards agree)"
+            : "'t': silent — no dialogue, prompt or toast on screen (the GATE held)");
+        return;
+    }
+    if (line.empty()) {
+        // The registry says a box is up but nothing has been spoken to the store. Either the box
+        // has not reached its first page yet, or the gate is reading a stale registry slot.
+        Log::Write("MSGTEXT", "'t': silent — a surface is live but the store is empty (the CLEAR held)");
+        return;
+    }
+    Speech::Output(line, /*interrupt=*/true);
 }
 
 } // namespace
@@ -192,6 +255,12 @@ namespace MessageReader {
 void NoteSpoken(const std::wstring& text) {
     std::lock_guard<std::mutex> lk(g_lastMutex);
     g_lastLine = text;
+}
+
+void ForgetLastLine() {
+    std::lock_guard<std::mutex> lk(g_lastMutex);
+    g_lastLine.clear();
+    g_toastLive.store(false, std::memory_order_relaxed);
 }
 
 bool Init() {
@@ -220,6 +289,7 @@ void Shutdown() {
         std::lock_guard<std::mutex> lk(g_confirmMutex);
         g_confirmPrompt.clear();
     }
+    ForgetLastLine();
     Log::Write("MSGTEXT", "MessageReader shut down");
 }
 

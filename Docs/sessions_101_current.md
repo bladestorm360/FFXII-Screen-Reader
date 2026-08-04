@@ -2902,6 +2902,108 @@ settle is SILENT instead of stale".
 tell "deferred and never replayed" from "never got the focus". That is the third silent-drop path
 this session -- after the refused `__MJ_CTRL` controllers and the one-shot paint retry -- and all
 three cost time for the same reason.
+
+## Session 128 — 2026-08-03 — [combat] "The combat log logs nothing" — the report was unfalsifiable, and that was the defect
+
+KEYWORDS: combat log, combat_events, combat_log, silent drop, drop census, power-of-two logging,
+HookedApply, HookedSprintf, empty-line, apply-not-valid, realhit, Enemy=0, absent log entry,
+regression hunt, S125 element suffix, no battle in log
+
+Tester report: the combat log is "completely broken, not logging anything", with a suspicion that a
+recent session had touched it. It had been touched — but not in any way that could break it, and the
+evidence available could not have told us either way. That second fact is what got fixed.
+
+> ## ⚠ TWO CLAIMS BELOW ARE STRUCK (Session 130) — and the cause was found
+>
+> The instrumentation this session added is good and shipped. The **reasoning** rests on two
+> statements that the tester's own logs refute, and both had the same root: **every log read here was
+> the DEVELOPER's.**
+>
+> 1. ~~"The hooks install. All three combat RVAs appear in the newest log's install list … over all
+>    66 installed RVAs"~~ — **STRUCK.** True of the dev machine. On the tester's machine all three
+>    combat hooks **FAILED to install**, with the reason printed at startup:
+>    `MH_CreateHook failed at RVA 0x416410 … MEMORY_ALLOC` ×3, then
+>    `CombatEvents: a hook FAILED to install`. 63 installed, 3 failed. `66` is a number only the dev
+>    machine produces; reading it as the tester's build was the whole error.
+> 2. ~~"No battle ever happened. Every 08-03 log reports `Enemy=0` on every rescan"~~ — **STRUCK.**
+>    `Enemy=` is emitted by `entity_scan.cpp`, the **field-object** rescan; it is not a battle
+>    predicate and never was. The 07-28 tester log has `Enemy=0` on all **361** rescans *and* a
+>    complete Dire Rat fight with kills, EXP/LP and speech. The 08-03 07:31 tester log has 248
+>    `[COMBAT]` lines. Battles happened; this session simply never looked at a log in which the hooks
+>    had failed.
+>
+> **THE LESSON, and it is the expensive one: a defect reported on another machine cannot be
+> diagnosed from your own logs.** Everything checked here was checked correctly and proved the code
+> innocent — which it is. The answer was sitting in a file nobody had opened. Session 130 has the
+> root cause and the fix.
+
+### What the evidence actually said
+
+All 20 archived logs were checked, not just the newest. The split is clean:
+
+| build era | COMBAT lines |
+|---|---|
+| 2026-08-01 15:07 | 880 |
+| 2026-08-02 04:33 / 05:39 / 06:01 | 112 / 61 / 12 |
+| **every 2026-08-03 session (14 of them)** | **2 — the init and the install, nothing else** |
+
+That looks exactly like a regression on 08-03, and it is not one. Three independent checks:
+
+* **`git diff ab99988 HEAD -- src/battle/`** — the last-known-working commit to HEAD. `combat_log.cpp`
+  is BYTE-IDENTICAL. The only functional change to the producers is S125 passing
+  `BattleState::AbilityElements(actionId)` into `DamageLine`. `ElementSuffix` returns `""` for the
+  447 non-elemental rows and otherwise appends at most `" Fire"` — it is incapable of suppressing a
+  line. S126+S127 (`7f90dff`) touched **nothing** under `src/battle/`.
+* **The hooks install.** All three combat RVAs (`0x416410`, `0x1F12F0`, `0x1F2280`) appear in the
+  newest log's install list at the same addresses as the working build, and `uniq -d` over all 66
+  installed RVAs finds no collision with the 14 hooks S126/S127 added. `CombatEvents::Init` has one
+  call site (`dllmain.cpp:116`), so the ring cannot be cleared mid-session.
+* **No battle ever happened.** Every 08-03 log reports `Enemy=0` on every rescan, `[TARGET]` holds
+  only its install line (743 readouts in the working 08-01 log), and no battle UI is drawn. The
+  `CombatEvents::HookedApply calls=1340` burst that looked like combat is the per-frame STATUS TICK
+  path — it runs on the FIELD, where party BtlChrs exist. The tester was navigating Lhusu Mines
+  (map 357) at the time.
+
+So the producers are intact, and not one logged session on 08-03 contains a fight. **An absent log
+entry means nobody wrote one.** The report is neither confirmed nor refuted by anything on disk.
+
+### The actual defect: four silent drops made the two cases identical
+
+A battle that logged nothing and a battle that never happened produced the SAME file. Every early
+exit in the combat path returned without a word:
+
+* `HookedApply` — real action id whose `+0x1c` emission gate never armed: **silent**
+* `OnRealHit` — genuine hit whose formatted line came back empty: **silent**
+* `HookedSprintf` — no readable id / no destination buffer, and decoded-to-nothing: **silent, twice**
+* `CombatLog::Append` — empty text, one step short of the file: **silent**
+
+All five now report, plus a **positive control** (`realhit`) so "no drops and no entries" stops
+having two readings — without it, "the gate rejected everything" and "nothing reached the gate" look
+the same. The empty-line drop carries `atkNamed`/`tgtNamed` separately, because `DamageLine` only
+returns nothing when BOTH names fail, and that distinguishes a broken name chain from a broken
+formatter.
+
+**Counted on the hot path, reported at powers of two.** `HookedApply` runs ~20×/sec per actor, so a
+per-call line would be O(N) and would flood the file the console-output budget protects. `1` is a
+power of two, so the first of each kind always prints — and that first line is the one that names
+the cause.
+
+### The lesson
+
+This is the FOURTH silent-drop path recorded in two sessions (S127 had three: the refused
+`__MJ_CTRL` controllers, the one-shot paint retry, the primer settle). The pattern is now
+unmistakable: **an early `return` with no log is a defect in its own right**, because it destroys the
+evidence that would name the next bug. It also cost this session the wrong first move — the log's
+own shape invited "S125 broke it", and only a diff against the last-working commit killed that.
+
+**Do not revert working code to chase a report the log cannot see.** A revert justified by ABSENCE
+needs a log in which the change COULD have fired; there was no such log here. What was missing was
+not a fix, it was a measurement.
+
+**Still open:** whether the tester's report reflects a real in-battle failure. The next log from an
+actual fight now answers it outright — `realhit xN` with no `DMG |` lines means the formatter or the
+name chain; no `realhit` at all means the applier gate; `drop[...]` names the rest.
+
 ---
 
 ## Session 129 — 2026-08-03 — [menus] The shop crash: a four-argument detour on a six-argument function
@@ -3033,3 +3135,196 @@ slots is not.**
 
 **Not verified in play.** The build is deployed; the crash is a single-instruction write through an
 uninitialised stack slot and the fix supplies that slot, but no shop has been entered on this build.
+
+---
+
+## Session 130 — 2026-08-04 — [combat+text] The combat log was never broken: MinHook ran out of trampoline slots at 63
+
+KEYWORDS: MinHook, MEMORY_BLOCK_SIZE, MEMORY_SLOT_SIZE, trampoline pool, MH_CreateHook MEMORY_ALLOC,
+63 slots, hook census, build stamp, tester machine, font00.dat, glyph table, accented characters,
+diacritics, n-tilde, codec table, game_glyphs.h, IsMostlyPrintable, t key, re-read, IsBoxLive,
+message window registry, lifetime, ForgetLastLine
+
+Three defects, all root-caused, all fixed. The first had been hunted as a code regression for two
+sessions and was neither a regression nor in our code.
+
+### 1. The combat log — 63 is not a coincidence
+
+The tester's own log said it, at startup, in plain text
+(`Tester Logs\Dylan\FFXII-Screen-Reader-2026-08-03_17-39-23.log`, lines 115-118):
+
+```
+[HOOKS] MH_CreateHook failed at RVA 0x416410 (abs 0x536410): MEMORY_ALLOC
+[HOOKS] MH_CreateHook failed at RVA 0x1F12F0 (abs 0x3112f0): MEMORY_ALLOC
+[HOOKS] MH_CreateHook failed at RVA 0x1F2280 (abs 0x312280): MEMORY_ALLOC
+[COMBAT] CombatEvents: a hook FAILED to install
+```
+
+| log | attempted | installed | failed | combat log |
+|---|---|---|---|---|
+| dev, current | 66 | 66 | 0 | works |
+| tester 07-28 | 43 | 43 | 0 | worked — full Dire Rat fight, kills, EXP/LP spoken |
+| tester 08-03 07:31 | 55 | 55 | 0 | worked — 248 `[COMBAT]` lines |
+| **tester 08-03 17:39** | **66** | **63** | **3** | **dead** |
+
+`include/MinHook/buffer.c` had `MEMORY_BLOCK_SIZE 0x1000` and `buffer.h` has `MEMORY_SLOT_SIZE 64`;
+the block header eats the first slot, so the free-list is **exactly 63 trampolines per block**. The
+mod installs 66. The tester's process could not place a second block within ±1 GB of `0x536410` —
+the exe's image base is `0x120000`, which is very low, so there is little room below and the search
+window is largely the exe's own. Whether that second block lands is a function of the process's
+virtual-address map: other injected DLLs, overlays, ASLR. It is machine-dependent, and nothing else
+in the combat path is.
+
+**`CombatEvents::Init()` is the LAST subsystem initialised** (`dllmain.cpp`), so when the pool ran
+dry the three combat hooks were the only casualties. Everything else worked; the mod looked healthy.
+
+The attempted RVA set is byte-identical on both machines, same image base `0x120000`. Not a
+localization (the tester's logs are full of English game text; the Polish patch is a VBF **data**
+repack that does not touch the exe), not a race (installs are sequential on one thread), not a
+missing dependency (NVDA detected, SDL3 audio ready on both).
+
+**The fix, and why it is free.** `MEMORY_BLOCK_SIZE` becomes `0x10000`. On x64 MinHook places blocks
+with `FindPrevFreeRegion` / `FindNextFreeRegion`, which step by `si.dwAllocationGranularity` — 64 KB
+— so **Windows already reserves 64 KB for every block** and MinHook was asking for one page of it.
+Raising the request to the granularity it was already paying for costs zero additional address space
+and yields **1023 slots per block** instead of 63. `FreeBuffer`'s block-base arithmetic still holds:
+a 64 KB-aligned block is still aligned to the larger size. Marked `[LOCAL]` in the vendored file with
+the tester's log lines quoted as the reason.
+
+The dev machine was about three hooks from the same cliff.
+
+### 2. Two things that made this invisible, both now fixed
+
+* **No log this mod has ever written carried a version.** Identifying the tester's build meant
+  counting hook-install lines (43 / 55 / 66). Every log now names itself on line 3:
+  `Build: V0.6 (90975a4) compiled ...`, from a CMake-generated version plus git short hash.
+* **No caller checked `Hooks::Install`'s return** except `CombatEvents::Init`, and `dllmain` threw
+  that away. There was no total anywhere, so a partial-hook session looked completely normal unless
+  somebody happened to grep for `MH_CreateHook`. `Hooks::LogInstallCensus()` now emits one line at
+  the end of deferred init — attempted / installed / failed, the first failing RVA, and a plain-words
+  note that `MEMORY_ALLOC` means the trampoline pool, not the machine's memory.
+
+**A failure that only ever appears as a line nobody greps for is a failure with no report.**
+
+### 3. Accented characters were not being flattened — they were being deleted
+
+Reported as "a bare n instead of an n-tilde". The code cannot do that. `game_text.cpp` ended its
+glyph handling with `default: break;  // unmapped extended glyph: drop`, so an unmapped byte emitted
+**nothing**: "Senor" (with the tilde) decoded as "Seor", exactly the way "Cuchulainn" read as
+"Cchulainn" before `0x81` = u-acute was added by hand. The speech path was cleared end to end and is
+innocent — `Decode` returns `std::wstring`, `Speech::Output` passes `c_str()` straight to
+`Tolk_Output(const wchar_t*)`; there is no `CP_ACP` anywhere in `src/`, no default-char argument, no
+transliterate helper, and `/utf-8` is set. All refuted at 1.00.
+
+**`font00.dat` is the byte-to-character map, shipped as data.** Beside the font texture: a record
+count at `+0x04` and 36-byte records carrying a slot index at `+0x18` and the character at `+0x1C`
+**as its UTF-8 bytes packed little-endian** — which reads as a codepoint for ASCII and then stops
+making sense, and is the trap. `FUN_002ac2f0:75` computes `glyph slot = byte - 0x20`, so
+**codec byte = slot + 0x20**.
+
+Record 97 is codec byte `0x81` and decodes to u-acute — the one accented character the mod had
+already derived by hand, from shipped text, for "Cuchulainn". Two independent methods, same answer.
+
+**The validation gate is what carries this over the 0.98 bar.**
+`FFXII-Decompile/tools/parse_font_dat.py --check` re-derives all **80** mappings `game_text.cpp` had
+established independently (62 structural A-Z/a-z/0-9 plus 18 hand-won punctuation marks) and refuses
+to emit if one disagrees. **0 disagree.** A separate old-versus-new diff over all 256 byte values:
+**0 regressions, 0 losses, 144 bytes newly mapped** — the entire accented Latin block `0x54-0x84`
+(A-grave through eszett; **`0x72` is n-tilde**) and a good deal of plain ASCII that had been silently
+deleted from spoken text: `@ # $ ^ * _ ; \ " [ ] > { } |`.
+
+The table is generated into `src/core/game_glyphs.h`. Two deliberate speech overrides stay in
+`game_text.cpp` rather than the generated file, where they would look like parser bugs: `0x8F` (the
+atlas draws U+2014 em-dash) speaks as `-`, and `0xC4` (atlas draws U+2267) speaks as U+2265, which is
+the one screen readers voice. Both predate the table and are play-confirmed.
+
+**`IsMostlyPrintable` had to widen in the same change, or the fix would have made things worse.** It
+required 60% ASCII and at least one character in `A-Z`/`a-z` — which held only *because* accents were
+being dropped, so whatever survived was ASCII by construction and the test could not fail on real
+text. With accents decoding, a short heavily-accented string could fall under the threshold and be
+judged garbage by the ~30 call sites that gate on it: not a wrong reading, **silence**. Letters are
+now counted with `iswalpha` and the printable share admits Latin-1 / Latin Extended-A.
+
+**The map is PER-LOCALE, and this matters.** There are five font directories, not twelve: `us`
+(shared by the seven Western locales), `jp`, `cn`, `ch`, `kr`. All 224 single-byte slots differ
+between them — in the `jp` atlas slot 0 is a mathematical symbol, not `A`. The mod has always been
+implicitly built for the `us` atlas; this table does not change that, it makes the `us` case
+complete. Locale detection is the clean future path and does not exist yet.
+
+Also recorded, not built: the 2-byte extended banks (`0x10`-`0x1F` lead) are still consumed and
+dropped. The arithmetic is now known — `bank[i] = 224 * (i + 1)` for `i = lead & 0xF`, from
+`DAT_00916570` / `DAT_009165b0` — but in the `us` atlas slots 224+ are kana and kanji, which cannot
+appear in Western text, and the two bank tables disagree from index 8 on a runtime flag we do not
+read. See `GameArchitecture.md`.
+
+### 4. `t` was already dialogue-scoped. What it had no notion of was a LIFETIME
+
+Contrary to the report, `t` never repeated "whatever the screen reader last said" — only three call
+sites ever wrote `g_lastLine` (the obtained-item toast, the menu system-message panel, and each
+dialogue page, all through `MessageReader::NoteSpoken`). Menu rows, entity descriptions, the combat
+log, gil, LP and party status never touched it. **The scope was right from the start.**
+
+Nothing ever *cleared* it. Not end-of-message, not a map change, not `Shutdown()` (which clears
+`g_confirmPrompt` and not this). So a conversation that ended an hour ago was still what `t` spoke —
+in the field, in menus, mid-battle.
+
+Two guards now, deliberately independent:
+
+* **The gate.** `DialogueReader::IsBoxLive()` — the same registry `LiveMessageSlot` uses to decide
+  whether a text widget is a dialogue page (`DAT_0215f200`, 8 slots, stride `0x68`), asked the other
+  way round. OR-ed with `MenuState::IsChoicePopup` / `IsConfirmWindow` for prompts, and with a latch
+  for the toast, which is the one surface with nothing left to interrogate afterwards — its widget
+  self-destructs on the case-2 animation end, so it arms at case 1 and the destruct clears it.
+* **The clear.** `MessageReader::ForgetLastLine()`, called from the SAME events `DialogueReader`
+  already drops its page key on — the `+0xC0` end-of-message latch and `ForgetLivePages()` — plus
+  `Shutdown()`. Tied to events already proven to bound a box's life rather than given a fourth guard
+  of its own; three guards in this codebase have gone silent by outliving the object they described.
+
+**`MenuState::IsAnyMenuOpen()` was NOT used and must not be.** It reads `*DAT_0208ebc0`, which the
+whole decompile writes once and never clears, so after the first menu it answers "open" forever. A
+gate built on it once killed the field object scan for an entire fight.
+
+**The log says which guard fired.** `t` with nothing open reports whether the gate held, the clear
+held, or both agree. That is deliberate: the gate's weak point is unmeasured — if the game leaves
+stale window pointers in `DAT_0215f200` the way it leaves one in `DAT_0208ebc0`, the gate would
+answer "live" forever and only the cleared store would be doing the work. One press in the field
+after a conversation distinguishes them.
+
+### Files
+
+`include/MinHook/buffer.c` (`[LOCAL]`), `src/core/hooks.{h,cpp}`, `src/proxy/dllmain.cpp`,
+`src/core/logger.cpp`, `CMakeLists.txt`, `src/battle/combat_events.h`,
+**`src/core/game_glyphs.h` (generated)**, `src/core/game_text.cpp`, `src/ui/dialogue_reader.{h,cpp}`,
+`src/ui/message_reader.{h,cpp}`, `FFXII-Decompile/tools/parse_font_dat.py` (new).
+
+Also committed: Session 128's uncommitted drop-census instrumentation, which is good and was never
+the cause — it simply never reached a machine where the hooks were installed.
+
+### Not verified in play
+
+All three are built, deployed and compile clean, and items 1 and 3 carry offline proofs (the 63-slot
+arithmetic; 80/80 cross-check plus a 0-regression diff). **Item 1's real proof is the tester's next
+log** — the dev machine never reproduced it. Ship him a build: he has never run one containing the
+S128 counters, and he does not have S129's shop-crash fix either.
+
+### Designed, not built — four items carried forward
+
+Written up in full in the session plan and summarised here so they are greppable:
+
+* **Live positional soundscape.** `AudioEngine` is one voice (retrigger, no overlap, no looping, no
+  distance gain) and needs a software mixer summing N sources into the existing stream. All ten
+  categories now have a sound; durations run 0.251-1.834 s and two are stereo, so
+  `debug.md`'s "all nine are mono" is stale. 15 steps = 11.25 world units
+  (`g_unitsPerStep = 0.75`). Identity is the `sceneObj` pointer. Voices must be phase-offset from a
+  hash of that pointer so they never start together, and same-category instances pitch-spread. Needs
+  its own polled-monitor approval, and a **mod-menu submenu** — the menu is flat today and
+  `g_cursor` IS the `SettingId`.
+* **Autodetail (`F7`).** `Docs/Controls.md` already holds the design; the shop equipment comparison
+  is the named first consumer.
+* **Dialogue scrollback — the GAME already has one.** Triangle (keyboard `R`, the Party Menu key)
+  opens its conversation log during a conversation. Step one is a MEASUREMENT, not code: the log
+  probably reuses the message widget `FUN_002a8c50` already hooks.
+* **Controller support.** The game reads the pad through **XInput**, so the dinput8 proxy is
+  structurally blind to it; consuming a button needs an IAT hook on `XInputGetState`. Claimable
+  buttons are Select, L1, R1, L3, R3 — L2 stays the game's for Lock On. `L3` toggles intercept and is
+  the one button the mod never hands back.

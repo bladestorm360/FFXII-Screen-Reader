@@ -29,8 +29,29 @@
 #include <windows.h>
 #include "buffer.h"
 
-// Size of each memory block. (= page size of VirtualAlloc)
-#define MEMORY_BLOCK_SIZE 0x1000
+// Size of each memory block.
+//
+// [LOCAL] Upstream MinHook uses 0x1000 here. With MEMORY_SLOT_SIZE 64 that is exactly 63 usable
+// trampoline slots per block (the block header eats the first one -- see the free-list build at the
+// bottom of GetMemoryBlock), and this mod installs 66 hooks. On the developer's machine the second
+// block allocates fine and all 66 install; on a tester's machine it did not, and the log said so:
+//
+//     [HOOKS] MH_CreateHook failed at RVA 0x416410 (abs 0x536410): MEMORY_ALLOC
+//     [HOOKS] MH_CreateHook failed at RVA 0x1F12F0 (abs 0x3112f0): MEMORY_ALLOC
+//     [HOOKS] MH_CreateHook failed at RVA 0x1F2280 (abs 0x312280): MEMORY_ALLOC
+//     [COMBAT] CombatEvents: a hook FAILED to install
+//
+// 63 installed, 3 failed -- and because CombatEvents::Init() is the LAST subsystem initialised
+// (dllmain.cpp), the three combat hooks were the only casualties. The mod looked healthy and the
+// combat log was simply dead, which cost two sessions of hunting a regression that did not exist.
+//
+// Why 0x10000 is free: on x64 the blocks are placed by FindPrevFreeRegion / FindNextFreeRegion,
+// which step by si.dwAllocationGranularity -- 64 KB. Windows therefore already RESERVES 64 KB for
+// every block and MinHook was asking for one page of it. Raising the request to the granularity it
+// is already paying for costs zero additional address space and yields 1023 slots per block instead
+// of 63. FreeBuffer's block-base arithmetic ((p / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE) still
+// holds, because a 64 KB-aligned block is still aligned to the larger size.
+#define MEMORY_BLOCK_SIZE 0x10000
 
 // Max range for seeking a memory block. (= 1024MB)
 #define MAX_MEMORY_RANGE 0x40000000
