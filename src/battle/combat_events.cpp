@@ -83,6 +83,37 @@ Latch& LatchFor(void* bc) {
     return l;
 }
 
+// ---- drop census -------------------------------------------------------------------------------
+// Every early exit below used to return in SILENCE, so a battle that produced no combat-log entry
+// was indistinguishable from a battle that never happened. That is not hypothetical: when the log
+// was reported broken on 2026-08-03, all 14 sessions of that day held exactly two COMBAT lines --
+// the init and the install -- and nothing in the file could say whether the producers had failed or
+// the player had simply not fought. (They had not: every one of those logs reports Enemy=0.) An
+// absent line means nobody wrote one; it is not evidence either way, and that ambiguity is the bug.
+//
+// Counters are bumped on the HOT PATH -- one add, no allocation, no lock, no SEH read -- and are
+// REPORTED only when the count reaches a power of two. The file therefore grows O(log N) in the
+// number of drops and never O(N), which is what the console-output budget requires of a hook that
+// runs ~20 times a second per actor. 1 is a power of two, so the FIRST of each kind always prints,
+// and that first line is the one that names the cause.
+uint32_t g_dropNotValid  = 0;   // applier reached with a real action id, but +0x1c never armed
+uint32_t g_dropEmptyLine = 0;   // genuine hit, but the formatter produced no sentence
+uint32_t g_dropNoBuffer  = 0;   // Tier-1 sprintf with no readable id or no destination buffer
+uint32_t g_dropNoText    = 0;   // Tier-1 sprintf whose buffer decoded to nothing
+uint32_t g_realHits      = 0;   // POSITIVE control: hits that passed the gate and were formatted
+
+bool CountAtPowerOfTwo(uint32_t& n) {
+    ++n;
+    return (n & (n - 1)) == 0;
+}
+
+void CountDrop(const char* reason, uint32_t& n) {
+    if (!CountAtPowerOfTwo(n)) return;
+    char m[128];
+    snprintf(m, sizeof(m), "drop[%s] x%u", reason, n);
+    Log::Write("COMBAT", m);
+}
+
 // ---- critical-vitals watch, shared by real hits AND status ticks --------------------------------
 //
 // We do NOT announce KO ourselves. The GAME narrates it: FUN_00300530's KO path calls
@@ -223,18 +254,38 @@ void OnRealHit(void* result, void* atkBc, void* tgtBc, uint16_t actionId) {
     void* atkActor = BattleState::ActorForBtlChr(atkBc);
     void* tgtActor = BattleState::ActorForBtlChr(tgtBc);
 
+    // Resolved into locals rather than passed inline, so the drop diagnostic below can say WHICH
+    // half failed. DamageLine returns nothing only when attacker AND target are both nameless, and
+    // that distinction is the difference between a broken name chain and a broken formatter.
+    const std::wstring atkName = BattleState::DisplayNameForActor(atkActor);
+    const std::wstring tgtName = BattleState::DisplayNameForActor(tgtActor);
+    const uint8_t      cat     = BattleState::AbilityCategory(actionId);
+
     const std::wstring line = CombatFormat::DamageLine(
-        BattleState::DisplayNameForActor(atkActor),
-        BattleState::DisplayNameForActor(tgtActor),
+        atkName,
+        tgtName,
         BattleState::AbilityName(actionId),
-        BattleState::AbilityCategory(actionId),
+        cat,
         hpDelta,
         outcome,
         BattleState::AbilityElements(actionId));
 
     // Log-only: this is the stream that made linear narration unusable, and it is why the log
     // exists at all. Critical events below get their own realtime treatment.
-    if (!line.empty()) CombatLog::Append(CombatLog::Kind::Damage, line, /*speakNow=*/false);
+    if (!line.empty()) {
+        CombatLog::Append(CombatLog::Kind::Damage, line, /*speakNow=*/false);
+    } else if (CountAtPowerOfTwo(g_dropEmptyLine)) {
+        // The one drop worth more than a counter: a hit passed every gate and still said nothing.
+        // Both name flags at 0 points at the actor/name chain, not at this file.
+        char m[192];
+        snprintf(m, sizeof(m),
+                 "drop[empty-line] x%u: action=0x%04X cat=%u atkNamed=%d tgtNamed=%d "
+                 "hpDelta=%d outcome=%u",
+                 g_dropEmptyLine, static_cast<unsigned>(actionId), static_cast<unsigned>(cat),
+                 atkName.empty() ? 0 : 1, tgtName.empty() ? 0 : 1,
+                 static_cast<int>(hpDelta), static_cast<unsigned>(outcome));
+        Log::Write("COMBAT", m);
+    }
 
     CheckVitals(tgtBc, hpDelta);
 }
@@ -248,13 +299,13 @@ void HookedSprintf(void* argBlock, void* dest, uint32_t size, uint32_t flag) {
 
     s_origSprintf(argBlock, dest, size, flag);
 
-    if (!haveId || !dest) return;
+    if (!haveId || !dest) { CountDrop("sprintf-no-buffer", g_dropNoBuffer); return; }
     const uint16_t msgId = static_cast<uint16_t>(idRaw & 0x7FFF);   // bit 15 = isPc
 
     // `dest` is a 0x180 stack buffer in the caller's frame holding RAW CODEC BYTES -- it must be
     // decoded and copied here, because it dies when that frame returns.
     std::wstring text = GameText::Decode(static_cast<const uint8_t*>(dest), 0x180);
-    if (text.empty()) return;
+    if (text.empty()) { CountDrop("sprintf-no-text", g_dropNoText); return; }
 
     CombatLog::Append(CombatLog::Kind::GameMessage, text, CombatFormat::ShouldSpeakNow(msgId));
 }
@@ -271,8 +322,22 @@ void HookedApply(void* result, void* atkBc, void* tgtBc, uint32_t actionId, uint
         uint8_t valid = 0;
         // +0x1c == 1 is the emission gate -- FUN_00385f60 sets it as its LAST statement, so every
         // early bail leaves it 0.
-        if (MemRead::SafeReadU8(result, R_VALID, &valid) && valid == 1)
+        if (MemRead::SafeReadU8(result, R_VALID, &valid) && valid == 1) {
+            // POSITIVE control. Without it, "no drops and no entries" still has two readings --
+            // the gate rejected everything, or nothing ever reached the gate. This line is what
+            // makes "the applier saw N real hits" a fact instead of an inference.
+            if (CountAtPowerOfTwo(g_realHits)) {
+                char m[96];
+                snprintf(m, sizeof(m), "realhit x%u (action=0x%04X)",
+                         g_realHits, static_cast<unsigned>(actionId & 0xFFFF));
+                Log::Write("COMBAT", m);
+            }
             OnRealHit(result, atkBc, tgtBc, static_cast<uint16_t>(actionId & 0xFFFF));
+        } else {
+            // A real action id that never armed the emission gate. Expected sometimes; a battle
+            // made ENTIRELY of these is the shape "the log stopped working" would actually take.
+            CountDrop("apply-not-valid", g_dropNotValid);
+        }
     } else {
         // STATUS TICK. It must NEVER produce a log entry -- regen/poison/doom drift would flood the
         // log with low-information lines between the actions that matter (§9.1.3e), and the drift

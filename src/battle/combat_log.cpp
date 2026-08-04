@@ -88,7 +88,18 @@ void Shutdown() {
 }
 
 void Append(Kind kind, const std::wstring& text, bool speakNow) {
-    if (text.empty()) return;
+    if (text.empty()) {
+        // The last silent drop in the chain. A producer that formats an empty sentence used to be
+        // swallowed here, one step short of the file, which reads identically to a producer that
+        // never fired. Reported at powers of two so it can never flood the log.
+        static uint32_t s_empty = 0;
+        if ((++s_empty & (s_empty - 1)) == 0) {
+            char m[96];
+            snprintf(m, sizeof(m), "drop[append-empty] x%u kind=%d", s_empty, static_cast<int>(kind));
+            Log::Write("COMBAT", m);
+        }
+        return;
+    }
     {
         std::lock_guard<std::mutex> lk(g_mx);
         if (g_ring.size() >= kCapacity) g_ring.erase(g_ring.begin());
