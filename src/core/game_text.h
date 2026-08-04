@@ -11,6 +11,25 @@
 // The mod NEVER stores option-name strings; it decodes what the game drew.
 namespace GameText {
 
+// Which font atlas this install is running, because the atlas IS the character map.
+//
+// `Standard` is the stock `us` atlas, shared by all seven Western locales. `PolishPatch` is the
+// PL_ff12_v1.3 fan translation, which repaints ~16 accented slots to Polish letters WITHOUT
+// updating the metadata that says what they are — so nothing on disk can be read to detect it and
+// nothing in the file can be trusted to describe it. See game_glyphs_pl.h for how the real mapping
+// was recovered and what each entry rests on.
+//
+// It is a player setting rather than autodetection because the patch repacks the game archive in
+// place: it leaves no loose file, no marker and no version string to test.
+enum class Variant : uint8_t { Standard = 0, PolishPatch = 1 };
+
+// Set by ModMenu when the player changes the setting, and once at startup from the stored value.
+// Lock-free: a relaxed atomic, read on the game thread inside the decode loop, written on the input
+// thread. GameText deliberately does not include ui/mod_menu.h -- the dependency runs the other way,
+// exactly as it does for SetElementSpriteResolver.
+void SetVariant(Variant v);
+Variant GetVariant();
+
 // Decode a NUL-terminated codec byte string into a wide string. Reads at most
 // `maxBytes` codec bytes. SEH-guarded (the source struct can be transient);
 // returns an empty string on fault or null input.

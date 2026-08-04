@@ -5349,3 +5349,54 @@ distinguishes the two — press it in the field after a conversation and read wh
 
 **KEYWORDS: t key re-read last spoken line lifetime g_lastLine ForgetLastLine IsBoxLive
 message window registry DAT_0215f200 IsAnyMenuOpen unusable stale guard outlived its object**
+
+### Session 130 (follow-up) — the Polish patch: the font metadata LIES, so the mapping came from the text
+
+The Polish fan translation `PL_ff12_v1.3` repaints ~16 accented glyph slots to Polish letters. Its
+`font00.dat` differs from stock in **20 bytes**, and **not one of them is a character field** — all
+ten changed records changed only their *advance width*. So the file that is authoritative for a
+stock install is actively wrong for this one, and every repurposed slot still claims the stock
+letter it used to draw.
+
+**Autodetection is not available.** `instaluj.bat` repacks the archive in place
+(`ff12-vbf.exe -r ff12data ..\FFXII_TZA.vbf`) and patches `FileSizeTable_US.fst`. No loose file, no
+marker, no version string. Hence a mod-menu row (**Text glyphs — Standard / Polish translation**,
+default Standard) rather than a probe.
+
+**How the mapping was recovered:** decode the patch's own shipped `ps2data` text with the STOCK
+table and read the Polish. A repurposed slot shows up as a stock letter standing in a position
+Polish orthography forbids, and the correct letter is the one that makes the word:
+
+```
+"Jù¿RùùùJùù nie moêe dosiègnàç celu."   ->  nie może dosięgnąć celu
+"zamienia siè w kamieñ."                ->  zamienia się w kamień
+"PÊ czèéciowo odnowione."               ->  PŻ (Punkty Życia) częściowo odnowione
+"minè¿y róêne przypad¿oéci"             ->  minęły różne przypadłości
+"BROŃ JEDNORĘCZNA" / "Bezimienne Źródło" / "Pani Życia i Śmierci"
+```
+
+**L-STROKE IS THE TRAP.** Lowercase `ł` sits at `0x94`, a PUNCTUATION slot, not in the accented
+block — so the block rule cannot place its capital, and the obvious guess (`0x93`, the neighbouring
+inverted-exclamation slot) is **wrong**. `Ł` is at **`0x81`** — the very byte the stock table maps to
+`ú`, which this project had hand-derived years ago for "Cúchulainn". Found by asking which unmapped
+byte behaves like a word-initial capital: 173 hits, witnesses `Łatwo` / `Łowca` / `Łupieżca`, plus 42
+item and enemy names (`Arkadyjski Łucznik`, `Cesarska Łuska`, `Deszcz Łez`).
+
+**The in-block rule, stated over its five confirmed pairs and no counterexample:** capital = lowercase
+− `0x18` (ę/Ę, ś/Ś, ż/Ż, ź/Ź, ń/Ń). `ą`→`Ą` (`0x54`) and `ć`→`Ć` (`0x59`) follow from it and are
+marked **rule-derived, not witnessed** — capital A-ogonek is essentially unattested in Polish and
+capital C-acute is word-initial only in rare proper nouns, so neither appears anywhere in the
+corpus. That is expected, not alarming, and it is recorded so a later session does not mistake it
+for a measurement.
+
+**End-to-end validation:** decoding the patch's name pool with the shipped table yields **1,351
+clean Polish item and enemy names** — `Adamantowy Żółw`, `Agatowy Pierścień`, `Anielska Pieśń`,
+`Arkadyjska Armia Żołnierz` — and **zero** names still containing a stock accented letter, which is
+the check that proves no repurposed slot was missed.
+
+`ó` needs no entry: the stock atlas already carries it at `0x7C` / `0x64` and the patch left both
+alone (`Podróżnik`, `Żółć`, `Ósma` all decode correctly unmodified).
+
+**KEYWORDS: Polish patch spolszczenie PL_ff12_v1.3 fan translation glyph override font00.dat
+advance width repaint l-stroke 0x81 u-acute collision block rule 0x18 text glyphs mod menu
+game_glyphs_pl.h autodetection impossible VBF repack in place**

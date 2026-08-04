@@ -51,6 +51,7 @@ enum class SettingId : int {
     TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
+    TextGlyphs,           // S130: which font atlas this install runs. Default Standard
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was

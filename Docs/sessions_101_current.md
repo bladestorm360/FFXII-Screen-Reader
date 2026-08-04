@@ -3307,6 +3307,42 @@ arithmetic; 80/80 cross-check plus a 0-regression diff). **Item 1's real proof i
 log** — the dev machine never reproduced it. Ship him a build: he has never run one containing the
 S128 counters, and he does not have S129's shop-crash fix either.
 
+### 5. The Polish fan translation — its font metadata lies, so the mapping came from its text
+
+`PL_ff12_v1.3` repaints ~16 accented glyph slots to Polish letters. Its `font00.dat` differs from
+stock in **20 bytes and not one is a character field** — all ten changed records changed only their
+advance width. So every repurposed slot still claims the stock letter it used to draw, and the file
+that is authoritative for a stock install is actively wrong for this one.
+
+Autodetection is not available: `instaluj.bat` repacks the archive in place and patches the file-size
+table, leaving no loose file and no marker. Hence a mod-menu row — **Text glyphs: Standard / Polish
+translation**, default Standard, applied at Init and on every change so the player hears it
+immediately.
+
+The mapping was recovered by decoding the patch's own shipped text with the STOCK table and reading
+the Polish: a repurposed slot shows up as a letter Polish orthography forbids in that position.
+`"nie moêe dosiègnàç celu"` is *nie może dosięgnąć celu*; `"zamienia siè w kamieñ"` is *kamień*;
+`"PÊ czèéciowo odnowione"` is *PŻ* (Punkty Życia); `BROŃ JEDNORĘCZNA`, `Bezimienne Źródło` and
+`Pani Życia i Śmierci` fix five of the capitals outright.
+
+**L-stroke is the trap.** Lowercase `ł` sits at `0x94`, a PUNCTUATION slot outside the accented
+block, so the block rule cannot place its capital — and the obvious guess (`0x93`, the neighbouring
+inverted-exclamation slot) is wrong. `Ł` is at **`0x81`**, the very byte the stock table maps to `ú`,
+which this project hand-derived years ago for "Cúchulainn". Found by asking which unmapped byte
+behaves like a word-initial capital: 173 hits, then 42 more in the name pool (`Arkadyjski Łucznik`,
+`Cesarska Łuska`, `Deszcz Łez`).
+
+Within the block the rule is capital = lowercase − `0x18`, holding across all five confirmed pairs
+with no counterexample. `Ą` and `Ć` follow from it and are marked **rule-derived, not witnessed** —
+capital A-ogonek is essentially unattested in Polish and capital C-acute is word-initial only in rare
+proper nouns, so neither occurs anywhere in the corpus. Recorded as derived so a later session does
+not mistake it for a measurement.
+
+**Validation:** decoding the patch's name pool with the shipped table yields **1,351 clean Polish
+item and enemy names** — `Adamantowy Żółw`, `Agatowy Pierścień`, `Anielska Pieśń` — with **zero**
+still containing a stock accented letter. That residual count is the check that proves no repurposed
+slot was missed.
+
 ### Designed, not built — four items carried forward
 
 Written up in full in the session plan and summarised here so they are greppable:

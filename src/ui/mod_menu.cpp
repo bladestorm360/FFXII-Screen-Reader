@@ -4,6 +4,7 @@
 #include "input/input_tracker.h"
 #include "speech/phrasebook.h"
 #include "speech/speech.h"
+#include "core/game_text.h"
 
 #include <windows.h>
 
@@ -69,6 +70,14 @@ const Setting kSettings[] = {
       { Id::BeaconOff,       Id::BeaconOn },
       { Id::AutoWalkDescOff, Id::AutoWalkDescOn },
       Id::AutoWalkDesc, "auto_walk", 0 },
+    // S130. Default STANDARD, which is every unmodified install in all twelve languages -- a fan
+    // patch is the exception and its player is the one who knows they installed it. Nothing on disk
+    // can detect it: the Polish patch repacks the game archive in place, leaving no loose file and
+    // no marker, and its own font metadata still claims the stock letters. See game_glyphs_pl.h.
+    { Id::SettingTextGlyphs, Kind::Named, 2,
+      { Id::TextGlyphsStandard,     Id::TextGlyphsPolish },
+      { Id::TextGlyphsDescStandard, Id::TextGlyphsDescPolish },
+      Id::TextGlyphsDesc, "text_glyphs", 0 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -219,11 +228,24 @@ bool OnDescribe() {
     return true;
 }
 
+// Push the glyph-variant setting into the decoder. Called from Init (so a stored value applies from
+// the first string the mod ever decodes) and from Adjust (so a change takes effect immediately,
+// without a restart -- the player needs to HEAR the difference to know they picked right).
+//
+// Unconditional rather than gated on which setting moved: it is two atomic stores and a 256-entry
+// copy, it runs only on a keypress, and a condition here would be one more thing to forget when a
+// setting is added. GameText owns the table; this only tells it which one.
+void ApplyTextGlyphs() {
+    const int v = g_values[static_cast<int>(SettingId::TextGlyphs)].load(std::memory_order_relaxed);
+    GameText::SetVariant(v == 1 ? GameText::Variant::PolishPatch : GameText::Variant::Standard);
+}
+
 } // namespace
 
 bool Init() {
     if (g_initialized) return true;
     Load();                                     // seeds defaults, then overlays the stored file
+    ApplyTextGlyphs();                          // before any reader can decode a string
     InputTracker::SetModMenuNavCallback(&OnMenuNavKey);
     InputTracker::SetModMenuDescribeCallback(&OnDescribe);
     g_initialized = true;
@@ -299,6 +321,7 @@ void Adjust(SettingId id, int delta) {
         g_values[i].store(next, std::memory_order_relaxed);
         Save();
         LogState("set", i);
+        ApplyTextGlyphs();   // no-op for every other setting; see the note on the function
     }
     // The value alone, not the setting name: F4 is a dedicated key whose meaning the player already
     // knows, and inside the menu they just heard the name. Short enough to use mid-fight.

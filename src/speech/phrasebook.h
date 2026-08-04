@@ -126,6 +126,12 @@ enum class Id {
     // and on route loss -- player-initiated stops and self-announcing ones (arrival cue, combat,
     // map transition) stay silent per the silence-is-normal rule.
     SettingAutoWalk, AutoWalkDesc, AutoWalkDescOff, AutoWalkDescOn, AutoWalkStopped,
+    // S130: which font atlas this install runs, because the atlas IS the character map. A fan
+    // translation that repaints accented slots makes the stock table say the wrong letter, and the
+    // patch leaves nothing on disk to detect it by, so the player picks. The two VALUE words are
+    // its own rather than reusing Off/On: this is not a feature being switched on.
+    SettingTextGlyphs, TextGlyphsDesc,
+    TextGlyphsStandard, TextGlyphsPolish, TextGlyphsDescStandard, TextGlyphsDescPolish,
     // (S106's four sneak-assist ids were removed in S115 with the setting they named. The feature is
     // automatic on the maps `path_danger.cpp` lists, so it has no menu row and speaks nothing.)
 

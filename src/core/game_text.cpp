@@ -1,14 +1,35 @@
 #include "core/game_text.h"
 #include "core/game_glyphs.h"
+#include "core/game_glyphs_pl.h"
 
 #include <Windows.h>
 
+#include <atomic>
 #include <cwctype>
 
 namespace GameText {
 namespace {
 
 SpriteNameFn g_spriteResolver = nullptr;
+
+// ---- glyph variant ------------------------------------------------------------------------------
+// The live byte -> character table. `kGlyph` (generated from the game's own font00.dat) is the base;
+// a fan translation that repaints atlas slots patches a handful of entries over it.
+//
+// Built once per variant change rather than consulted per character: the decode loop runs per byte
+// of every string the mod speaks, and a 16-entry search inside it would be paid on every letter of
+// every line. One array, one index, no branch.
+std::atomic<Variant> g_variant{Variant::Standard};
+wchar_t g_glyph[256];
+std::atomic<bool> g_glyphReady{false};
+
+void BuildGlyphTable(Variant v) {
+    for (int i = 0; i < 256; ++i) g_glyph[i] = kGlyph[i];
+    if (v == Variant::PolishPatch) {
+        for (const auto& o : kGlyphPolish) g_glyph[o.byte] = o.ch;
+    }
+    g_glyphReady.store(true, std::memory_order_release);
+}
 
 // Where the last decode on this thread gave up. See DecodeBail in the header for why this matters.
 thread_local DecodeBail g_bail;
@@ -331,7 +352,8 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         //
         // A ZERO ENTRY STILL MEANS DROP. The table is the atlas, so a slot the atlas does not
         // fill has no character to speak -- silence beats a guess, unchanged.
-        wchar_t glyph = kGlyph[c];
+        if (!g_glyphReady.load(std::memory_order_acquire)) BuildGlyphTable(g_variant.load());
+        wchar_t glyph = g_glyph[c];
 
         // The two places the mod deliberately speaks something other than what the atlas draws.
         // Both predate this table, both were chosen for the screen reader rather than for
@@ -404,6 +426,13 @@ const uint8_t* SkipVariantPrefix(const uint8_t* p) {
 void SetElementSpriteResolver(SpriteNameFn fn) {
     g_spriteResolver = fn;
 }
+
+void SetVariant(Variant v) {
+    g_variant.store(v, std::memory_order_relaxed);
+    BuildGlyphTable(v);
+}
+
+Variant GetVariant() { return g_variant.load(std::memory_order_relaxed); }
 
 DecodeBail LastDecodeBail() { return g_bail; }
 

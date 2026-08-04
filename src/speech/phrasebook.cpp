@@ -115,6 +115,13 @@ const Row kTable[] = {
     EN(L"Off never moves the character."),
     EN(L"On walks the route automatically after the route key. Combat, menus, or your own movement stop it instantly."),
     EN(L"Auto-walk stopped."),
+    // S130: font-atlas variant. Flag the wording to the user before rewording.
+    EN(L"Text glyphs"),
+    EN(L"Which font the game is running. Set this to match your install, or accented letters will be read as the wrong letter."),
+    EN(L"Standard"),
+    EN(L"Polish translation"),
+    EN(L"Standard is the unmodified game, in any language it shipped in."),
+    EN(L"Polish translation is the PL fan patch, which reuses accented letter slots for Polish ones."),
     // (S106's four sneak-assist rows were removed in S115. The feature became automatic on the
     // danger-table maps, so it has no menu row and no words -- and an unused row here would be an
     // invented label waiting to be re-used for something it was not written for.)

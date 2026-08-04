@@ -196,6 +196,7 @@ The settings it holds:
 * Audio beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Target beacon — On or Off. The separate sound that tracks the enemy your party is fighting, described above. On is the default.
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
+* Text glyphs — Standard or Polish translation. Standard is the default and is right for any unmodified copy of the game, in any language. Choose Polish translation only if you installed the Polish fan patch, which reuses sixteen accented letter slots for Polish letters; without this setting those letters are read as the wrong letter.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
 
 F4 switches Combat verbosity and F11 switches the Audio beacon, both without opening the menu, so you can change either of them in the middle of a fight. Your choices are remembered between sessions.
