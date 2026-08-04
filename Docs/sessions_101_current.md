@@ -2902,3 +2902,134 @@ settle is SILENT instead of stale".
 tell "deferred and never replayed" from "never got the focus". That is the third silent-drop path
 this session -- after the refused `__MJ_CTRL` controllers and the one-shot paint retry -- and all
 three cost time for the same reason.
+---
+
+## Session 129 — 2026-08-03 — [menus] The shop crash: a four-argument detour on a six-argument function
+
+KEYWORDS: crash, shop, sell menu, equip_compare, HookedDelta, FUN_002cc780, FUN_002ca7c0,
+FUN_002cc4f0, FUN_0056e5d0, FUN_0057b890, arity, stack arguments, shadow space, x64 calling
+convention, access violation, minidump, InstallTyped, hook audit, silent memory corruption
+
+Tester report: using the sell menu in a shop crashes the game. Root-caused from the crash dump to a
+hook the mod installed in S125, fixed, and the same class of defect audited out of the other 65
+hooks.
+
+### The log named the surface; the dump named the instruction
+
+The mod log ends mid-menu with no error, so the last two lines are the whole of what it says:
+
+```
+[READER] pane owner=...2BE00E00 focus=...2BE00E00 focused=1 rowOff=0xD0
+[PERF] thread: IngameMenu::OnRowChainFocus runs on tid=1
+```
+
+Two earlier logs (`05-19-46`, `06-10-14`) contain the same pane class `0x45B890` at `rowOff=0xD0`
+followed by `[INGAME] menu: "Sell"` / `"Buy"` / `"Bazaar"`, which identifies it: **that class is the
+shop's Buy/Sell/Bazaar list**, and it is ONE class for all three entries. The wall-clock in the log
+is skewed, but uptime is not — session start `17:46:25` plus the last stamp `+99406ms` lands on
+`17:48:05`, exactly the dump `FFXII_TZA.exe.20260803_174805.dmp`. Same event.
+
+The dump was parsed directly (no debugger on this machine — a ~90-line Python minidump reader over
+the `Exception`, `ModuleList` and `Memory64List` streams):
+
+```
+exception  c0000005  ACCESS VIOLATION WRITE at 0x118110a0
+rip        FFXII_TZA.exe+0x245668       (ABS 0x365668)
+rcx = rbx  0x118110a0   <- unmapped
+rdx        0x10d810a0
+r13        0x0000ffff
+```
+
+`0x365668` is in a gap Ghidra never made a function for, so it was read as bytes out of the dump:
+
+```
+0x365660  cmp  edx, 8
+0x365663  jge  0x365668
+0x365665  xor  eax, eax ; ret
+0x365668  mov  dword [rcx], 'ex00'   <-- FAULT
+0x36566e  test r8d, r8d
+0x365673  mov  word [rcx+4], '+' ; mov eax, 8 ; mov word [rcx+6], 0 ; ret
+```
+
+A bounds-checked 8-byte writer: `if (size >= 8) { write 8; return 8; }`. So `rcx` is an output
+buffer and `edx` is its size — and both are garbage.
+
+### Who supplied the garbage
+
+A raw scan of the stack from `rsp` gives a chain that is self-consistent (every return address was
+checked back against the byte at its call site):
+
+```
+rsp+0x000  FUN_002cc780+0xE9
+rsp+0x050  dinput8.dll+0x21714       <- OUR HookedDelta
+rsp+0x0d0  FUN_002ca7c0+0x3F6
+rsp+0x1f0  FUN_002cc4f0+0x7A
+rsp+0x400  FUN_0056e5d0+0x10F
+rsp+0x430  dinput8.dll+0x1EDE7       <- OUR HookedHilite
+rsp+0x460  FUN_0056dd50+0x13F
+rsp+0x4c0  FUN_0057b890+0x33E        <- the Buy/Sell/Bazaar proc
+rsp+0x4f0  FUN_00247510+0x39
+rsp+0x540  dinput8.dll+0x137BA       <- OUR HookedDispatch
+```
+
+`FUN_0056dd50` is the shop container's constructor: it builds the rows (`FUN_0056e410`) and then
+calls `FUN_0056e5d0(container, 1)` for the initial highlight — which is why this fires on the
+container BUILD, and why "the sell menu" is the visible trigger rather than the cause. `FUN_0056e5d0`
+ends in `FUN_002cc4f0(uVar6)`, `uVar6` being the row's item id or `0xFFFF` when the row is empty
+(`r13 = 0xffff` — the empty-row path, taken because the panel is mid-construction). `FUN_002cc4f0`
+loops the nine compare columns through `FUN_002ca7c0`, which calls `FUN_002cc780`.
+
+**`FUN_002cc780` takes six arguments; `equip_compare.cpp` declared four.** Ghidra's decompile of the
+callee says six outright, but the CALL SITE hides it — outgoing stack arguments are rendered as
+caller locals:
+
+```c
+local_f8 = param_2 + 0xf8;
+local_f0 = 8;
+FUN_002cc780(&local_e0, delta, param_2 + 0xd8, 0x10);   // four visible arguments
+```
+
+Disassembled, those "locals" are the argument slots:
+
+```
+mov  dword [rsp+0x28], 8      ; arg6 = buffer size  -> matches `cmp edx,8`
+mov  [rsp+0x20], rcx          ; arg5 = buffer ptr
+mov  r9d, 0x10                ; arg4
+call FUN_002cc780             ; ret 0x2CABB6 = the stack value exactly
+```
+
+and the callee reads arg5 back as `[rsp+0x70]` after its prologue (`R-0x48+0x70 = R+0x28`, the arg-5
+home). On x64 only args 1-4 are in registers. A four-argument detour reserves only the 32-byte shadow
+space when it calls the trampoline, so `[rsp+0x20]` and `[rsp+0x28]` are **never written** and the
+original reads whatever the previous call left there. Every register at the fault agrees: `rbx` =
+stale pointer, `rdx` = stale size that trivially clears `>= 8`, and the write goes wherever the
+stale pointer pointed.
+
+### Why "it worked in earlier shop sessions" proves nothing
+
+The outcome is decided by leftover stack: **unmapped -> crash; mapped -> eight bytes of unrelated
+memory destroyed with no symptom at all.** The 08-03 logs that show shops working are not logs where
+the bug did not fire — they are logs where it landed somewhere writable. That is the worse case, and
+it is why this was fixed by passing the arguments rather than by guarding the crash.
+
+### Fix
+
+`Pfn_Delta` and `HookedDelta` now declare and forward all six; the two new arguments are passed
+through untouched and never read. One file, three lines of code.
+
+### The rule, and the audit
+
+`Hooks::InstallTyped` cannot catch this — it is a template whose only constraint is that the detour
+and the trampoline pointer have the same type as **each other**. Both were wrong together, so it
+compiled clean.
+
+All 66 hooks installed in the crash session were audited: each hooked RVA mapped to ABS, the detour's
+parameter count parsed out of the mod source and compared against the callee's decompiled signature.
+`HookedDelta` was the only under-declaration. One over-declaration exists — `HookedSprintf` declares
+4 against `FUN_00536410`'s 3 — and is left alone: the extra argument is a REGISTER argument, so it is
+read as garbage and forwarded to a callee that ignores it. Nothing is written and nothing can be
+corrupted. **Under-declaring is a memory-corruption bug; over-declaring within the four register
+slots is not.**
+
+**Not verified in play.** The build is deployed; the crash is a single-instruction write through an
+uninitialised stack slot and the fix supplies that slot, but no shop has been entered on this build.

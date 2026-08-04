@@ -7,6 +7,40 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### SOLVED (S129) — a DETOUR THAT DECLARES FEWER ARGUMENTS THAN THE GAME FUNCTION CORRUPTS MEMORY
+
+KEYWORDS: crash shop sell menu equip_compare HookedDelta FUN_002cc780 arity stack arguments
+shadow space x64 calling convention access violation write InstallTyped hook signature
+uninitialised argument minidump 0x118110a0 silent corruption
+
+**Symptom:** the game crashes on entering a shop. Reported as "the sell menu crashes"; the
+Buy/Sell/Bazaar list is one class (`FUN_0057b890`) and the crash is on the container BUILD, so
+whichever entry the player picks first is the one that appears to be at fault.
+
+**Root cause:** `equip_compare.cpp` (S125) hooked `FUN_002cc780` with a **four**-argument detour.
+The function takes **six**. On x64 only args 1-4 are in registers; 5 and 6 are written by the caller
+into its own outgoing stack area at `[rsp+0x20]` / `[rsp+0x28]`. A four-argument detour reserves
+only the 32-byte shadow space when it calls the trampoline, so those two slots are **never written**
+and the original reads whatever the previous call happened to leave there — a wild pointer (arg5 =
+output buffer) and a wild size (arg6, normally 8). The size guard is `>= 8`, which any garbage
+passes, so the game then writes 8 bytes through the wild pointer.
+
+**Why it looked intermittent, and why it is worse than a crash.** The stale stack value decides the
+outcome: unmapped -> instant access violation; *mapped* -> eight bytes of unrelated memory silently
+destroyed with no symptom at the time. Shop sessions on 08-03 that did not crash were not sessions
+where the bug did not fire. Do not treat "it worked once" as evidence here.
+
+**Fix:** declare and forward all six. Nothing else — the crash must never be "fixed" by guarding it,
+because the guard would leave the silent-corruption case intact.
+
+**The general rule this bought.** `Hooks::InstallTyped` cannot catch this: it is a template that
+only forces the detour and the trampoline pointer to have the *same* type as each other. Both were
+wrong together, so it compiled. **Every detour's arity must equal the game function's, and the count
+comes from the CALLEE's decompile.** It cannot be read off the call site: Ghidra renders outgoing
+stack arguments as caller locals (here `local_f8 = param_2 + 0xf8; local_f0 = 8;` immediately above
+`FUN_002cc780(...)` with four visible arguments), so a call site with N visible arguments may be
+passing more. All 66 installed hooks were audited this way in S129; this was the only one.
+
 ### REFUTED TWICE — "an object's event table names the transition routine it fires" (S119 doors, S122/S123 rects)
 
 KEYWORDS: nameOff join event table object+0x48 name-pool offset transition routine movie rect

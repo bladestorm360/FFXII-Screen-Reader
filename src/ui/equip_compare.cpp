@@ -26,7 +26,9 @@ using MemRead::SafeReadU32;
 
 // ---- the panel, all probe-confirmed 2026-08-03 (probe_equip_compare_output.log) ----------------
 constexpr uint32_t RVA_REFRESH   = 0x1AC4F0;  // FUN_002cc4f0(itemId) -- brackets one refresh pass
-constexpr uint32_t RVA_DELTA     = 0x1AC780;  // FUN_002cc780(pair, delta, target, style)
+constexpr uint32_t RVA_DELTA     = 0x1AC780;  // FUN_002cc780(pair, delta, target, style, outBuf, outSize)
+                                              // SIX arguments -- 5 and 6 travel on the STACK. See the
+                                              // typedef below; getting this count wrong CORRUPTS MEMORY.
 constexpr uint32_t RVA_MENUCTX   = 0x1F7AC30; // DAT_0209ac30 (ptr) -- pause/menu context
 constexpr uint32_t RVA_PANELCLS  = 0x1ABF80;  // FUN_002cbf80 -- the panel's own class
 constexpr uint32_t RVA_SHOPLIST  = 0x2B89798; // DAT_02ca9798 -- the live shop list container
@@ -74,7 +76,8 @@ constexpr int kStats = 2;
 constexpr uint32_t RVA_ATTRFILL = 0x2DE720;
 
 typedef uint64_t (*Pfn_Refresh)(uint32_t);
-typedef uint64_t (*Pfn_Delta)(void*, int, void*, int);
+// ALL SIX ARGUMENTS, and the count is load-bearing -- see HookedDelta.
+typedef uint64_t (*Pfn_Delta)(void*, int, void*, int, void*, uint32_t);
 typedef void     (*Pfn_AttrFill)(int, int);
 Pfn_Refresh  s_origRefresh  = nullptr;
 Pfn_Delta    s_origDelta    = nullptr;
@@ -270,7 +273,32 @@ bool LocateTarget(void* target, int* colOut, int* slotOut) {
     return false;
 }
 
-// FUN_002cc780(pair, delta, target, style) -- draws one stat's arrow + number.
+// FUN_002cc780(pair, delta, target, style, outBuf, outSize) -- draws one stat's arrow + number.
+//
+// ALL SIX ARGUMENTS MUST BE DECLARED AND FORWARDED. This shipped declaring only the first four and
+// it CRASHED THE GAME on entering a shop (dump 2026-08-03 17:48, access violation WRITE).
+//
+// Arguments 5 and 6 are not in registers -- on x64 only the first four are, and the rest travel in
+// the CALLER's outgoing stack-argument area at [rsp+0x20] and [rsp+0x28]. The game's caller fills
+// them (FUN_002ca7c0, disassembled at its call site):
+//     mov  dword [rsp+0x28], 8        ; arg6 = size of the output buffer
+//     mov  [rsp+0x20], rcx            ; arg5 = the output buffer itself
+//     call FUN_002cc780
+// and the callee reads arg5 back as `[rsp+0x70]` after its prologue, hands it to a small writer that
+// does `if (size >= 8) { *(uint32_t*)buf = ...; buf[4] = '+'|'-'; }`.
+//
+// A four-argument detour reserves only the 32-byte shadow space when it calls the trampoline, so
+// those two slots are never written and the original reads whatever the previous call left on the
+// stack. That is a WILD POINTER and a WILD SIZE: the size check passes on garbage (any large value
+// is >= 8) and the write lands wherever the pointer happened to point. Unmapped -> instant crash;
+// mapped -> eight bytes of somebody else's memory silently destroyed, which is the worse outcome and
+// is why this must never be "fixed" by guarding the crash instead of passing the arguments.
+//
+// The same reasoning applies to EVERY hook: the detour's arity must equal the game function's, and
+// Hooks::InstallTyped cannot check it for us -- it only forces the detour and the trampoline pointer
+// to agree with EACH OTHER. Both were wrong here together, which is exactly why it compiled.
+//
+// We only observe `delta`; the two new arguments are forwarded untouched and never read.
 //
 // POLARITY, the one fact that must not be wrong. FUN_002ca7c0:115-121 computes
 //     FUN_0030a4e0(member, 0,                curStats);
@@ -282,8 +310,8 @@ bool LocateTarget(void* target, int* colOut, int* slotOut) {
 //
 // We store `improve = -delta` and never expose the raw value, so nothing downstream can re-invert
 // it by accident. An inverted announce would be worse than silence: the player buys the wrong sword.
-uint64_t HookedDelta(void* pair, int delta, void* target, int style) {
-    const uint64_t ret = s_origDelta ? s_origDelta(pair, delta, target, style) : 0;
+uint64_t HookedDelta(void* pair, int delta, void* target, int style, void* outBuf, uint32_t outSize) {
+    const uint64_t ret = s_origDelta ? s_origDelta(pair, delta, target, style, outBuf, outSize) : 0;
     STALL_SCOPE("EquipCompare::HookedDelta");
     int col = 0, slot = 0;
     if (LocateTarget(target, &col, &slot)) {
