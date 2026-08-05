@@ -3709,3 +3709,30 @@ Docs corrected: `N` is a crowd count plus the nearest guard, not a list of nearb
 
 **KEYWORDS: earshot 3 steps patrol confound not pinned live guard distance beats a boolean
 path_planner fixed FVec3 g_objTarget snapshot no g_objSceneObj moving target route deferred**
+
+## Session 140 — 2026-08-05 — Backlog written up; menu terminology corrected from the game's own screen
+
+No code. Four deferred items recorded in `debug.md` with their evidence, plus one correction worth
+making before the next session builds on a wrong word.
+
+**MENU VOCABULARY — the game says "Battle Menu" and "Party Menu".** Captured verbatim from its own
+Controls screen (`Docs/Controls.md:100-110`); it does **not** say "command menu". Internally this
+project calls the `R` menu the *field menu* and reserves *party menu* for that menu's first command,
+which is where the confusion comes from. User-facing wording uses the GAME's words.
+
+**ITEM QUANTITY IS ALREADY SHIPPED ON THE FIELD SIDE.** `inventory_reader.cpp:234-237` reads the
+owned count at row `+0x0E` and appends it, on the `FUN_005655f0` refresh that serves the party-menu
+lists and the equipment list. So that half of the request is a VERIFY, not a build — worth knowing
+before someone reimplements it. The battle menu is the real gap: it is a separate system releasing
+on its row draw (`FUN_00276be0`) with no pane-replay path, so it does not go through that refresh at
+all. Same structural fact scopes the MP-cost work to the battle menu cleanly.
+
+**MP COST IS SCOPED, NOT GLOBAL.** Battle Menu only. The Party Menu's Magicks screen is a browsing
+surface where a cost is noise; the battle menu is where the number decides whether the action is
+castable.
+
+Backlog: Polish diacritics (**not fixed — re-measure on the tester's build**), MP cost (battle menu
+only), battle-menu item quantity, the empty `<n>` dialogue macro, live-target routing.
+
+**KEYWORDS: backlog deferred Polish diacritics MP cost battle menu party menu vocabulary item
+quantity OFF_R_QTY 0x0E FUN_005655f0 battle menu FUN_00276be0 setmesmacro macro empty**

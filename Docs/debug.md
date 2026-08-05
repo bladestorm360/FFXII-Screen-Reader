@@ -5427,3 +5427,65 @@ behaviour byte for byte.
 project (the whole S84–S124 arc) and it interacts with the funnel, the corridor march, the surface
 goal, auto-walk and the beacon. A replan that fires too eagerly would stall the beacon or fight
 auto-walk. It needs its own session with play evidence.
+
+## BACKLOG — carried to a future session (recorded 2026-08-05, S140)
+
+Four items, all deferred at the tester's direction. Each is written up so the next session starts
+from evidence rather than from a re-investigation.
+
+### 1. The Polish diacritics fix is NOT working
+
+**The tester reports the S130 glyph work did not solve accented-character reading on the
+PL_ff12_v1.3 fan patch.** `project_s130_minhook_ceiling_and_glyph_table.md` and the
+`GameArchitecture.md` glyph section are marked as findings, **not** as a solved problem.
+
+Start from the TESTER's build and the TESTER's own log, never the dev machine — that is the standing
+rule and it is exactly the trap this one sets, because the dev machine has no fan patch installed.
+Check in order: whether the **Text glyphs** mod-menu setting is actually on `Polish` in their
+`mod_settings.txt`; whether the mapping is applied on the read path their text actually takes; and
+whether more slots moved than the 144 bytes S130 recovered. Several claims in that section may need
+STRIKING rather than extending.
+
+### 2. MP cost of magicks — BATTLE MENU ONLY
+
+**Scope is the requirement, not a detail.** MP cost belongs to the game's **Battle Menu** (`F`),
+where the player is committing an action and the cost decides whether it can be cast. It must NOT
+appear on the **Party Menu**'s Magicks screen, which is a browsing surface where the number is noise.
+
+That scoping is structural rather than a flag: the battle menu is already a separate system in this
+codebase, releasing on its row DRAW (`FUN_00276be0`) with no pane-replay path
+(`ingame_menu_reader.cpp:49`, `:160`).
+
+**VOCABULARY.** The game's own Controls screen says **"Battle Menu"** and **"Party Menu"**
+(`Docs/Controls.md:100-110`, captured verbatim). It does not say "command menu". Internally this
+project calls the `R` menu the *field menu* and reserves *party menu* for that menu's first command.
+User-facing wording uses the GAME's words.
+
+### 3. Item quantity in the battle menu
+
+**The field side already works and must be verified, not rebuilt.** `inventory_reader.cpp` reads the
+owned count at row `+0x0E` (`OFF_R_QTY`, u16) and appends it (`:234-237`), hooking `FUN_005655f0`
+(RVA `0x4455F0`), which serves the party-menu lists and the equipment list (`:57`).
+
+**The gap is the battle menu**, which does not go through that refresh, so its Items list almost
+certainly announces a name with no count. Confirm that, find the battle Items row layout (the
+`+0x0E` field may not have the same shape), and append the count on that path only.
+
+**One decision for the tester:** the field reader speaks the count only when `qty > 1`. In battle,
+"Potion 1" versus "Potion" is the difference between knowing it is your last one and finding out the
+hard way — so the battle path may want to state the count always.
+
+### 4. The `<n>` dialogue macro renders empty
+
+The shout sequence's own feedback line reads as **"Only  Bhujerban heeds your words."** — a double
+space where the count belongs. The game fills it with `setmesmacro` (native `0x1A8`) and the mod's
+dialogue reader sees the unsubstituted form.
+
+This matters beyond cosmetics: that line is **the game's own statement of how many NPCs heeded each
+shout**, which is better feedback than any meter reading, and it would give the civilian-earshot
+answer for free. Investigate whether substitution happens later or into a second buffer at draw
+time. Affects messages 5 and 6 of every `byu_*` shout map.
+
+### 5. Routing to a moving target
+
+See the entry above this block — cause, fix and risk are already written up there.
