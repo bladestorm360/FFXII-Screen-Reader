@@ -27,6 +27,25 @@ namespace {
 // statically rather than left to a runtime guard.
 //
 // The four `byu_?01` stubs (w/x/y/z) contain no `setgaugecounter` call and are deliberately absent.
+//
+// ---- GUARD IDENTITY: the leading candidate, NOT yet shipped ------------------------------------
+//
+// The 2026-08-05 play log ran the sequence on map 804 (Cloudborne Row) and its object dump lists
+// exactly one plausible watcher among eight NPC identities:
+//
+//     387  Bhujerban Sainikah   x1     <- "sainikah" is the game's word for SOLDIER
+//     386  Cloudborne Patron    x2         311  Archadian Wayfarer   x1
+//     388  Cloudborne Resident  x2         409  Lhusu Miner          x1
+//    1054  Informed Parijanah   x3        1137  Bhujerban Guru       x1
+//
+// NOTE WHAT IS NOT THERE: no "Imperial". Bhujerba is Ondore's city and its street watch is his own
+// sainikah, so the assumption that the punisher is an Imperial -- carried from the palace sneak
+// sequence, where 694 really was one -- looks wrong for this map.
+//
+// **387 IS A CANDIDATE, NOT A MEASUREMENT.** One NPC of that name on one map, with no penalty
+// observed beside it, is nowhere near the 0.98 bar, and shipping it would have the crowd key
+// confidently miscount. It stays a comment until a PENALTY capture puts it close and the CLEAN
+// captures put it far -- which is exactly what shout_diag.cpp's instrument is for.
 constexpr Row kRows[] = {
     { "byu_a01.src", 0x0D, 100, -1, 0.0f },
     { "byu_a02.src", 0x0E, 100, -1, 0.0f },
