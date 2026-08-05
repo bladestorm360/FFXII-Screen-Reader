@@ -38,9 +38,16 @@ namespace MessageMacro {
 // Installs the writer hook. Non-fatal: without it macros stay blank, exactly as before.
 bool Init();
 
-// The most recent macro value, or false when none has been written this session.
-// `outOther` optionally receives the pair's second word -- WHICH OF THE TWO the printer uses is not
-// settled by the decompile, so both are logged on the first write and one play pass decides it.
-bool Latest(int32_t* outValue, int32_t* outOther = nullptr);
+// The most recent macro VALUE, or false when none has been written this session.
+//
+// **IT IS THE SECOND WORD, MEASURED.** The decompile does not say which of the pair the printer
+// uses, so the first build shipped `valA` and logged both. One play pass settled it: the game showed
+// "2 Bhujerbans heed your words" while the log read `valA=0 valB=2`, and the mod spoke the 0. So the
+// pair is (kind, value) -- `valA` is a type selector, 0 for a plain integer, and `valB` is the
+// number. `FUN_002E1B70` storing them at +0 and +4 respectively fits that reading exactly.
+//
+// `outKind` optionally returns the first word, which is still logged on every first write so a
+// non-zero kind (a different macro TYPE the mod has not seen) shows up rather than printing wrong.
+bool Latest(int32_t* outValue, int32_t* outKind = nullptr);
 
 } // namespace MessageMacro

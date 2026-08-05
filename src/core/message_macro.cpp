@@ -30,14 +30,18 @@ void __fastcall HookedSetMacro(int slot, int index, uint32_t a, uint32_t b) {
     s_valB.store(static_cast<int32_t>(b), std::memory_order_relaxed);
     s_have.store(true, std::memory_order_release);
 
-    // ONE line, the first time only. WHICH of the two words the printer uses is not settled by the
-    // decompile, so both are recorded and a single play pass decides it -- the same measure-rather-
-    // than-guess shape the gauge work used. Per-call logging would be O(every message in the game).
+    // ONE line, the first time only -- per-call logging would be O(every message in the game).
+    //
+    // THIS LINE IS WHY THE VALUE IS RIGHT NOW. The first build spoke `valA` and logged both, because
+    // the decompile does not say which word the printer uses. The play log read `valA=0 valB=2`
+    // while the screen said "2 Bhujerbans heed your words" -- so the pair is (kind, value), and the
+    // measurement cost one run instead of a guessing round. `kind != 0` is worth noticing: it means
+    // a macro TYPE this has never seen, and the number may not be a plain integer.
     if (!s_logged.exchange(true, std::memory_order_relaxed)) {
-        char m[176];
+        char m[192];
         snprintf(m, sizeof(m),
-                 "first macro write: slot=%d index=%d valA=%u valB=%u -- the spoken number is valA; "
-                 "if a line reads wrong, valB is the other candidate",
+                 "first macro write: slot=%d index=%d kind=%u value=%u -- `value` is what is spoken; "
+                 "a non-zero kind means a macro type this build has not seen",
                  slot, index, a, b);
         Log::Write("MESMACRO", m);
     }
@@ -46,10 +50,10 @@ void __fastcall HookedSetMacro(int slot, int index, uint32_t a, uint32_t b) {
 
 } // namespace
 
-bool Latest(int32_t* outValue, int32_t* outOther) {
+bool Latest(int32_t* outValue, int32_t* outKind) {
     if (!s_have.load(std::memory_order_acquire)) return false;
-    if (outValue) *outValue = s_valA.load(std::memory_order_relaxed);
-    if (outOther) *outOther = s_valB.load(std::memory_order_relaxed);
+    if (outValue) *outValue = s_valB.load(std::memory_order_relaxed);   // the VALUE (measured)
+    if (outKind)  *outKind  = s_valA.load(std::memory_order_relaxed);   // the kind selector
     return true;
 }
 

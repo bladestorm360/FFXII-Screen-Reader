@@ -3871,3 +3871,26 @@ Built + deployed, **NOT play-confirmed.** Expect *"Only 1 Bhujerban heeds your w
 
 **KEYWORDS: selector 0x2E macro printer FUN_002AC5F0 param_1[0xE] FUN_002E16B0 render context
 FUN_002E1B70 writer hook message_macro additive decode heed count**
+
+## Session 145 — 2026-08-05 — The macro pair is (kind, value), and the diagnostic paid for itself
+
+S144 shipped `valA` as the spoken number because the decompile does not say which word of the pair
+the printer uses, and logged BOTH on the first write so one play pass could decide it. That pass:
+
+    [MESMACRO] first macro write: slot=2 index=0 valA=0 valB=2
+    [DIALOGUE] "0 Bhujerbans heed your words."
+
+The screen said **two**. So `valA` is a **kind selector** (0 = plain integer) and **`valB` is the
+number** — which is exactly what `FUN_002E1B70` storing them at `+0` and `+4` implies, now that
+there is a reading to attach to it. One-line fix, and **the wrong guess cost one run instead of a
+guessing round**, which is the whole reason the line was there.
+
+`Latest()` now returns `valB` as the value and exposes `valA` as the kind. The first-write log
+survives and names them properly: a **non-zero kind** means a macro TYPE this build has never seen,
+where the second word may not be a plain integer at all — so the log still reports the thing that
+would make this wrong again.
+
+Built + deployed, **NOT play-confirmed.** Expect *"2 Bhujerbans heed your words."*
+
+**KEYWORDS: macro pair kind value valA valB measured one play pass FUN_002E1B70 +0 +4 heed count
+non-zero kind is the falsifier**
