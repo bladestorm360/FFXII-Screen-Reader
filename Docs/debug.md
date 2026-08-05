@@ -5461,45 +5461,39 @@ codebase, releasing on its row DRAW (`FUN_00276be0`) with no pane-replay path
 project calls the `R` menu the *field menu* and reserves *party menu* for that menu's first command.
 User-facing wording uses the GAME's words.
 
-### 3. Item quantity is BROKEN IN BOTH menus
+### 3. ~~Item quantity is BROKEN IN BOTH menus~~ — SOLVED, and "BOTH" was WRONG (Session 146)
 
-**Tester report: the count is not announced in EITHER the field/Party menu or the Battle menu.**
+~~**Tester report: the count is not announced in EITHER the field/Party menu or the Battle menu.**~~
+**STRUCK 2026-08-05.** The field side was **never broken**. The tester re-tested on the current
+build and the log says it plainly:
 
-> ~~"The field side already works and must be verified, not rebuilt."~~ **STRUCK.** That came from
-> reading `inventory_reader.cpp:234-237` and seeing the code present. The tester has played it; that
-> outranks a code reading. **The RULE in the code is right, the BEHAVIOUR is absent** — which is a
-> different and more interesting bug than the missing feature I had written up.
+    [INV]    item: "Potion 32"   "Antidote 5"          <- FIELD menu, count SPOKEN
+    [INGAME] command: 0x52 "Potion"   0x5B "Antidote"  <- BATTLE menu, count MISSING
 
-**THE RULE, confirmed by the tester: announce the quantity only when it is 2 OR GREATER.** A count of
-one is not worth saying. `inventory_reader.cpp:237` already implements exactly that (`if (qty > 1)`),
-so nothing about the rule needs changing.
+The 2026-08-03 tester log had already said the same thing — `"Wind Stone 6"`, `"Bone Fragment 7"`,
+`"Silken Shirt 2"`, each matching the shop reader's independent `"6 in inventory"` to the digit.
+**Only the battle menu was ever missing a count**, and that half shipped this session.
 
-**WHERE THE FAILURE IS NOT.** The reader initialises — `[INV] InventoryReader initialized (item
-name+quantity on focus; category name on open/switch)` — and `TryFocus` **runs** (the `PERF` block
-records `calls=1` on two separate occasions), while **zero** item lines reach `SPEAK-OUT` in the same
-log. So the hook install and the dispatch are both fine. The failure is downstream, inside
-`TryFocus`'s early-out chain.
+**HOW THE WRONG HALF OF THE REPORT SURVIVED A SESSION.** S143 read `PERF … InventoryReader::TryFocus
+calls=1` in a log with zero item lines and concluded the reader was bailing out early. Those two
+calls were the **title screen and the save-slot list** — that log never opened an item list at all.
+*A counter proves a function ran; it does not prove it ran on the surface you are thinking about.*
+The seven early-outs this section used to tabulate as "where to look first" were a hunt for a bug
+that did not exist, and the instrumentation they called for was never written. **Before instrumenting
+a refusal, confirm the surface was even visited** — one grep for the announcement the working half
+would have printed (`[INV] item:`) answers it in a second.
 
-**WHERE TO LOOK FIRST** — `TryFocus`'s returns, in order (`inventory_reader.cpp:194-230`):
+**THE RULE, unchanged and now applied in BOTH menus: announce the quantity only when it is 2 OR
+GREATER.** A row exists only because you own at least one, so a bare name already means exactly one.
+(`inventory_reader.cpp:237`; `ingame_menu_reader.cpp`'s `ItemCountSuffix`.)
 
-| line | early-out |
-|---|---|
-| `:196` | null owner / negative index |
-| `:200` | `ShopReader::OwnsSurface` |
-| `:207` | `PrimerReader::OwnsSurface` |
-| `:212` | `IsEmptyCategory` |
-| `:221` | `index >= li.count` |
-| `:227` | `id == 0xFFFF` (empty / mid-rebuild) |
-| `:230` | `name.empty()` |
-
-**Instrument these.** One log line naming which return fired is the whole diagnosis — the same
-"make the refusal say why" shape that cracked the shout module resolution in two sessions rather
-than five.
-
-**THE BATTLE MENU IS A SECOND, SEPARATE JOB.** It never goes through `FUN_005655f0`: it is its own
-system, releasing on its row DRAW (`FUN_00276be0` — `ingame_menu_reader.cpp:49`, `:160`). It needs
-its own row layout and its own announcement, and the field row's `+0x0E` count field must not be
-assumed to match.
+**THE BATTLE MENU IS ITS OWN SYSTEM** — it never goes through `FUN_005655f0`, and the field row's
+`+0x0E` does not apply to it. Its count and its MP cost are **the same word**, the u16 at
+`panel+0x512+row*8`, and only the gate at `panel+0x50C` says which (`3` = count). Two other
+discriminators were shipped and measured away first — the draw callback (the Items list shares
+`FUN_0027ce70` with the magick list) and the list kind (both are case `0xB`). Full model, and why
+the gate must not be replaced by "is the number non-zero", in `GameArchitecture.md` under the battle
+command menu.
 
 ### 4. The `<n>` dialogue macro renders empty — TRACED, one unknown left
 

@@ -103,6 +103,39 @@ constexpr uint32_t OFF_LISTWIDGET  = 0x1510;   // panel+0x1510 = the list widget
 constexpr uint32_t OFF_DRAW_CB     = 0x120;    // listWidget+0x120 = per-row draw callback
 constexpr uint32_t OFF_BCMD_FLAG   = 0x513;    // panel+0x513 + row*8 = per-row flag byte (bit2 in chooser)
 
+// ---- The SECOND COLUMN the sub-lists draw beside the name (Session 146) -----------------------
+// Every battle sub-list that shows a number to the right of the row draws it from ONE place: the
+// u16 at panel+0x512 + row*8 (FUN_0027ce70:119-125, via FUN_0029cb80(0x4694, word)). What the word
+// MEANS is said by panel+0x50C, which FUN_0031eb20's case 0xB sets in the SAME `if` that writes it:
+//
+//   rec+0xC & 0x20000000 -- an MP-costing action. Word = FUN_002f95d0(actor, id), the cost AS THIS
+//                           CHARACTER PAYS IT, not the master-data figure. Gate = 1, 2 or 4.
+//   rec+0xC bit 31       -- an ITEM-consuming action. Word = FUN_00309ec0(FUN_003093b0(rec), 0):
+//                           rec+0x22 is the item the action spends, and that call is its OWNED
+//                           COUNT. Gate = 3.
+//
+// TWO WRONG DISCRIMINATORS WERE SHIPPED AND MEASURED AWAY BEFORE THIS ONE, both in one session:
+//   * the per-row DRAW CALLBACK -- the battle Items list shares FUN_0027ce70 with the magick list,
+//     so every item read "Potion, MP 31";
+//   * the LIST KIND at panel+0x4C0 -- the Items list is case 0xB TOO. Measured: `listKind=0xB
+//     costGate=3` for items against `listKind=0xB costGate=1` for White Magicks.
+// The lesson both times: identify a shared surface by the branch that WROTE the field, not by the
+// code that renders it or the container it lives in. Only the gate word is that branch's own output.
+//
+// THE GATE IS ALSO THE SILENCE TEST, and must not be replaced by "is the number non-zero" -- the
+// game's own display test is `& ~2` (FUN_0027ce70:61):
+//   0 -- no cost at all (Technicks). Case 0xB never clears +0x512 per row, so the stale word from a
+//        previous list is still sitting there. This is exactly the case the tester asked to be SILENT.
+//   2 -- the word is a MIST CHARGE count that the draw spends on icons (FUN_0027ce70:91-100), never
+//        on a figure. Speaking it would be a wrong number, not a missing one.
+constexpr uint32_t OFF_BCMD_COST     = 0x512;  // panel+0x512 + row*8 = u16 second column
+constexpr uint32_t OFF_BCMD_COSTKIND = 0x50C;  // panel+0x50C = what that word means, per builder
+constexpr uint32_t OFF_BCMD_LISTKIND = 0x4C0;  // panel+0x4C0 = FUN_0031eb20's switch (LOG ONLY --
+                                               // 0xB for BOTH lists; that is why it cannot discriminate)
+constexpr uint32_t COSTKIND_MIST     = 2;      // gate values that print nothing: 0 and this
+constexpr uint32_t COSTKIND_ITEMS    = 3;      // ...and the one that means "owned count", not MP
+constexpr int      MAX_SECOND_COLUMN = 999;    // out of range -> say nothing, and log why
+
 // ---- GAMBITS: the one battle command that is a TOGGLE, not a submenu --------------------------
 // cmdId 0x0D. Two independent sites single it out: the row draw FUN_00276be0 special-cases exactly
 // this id to draw a SECOND, two-state graphic beside the name (FUN_00242600 with a frame index),
@@ -257,6 +290,19 @@ uint8_t ReadBcmdRowFlag(void* panel, int index) {
         if (count <= 0 || count > 64 || index >= count) return 0;
         return *reinterpret_cast<uint8_t*>(p + OFF_BCMD_FLAG + static_cast<size_t>(index) * BCMD_STRIDE);
     } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+// The per-row cost word at panel+0x512+index*8 (MP, or mist charges -- see OFF_BCMD_COST). Bounded
+// by the same row count as the id and flag readers. POD-only under __try; false on fault.
+bool ReadBcmdCost(void* panel, int index, uint16_t* out) {
+    if (!panel || index < 0) return false;
+    __try {
+        char* p = reinterpret_cast<char*>(panel);
+        int count = *reinterpret_cast<int*>(p + OFF_BCMD_CNT);
+        if (count <= 0 || count > 64 || index >= count) return false;
+        *out = *reinterpret_cast<uint16_t*>(p + OFF_BCMD_COST + static_cast<size_t>(index) * BCMD_STRIDE);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
 // During FUN_00276be0's draw of row `index`: the command id (panel+0x510+index*8) and the name codec
@@ -468,12 +514,93 @@ std::wstring GambitStateSuffix(void* panel, int index, int cmdId) {
     return std::wstring(L": ") + Phrase::Get(on ? Phrase::Id::On : Phrase::Id::Off);
 }
 
+// Name the surface ONCE per distinct (draw callback, list kind, cost gate) triple, so a log from
+// any play pass says which list was on screen and which branch below owned it. Log-only volume
+// control, and the reason it exists: the draw callback ALONE said "items" and "magicks" were the
+// same surface, and one line of this would have caught the wrong label before it shipped.
+void LogSecondColumnSurface(void* cb, uint32_t listKind, uint32_t costKind) {
+    struct Seen { void* cb; uint32_t list; uint32_t cost; };
+    static Seen s_seen[12] = {};
+    static int  s_n = 0;
+    for (int i = 0; i < s_n; ++i)
+        if (s_seen[i].cb == cb && s_seen[i].list == listKind && s_seen[i].cost == costKind) return;
+    if (s_n >= 12) return;
+    s_seen[s_n++] = Seen{cb, listKind, costKind};
+    const uintptr_t base = reinterpret_cast<uintptr_t>(Hooks::ResolveRva(0));
+    const uintptr_t c    = reinterpret_cast<uintptr_t>(cb);
+    char m[160];
+    const char* means = (costKind == 0 || costKind == COSTKIND_MIST) ? "nothing"
+                      : (costKind == COSTKIND_ITEMS)                 ? "owned count"
+                                                                     : "MP cost";
+    snprintf(m, sizeof(m), "second column: draw RVA=0x%llX listKind=0x%X costGate=%u -> %s",
+             static_cast<unsigned long long>(c >= base ? c - base : c),
+             listKind, costKind, means);
+    Log::Write("INGAME", m);
+}
+
+// The number the game draws to the RIGHT of a row: " 31" for an item, ", MP 6" for an ability.
+//
+// ONE reader for both, because the game draws ONE column. Only the label forks, on the gate word the
+// builder set beside it -- see OFF_BCMD_COST above for the two discriminators that looked right and
+// were not. Empty (SILENT) whenever the game itself shows no number there.
+std::wstring SecondColumnSuffix(void* panel, int index, void* cb) {
+    uint32_t costKind = 0, listKind = 0;
+    if (!MemRead::SafeReadU32(panel, OFF_BCMD_COSTKIND, &costKind)) return std::wstring();
+    MemRead::SafeReadU32(panel, OFF_BCMD_LISTKIND, &listKind);     // for the log line only
+    LogSecondColumnSurface(cb, listKind, costKind);
+
+    // The game's own display test, verbatim (FUN_0027ce70:61) -- NOT "is the number non-zero", which
+    // would read a Technick's stale word and a Quickening's mist charges as a figure.
+    if ((costKind & ~COSTKIND_MIST) == 0) return std::wstring();
+
+    uint16_t word = 0;
+    if (!ReadBcmdCost(panel, index, &word) || word == 0) return std::wstring();
+    if (word > MAX_SECOND_COLUMN) {
+        // The column is showing something that is not a small number. Report it rather than putting
+        // it in the player's ear -- this line is the falsifier for the offsets above, exactly like
+        // the macro writer's first-write log.
+        char m[128];
+        snprintf(m, sizeof(m), "second column out of range: listKind=0x%X costGate=%u raw=%u -- not spoken",
+                 listKind, costKind, static_cast<unsigned>(word));
+        Log::Write("INGAME", m);
+        return std::wstring();
+    }
+
+    if (costKind == COSTKIND_ITEMS) {
+        // ITEM list -- "Potion 31", word for word what the field item list says, on the tester's
+        // instruction. Above 1 only, which is that list's rule too: a row exists only because you
+        // own at least one, so a bare name already means exactly one.
+        if (word <= 1) return std::wstring();
+        return L" " + std::to_wstring(word);
+    }
+
+    // ABILITY list. The label is the mod's existing "MP " gauge word, so the status screen and this
+    // row read alike.
+    return std::wstring(L", ") + Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(word);
+}
+
+// The extra thing the game draws to the RIGHT of a row's name, dispatched on the same draw-callback
+// identity BattleCommandName resolves the NAME with. One function so the cases cannot drift apart,
+// and so an unmapped list type stays silent by construction rather than by omission.
+//
+// FUN_0027ce70 covers the item list as well as the ability lists -- see OFF_BCMD_COST. There is
+// deliberately NO branch for FUN_0027e530: it draws its count from its own FUN_00272c80(entry) call
+// rather than from +0x512, and no play pass has ever landed on it, so reading it would be shipping
+// an unverified number. Silence on a surface we have never seen is the correct answer.
+std::wstring RowDetailSuffix(void* panel, int index, int cmdId) {
+    void* cb = BattleDrawCallback(panel);
+    if (cb == Hooks::ResolveRva(RVA_DRAW_TOPCMD)) return GambitStateSuffix(panel, index, cmdId);
+    if (cb == Hooks::ResolveRva(RVA_DRAW_MAGICK)) return SecondColumnSuffix(panel, index, cb);
+    return std::wstring();
+}
+
 bool TrySpeakBattleCommand(void* panel, int index) {
     int cmdId = ReadBcmdCmdId(panel, index);
     if (cmdId < 0) return false;
     std::wstring text = BattleCommandName(panel, index, cmdId);   // resolves by list type; locks internally
     if (text.empty()) return false;
-    text += GambitStateSuffix(panel, index, cmdId);   // "Gambits: on" -- the NAME is still the game's
+    // "Gambits: on" / "Potion 32" / "Cure, MP 6" -- the NAME is still the game's own text.
+    text += RowDetailSuffix(panel, index, cmdId);
 
     // THE MENU JUST BECAME ACTIVE -> say whose it is first. The tester asked for this explicitly:
     // the command highlight is meaningless until you know which character is about to obey it.

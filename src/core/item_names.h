@@ -29,4 +29,10 @@ const uint8_t* ResolveCodec(uint32_t itemId);
 // Decoded display name; empty when unresolvable (callers must stay SILENT rather than invent one).
 std::wstring Resolve(uint32_t itemId);
 
+// NOT WRAPPED, on purpose (Session 146): FUN_00272c80 (RVA 0x152C80) is this resolver's count
+// sibling -- same FUN_003588b0 lookup, then FUN_00263a10 -> the stack size at rec+0x100. It is what
+// FUN_0027e530 draws its count from. The battle item list does NOT go through that draw (it shares
+// FUN_0027ce70 with the magick list and shows the count from panel+0x512), so a wrapper here would
+// have no caller and no play evidence behind its number. Recorded in GameArchitecture.md instead.
+
 } // namespace ItemNames

@@ -2067,8 +2067,10 @@ it was just an unmapped owner class (showed as `[focus] UNKNOWN owner obj[0]=+0x
   0x0=Attack, 0x12="Magicks & Technicks" (codec `0xa0`='&'), 0x3=Items.
 - **Sub-lists (Session 31) — SHIPPED, USER-CONFIRMED.** The mod picks the resolver by the panel's per-row
   draw callback `*( *(panel+0x1510) + 0x120 )` (exact-match guarded → wrong guess is SILENT, never wrong):
-  - **Items** = draw `FUN_0027e530` (RVA `0x15E530`) → resolver `FUN_00272cb0(id)` (RVA `0x152CB0`) returns
-    the name codec directly. (Earlier "FUN_0027d5c0/cat 2" claim was WRONG — retracted.)
+  - ~~**Items** = draw `FUN_0027e530` (RVA `0x15E530`) → resolver `FUN_00272cb0(id)` (RVA `0x152CB0`)~~
+    **STRUCK S146 as the LIVE battle path** — the battle Items list draws through `FUN_0027ce70` like
+    the magick list, so its name comes from `FUN_0035d330(0x14, id)`. The entry stays as a valid
+    handler; it is simply never the one that fires. (Earlier "FUN_0027d5c0/cat 2" claim was WRONG — retracted.)
   - **"Magicks & Technicks" is TWO-LEVEL** (trace: top cmdId 0x12 → `FUN_0027c3d0` returns kind 2 →
     `FUN_0027e050` case 2 type 8; then category → kind 0xa-0xf → type 0xb): (1) category **chooser** draw
     `FUN_0027d240` (RVA `0x15D240`), resolver `FUN_0035d330(cat, id)` with `cat = (panel+0x513+row*8 & 4) ?
@@ -2076,6 +2078,43 @@ it was just an unmapped owner class (showed as `[focus] UNKNOWN owner obj[0]=+0x
     (RVA `0x15CE70`), `FUN_0035d330(0x14, id)`, `panel+0x1578` OVERWRITTEN by MP-cost → re-resolve.
 - **NOT** `FUN_002c2320` (that's the FIELD Equipment screen, opened via pause menu `FUN_00281ed0` cmd
   0x4b6). **NOT** `FUN_002b7590`/`DAT_0209e5c0` (that's the message/dialogue framework). Both retracted.
+- **THE SECOND COLUMN the sub-lists draw beside the name (Session 146) — SHIPPED.** Every sub-list
+  that shows a number to the right of a row draws it from **ONE** place — the **u16 at
+  `panel+0x512 + row*8`**, via `FUN_0029cb80(0x4694, word)` (`FUN_0027ce70:119-125`). What the word
+  MEANS depends on which builder case filled it:
+  - **`panel+0x50C` SAYS WHICH** — `FUN_0031eb20`'s **case 0xB** sets it in the **same `if` that writes
+    the word**, which is what makes it the only trustworthy discriminator:
+
+    | `rec+0xC` | word written | gate at `panel+0x50C` |
+    |---|---|---|
+    | `& 0x20000000` (MP-costing action) | `FUN_002f95d0(actor, id)` — the cost **as this character pays it** | `FUN_002fa140` → `0→1`, `1→4`, `2→2` |
+    | bit 31 (item-consuming action) | `FUN_00309ec0(FUN_003093b0(rec), 0)` — `rec+0x22` is the item spent, the call is its **OWNED COUNT** | **3** |
+  - ⚠ **TWO OTHER DISCRIMINATORS LOOK RIGHT AND ARE NOT** — both shipped and were measured away in
+    S146. **The per-row DRAW CALLBACK:** the battle Items list shares **`FUN_0027ce70`** with the
+    magick list, so every item read "Potion, MP 31". **The LIST KIND at `panel+0x4C0`:** the Items list
+    is **case 0xB too** — measured `listKind=0xB costGate=3` (Items) against `listKind=0xB costGate=1`
+    (White Magicks). *Identify a shared surface by the branch that WROTE the field, not by what renders
+    it or what container it was built into.*
+  - Collateral: ~~"Items = draw `FUN_0027e530`"~~ is **STRUCK as the live battle path**, so the item
+    NAME has always come from `FUN_0035d330(0x14, id)` (the action table covers item actions) rather
+    than from `FUN_00272cb0`.
+  - **`FUN_0027e530` (RVA `0x15E530`) is a real draw with a real count source** —
+    `FUN_00272c80(entry)` (RVA **`0x152C80`**), the count sibling of `FUN_00272cb0`: same
+    `FUN_003588b0` lookup, then `FUN_00263a10` → the stack size at **`rec+0x100`**, but only when
+    **`rec+0x102 < 0`** (a stack), else **0** (a single equipment instance). **No play pass has ever
+    landed on that draw**, so the mod does not read it; the resolver entry for it in
+    `BattleCommandName` stays as the correct handler if it is ever the live one.
+  - ⚠ **THE SILENCE TEST IS NOT "is the number non-zero", and must not be replaced by one.** The game's
+    own display test is `(*(u32)(panel+0x50C) & ~2) != 0` (`FUN_0027ce70:61`). Gate **0** = no cost
+    (Technicks): case 0xB **never clears `+0x512` per row**, so the stale word from a previous list is
+    still sitting there. Gate **2** = the **mist-charge count** the draw spends on icons
+    (`FUN_0027ce70:91-100`) — speaking it would be a wrong number, not a missing one.
+  - The **gate is per-LIST, not per-row** — the builder writes one field inside a per-row loop, so it
+    ends up holding the LAST row's kind. That is the game's own behaviour (these lists are
+    homogeneous); do not "fix" it into a per-row lookup.
+  - `[INGAME] second column: draw RVA=… listKind=… costGate=… -> owned count|MP cost|nothing` names
+    each distinct surface once per session, so a log says which branch owned a row. It is what
+    refuted the list-kind model.
 
 **Battle targeting (Foes/Party/Allies highlight select) — SHIPPED Session 32.**
 ⚠️ The Session-28..31 model (window `FUN_00552250` / reticle `FUN_005528c0` / gate `DAT_02ca8f38`,

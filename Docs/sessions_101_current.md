@@ -3894,3 +3894,73 @@ Built + deployed, **NOT play-confirmed.** Expect *"2 Bhujerbans heed your words.
 
 **KEYWORDS: macro pair kind value valA valB measured one play pass FUN_002E1B70 +0 +4 heed count
 non-zero kind is the falsifier**
+
+## Session 146 — 2026-08-05 — [menus] The battle menu's second column: one word, two meanings
+
+Three asks: item quantity in the field and battle menus, and the MP cost of a magick/technick spoken
+**on highlight** — the deliberate exception to AUTODETAIL, because a cost you learn after committing
+is a cost you learn too late. The field half of the report turned out not to exist.
+
+**THE FIELD MENU WAS NEVER BROKEN, AND S143'S DIAGNOSIS IS STRUCK.** S143 read `PERF …
+InventoryReader::TryFocus calls=1` in a log with zero item lines and concluded the reader was bailing
+out of its early-out chain. **Those two calls were the title screen and the save-slot list** — that
+log never opened an item list at all. The tester's own 2026-08-03 log had `"Wind Stone 6"`,
+`"Bone Fragment 7"`, `"Silken Shirt 2"`, each matching the shop reader's independent
+`"6 in inventory"` to the digit, and a fresh test this session printed `"Potion 32"` / `"Antidote 5"`.
+*A counter proves a function ran; it does not prove it ran on the surface you are thinking about.*
+The seven tabulated early-outs were a hunt for a bug that did not exist. **One grep for the line the
+working half prints (`[INV] item:`) settles "was this surface even visited" in a second, and it
+belongs BEFORE any instrumentation plan.**
+
+**THE BATTLE MENU DRAWS ONE COLUMN AND MEANS TWO THINGS BY IT.** Every sub-list number to the right
+of a row is the **u16 at `panel+0x512 + row*8`**, and `FUN_0031eb20`'s **case 0xB** fills it from one
+of two branches:
+
+    rec+0xC & 0x20000000  ->  FUN_002f95d0(actor, id)                 MP, AS THIS CHARACTER PAYS IT
+    rec+0xC bit 31        ->  FUN_00309ec0(FUN_003093b0(rec), 0)      the OWNED COUNT of rec+0x22
+
+**TWO DISCRIMINATORS WERE SHIPPED AND MEASURED AWAY BEFORE THE RIGHT ONE, in this session, in front
+of the tester.** First the per-row **draw callback**, dispatched exactly as the name resolver does —
+the tester heard **"Potion, MP 31"** and **"Antidote, MP 6"**. Both numbers were right; only the
+label was wrong, because **the battle Items list shares `FUN_0027ce70` with the magick list**. Then
+the **list kind** at `panel+0x4C0`, `FUN_0031eb20`'s own switch value — and the diagnostic added with
+that build printed the refutation on the next run:
+
+    second column: draw RVA=0x15CE70 listKind=0xB costGate=3   <- Items
+    second column: draw RVA=0x15CE70 listKind=0xB costGate=1   <- White Magicks
+
+**The Items list is case 0xB TOO.** What finally separates them is **`panel+0x50C`, which case 0xB
+sets INSIDE THE SAME `if` that writes the word** — gate **3** = item count, 1/2/4 = MP. *Identify a
+shared surface by the branch that WROTE the field: not by the code that renders it (the callback),
+and not by the container it was built into (the list kind). Only the gate is that branch's own
+output.* **The instrument earned its build**: the second wrong model cost one play pass instead of a
+guessing round, which is exactly what it was added for.
+
+Collateral strike: the mapping this project has carried since S31 — "Items = draw `FUN_0027e530` →
+`FUN_00272cb0`" — is **STRUCK as the live battle path**. Battle item names have always come from
+`FUN_0035d330(0x14, id)`, the action table, which covers item actions.
+
+**SILENCE WHERE THE GAME IS SILENT**, and by the game's own test (`panel+0x50C & ~2`, `FUN_0027ce70:61`)
+rather than by "is the number non-zero": gate **0** = Technicks, where case 0xB **never clears
+`+0x512` per row** so the previous list's word is still sitting there; gate **2** = the **mist-charge
+count** the draw spends on icons. Either would have been read as a cost.
+
+Also this session: **no wrapper for `FUN_00272c80`** (RVA `0x152C80`, the count sibling of
+`FUN_00272cb0`). It is what `FUN_0027e530` draws its count from, and no play pass has ever landed on
+that draw — a wrapper would have shipped a number with no evidence behind it. It is recorded in
+`GameArchitecture.md`, which is where a fact with no caller belongs.
+
+Surviving log line `[INGAME] second column: draw RVA=… listKind=… costGate=… -> owned count|MP cost|
+nothing`, once per distinct surface. It stays because it is what refuted the second model, and it
+names the one field the wording now depends on.
+
+**Item rows read exactly as the field list does — name, space, number, nothing at 1** ("Potion 31"),
+on the tester's instruction: *"battle menu can just have the item name and number."* Abilities read
+`"Cure, MP 8"` / `"Blindna, MP 6"`; Technicks and Quickenings say nothing extra.
+**PLAY-CONFIRMED, both halves.**
+
+**KEYWORDS: battle menu second column panel+0x512 costGate panel+0x50C gate 3 owned count gate 1 MP
+FUN_0031eb20 case 0xB FUN_002f95d0 per-actor MP FUN_00309ec0 FUN_003093b0 rec+0x22 mist charges
+Technicks silent FUN_0027ce70 shared by items listKind 0xB for BOTH cannot discriminate STRIKES
+FUN_0027e530 item draw S143 field quantity struck calls=1 was the title screen identify by the branch
+that wrote the field MP on highlight autodetail exception**
