@@ -3772,3 +3772,27 @@ Built + deployed, **NOT play-confirmed.**
 
 **KEYWORDS: earshot shipped 3.0m EarshotRadius one constant in earshot civilians guards rounded up
 patrol jitter asymmetric errors S139 superseded reporting window removed**
+
+## Session 142 — 2026-08-05 — The heed count: traced to the macro table, one unknown left
+
+The tester asked whether the game's *"… Bhujerbans heed your words"* line actually carries a number.
+**It does, and it is reachable.** Full write-up in `debug.md`; the short version:
+
+* Messages 5 and 6 of every `byu_*` map carry a six-escape run exactly where the count belongs —
+  `0F 28 81 A4 | 0F 29 80 95 | 0F 2E 80 91 | 0F 29 80 80 | 0F 28 81 98 | 0F 3C C1 FD`. Message 7
+  ("No one heeds your words") has none, which is why that one reads correctly.
+* **The mod's decoder is not broken.** `EscapeParamCount` frames all six at 2 parameters and
+  consumes them cleanly. The substitution is simply not implemented.
+* `setmesmacro` (native `0x1A8`) → `FUN_0034CF20` → `FUN_002E1B70(slot, index, valA, valB)` writes
+  the value to a table at **RVA `0x203F540`**, 8 slots × 32 entries × 8 bytes,
+  indexed `slot*0x20 + index`.
+* **One unknown:** which selector prints it, and how its parameters map to `(slot, index)`. Needs a
+  Ghidra xref pass on `DAT_0215F540` — a recursive grep over 33k decompile files times out.
+
+Not implemented this session on purpose: the fix belongs in `GameText::Decode`, the choke point for
+**all** mod text, where a wrong change breaks every surface at once. Done properly it fixes every
+macro'd line in the game rather than this one, and it would give the civilian earshot for free — the
+heed count is ground truth for who actually heard a shout.
+
+**KEYWORDS: setmesmacro 0x1A8 FUN_002E1B70 macro table 0x203F540 slot*0x20+index escape run 0F 28
+0F 29 0F 2E 0F 3C EscapeParamCount frames correctly substitution not implemented heed count**

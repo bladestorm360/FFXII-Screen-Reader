@@ -5475,16 +5475,41 @@ certainly announces a name with no count. Confirm that, find the battle Items ro
 "Potion 1" versus "Potion" is the difference between knowing it is your last one and finding out the
 hard way — so the battle path may want to state the count always.
 
-### 4. The `<n>` dialogue macro renders empty
+### 4. The `<n>` dialogue macro renders empty — TRACED, one unknown left
 
-The shout sequence's own feedback line reads as **"Only  Bhujerban heeds your words."** — a double
-space where the count belongs. The game fills it with `setmesmacro` (native `0x1A8`) and the mod's
-dialogue reader sees the unsubstituted form.
+**The number exists and is reachable.** The mod reads *"Only  Bhujerban heeds your words."* (double
+space) and *"Bhujerbans heed your words."* (the leading `<n> ` gone entirely); *"No one heeds your
+words."* is a separate message with no macro and reads correctly.
 
-This matters beyond cosmetics: that line is **the game's own statement of how many NPCs heeded each
-shout**, which is better feedback than any meter reading, and it would give the civilian-earshot
-answer for free. Investigate whether substitution happens later or into a second buffer at draw
-time. Affects messages 5 and 6 of every `byu_*` shout map.
+**THE MESSAGE BYTES.** In `byu_a01.ebp` (message base `0x41C00`), entries 5 and 6 both carry the
+same six-escape run exactly where the number belongs, and entry 7 has none:
+
+    0F 28 81 A4 | 0F 29 80 95 | 0F 2E 80 91 | 0F 29 80 80 | 0F 28 81 98 | 0F 3C C1 FD
+
+**THE DECODER FRAMES THEM CORRECTLY AND EMITS NOTHING.** `game_text.cpp`'s `EscapeParamCount` gives
+all six 2 parameters (`0x29` takes its `k = at(1) & 7 == 0` branch), so the run is consumed cleanly.
+**This is not a framing bug** — the substitution is simply not implemented.
+
+**WHERE THE VALUE LIVES** (traced this session): `setmesmacro` is native `0x1A8` → impl
+`FUN_0034CF20` → `FUN_002E1B70(slot, index, valA, valB)`, which clamps `slot` to `[0,7]` and writes
+
+    *(u32*)(DAT_0215F540 + (slot*0x20 + index)*8) = valA
+    *(u32*)(DAT_0215F544 + (slot*0x20 + index)*8) = valB
+
+so the macro table is at abs `0x0215F540` = **RVA `0x203F540`**, 8 slots × 32 entries, 8 bytes each.
+`updatemesmacro` is native `0x1A9`.
+
+**THE ONE REMAINING UNKNOWN:** which of the six selectors is the "print macro" one, and how its two
+parameter bytes map to `(slot, index)`. Find it with a **Ghidra xref pass on `DAT_0215F540`** — a
+recursive grep over the 33k-file decompile times out. The escape dispatcher is `FUN_002AC5F0`
+(already named in `game_text.cpp`'s comments) and the generic 2-param handlers it lists are
+`FUN_003FFAB0 / 003FFC60 / 003FFDA0 / 003FFEE0 / 003FFB90`; the reader is one of those.
+
+**WHY THIS IS DONE PROPERLY RATHER THAN QUICKLY.** The fix belongs in `GameText::Decode`, the choke
+point for **all** text in the mod — menus, dialogue, item names, everything. A wrong change there
+breaks every surface at once. Done right it is a general win: every macro'd line in the game starts
+reading correctly, not just this minigame's. It would also hand us the civilian earshot for free,
+since the heed count is ground truth for who actually heard a shout.
 
 ### 5. Routing to a moving target
 
