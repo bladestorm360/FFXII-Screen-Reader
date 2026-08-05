@@ -103,7 +103,7 @@ void SpeakCrowd() {
         return;
     }
     const bool  haveGuards = ShoutTable::HaveGuardIdentity();
-    const float radius     = s_module.row ? s_module.row->earshotRadius : 0.0f;
+    const float radius     = ShoutTable::EarshotRadius();
 
     std::vector<EntityList::NearbyNPC> npcs;
     EntityList::CollectNearestNPCs(me, 64, npcs);
@@ -113,20 +113,12 @@ void SpeakCrowd() {
         return;
     }
 
-    // THE WINDOW. Counting everyone on the map was the first version's mistake -- the tester's words
-    // were "way, way too broad" -- because the question is who can hear a shout from HERE, and a
-    // street holds people the player will never reach.
-    //
-    // When the row carries a measured earshot, that is the window and the answer is exact. Until
-    // then the count is taken over a REPORTING window that is SPOKEN ALOUD, so it makes no hidden
-    // claim about the game's rules; it is expressed in the mod's own step unit so it means the same
-    // thing as every other distance the mod says. The play evidence puts the guard's real trigger
-    // at roughly the engine's interaction reach, so this is deliberately a little wider than that
-    // rather than a guess at the true number.
-    constexpr int kReportSteps = 10;
+    // THE WINDOW IS EARSHOT. Counting everyone on the map was the first version's mistake ("way,
+    // way too broad"); a 10-step reporting window was the second, because a window the player has to
+    // translate is not detection. This is the shipped earshot -- see shout_table.h for where the
+    // number comes from and why it is rounded the way it is.
     const bool  measured = (radius > 0.0f);
-    const float window   = measured ? radius
-                                    : NavCommon::GetUnitsPerStep() * static_cast<float>(kReportSteps);
+    const float window   = measured ? radius : NavCommon::GetUnitsPerStep() * 10.0f;
 
     int civilians = 0, guards = 0;
     for (const EntityList::NearbyNPC& e : npcs) {
@@ -142,13 +134,13 @@ void SpeakCrowd() {
     } else {
         text = std::to_wstring(civilians) + L" " + Phrase::Get(Phrase::Id::People);
     }
-    // Name the window every time, and name it for what it is: the game's own earshot once measured,
-    // otherwise a stated distance the player can hear and judge.
+    // Name the window for what it is. `measured` is true today; the fallback survives only so that
+    // zeroing the radius degrades to a stated distance rather than to a silent, invisible one.
     if (measured) {
         text += std::wstring(L" ") + Phrase::Get(Phrase::Id::InEarshot);
     } else {
-        text += std::wstring(Phrase::Get(Phrase::Id::WithinPrefix)) +
-                std::to_wstring(kReportSteps) + Phrase::Get(Phrase::Id::StepsSuffix);
+        text += std::wstring(Phrase::Get(Phrase::Id::WithinPrefix)) + L"10" +
+                Phrase::Get(Phrase::Id::StepsSuffix);
     }
 
     // The nearest guard is the one thing worth a bearing: it is what the player would move away

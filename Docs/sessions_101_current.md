@@ -3736,3 +3736,39 @@ only), battle-menu item quantity, the empty `<n>` dialogue macro, live-target ro
 
 **KEYWORDS: backlog deferred Polish diacritics MP cost battle menu party menu vocabulary item
 quantity OFF_R_QTY 0x0E FUN_005655f0 battle menu FUN_00276be0 setmesmacro macro empty**
+
+## Session 141 — 2026-08-05 — Earshot SHIPPED; the "deliberately not pinned" position is superseded
+
+The tester asked for earshot detection twice, having already measured it in play. **Withholding a
+number they had supplied was not caution — it was the feature not working**, and S139's position is
+struck rather than argued.
+
+**SHIPPED: `ShoutTable::EarshotRadius()` = 3.0 m**, one constant, applied to civilians and guards
+alike, because "who can hear me from here" is one question. The crowd key now says **"3 civilians,
+1 guard in earshot"** — detection, not a window the player has to translate.
+
+The evidence in full:
+
+    PENALTY   meter 25 -> 0     guard at  0.88 m     captured
+    CLEAN     meter 23 -> 27    guard at 19.64 m     captured
+    tester, from play: the trigger is "about 3 steps", "might be a little smaller"
+    civilians observed heeding at 4.12 m and 4.28 m  captured, CLEAN bursts
+
+**Rounded UP from the tester's 3 steps by one**, for two reasons pointing the same way. THE GUARD
+PATROLS, so the distance when the key is pressed is not the distance when the shout resolves, and
+the honest answer to that jitter is margin. And THE TWO ERRORS ARE NOT EQUAL: slightly too large
+says "guard in earshot" when the player was just safe — they move and lose nothing; slightly too
+small says the street is clear when it is not, and costs 30 points. 3.0 m also sits just above the
+two distances at which civilians were actually seen to heed, so the crowd half of the count matches
+the captures rather than a guess.
+
+**The nearest guard's LIVE distance and bearing is still spoken alongside the verdict**, so the raw
+number is never thrown away: the radius decides the wording, not what the player is told.
+
+The 10-step reporting window is gone. Its fallback survives only so that zeroing the radius degrades
+to a stated distance rather than to a silent, invisible one.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: earshot shipped 3.0m EarshotRadius one constant in earshot civilians guards rounded up
+patrol jitter asymmetric errors S139 superseded reporting window removed**

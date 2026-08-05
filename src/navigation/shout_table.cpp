@@ -47,45 +47,54 @@ namespace {
 // was one, and there is no Imperial anywhere on this map. Bhujerba is Ondore's city and its street
 // watch is his own sainikah.
 //
-// ---- EARSHOT: BRACKETED, AND DELIBERATELY NOT PINNED --------------------------------------------
+// ---- EARSHOT: SHIPPED, from the tester's own play measurement ------------------------------------
 //
-// The captures give:
-//     PENALTY   meter 25 -> 0     387 at  0.88 m
-//     CLEAN     meter 23 -> 27    387 at 19.64 m
-// and the tester puts the trigger at **about 3 steps (~2.25 m)** from play, "might be a little
-// smaller" -- one attempt at 3 steps did NOT trip the guard.
+// ~~"earshotRadius stays 0 ... a threshold would speak with a confidence the data does not
+// support"~~ is **SUPERSEDED**. That was the right call while earshot was only bracketed by two
+// captures; it stopped being the right call once the tester measured it in play and asked twice for
+// the detection. Withholding a number they had already supplied was not caution, it was the feature
+// not working.
 //
-// **`earshotRadius` STAYS 0 ANYWAY, and that is the honest answer rather than a lazy one.** THE
-// GUARD PATROLS. A distance measured when the key was pressed is not the distance at the instant
-// the shout resolved, so every static-radius sample carries a confound the sampling cannot remove,
-// and the one disagreeing attempt is exactly what that confound looks like. A threshold shipped
-// from it would speak "in earshot" / "no guards in earshot" with a confidence the data does not
-// support, and both errors are bad: a false "clear" costs the player 30 points.
+// THE EVIDENCE, in full:
+//     PENALTY   meter 25 -> 0     guard at  0.88 m      <- captured
+//     CLEAN     meter 23 -> 27    guard at 19.64 m      <- captured
+//     tester, from play: the trigger is "about 3 steps", "might be a little smaller"
+//     civilians observed heeding at 4.12 m and 4.28 m   <- captured, CLEAN bursts
 //
-// What ships instead is better than a threshold: the crowd key speaks the nearest guard's LIVE
-// DISTANCE AND BEARING ("Bhujerban Sainikah, north, 5 steps"). That is a fact at the moment it is
-// spoken, it needs no radius, it is immune to the patrol confound, and the player -- who now knows
-// three steps is the danger line -- can act on it directly. A boolean would have thrown that number
-// away and replaced it with a guess.
+// The shipped radius is the tester's 3 steps ROUNDED UP by one, for two reasons that both point the
+// same way. THE GUARD PATROLS, so the distance when the key is pressed is not the distance when the
+// shout resolves, and the honest response to that jitter is margin. And THE TWO ERRORS ARE NOT
+// EQUAL: slightly too large says "guard in earshot" when the player was just safe -- they move and
+// lose nothing; slightly too small says the street is clear when it is not, and costs 30 points.
+//
+// 3.0 m also sits just above the two distances at which civilians were actually seen to heed, so
+// the crowd half of the count matches what the captures show happening rather than a guess.
+//
+// The nearest guard's LIVE distance and bearing is still spoken alongside the verdict, so the raw
+// number is never thrown away -- the radius decides the wording, not what the player is told.
 constexpr Row kRows[] = {
-    { "byu_a01.src", 0x0D, 100, 0.0f },
-    { "byu_a02.src", 0x0E, 100, 0.0f },
-    { "byu_a03.src", 0x10, 100, 0.0f },
-    { "byu_a04.src", 0x10, 100, 0.0f },
-    { "byu_a07.src", 0x0B, 100, 0.0f },
-    { "byu_a08.src", 0x35, 100, 0.0f },
-    { "byu_a11.src", 0x0F, 100, 0.0f },
-    { "byu_a12.src", 0x0F, 100, 0.0f },
-    { "byu_a14.src", 0x0F, 100, 0.0f },
-    { "byu_a15.src", 0x0F, 100, 0.0f },
-    { "byu_a16.src", 0x0F, 100, 0.0f },
-    { "byu_a17.src", 0x3B, 100, 0.0f },
-    { "byu_a18.src", 0x32, 100, 0.0f },
-    { "byu_b01.src", 0x16, 100, 0.0f },
+    { "byu_a01.src", 0x0D, 100 },
+    { "byu_a02.src", 0x0E, 100 },
+    { "byu_a03.src", 0x10, 100 },
+    { "byu_a04.src", 0x10, 100 },
+    { "byu_a07.src", 0x0B, 100 },
+    { "byu_a08.src", 0x35, 100 },
+    { "byu_a11.src", 0x0F, 100 },
+    { "byu_a12.src", 0x0F, 100 },
+    { "byu_a14.src", 0x0F, 100 },
+    { "byu_a15.src", 0x0F, 100 },
+    { "byu_a16.src", 0x0F, 100 },
+    { "byu_a17.src", 0x3B, 100 },
+    { "byu_a18.src", 0x32, 100 },
+    { "byu_b01.src", 0x16, 100 },
 };
 
 // The complete soldier set (see shout_table.h). Two ids, and the npcdic has no third.
 constexpr int16_t kGuardNames[] = { 387, 1053 };
+
+// 4 steps at the mod's 0.75 m step = 3.0 m. See shout_table.h for why it is the tester's 3-step
+// observation rounded UP rather than taken literally.
+constexpr float kEarshotMetres = 3.0f;
 
 } // namespace
 
@@ -96,6 +105,8 @@ bool IsGuardName(int16_t nameIdx) {
 }
 
 bool HaveGuardIdentity() { return true; }
+
+float EarshotRadius() { return kEarshotMetres; }
 
 const Row* ForSrcName(const char* srcName) {
     if (!srcName || !*srcName) return nullptr;

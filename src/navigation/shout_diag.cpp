@@ -81,7 +81,7 @@ void Dump() {
         snprintf(line, sizeof(line),
                  "   module=%s slot=%d meterVar=0x%02X goal=%d earshot=%.2f guardIdentity=%d",
                  m.srcName, m.slot, m.row->meterVarIdx, m.row->fillValue,
-                 static_cast<double>(m.row->earshotRadius),
+                 static_cast<double>(ShoutTable::EarshotRadius()),
                  ShoutTable::HaveGuardIdentity() ? 1 : 0);
         Log::Write("NAV-PROBE", line);
     } else {

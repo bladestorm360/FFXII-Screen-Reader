@@ -36,11 +36,6 @@ struct Row {
     const char* srcName;       // the module's own authoring name, e.g. "byu_a01.src"
     uint8_t     meterVarIdx;   // script variable the gauge counter is driven from
     uint8_t     fillValue;     // the script's OWN success threshold (`v >= N`), never a mod constant
-    // Earshot, in metres. 0 = NOT MEASURED, and while it is 0 the guard key reports distance and
-    // bearing without a verdict -- an invented radius would be worse than no answer. Filled from the
-    // bracket the shipped measurement produces: the largest distance at which a shout was PENALISED
-    // and the smallest at which one was CLEAN (see shout_meter.cpp's burst capture).
-    float       earshotRadius;
 };
 
 // The row whose `srcName` matches, or nullptr. `srcName` is compared as an exact ASCII string.
@@ -58,6 +53,27 @@ const Row* ForSrcName(const char* srcName);
 // It is a shared set rather than a per-row field because every Bhujerba map draws from the one
 // npcdic; a row cannot disagree with another about what a soldier is.
 bool IsGuardName(int16_t nameIdx);
+
+// HOW FAR A SHOUT CARRIES, in metres. Applies to civilians and guards alike -- one radius, because
+// "who can hear me from here" is one question.
+//
+// **THIS IS THE TESTER'S MEASUREMENT FROM PLAY**, not a derivation: they put the guard's trigger at
+// about 3 steps and noted it "might be a little smaller". The shipped value rounds that UP by one
+// step, deliberately:
+//   * THE GUARD PATROLS, so the distance when the key is pressed is not the distance when the shout
+//     resolves, and the honest response to that jitter is margin;
+//   * THE TWO ERRORS ARE NOT EQUAL. A radius slightly too large says "guard in earshot" when the
+//     player was just safe -- they move, and lose nothing. A radius slightly too small says the
+//     street is clear when it is not, and costs 30 points. Err large.
+// It also sits just above the two distances at which civilians were seen to heed (4.12 m, 4.28 m),
+// so the crowd count matches what the captures show actually happening.
+//
+// The captured bracket it has to live inside: a PENALTY at 0.88 m and a CLEAN at 19.64 m.
+//
+// ONE CONSTANT, TUNABLE IN ONE PLACE. If play says it is wide or narrow, this is the only line to
+// change -- there is no per-map variation to keep in step, because every Bhujerba script runs the
+// same sequence.
+float EarshotRadius();
 
 // Whether the guard identity is known at all. False would put the crowd key back to counting
 // "people"; it is true today and this exists so that stays a decision the data makes.
