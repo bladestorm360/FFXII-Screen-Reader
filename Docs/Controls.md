@@ -221,6 +221,12 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > sequence: **Puzzle guide** (default ON — the spoken meter and these two keys) and **Instant
 > success** (default OFF — one shout completes the minigame; it writes game state, so it follows
 > auto-walk's rule that the player must switch it on deliberately).
+>
+> **A HIDDEN ROW READS AS OFF** (S133, standing rule for every context-gated setting, not just
+> these two). `ModMenu::EffectiveValue` forces a gated setting's read to 0 whenever its visibility
+> predicate is false, so the feature cannot act outside its context whatever the stored value says —
+> and a consumer does not have to remember to re-check the context, because asking the setting is
+> already asking it. The stored value is untouched and returns with the context.
 | `Up` / `Down` | **Status Attributes page** and **an open Clan Primer entry:** previous / next entry in the virtual buffer | free on those pages |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
 

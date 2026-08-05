@@ -3469,3 +3469,37 @@ Built + deployed, **NOT play-confirmed.**
 **KEYWORDS: puzzle active gauge 0xD8 shown bit setgaugeshowstatus FUN_00408360 FUN_00408190
 context-gated mod menu visible predicate puzzle guide instant success toggle guard census
 SHOUT-MEASURE CLEAN PENALTY earshot bracket shout_gauge shout_diag**
+
+## Session 133 — 2026-08-05 — A hidden mod-menu row reads as OFF
+
+Tester's rule, and the right shape: *"when a mod menu setting has hidden rows, the setting should be
+set to off even if map specific… we don't need to be able to hear about the infamy meter (non
+existent outside of puzzle sequence) or how many guards are close by without the puzzle being
+active."*
+
+`ModMenu::EffectiveValue(id)` is now the single read path for every setting: it returns 0 whenever
+the row's visibility predicate is false, and the stored value otherwise. All the accessors —
+`CombatVerbosity`, `AudioBeaconOn`, `TargetBeaconOn`, `AutoWalkOn`, `PuzzleGuideOn`, `PuzzleSkipOn` —
+go through it. Rows with no predicate are always visible, so nothing that predates S132 changes
+behaviour at all.
+
+**WHY THIS IS BETTER THAN GATING AT EACH CONSUMER.** Before this, "is the context live" was asked
+twice — once by the menu to decide whether to show the row, once by the feature to decide whether to
+act — and the second one is the kind of check that gets forgotten when a third consumer arrives.
+Now the context test lives in exactly ONE place, the predicate that hides the row, and asking the
+setting IS asking the context.
+
+**THE STORED VALUE IS UNTOUCHED**, deliberately. Only the read is forced, so the player's choice
+comes straight back the moment the context returns — which is the whole point of a persisted
+setting. Value 0 is Off, and also the first value, for every two-valued row; no Percent row is gated
+today, and a note in the code says its author must decide what "not applicable" means for a number
+first, because 0 there is the quietest step rather than a natural off.
+
+`ShoutMeter::KeysAnswer` keeps its explicit `PuzzleActive()` test ahead of `PuzzleGuideOn()` even
+though the second now implies the first: the overlap is what lets the log say which of the two
+actually stopped the key, rather than blaming a setting the player never touched.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: EffectiveValue hidden row reads off context-gated setting single read path mod menu
+visibility predicate one place puzzle guide puzzle skip stored value persists**

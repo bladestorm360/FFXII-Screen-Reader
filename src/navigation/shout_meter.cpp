@@ -138,6 +138,10 @@ void SpeakGuards() {
 // Both keys answer ONLY while the sequence is actually running and the guide is switched on.
 // Anywhere else they are silent no-ops with one log line -- the `;`/`7` precedent, never a spoken
 // "not available here".
+//
+// The two tests below overlap on purpose: `PuzzleGuideOn` is context-gated and so already returns
+// false off a sequence. Asking `PuzzleActive` FIRST is what lets the log say which of the two
+// actually stopped the key, instead of blaming a setting the player never touched.
 bool KeysAnswer(const char* which) {
     if (!PuzzleActive()) {
         char m[128];

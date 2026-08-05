@@ -112,6 +112,7 @@ bool RowVisible(int i) {
     return kSettings[i].visible == nullptr || kSettings[i].visible();
 }
 
+
 // Step the cursor `dir` places over VISIBLE rows only, wrapping. Returns the current index unchanged
 // when nothing is visible but it (or nothing at all is) -- the walk can never spin forever.
 int StepVisible(int from, int dir) {
@@ -139,6 +140,26 @@ std::atomic<int>  g_values[kCount] = {};
 std::atomic<bool> g_open{false};
 int               g_cursor = 0;      // input thread only
 bool              g_initialized = false;
+
+// A HIDDEN ROW READS AS OFF (S133, tester's rule, and it is the right shape). A context-gated
+// setting is one whose feature has no meaning outside its context: there is no infamy meter on a
+// Bhujerba street with no shout sequence running, and nothing worth counting as a guard there
+// either. So rather than have every consumer remember to re-check the context, THE SETTING ITSELF
+// answers off whenever its row is not applicable, and the context test lives in exactly one place --
+// the same predicate that hides the row.
+//
+// THE STORED VALUE IS UNTOUCHED. Only the read is forced; the player's choice comes straight back
+// the moment the context returns, which is what makes a persisted setting worth having at all.
+//
+// Value 0 is Off, and also the first value, for every two-valued row. No Percent row is gated today;
+// if one ever is, its author has to decide what "not applicable" means for a number first, because 0
+// there is the quietest step rather than a natural off.
+int EffectiveValue(SettingId id) {
+    const int i = static_cast<int>(id);
+    if (i < 0 || i >= kCount) return 0;
+    if (!RowVisible(i)) return 0;
+    return g_values[i].load(std::memory_order_relaxed);
+}
 
 // ---- persistence ---------------------------------------------------------------------------------
 // %LOCALAPPDATA%, NOT the game folder: the install is read-only to this mod (CLAUDE.md) and only
@@ -311,35 +332,31 @@ void Shutdown() {
 }
 
 Verbosity CombatVerbosity() {
-    const int v = g_values[static_cast<int>(SettingId::CombatVerbosity)].load(std::memory_order_relaxed);
+    const int v = EffectiveValue(SettingId::CombatVerbosity);
     return static_cast<Verbosity>(v);
 }
 
 bool AudioBeaconOn() {
-    return g_values[static_cast<int>(SettingId::AudioBeacon)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
+    return EffectiveValue(SettingId::AudioBeacon) == static_cast<int>(Beacon::On);
 }
 
 bool TargetBeaconOn() {
-    return g_values[static_cast<int>(SettingId::TargetBeacon)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
+    return EffectiveValue(SettingId::TargetBeacon) == static_cast<int>(Beacon::On);
 }
 
 bool AutoWalkOn() {
-    return g_values[static_cast<int>(SettingId::AutoWalk)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
+    return EffectiveValue(SettingId::AutoWalk) == static_cast<int>(Beacon::On);
 }
 
 // S132. Read from the game thread (the gauge hook and the field frame) and the input thread (the
 // key handlers), so the same relaxed-atomic-load discipline as the rows above.
-bool PuzzleGuideOn() {
-    return g_values[static_cast<int>(SettingId::PuzzleGuide)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
-}
-bool PuzzleSkipOn() {
-    return g_values[static_cast<int>(SettingId::PuzzleSkip)].load(std::memory_order_relaxed)
-           == static_cast<int>(Beacon::On);
-}
+//
+// BOTH ARE CONTEXT-GATED, so both go through EffectiveValue and answer FALSE whenever no shout
+// sequence is running -- however the stored value happens to be set. That is the whole guarantee
+// this pair needs: outside the sequence there is no meter to speak, nothing to call a guard, and
+// nothing the instant fill could honestly write.
+bool PuzzleGuideOn() { return EffectiveValue(SettingId::PuzzleGuide) == static_cast<int>(Beacon::On); }
+bool PuzzleSkipOn()  { return EffectiveValue(SettingId::PuzzleSkip)  == static_cast<int>(Beacon::On); }
 
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }

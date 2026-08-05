@@ -46,9 +46,18 @@ enum class Beacon : uint8_t { Off = 0, On = 1 };
 // where the thing hitting you is -- and a player may well want the second without the first.
 // SOME ROWS ARE CONTEXT-GATED (Session 132, tester's request). A setting may carry a visibility
 // predicate; when it returns false the row is skipped by Up/Down/Home/End and by the menu's opening
-// announcement, exactly as if it were not in the table. Its VALUE is untouched and still persists --
-// only the row is hidden, so a puzzle setting the player set last week is still set when they next
-// reach that puzzle. A setting with no predicate is always visible, which is every older row.
+// announcement, exactly as if it were not in the table. A setting with no predicate is always
+// visible, which is every older row.
+//
+// **A HIDDEN ROW READS AS OFF** (Session 133, tester's rule). Every accessor below goes through the
+// same gate the row's visibility uses, so a context-gated feature cannot act outside its context no
+// matter what the stored value says -- there is no infamy meter to speak on a Bhujerba street with
+// no shout sequence running, so the setting that speaks it answers off there. Consumers therefore
+// do NOT each have to remember to re-check the context; asking the setting is enough.
+//
+// The STORED value is untouched by any of this. It still persists and comes straight back the moment
+// the context returns, so a puzzle setting the player chose last week is still chosen when they next
+// reach that puzzle.
 enum class SettingId : int {
     CombatVerbosity = 0,
     AudioBeacon,          // the ROUTE beacon
