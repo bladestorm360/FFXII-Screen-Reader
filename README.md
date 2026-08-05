@@ -207,6 +207,8 @@ The settings it holds:
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Text glyphs — Standard or Polish translation. Standard is the default and is right for any unmodified copy of the game, in any language. Choose Polish translation only if you installed the Polish fan patch, which reuses sixteen accented letter slots for Polish letters; without this setting those letters are read as the wrong letter.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
+* Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
+* Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 
 F4 switches Combat verbosity and F11 switches the Audio beacon, both without opening the menu, so you can change either of them in the middle of a fight. Your choices are remembered between sessions.
 
