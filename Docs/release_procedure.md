@@ -151,6 +151,66 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.6.1-Shotgun-Build — 2026-08-05
+
+**Built from:** `42014e0`. Tree clean before and after. **The DLL's code traces to `c907b7a`** — the
+one commit after it is the readme change below, so nothing in this binary post-dates S146. Covers
+**Sessions 128–146** (25 commits) since `V0.6-Test-Build`'s `a5a7900`.
+
+**Directory name normalised**, the same way V0.6's was: the user asked for "0.6.1-Shotgun Build" and
+the directory and zip are `V0.6.1-Shotgun-Build`, hyphenated to keep a space out of the zip name.
+Capitalisation follows the user's own, as V0.6 did.
+
+**Zip:** `FFXII-Screen-ReaderV0.6.1-Shotgun-Build.zip`, 1,214,891 bytes, five files, root flat.
+- `dinput8.dll` 821,760 bytes (sha256 `ff8a09ea…bc4a46bf`) — up from V0.6's 783,360; nineteen
+  sessions covering the Bhujerba shout minigame, the Polish glyph overrides, the MinHook
+  trampoline-exhaustion fix, the shop detour fix, and the battle-menu second column.
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` — **byte-identical to V0.6's**
+  (sha256 `056db4a9…fa3a1d19`), same source, unchanged build.
+- TTS pair carried over unchanged from `V0.6-Test-Build` (`Tolk.dll` 122,368,
+  `nvdaControllerClient64.dll` 153,600).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: CHANGED** — 19,968 bytes / 222 lines (sha256 `443e6ec9…a0e9680c`), against V0.6's 18,527 /
+210. Four commits touched `README.md` in this range: `a51af2e` and `7911c7c` (the Bhujerba section —
+`B`, `N`, the self-speaking meter, and the two context-gated settings), `e886a01` (S139), and
+`42014e0`, the readme commit made immediately before this release trigger.
+
+**Converter re-validated the documented way, and it passed.** Run against `git show a5a7900:README.md`
+it reproduced the shipped `Releases\V0.6-Test-Build\ReadMe.txt` **byte-identically** — 18,527 bytes
+both, sha256 `49f4c92a…`. The current file was then converted from `git show HEAD:README.md` with the
+same code. Rules unchanged from V0.6, including the paired-code-span unwrap and the lone-backtick
+exemption. Output audit: zero `#`, zero `*`, zero `](`, zero leftover escapes, no BOM, CRLF on all 222
+lines, and **exactly one backtick** — the literal `` ` `` key name, the same single survivor as the
+last five releases.
+
+**Readme key coverage: no gaps.** `B` and `N` are the only keys added since V0.6 and both are
+documented, as is `O`'s behaviour in the mod menu. No existing key changed meaning on any screen.
+
+**One flag, not fixed here:** the mod-menu settings list in `README.md` orders Text glyphs before
+Auto-walk, while the menu's Up/Down walks Auto-walk first (`kSettings` order in `mod_menu.cpp`). It
+misleads only a player counting rows, so it is recorded rather than fixed — readme edits are a
+separate commit made *before* the release trigger, and this release's readme commit was deliberately
+scoped to the puzzle rows the user asked for.
+
+**What the readme commit added.** The Bhujerba section already documented `B`, `N` and the spoken
+meter from S131/S132, but the mod menu's own "settings it holds" list stopped at Auto-walk. A player
+looking settings up therefore never saw **Puzzle guide** or **Instant success**, and had no way to
+learn the two rows are hidden until a shout sequence is live — which is the one thing needed to find
+them. Both are now in that list with their defaults (guide On, instant success Off) and the
+visibility condition.
+
+**Purpose:** shotgun build of Sessions 128–146. What the tester is exercising: the Bhujerba shout
+minigame end to end (spoken infamy meter, `B`, `N`, the two mod-menu rows, earshot at 3.0 m from
+S141), the Polish fan-translation glyph overrides (S130), the combat log after the MinHook
+trampoline-slot fix (S130), the shop crash fix (S129), and the battle menu's second column (S146).
+
+**Both of V0.6's known-unfinished items still ship in this zip**, unchanged and still open in
+`Docs\debug.md`: the **Clan Primer wrap-around settle is SILENT** (Session 127, tester-accepted as the
+better of the two behaviours, with the four candidate causes and the do-not-fix-by-reverting warning
+recorded there), and the `__MJ_CTRL` exit-builder widening means maps **318, 319, 321, 322 and 568**
+may list exits they previously dropped — still the maps logging unclaimed surfaces.
+
 ## V0.6-Test-Build — 2026-08-03
 
 **Built from:** `a5a7900`. Tree clean before and after. **The DLL's code traces to `7f90dff`** — the
