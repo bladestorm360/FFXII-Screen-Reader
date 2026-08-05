@@ -4700,3 +4700,137 @@ alone (`Podróżnik`, `Żółć`, `Ósma` all decode correctly unmodified).
 **KEYWORDS: Polish patch spolszczenie PL_ff12_v1.3 fan translation glyph override font00.dat
 advance width repaint l-stroke 0x81 u-acute collision block rule 0x18 text glyphs mod menu
 game_glyphs_pl.h autodetection impossible VBF repack in place**
+
+> ⚠ **THE TESTER REPORTS THIS IS NOT FIXED (2026-08-05).** The mapping work above is recorded as
+> findings, not as a solved problem. Re-measure against the TESTER's build and the TESTER's own log
+> before building on any claim in this section — several of them may need striking.
+
+---
+
+## The HUD gauge system, and the script VM's variable storage (Session 131)
+
+Established while building the spoken infamy meter for Bhujerba's shout minigame. Everything here
+is read from the decompile and cross-checked against the shipped bytecode; the two agree.
+
+### The gauge the scripts drive
+
+| what | where | notes |
+|---|---|---|
+| `setgaugecounter` native | id **0x1AE**, group 0 | shim `FUN_0034EA90` (RVA `0x22EA90`) |
+| **the HUD writer** | **`FUN_004085B0`, RVA `0x2E85B0`** | **`void(int)` — ONE int arg, and it IS the new counter value** |
+| getter | `FUN_00408250`, RVA `0x2E8250` | reference only — see the `+0xC0` caveat below |
+| manager global | `DAT_02B62D80`, **RVA `0x2A42D80`** | a POINTER slot; same HUD cluster as the dialogue nameplate `DAT_02B62D78` |
+| the gauge object | `*(u64*)(mgr + 0xC0)` | re-resolve every use; it dies with the HUD |
+| value / max | object `+0xE4` / `+0xE0`, both s32 | the writer stores `+0xE4` BEFORE dispatching its redraw |
+| write suppressed when | `*(u8*)(mgr + 0xC8) & 2` | log it; do not gate speech on it |
+| tween state | `+0x108`, `+0x118`, `+0x11C`, `+0x120` | `changegaugecounterbyframe` (`0x1B2`) drives these |
+
+**ARITY: the detour takes one int, counted from the CALLEE.** The shim above it, `FUN_0034EA90`,
+decompiles as `void(void)` while actually reading its VM context out of R9 — hooking *that* would
+have repeated S129's four-args-on-a-six-arg-function defect exactly. Hook the writer, not the shim.
+
+**OPEN MEASUREMENT — the byte at gauge `+0xC0`.** As decompiled, `FUN_004085B0` nulls the gauge
+object when `*(char*)(gauge+0xC0) != 0` and *then* dispatches its redraw on that same byte being
+0/1/3, which cannot both be true; `FUN_00408250` carries the identical guard. The likely reading is
+that Ghidra folded two adjacent fields (`+0xC0`/`+0xC1`). **Nothing in the mod gates on it** — the
+value at `+0xE4` is what the script asked for either way — and `shout_meter.cpp` logs `+0xC0`,
+`+0xC1` and `mgr+0xC8` on every meter-key press so one play pass settles it.
+
+### Script variable storage — resolver `FUN_00262440` (RVA `0x142440`)
+
+Module records live in the **same five-slot array the entity scan already walks**:
+`NavRva::HANDLE_TABLE_BASE` = RVA `0x1F78E10`, stride `0x288`. A slot is a *controller*: a script VM
+instance plus its actors. As longlong indices into the record (verified against loader
+`FUN_0026C8C0`, RVA `0x14C8C0`):
+
+| field | byte off | meaning |
+|---|---|---|
+| `mod[0x00]` | `+0x00` | the loaded EBP2 image base |
+| `mod[0x08]` | `+0x40` | storage-class **1** base |
+| `mod[0x09]` | `+0x48` | storage-class **0** base |
+| `mod[0x0B]` | `+0x58` | storage-class **4** base — the loader assigns `0x02099DF0` (RVA `0x1F79DF0`) to *every* module: the cross-script global int work array |
+| `mod[0x0C]` | `+0x60` | storage-class **5** base — `0x02099FF0`, the float globals |
+| `mod[0x0F]` | `+0x78` | the variable **descriptor table** (= `ebpBase + *(i32*)(ebp+0x28)`, filled at load) |
+
+Class **3** is module-local: `ebpBase + *(u32*)(ebpBase + 0x40)`. Class **2** is per-actor and is
+resolved by CALLING `mod[0x13]` with a live VM context — there is no address to compute outside a
+running native, so the mod declines class 2 rather than guessing.
+
+```
+desc     = *(u32*)(mod[0x0F] + 4 + varIdx * 8)
+elemType = desc >> 28        0=u8 1=s8 2=u16 3=s16 4=u32 5=float  (strides 1/1/2/2/4/4)
+class    = (desc >> 24) & 7
+address  = classBase + (desc & 0xFFFFFF)
+```
+
+**READ THE BASES FROM THE RECORD, not from the globals the loader happens to store there** — same
+values, but the record is what the engine's own resolver reads, so the two cannot drift apart.
+`PUSHV` = `FUN_00267FC0`, `POPV` = `FUN_00267E60`. **Do not hook the resolver**: it is on every
+variable access in every script.
+
+`DAT_02099D70` (RVA `0x1F79D70`) holds a pointer to the *currently executing* module record
+(save/set/restore around every module entry point). The mod does not use it — scanning the five
+slots is cheaper to reason about and does not depend on when the engine sets it.
+
+### A module names itself — the identity that replaced a mapId table
+
+**At file offset `0x110` every EBP2 image carries three NUL-terminated strings: a build stamp
+(`DD/MM HH:MM`), the author, and `<module>.src`.** This is FORMAT-LEVEL, not a per-map discovery:
+it parses correctly on **all 809** EBP2 files in the game — map scripts and event scripts alike —
+with the third string matching the file name every time, across 18 distinct author names.
+
+That is why `shout_table.cpp` is keyed on `"byu_a01.src"` and not on a map id: the mapId to script
+join is genuinely unproven for the Bhujerba streets, and this makes the join unnecessary.
+
+### Bhujerba is `byu`
+
+**Bhujerba's internal map code is `byu`** (Japanese katakana Byuerba). `bhm_*` is the **Sky Fortress
+Bahamut** — confirmed from its own message text. A search for `bhu*` finds nothing.
+
+### The shout minigame's own mechanics (from the bytecode)
+
+Meter is a per-module script variable, max **100**, and all three thresholds were recovered
+generically and agree with a hand decode of `byu_a01`:
+
+* `v >= 100` — success; the story proceeds (message 9, "You. Boy. You will come with us.")
+* `v >= 30` — the Imperial penalty: a **30-step `-1` loop, one step per frame** (`0x34C35`)
+* `v >= 1` — idle decay, a single `-1` through `changegaugecounterbyframe`
+
+**The increment loop updates the script variable AFTER the gauge call** (`0x34EF8`:
+`PUSHV meter / PUSHII 1 / OPADD / CALLPOPA setgaugecounter`, then `POPV meter`), so at the instant
+the native runs, `storage == newValue - 1`. That is a guarantee, not a guess, and it is the
+falsifier `shout_fill.cpp` requires before it writes.
+
+**THE GUARD IDENTITY IS NOT IN THESE SCRIPTS.** A full native census of byu_a01's shout region
+(911 instructions, `0x34800`-`0x35200`) contains no `distance` native of either slot hypothesis,
+and the "how many heeded" weights come from variables set elsewhere rather than npcdic ids pushed
+as immediates. So no earshot radius and no guard npcdic id could be extracted at the 0.98 bar; the
+mod ships `guardNameIdx = -1`, reports the game's own NPC names with bearing and distance instead
+of a verdict, and dumps a per-map npcdic census to the log so the first play pass measures it.
+
+### Two errata in the RE archive, both corrected
+
+1. **`notes\athena_opcodes.md` (and `tools\ebp_disasm.py`'s `OP` dict) map name-index to opcode
+   DIRECTLY; the real opcode is name-index + 1.** The proof is internal to `ebp_disasm.py`: its
+   `isize()` model, taken from the VM's own length table `DAT_01efea60` via `FUN_0025E4C0`, says
+   opcodes `>= 0x48` carry an inline u16. `PUSHV` is the first operand-carrying opcode in name
+   order, so `PUSHV` must be `0x48` — the direct mapping puts it at `0x47`, which would make a
+   variable push carry no variable index. Correct values: `OPGTE 0x0E`, `OPADD 0x12`, `PUSHV 0x48`,
+   `POPV 0x49`, `PUSHI 0x4E`, `PUSHII 0x4F`, `JMP 0x51`, `CALL 0x58`, `CALLACT 0x59`,
+   `CALLPOPA 0x5D`, `CALLACTPOPA 0x5E`. **The map scripts reach natives through `CALLPOPA`**, so a
+   CALLACT-only scan finds nothing at all.
+2. **`output\script_native_table.txt` and `output\native_slots.txt` assume an 8-byte native record;
+   the real record is 32 bytes with three function slots**, and `impl(N) = record(N+1) slot 0`.
+   `output\group_tables.txt` already has it right. Group 0 base `0x01EED700`. Native names join
+   from `notes\dbg_symbols_mapctrl.csv` at **`dbgIndex = id + 5140`** — anchored on `mapjump`
+   (id `0x8D`, index 5281) and re-confirmed by `rand 0x29` and `setgaugecounter 0x1AE`.
+
+**The `0x28F` vs `0x290` distance-native tension is RESOLVED in favour of S107's `0x290`.** The
+22 apparent `0x28F` sites in `byu_a01` cluster in a data region at `0x3C600` on a regular 15-byte
+stride and **none of them decodes as code at any alignment** — they are a table that happens to
+contain the byte pair. There is no off-by-one on the native id; only on the opcode table.
+
+**KEYWORDS: gauge setgaugecounter 0x1AE FUN_004085B0 0x2E85B0 DAT_02B62D80 gauge+0xE4 gauge+0xE0
+infamy meter shout minigame Bhujerba byu byu_a01 script variable descriptor FUN_00262440 storage
+class mod+0x78 0x02099DF0 class 4 global work array EBP2 src name 0x110 module identity athena
+opcode off by one CALLPOPA native table stride 32 dbgIndex 5140 distance 0x290 resolved**

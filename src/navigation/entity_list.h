@@ -122,4 +122,22 @@ int CollectSceneObjectsByNameIdx(int16_t nameIdx, void** out, int cap);
 // the object that reported a touch instead of printing a bare pointer.
 std::wstring LabelForSceneObject(void* sceneObj);
 
+// One NPC near the player, as the shout-minigame guard key reports them.
+struct NearbyNPC {
+    std::wstring label;              // the game's own npcdic name — never a mod-authored one
+    FVec3        pos;
+    int16_t      nameIdx = 0;        // npcdic id, so the log can census WHICH NPCs a map carries
+    float        dist2D  = 0.0f;
+};
+
+// The nearest `maxOut` Category::NPC entries to `from`, nearest first, positions refreshed.
+// Returns how many were written. GAME THREAD callers only (it reads live transforms).
+//
+// Added for the shout minigame's guard key (Bhujerba): the identity of the Imperials whose earshot
+// costs the player points is not derivable from the map scripts, so the honest answer is the
+// game's own names with a bearing and a distance rather than an invented "guard" verdict. Sits
+// beside CollectPositionsByNameIdx / CollectSceneObjectsByNameIdx because it answers the same
+// class of question against the same locked list.
+int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out);
+
 } // namespace EntityList

@@ -60,6 +60,7 @@ add_library(${PROJECT_NAME} SHARED
     src/core/item_names.cpp
     src/speech/speech.cpp
     src/speech/phrasebook.cpp
+    src/speech/phrase_format.cpp
     src/audio/audio_clips.cpp
     src/audio/audio_engine.cpp
     src/audio/beacon_assets.rc
@@ -138,6 +139,10 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/nav_blocked.cpp
     src/navigation/path_danger.cpp
     src/navigation/sneak_assist.cpp
+    src/navigation/shout_table.cpp
+    src/navigation/shout_script.cpp
+    src/navigation/shout_fill.cpp
+    src/navigation/shout_meter.cpp
     src/navigation/path_planner.cpp
     src/navigation/audio_beacon.cpp
     src/navigation/auto_walk.cpp

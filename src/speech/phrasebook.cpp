@@ -133,6 +133,8 @@ const Row kTable[] = {
     EN(L"already equipped"),
     EN(L"Leader"),
     EN(L"Game Over"),
+    // Bhujerba shout minigame. Trailing space: it is a PREFIX, the same shape as HPPrefix above.
+    EN(L"Infamy "),
 };
 
 #undef EN

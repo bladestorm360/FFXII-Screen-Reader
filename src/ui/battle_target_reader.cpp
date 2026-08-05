@@ -7,6 +7,7 @@
 #include "core/phyre_types.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
+#include "speech/phrase_format.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "navigation/player_state.h"   // ReadSceneObjectPos (target world pos)
@@ -181,9 +182,7 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
         if (ally) {
             text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
         } else {
-            int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
-            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(pct)
-                  + Phrase::Get(Phrase::Id::PercentSuffix);
+            text += L", " + PhraseFormat::Percent(Phrase::Id::HPPrefix, curHP, maxHP);
         }
     }
 
@@ -446,9 +445,7 @@ bool SpeakTargetStatus() {
             // draws (there is no pre-Libra HP-visible flag to read).
             text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
         } else {
-            const int pct = static_cast<int>(static_cast<long long>(curHP) * 100 / maxHP);
-            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(pct)
-                  + Phrase::Get(Phrase::Id::PercentSuffix);
+            text += L", " + PhraseFormat::Percent(Phrase::Id::HPPrefix, curHP, maxHP);
         }
     }
     // Mod-emitted qualifier, and ONLY for a real commitment that has not started executing. A

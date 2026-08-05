@@ -97,6 +97,17 @@ constexpr int DIK_8 = 0x09, DIK_9 = 0x0A;
 // Walk/Run and the mod cannot swallow keys, so a Shift chord would silently flip walk/run on every
 // press. Home/End are unbound and have no side effects.
 constexpr int DIK_COMMA = 0x33, DIK_PERIOD = 0x34, DIK_HOME = 0xC7, DIK_END = 0xCF;
+// Bhujerba shout minigame: B reads the infamy meter, N reads the NPCs nearest the player.
+//
+// The tester first proposed `,` and `.` for these. Those are the COMBAT LOG's timeline navigation
+// (older/newer), documented in Controls.md and README.md, and the log's whole point is that it
+// works everywhere including mid-fight and in menus -- so taking them, even map-gated, would break
+// reading the log back while standing on a Bhujerba street. B and N were chosen instead: neither
+// appears in Docs/Controls.md's game bindings and neither is claimed anywhere in the mod.
+//
+// THEIR FREEDOM IS NO MORE PROVEN THAN 8/9's, and for the same Session 112 reason -- the game's
+// Controls screen omits bindings it really has. They join the pad-word collision watch below.
+constexpr int DIK_B = 0x30, DIK_N = 0x31;
 // Virtual-buffer navigation (status screen). Arrow keys are READ, never swallowed -- the game still
 // gets them. They only DO anything in the mod while a status buffer is active; elsewhere the mod
 // ignores them. DIK extended-key scan codes (dinput.h): Up 0xC8, Down 0xD0, Left 0xCB, Right 0xCD.
@@ -142,7 +153,7 @@ constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0x
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[25]{};   // 0-15 + 20-24 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[27]{};   // 0-15 + 20-26 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -160,9 +171,12 @@ std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 // Log-only and deduped per distinct pad value, so a held key writes one line, not thousands.
 // Absence of a line is NOT proof of freedom (the key may simply not have been pressed) -- but a
 // line IS proof of collision, which is the direction that matters.
-void LogPadOnKey(bool down8, bool down9) {
-    static uint32_t s_lastLogged = 0xFFFFFFFF;
-    if (!down8 && !down9) { s_lastLogged = 0xFFFFFFFF; return; }
+// `slot` gives each watched key its own dedup cell, so one key being held cannot mask a collision
+// on another. Extended from the original two-bool form when B and N joined the watch list.
+void LogPadOnKey(const char* keyName, int slot, bool down) {
+    static uint32_t s_lastLogged[4] = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
+    if (slot < 0 || slot >= 4) return;
+    if (!down) { s_lastLogged[slot] = 0xFFFFFFFF; return; }
 
     uint16_t w0 = 0, w1 = 0, w2 = 0;
     if (!MemRead::SafeReadU16(Hooks::ResolveRva(0x2E77368), 0, &w0) ||
@@ -171,13 +185,13 @@ void LogPadOnKey(bool down8, bool down9) {
     if (w0 == 0 && w1 == 0 && w2 == 0) return;          // nothing moved: the key looks free
 
     const uint32_t sig = (static_cast<uint32_t>(w0) << 16) ^ (static_cast<uint32_t>(w1) << 8) ^ w2;
-    if (sig == s_lastLogged) return;
-    s_lastLogged = sig;
+    if (sig == s_lastLogged[slot]) return;
+    s_lastLogged[slot] = sig;
 
     char hdr[112];
     snprintf(hdr, sizeof(hdr),
              "COLLISION? key=%s pad=0x%04X/0x%04X/0x%04X -- the game moved a pad bit for this key",
-             down8 ? "8" : "9", w0, w1, w2);
+             keyName, w0, w1, w2);
     Log::Write("INPUT", hdr);
 }
 
@@ -449,7 +463,14 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     // they are free, record the game's own pad words on the frame the key goes down: the pad is
     // where the game funnels keyboard input, so a bit moving here names the collision. Log-only,
     // deduped per distinct pad value so a held key cannot flood the file.
-    LogPadOnKey((dik[DIK_8] & 0x80) != 0, (dik[DIK_9] & 0x80) != 0);
+    LogPadOnKey("8", 0, (dik[DIK_8] & 0x80) != 0);
+    LogPadOnKey("9", 1, (dik[DIK_9] & 0x80) != 0);
+    // Shout minigame keys. Both are silent no-ops off a shout map; the dispatcher decides, so the
+    // edge is registered unconditionally here.
+    DInputEdge('B',           g_extraDown[25],(dik[DIK_B]         & 0x80) != 0, true);  // B  infamy meter
+    DInputEdge('N',           g_extraDown[26],(dik[DIK_N]         & 0x80) != 0, true);  // N  nearest NPCs
+    LogPadOnKey("B", 2, (dik[DIK_B] & 0x80) != 0);
+    LogPadOnKey("N", 3, (dik[DIK_N] & 0x80) != 0);
     DInputEdge(VK_OEM_COMMA,  g_extraDown[10],(dik[DIK_COMMA]     & 0x80) != 0, true);  // ,  log: older
     DInputEdge(VK_OEM_PERIOD, g_extraDown[11],(dik[DIK_PERIOD]    & 0x80) != 0, true);  // .  log: newer
     // Home/End: status buffer first (top/bottom of stats), else the combat log (oldest/newest). The

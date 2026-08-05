@@ -4,6 +4,7 @@
 #include "navigation/auto_walk.h"
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
+#include "navigation/shout_meter.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
 #include "ui/equip_compare.h"
@@ -206,6 +207,13 @@ void OnNavKey(int vk) {
         }
         case VK_OEM_COMMA:  CombatLog::StepBack();            break;  // ,  combat log: older
         case VK_OEM_PERIOD: CombatLog::StepForward();         break;  // .  combat log: newer
+        // Bhujerba shout minigame. Both only raise a flag: the work needs live transforms and the
+        // game's own name tables, so it drains on the next field frame (the `'` probe's arrangement
+        // above). Off a shout map both are silent no-ops -- the dispatcher always accepts the key
+        // and ShoutMeter decides, which is what keeps the no-op quiet rather than "not available
+        // here".
+        case 'B':           ShoutMeter::RequestMeterCheck();  break;  // B  infamy meter
+        case 'N':           ShoutMeter::RequestGuardCheck();  break;  // N  nearest NPCs
         case VK_HOME:       CombatLog::JumpOldest();          break;  // Home  oldest entry
         case VK_END:        CombatLog::JumpNewest();          break;  // End   newest entry
         default:            break;

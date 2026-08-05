@@ -185,6 +185,13 @@ Home and End belong to the page while the Status screen's Attributes page or a C
 
 How much gets spoken aloud is up to you — see Combat verbosity below.
 
+#### Bhujerba: shouting in the streets
+
+* B: the infamy meter, as a percentage.
+* N: the people nearest you, each with a direction and a distance.
+
+The meter also speaks on its own whenever it moves, whether it rises or an Imperial hears you and it falls. Both keys are silent everywhere else in the game.
+
 #### The mod menu (F8)
 
 F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.

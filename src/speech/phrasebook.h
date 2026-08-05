@@ -146,6 +146,13 @@ enum class Id {
     //   GameOver         -- baked texture art (`gameover_c.tm2`), like the title logo.
     StatUp, StatDown, CannotEquip, AlreadyEquipped, Leader, GameOver,
 
+    // -- Bhujerba shout minigame (shout_meter.cpp). USER-SUPPLIED WORDING, 2026-08-05: the tester
+    // called it "the infamy meter" when asking for it. The game draws this gauge as art and never
+    // names it -- its only text is "<n> Bhujerbans heed your words" -- so there is no game string
+    // to read instead. One word only; the direction of a change reuses StatDown above, and a
+    // percentage reuses PercentSuffix, rather than inventing more.
+    Infamy,
+
     Count
 };
 

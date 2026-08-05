@@ -5,6 +5,7 @@
 #include "navigation/item_scan.h"
 #include "navigation/path_planner.h"
 #include "navigation/sneak_assist.h"
+#include "navigation/shout_meter.h"
 #include "core/logger.h"
 #include "input/input_tracker.h"
 
@@ -20,6 +21,9 @@ bool Init() {
     // Sneak assist (S106; always-on for the danger-table maps since S115). Non-fatal by design: a
     // failed install just means the guards behave exactly as the game wrote them.
     SneakAssist::Init();
+    // Bhujerba shout minigame: the spoken infamy meter and its two keys. Non-fatal by design --
+    // a failed install means the gauge simply never speaks, exactly as before the feature existed.
+    ShoutMeter::Init();
     // Field-object list (walks the game's actor pool on demand).
     EntityList::Init();
     // Route nav hotkeys to the command dispatcher.

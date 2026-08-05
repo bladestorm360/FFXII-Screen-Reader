@@ -3374,3 +3374,60 @@ Written up in full in the session plan and summarised here so they are greppable
   structurally blind to it; consuming a button needs an IAT hook on `XInputGetState`. Claimable
   buttons are Select, L1, R1, L3, R3 — L2 stays the game's for Lock On. `L3` toggles intercept and is
   the one button the mod never hands back.
+
+## Session 131 — 2026-08-05 — Bhujerba shout minigame: spoken infamy meter, two puzzle keys, instant fill
+
+The tester sent an autosave sitting on the Bhujerba "shout at the crowd" sequence and asked for
+three things: the meter spoken as a percentage, a key to check for guards, and a one-shout instant
+fill so they need not play a minigame built entirely out of things a blind player cannot see.
+
+**The whole minigame was cracked from the bytecode; nothing here is inferred from play.** Findings
+are in `GameArchitecture.md` (gauge system, script-VM variable storage, the EBP2 self-naming rule,
+two archive errata). The census tool is `..\FFXII-Decompile\tools\ebp_shout_census.py`.
+
+**What shipped**
+
+* `shout_table.*` — 14 rows, one per shout map script, **keyed on the script's own `.src` name**
+  rather than a map id. Every EBP2 image names itself at file offset `0x110`; that parses on all
+  809 EBP2 files in the game, so the unproven mapId↔script join is simply not needed.
+* `shout_script.*` — module-record walk (the same 5-slot `0x288`-stride array the entity scan uses)
+  and the descriptor decode that turns a script variable index into an address.
+* `shout_meter.*` — the `FUN_004085B0` (RVA `0x2E85B0`) hook, the burst coalescer, the one speech
+  choke point, and both keys.
+* `shout_fill.*` — the write, under a four-boundary charter modelled on `sneak_assist.h`.
+* `speech/phrase_format.*` — `PhraseFormat::Percent`, now the single owner of the "<n> percent"
+  convention; `battle_target_reader.cpp`'s two inline copies (`:184`, `:449`) now call it.
+* `EntityList::CollectNearestNPCs` — new, beside the existing `Collect*ByNameIdx` pair.
+* One new phrase, `Infamy` — the tester's own word. The direction of a change reuses `StatDown`.
+
+**THE COALESCER IS NOT SPEECH DEDUP.** The Imperial penalty is `setgaugecounter(v-1)` **thirty
+times, one per frame** (measured at `byu_a01:0x34C35`). Announcing per call would say thirty
+numbers for one event. What ships detects the END of a change — a field frame with no new set — and
+speaks the value it settled on. Every burst announces; nothing is suppressed for being a repeat.
+Direction is measured WITHIN the burst, never against the last value spoken, because the idle decay
+runs through a different native that never reaches this hook.
+
+**THE FALSIFIER FOR THE WRITE IS A FACT, NOT A GUESS.** The increment loop updates its variable
+AFTER the gauge call, so at hook time `storage == newValue - 1` is what the bytecode guarantees.
+The fill declines unless that holds, logs all three numbers either way, and writes the script's OWN
+success constant into the script's OWN variable — after which the GAME clamps, prints its own
+messages, and runs its own success branch. **This is the mod's THIRD write-category exception**
+(after auto-walk S100 and sneak assist S107), user-authorized this conversation.
+
+**WHAT WAS NOT SHIPPED, AND WHY.** The guard identity is not in these scripts: a 911-instruction
+native census of the shout region contains no `distance` native, and the "how many heeded" weights
+come from variables set elsewhere rather than npcdic ids. So no earshot radius and no guard npcdic
+id reached the 0.98 bar. Rather than invent either, `guardNameIdx` stays `-1`, `N` reports the
+game's own NPC names with bearing and distance, and a per-map npcdic census goes to the log — the
+first play pass through the sequence is what measures it.
+
+**KEY CHOICE.** The tester proposed `,` and `.`; those are the combat log's timeline navigation,
+which is required to work everywhere. **B** (meter) and **N** (nearest NPCs) instead — neither is
+in the game's bindings nor claimed by the mod, and both joined the 8/9-style pad collision watch,
+because S112's lesson is that the Controls screen omits bindings the game really has.
+
+Built, deployed, **NOT play-confirmed.**
+
+**KEYWORDS: shout minigame Bhujerba byu infamy meter gauge setgaugecounter instant fill script
+variable descriptor EBP2 src name burst coalescer B key N key phrase percent helper third write
+exception ebp_shout_census athena opcode erratum native table stride 32**

@@ -209,6 +209,8 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `.` | Combat log: forward one entry, newer | free |
 | `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
+| `B` | Bhujerba shout minigame: the infamy meter as a percentage | unproven — collision watch |
+| `N` | Bhujerba shout minigame: the NPCs nearest you, with bearing and distance | unproven — collision watch |
 | `Up` / `Down` | **Status Attributes page** and **an open Clan Primer entry:** previous / next entry in the virtual buffer | free on those pages |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
 

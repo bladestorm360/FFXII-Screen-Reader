@@ -504,6 +504,26 @@ int CollectSceneObjectsByNameIdx(int16_t nameIdx, void** out, int cap) {
     return n;
 }
 
+int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out) {
+    out.clear();
+    if (maxOut <= 0 || !PlayerState::IsFieldActive()) return 0;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    RefreshPositionsLocked(from);
+    for (const EntityScan::Entity& e : g_entities) {
+        if (e.category != Category::NPC || e.label.empty()) continue;
+        NearbyNPC n;
+        n.label   = e.label;
+        n.pos     = e.pos;
+        n.nameIdx = e.nameIdx;
+        n.dist2D  = e.dist2D;
+        out.push_back(std::move(n));
+    }
+    std::sort(out.begin(), out.end(),
+              [](const NearbyNPC& a, const NearbyNPC& b) { return a.dist2D < b.dist2D; });
+    if (static_cast<int>(out.size()) > maxOut) out.resize(static_cast<size_t>(maxOut));
+    return static_cast<int>(out.size());
+}
+
 std::wstring LabelForSceneObject(void* sceneObj) {
     if (!sceneObj) return std::wstring();
     std::lock_guard<std::mutex> lk(g_mutex);
