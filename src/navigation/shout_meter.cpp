@@ -34,6 +34,9 @@ Pfn_GaugeSet s_orig = nullptr;
 // ---- State. Everything here is GAME THREAD ONLY except the two key flags -----------------------
 ShoutScript::Module s_module;
 bool s_moduleLogged  = false;
+// Refreshed once per field frame and read by the gauge hook, so the hook's first branch costs one
+// bool rather than a pointer chase through the HUD on every gauge write in the game.
+bool s_active        = false;
 
 struct Burst {
     bool active           = false;
@@ -82,56 +85,63 @@ void EmitMeter(int value, int max, bool rising, bool interrupt, const char* why)
     Speech::Output(text, interrupt);
 }
 
-// The `N` key. Once ShoutTable carries a measured `guardNameIdx` this reports GUARDS ONLY, with the
-// earshot verdict when the radius is measured too. Until then it reports the nearest NPCs by the
-// game's own names -- useful, and honest about not knowing which of them matters.
-void SpeakGuards() {
+// The `N` key: THE CROWD, not a list of individuals.
+//
+// The minigame rewards having as many listeners around you as possible -- the increment loop scales
+// with how many Bhujerbans heed -- so "who are the three nearest people" is the wrong question. What
+// the player is deciding is whether to shout HERE or move first, and that is a count.
+//
+// It degrades in one step. With a measured earshot radius the answer is the one the tester asked
+// for -- "5 civilians, 1 guard in earshot"; with only a measured guard id the split is reported over
+// everyone listed; with neither it is a bare count plus the nearest few, which still tells the
+// player whether they are standing in a crowd or on an empty street. NOTHING here invents a
+// distance: the window is only ever the game's own measured radius.
+void SpeakCrowd() {
     FVec3 me{};
     if (!PlayerState::ReadPlayerPos(me)) {
-        Log::Write("SHOUT-KEY", "guard: player position unavailable -- silent");
+        Log::Write("SHOUT-KEY", "crowd: player position unavailable -- silent");
         return;
     }
     const int16_t guardIdx = s_module.row ? s_module.row->guardNameIdx : static_cast<int16_t>(-1);
     const float   radius   = s_module.row ? s_module.row->earshotRadius : 0.0f;
 
     std::vector<EntityList::NearbyNPC> npcs;
-    EntityList::CollectNearestNPCs(me, 32, npcs);
-    if (guardIdx >= 0) {
-        std::vector<EntityList::NearbyNPC> guards;
-        for (const EntityList::NearbyNPC& e : npcs)
-            if (e.nameIdx == guardIdx) guards.push_back(e);
-        npcs.swap(guards);
-    }
-    if (npcs.size() > 3) npcs.resize(3);
-
+    EntityList::CollectNearestNPCs(me, 64, npcs);
     if (npcs.empty()) {
-        // No guard anywhere on the map is a REAL answer when we know what a guard is, so say it.
-        // Not knowing yet is a different thing, and that one stays quiet.
-        Log::Write("SHOUT-KEY", guardIdx >= 0 ? "guard: none listed on this map"
-                                              : "guard: no NPCs listed here");
-        if (guardIdx >= 0) Speech::Output(Phrase::Get(Phrase::Id::NoGuardsInEarshot), true);
-        else               Speech::Output(Phrase::Get(Phrase::Id::NoTargets), true);
+        Log::Write("SHOUT-KEY", "crowd: no NPCs listed here");
+        Speech::Output(Phrase::Get(Phrase::Id::NoTargets), true);
         return;
     }
 
-    float facing = 0.0f;
-    PlayerState::ReadCameraForwardStable(facing);
+    int civilians = 0, guards = 0;
+    for (const EntityList::NearbyNPC& e : npcs) {
+        if (radius > 0.0f && e.dist2D > radius) continue;   // outside the game's own earshot
+        if (guardIdx >= 0 && e.nameIdx == guardIdx) ++guards;
+        else                                        ++civilians;
+    }
 
     std::wstring text;
-    bool anyInEarshot = false;
-    for (size_t i = 0; i < npcs.size(); ++i) {
-        if (i) text += L". ";
-        text += npcs[i].label + L", " +
-                NavCommon::DescribeDirectionRelative(me, npcs[i].pos, facing);
-        if (radius > 0.0f && npcs[i].dist2D <= radius) anyInEarshot = true;
+    if (guardIdx >= 0) {
+        text = std::to_wstring(civilians) + L" " + Phrase::Get(Phrase::Id::Civilians) + L", " +
+               std::to_wstring(guards)    + L" " + Phrase::Get(Phrase::Id::Guards);
+    } else {
+        text = std::to_wstring(civilians) + L" " + Phrase::Get(Phrase::Id::People);
     }
-    // The verdict is only ever appended when the radius is a MEASURED number. With `earshotRadius`
-    // still 0 the player gets distance and bearing and no claim about safety.
-    if (radius > 0.0f)
-        text += std::wstring(L". ") +
-                Phrase::Get(anyInEarshot ? Phrase::Id::InEarshot : Phrase::Id::NoGuardsInEarshot);
+    // The window is named only when it is the game's own number.
+    if (radius > 0.0f) text += std::wstring(L" ") + Phrase::Get(Phrase::Id::InEarshot);
 
-    Log::WriteW("SHOUT-KEY", "guard: ", text);
+    // With no radius yet, a count alone has no scale, so the nearest few carry their distances and
+    // the player supplies the judgement the measurement will later supply for them.
+    if (radius <= 0.0f) {
+        float facing = 0.0f;
+        PlayerState::ReadCameraForwardStable(facing);
+        const size_t show = npcs.size() < 3 ? npcs.size() : 3;
+        for (size_t i = 0; i < show; ++i)
+            text += L". " + npcs[i].label + L", " +
+                    NavCommon::DescribeDirectionRelative(me, npcs[i].pos, facing);
+    }
+
+    Log::WriteW("SHOUT-KEY", "crowd: ", text);
     Speech::Output(text, true);
 }
 
@@ -171,8 +181,8 @@ void DrainKeys() {
             EmitMeter(g.value, g.max, /*rising=*/true, /*interrupt=*/true, "meter key");
         }
     }
-    if (s_reqGuard.exchange(false, std::memory_order_acq_rel) && KeysAnswer("guard")) {
-        SpeakGuards();
+    if (s_reqGuard.exchange(false, std::memory_order_acq_rel) && KeysAnswer("crowd")) {
+        SpeakCrowd();
     }
 }
 
@@ -201,13 +211,32 @@ void RefreshModule() {
 
 // ---- The hook ----------------------------------------------------------------------------------
 void __fastcall HookedGaugeSet(int newValue) {
-    // THE OFF-TABLE PATH IS THE FIRST BRANCH. `s_module` is decided on the field frame, never here,
-    // so this costs one bool: with no shout script live the function is the original and nothing
-    // else -- no gauge read, no burst, and ShoutFill's write is not on the path at all. Every other
-    // gauge in the game passes through untouched.
-    if (!s_module.valid) {
+    // THE OFF-SEQUENCE PATH IS THE FIRST BRANCH. `s_active` is decided on the field frame, never
+    // here, so this costs one bool: with no shout sequence live the function is the original and
+    // nothing else -- no burst, no speech, and ShoutFill's write is not on the path at all. Every
+    // other gauge in the game passes through untouched.
+    if (!s_active) {
         if (s_orig) s_orig(newValue);
         return;
+    }
+
+    // RESOLVE THE EXECUTING SCRIPT WHILE WE ARE INSIDE ITS NATIVE CALL. This is the one moment the
+    // engine's own current-module global names the script that drove the gauge, so it needs no
+    // scanning and no assumption about which slot holds what. The field-frame scan stays as the
+    // fallback; whichever answers, the fill needs a module and only gets one from here.
+    if (!s_module.valid) {
+        const ShoutScript::Module m = ShoutScript::FromCurrentModule();
+        if (m.valid) {
+            s_module = m;
+            if (!s_moduleLogged) {
+                s_moduleLogged = true;
+                char lm[224];
+                snprintf(lm, sizeof(lm),
+                         "module resolved FROM THE NATIVE CALL: %s -- meter var 0x%02X, goal %d",
+                         s_module.srcName, s_module.row->meterVarIdx, s_module.row->fillValue);
+                Log::Write("SHOUT", lm);
+            }
+        }
     }
 
     // The gauge's own value BEFORE the original overwrites +0xE4. FUN_004085B0 stores the argument
@@ -241,7 +270,16 @@ void __fastcall HookedGaugeSet(int newValue) {
 } // namespace
 
 bool PuzzleActive() {
-    return s_module.valid && ShoutGauge::IsShown();
+    // THE GAUGE IS THE PRIMARY SIGNAL, and identity only narrows it (S134). This used to require a
+    // resolved script module as well, and S133's play log is why it no longer does: the sequence ran
+    // -- its own dialogue is in the log -- while all five module slots read back empty, so every
+    // feature stayed dark on a map where all of them should have worked.
+    //
+    // A gauge on screen plus either identity is enough, and neither alone is: the script name is
+    // exact but currently unreliable, the map id is reliable but coarse, and a bare "some gauge is
+    // showing" would let this speak for any other gauge in the game.
+    if (!ShoutGauge::IsShown()) return false;
+    return s_module.valid || ShoutTable::MapIsShoutStreet(MapNames::CurrentMapId());
 }
 
 bool Init() {
@@ -253,6 +291,7 @@ bool Init() {
 
 void OnFieldFrame() {
     RefreshModule();
+    s_active = PuzzleActive();
     DrainKeys();
 
     if (!s_burst.active) return;
@@ -292,6 +331,7 @@ void OnMapTeardown() {
     s_module        = ShoutScript::Module();
     s_burst         = Burst();
     s_moduleLogged  = false;
+    s_active        = false;
     ShoutDiag::OnMapTeardown();
     ShoutFill::OnMapTeardown();
 }

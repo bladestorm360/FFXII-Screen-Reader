@@ -154,6 +154,10 @@ enum class Id {
     // `InEarshot` / `NoGuardsInEarshot` are only ever spoken once a row carries a MEASURED earshot
     // radius; with it unset the guard key gives distance and bearing and makes no safety claim.
     Infamy, InEarshot, NoGuardsInEarshot,
+    // S134, tester's own wording ("civilians 3, guards 2"): the shout minigame rewards having as
+    // many listeners around you as possible, so the guard key reports a CROWD rather than a list of
+    // individuals. `People` is used until a measured guard id lets the count be split.
+    People, Civilians, Guards,
     // The two context-gated mod-menu rows for the same minigame (S132). Wording is the tester's own
     // framing -- they asked for "the puzzle guide" and "instant success" as two separate toggles.
     SettingPuzzleGuide, PuzzleGuideDesc, PuzzleGuideDescOff, PuzzleGuideDescOn,

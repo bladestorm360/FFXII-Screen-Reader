@@ -63,6 +63,28 @@ struct Module {
 // row a one-line fix instead of another guessing round.
 Module FindShoutModule(char* outNames, int outNamesCap);
 
+// THE EXECUTING module, read from the engine's own "current module" global (`DAT_02099D70`, RVA
+// 0x1F79D70 — the loader and every module entry point save/set/restore it). Called from INSIDE a
+// script native, this is the record of the script that made the call, with no scanning and no
+// guessing about which slot holds what.
+//
+// Added in S134 because the five-slot scan came back empty on a live shout sequence: the tester's
+// log has the sequence's own dialogue and `script modules: [0]=- [1]=- [2]=- [3]=- [4]=-` on the
+// same map, so `record[0]` is not an EBP2 image the way the loader's decompile reads. Until
+// `DumpRecords` says what those records really hold, this is the resolution path that does not
+// depend on the layout being what we thought.
+Module FromCurrentModule();
+
+// Build a Module from a record pointer, whatever produced it. `valid` is false unless the record
+// yields an EBP2 image whose `.src` name matches a ShoutTable row.
+Module FromRecord(void* record);
+
+// RAW DIAGNOSTIC (log-only). Dumps the first quadwords of all five slot records, the value of the
+// current-module global, and the first bytes of whatever each candidate pointer addresses — so the
+// question "what is actually in these records" is answered by bytes rather than by another reading
+// of the decompile.
+void DumpRecords();
+
 // Decode one of the module's variables to an absolute address.
 // Returns false when the descriptor is unreadable, its storage class is unsupported (2), or the
 // resulting address is null. `outElemType` receives the descriptor's element type.

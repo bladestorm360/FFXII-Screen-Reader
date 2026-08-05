@@ -7,6 +7,7 @@
 
 #include "navigation/nav_rva.h"
 #include "core/hooks.h"
+#include "core/logger.h"
 #include "core/mem_read.h"
 
 namespace ShoutScript {
@@ -76,6 +77,90 @@ void* SlotRecord(int slot) {
 }
 
 } // namespace
+
+// The engine's own "currently executing module" pointer. See the header.
+constexpr uint32_t RVA_CURRENT_MODULE = 0x1F79D70;
+
+Module FromRecord(void* rec) {
+    Module m;
+    if (!rec) return m;
+    void* ebpBase = MemRead::PtrAt(rec, kOffEbpBase);
+    char name[32] = {};
+    if (!ReadSrcName(ebpBase, name, sizeof(name))) return m;
+    const ShoutTable::Row* row = ShoutTable::ForSrcName(name);
+    if (!row) return m;
+    m.valid   = true;
+    m.record  = rec;
+    m.ebpBase = ebpBase;
+    m.slot    = -1;
+    m.row     = row;
+    strncpy_s(m.srcName, sizeof(m.srcName), name, _TRUNCATE);
+    return m;
+}
+
+Module FromCurrentModule() {
+    void* slot = Hooks::ResolveRva(RVA_CURRENT_MODULE);
+    if (!slot) return Module();
+    void* rec = nullptr;
+    if (!MemRead::SafeReadPtr(slot, &rec) || !rec) return Module();
+    return FromRecord(rec);
+}
+
+void DumpRecords() {
+    Log::Write("SHOUT-RAW", "module records -- what is ACTUALLY at HANDLE_TABLE_BASE + slot*0x288");
+    for (int slot = 0; slot < kSlots; ++slot) {
+        void* rec = SlotRecord(slot);
+        if (!rec) continue;
+        uint64_t q[6] = {};
+        for (int i = 0; i < 6; ++i) MemRead::SafeReadU64(rec, static_cast<uint32_t>(i * 8), &q[i]);
+        char m[288];
+        snprintf(m, sizeof(m),
+                 "  slot %d rec=%p  +00=%016llX +08=%016llX +10=%016llX +18=%016llX +20=%016llX "
+                 "+28=%016llX",
+                 slot, rec, (unsigned long long)q[0], (unsigned long long)q[1],
+                 (unsigned long long)q[2], (unsigned long long)q[3], (unsigned long long)q[4],
+                 (unsigned long long)q[5]);
+        Log::Write("SHOUT-RAW", m);
+
+        // For each of the first three quadwords that looks like a user-mode pointer, show what it
+        // addresses. An EBP2 image announces itself in the first four bytes.
+        for (int i = 0; i < 3; ++i) {
+            void* p = reinterpret_cast<void*>(static_cast<uintptr_t>(q[i]));
+            if (q[i] < 0x10000 || q[i] > 0x00007FFFFFFFFFFFULL) continue;
+            uint8_t b[16] = {};
+            if (!MemRead::SafeReadBytes(p, b, sizeof(b))) continue;
+            char hex[128]; int off = 0;
+            for (int k = 0; k < 16; ++k)
+                off += snprintf(hex + off, sizeof(hex) - static_cast<size_t>(off), "%02X ", b[k]);
+            char asc[20];
+            for (int k = 0; k < 16; ++k) asc[k] = (b[k] >= 32 && b[k] < 127) ? (char)b[k] : '.';
+            asc[16] = '\0';
+            snprintf(m, sizeof(m), "    +%02X -> %p : %s |%s|", i * 8, p, hex, asc);
+            Log::Write("SHOUT-RAW", m);
+        }
+    }
+
+    void* cmSlot = Hooks::ResolveRva(RVA_CURRENT_MODULE);
+    void* cur = nullptr;
+    if (cmSlot) MemRead::SafeReadPtr(cmSlot, &cur);
+    char m[224];
+    snprintf(m, sizeof(m), "  current-module global (RVA 0x%X) = %p", RVA_CURRENT_MODULE, cur);
+    Log::Write("SHOUT-RAW", m);
+    if (cur) {
+        uint64_t q0 = 0;
+        MemRead::SafeReadU64(cur, 0, &q0);
+        uint8_t b[16] = {};
+        const bool got = (q0 >= 0x10000 && q0 <= 0x00007FFFFFFFFFFFULL) &&
+                         MemRead::SafeReadBytes(reinterpret_cast<void*>(static_cast<uintptr_t>(q0)),
+                                                b, sizeof(b));
+        char asc[20];
+        for (int k = 0; k < 16; ++k) asc[k] = got && b[k] >= 32 && b[k] < 127 ? (char)b[k] : '.';
+        asc[16] = '\0';
+        snprintf(m, sizeof(m), "    its +00 = %016llX%s |%s|", (unsigned long long)q0,
+                 got ? " ->" : " (not readable)", asc);
+        Log::Write("SHOUT-RAW", m);
+    }
+}
 
 Module FindShoutModule(char* outNames, int outNamesCap) {
     Module m;
