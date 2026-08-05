@@ -102,8 +102,8 @@ void SpeakCrowd() {
         Log::Write("SHOUT-KEY", "crowd: player position unavailable -- silent");
         return;
     }
-    const int16_t guardIdx = s_module.row ? s_module.row->guardNameIdx : static_cast<int16_t>(-1);
-    const float   radius   = s_module.row ? s_module.row->earshotRadius : 0.0f;
+    const bool  haveGuards = ShoutTable::HaveGuardIdentity();
+    const float radius     = s_module.row ? s_module.row->earshotRadius : 0.0f;
 
     std::vector<EntityList::NearbyNPC> npcs;
     EntityList::CollectNearestNPCs(me, 64, npcs);
@@ -131,12 +131,12 @@ void SpeakCrowd() {
     int civilians = 0, guards = 0;
     for (const EntityList::NearbyNPC& e : npcs) {
         if (e.dist2D > window) continue;
-        if (guardIdx >= 0 && e.nameIdx == guardIdx) ++guards;
-        else                                        ++civilians;
+        if (haveGuards && ShoutTable::IsGuardName(e.nameIdx)) ++guards;
+        else                                                   ++civilians;
     }
 
     std::wstring text;
-    if (guardIdx >= 0) {
+    if (haveGuards) {
         text = std::to_wstring(civilians) + L" " + Phrase::Get(Phrase::Id::Civilians) + L", " +
                std::to_wstring(guards)    + L" " + Phrase::Get(Phrase::Id::Guards);
     } else {
@@ -157,7 +157,7 @@ void SpeakCrowd() {
         float facing = 0.0f;
         PlayerState::ReadCameraForwardStable(facing);
         for (const EntityList::NearbyNPC& e : npcs) {
-            if (e.nameIdx != guardIdx || e.dist2D > window) continue;
+            if (!ShoutTable::IsGuardName(e.nameIdx) || e.dist2D > window) continue;
             text += L". " + e.label + L", " +
                     NavCommon::DescribeDirectionRelative(me, e.pos, facing);
             break;   // nearest first, so the first match is the nearest

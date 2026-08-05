@@ -22,8 +22,21 @@ constexpr uint32_t kOffClass4    = 0x58;
 constexpr uint32_t kOffClass5    = 0x60;
 constexpr uint32_t kOffDescTable = 0x78;
 
-constexpr uint32_t kEbpMagic     = 0x32504245;   // 'EBP2' little-endian
-constexpr uint32_t kEbpNameBlock = 0x110;        // stamp \0 author \0 <module>.src \0
+// ⚠ THE RUNTIME BASE IS THE FILE BASE + 0x80, and getting that wrong is what made every earlier
+// build fail to resolve a module. `mod[0]` does not address the file header: it addresses the
+// SECTION DIRECTORY, which the file places at offset 0x80 and which announces itself with
+// 0x8000000B. The 2026-08-05 raw dump settled it -- record +00 pointed at bytes `0B 00 00 80`,
+// not at `EBP2`.
+//
+// Everything the loader reads then lines up, which is the confirmation. Read at the FILE base its
+// header fields looked like zeros, which invited the wrong conclusion that a relocation pass filled
+// them in at load time; read at base+0x80 they are all populated in the shipped file:
+//     base+0x14 = 0x9BA0     the count table the loader walks
+//     base+0x28 = 0x2DD30    the VARIABLE DESCRIPTOR TABLE  (mod[0x0F])
+//     base+0x40 = 0x180      the class-3 storage base
+// and the three name strings sit at base+0x90: "00/00 00:00", "naomif", "byu_a01.src".
+constexpr uint32_t kEbpMagic     = 0x8000000B;   // section-directory magic, at the runtime base
+constexpr uint32_t kEbpNameBlock = 0x90;         // stamp \0 author \0 <module>.src \0
 constexpr uint32_t kEbpClass3Off = 0x40;         // class-3 base = ebpBase + *(u32*)(ebpBase+0x40)
 
 // Element strides, indexed by descriptor elemType (0=u8 1=s8 2=u16 3=s16 4=u32 5=float).

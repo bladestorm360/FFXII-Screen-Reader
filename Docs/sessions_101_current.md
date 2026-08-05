@@ -3595,3 +3595,47 @@ Built + deployed, **NOT play-confirmed.**
 
 **KEYWORDS: Bhujerban Sainikah 387 guard identity not Imperial idle decay chatter burst changed
 nothing CaptureBurst module gate crowd window 10 steps reporting window earshot unmeasured**
+
+## Session 137 — 2026-08-05 — The module base was 0x80 out; the guard is a PAIR of ids
+
+The `'` dump the tester took twice mid-sequence answered both open questions outright.
+
+**THE RUNTIME MODULE BASE IS THE FILE BASE + 0x80.** `mod[0]` does not address the file header — the
+raw dump showed record `+00` pointing at bytes **`0B 00 00 80`**, i.e. `0x8000000B`, the SECTION
+DIRECTORY magic the file places at offset 0x80. Every earlier build checked for `EBP2` at +0 and so
+resolved nothing, which is why three sessions of features sat behind a module that never arrived.
+
+Everything the loader reads lines up at the corrected base, and that is the confirmation:
+
+    base+0x14 = 0x9BA0     the count table the loader walks
+    base+0x28 = 0x2DD30    the VARIABLE DESCRIPTOR TABLE (mod[0x0F])
+    base+0x40 = 0x180      the class-3 storage base
+    base+0x90              "00/00 00:00", "naomif", "byu_a01.src"
+
+**AND IT RETIRES A WRONG CONCLUSION FROM S131.** That session recorded these header fields as "zero
+in the extracted file, filled by the loader's relocation pass at load time". They were never zero.
+They read as zero because they were read at the FILE base, 0x80 too early. There is no relocation
+pass. The `.src` name is at file 0x110 and at RUNTIME 0x90 — both true, same bytes, different origin.
+
+**THE GUARD IS TWO IDS, NOT ONE.** The captures show `1053 "Informed Sainikah"` standing where a
+guard would be, and the npcdic contains exactly two Sainikah entries — **387 "Bhujerban Sainikah"**
+and **1053 "Informed Sainikah"**. The whole "Informed" family (1052 Citydweller, 1054 Parijanah,
+1076 Shopkeep, 1077 Wayfarer) is the minigame's own mechanic in the data: an NPC is replaced by an
+Informed variant once they have heard the rumour. A guard who has heard you is still a guard, so
+`ShoutTable::IsGuardName` matches both, and the set is COMPLETE because the npcdic has no third.
+
+**THE EARSHOT BRACKET, from three captures:**
+
+    PENALTY   meter 25 -> 0     387 at  0.88 m
+    CLEAN     meter 23 -> 27    387 at 19.64 m
+    CLEAN     meter  0 -> 5    1053 at  8.26 m
+
+so earshot lies in **(0.88, 19.64]** on 387's evidence alone. 1053's clean pass at 8.26 m would
+narrow it to (0.88, 8.26) — but only if an Informed Sainikah still punishes, which is exactly the
+kind of assumption this instrument exists to avoid. **`earshotRadius` stays 0**; the crowd key keeps
+its spoken 10-step reporting window until a second penalty tightens the bound.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: module base file+0x80 section directory 0x8000000B name at 0x90 descriptor table 0x2DD30
+no relocation pass S131 corrected guard pair 387 1053 Informed Sainikah earshot bracket 0.88 19.64**

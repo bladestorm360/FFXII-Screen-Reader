@@ -36,7 +36,6 @@ struct Row {
     const char* srcName;       // the module's own authoring name, e.g. "byu_a01.src"
     uint8_t     meterVarIdx;   // script variable the gauge counter is driven from
     uint8_t     fillValue;     // the script's OWN success threshold (`v >= N`), never a mod constant
-    int16_t     guardNameIdx;  // npcdic id of the Imperials; -1 = not measured (see the note above)
     // Earshot, in metres. 0 = NOT MEASURED, and while it is 0 the guard key reports distance and
     // bearing without a verdict -- an invented radius would be worse than no answer. Filled from the
     // bracket the shipped measurement produces: the largest distance at which a shout was PENALISED
@@ -46,6 +45,23 @@ struct Row {
 
 // The row whose `srcName` matches, or nullptr. `srcName` is compared as an exact ASCII string.
 const Row* ForSrcName(const char* srcName);
+
+// Is this npcdic id one of the soldiers whose earshot costs the player 30 points?
+//
+// MEASURED, and the set is COMPLETE: the whole npcdic contains exactly two "Sainikah" entries --
+// 387 "Bhujerban Sainikah" and 1053 "Informed Sainikah" -- and they are the same soldier in two
+// states. The play captures show the swap happening: 1052 Informed Citydweller, 1054 Informed
+// Parijanah and 1077 Informed Wayfarer all appear beside their plain counterparts, because the
+// minigame replaces an NPC with an "Informed" variant once they have heard the rumour. A guard who
+// has heard you is still a guard, so both ids count.
+//
+// It is a shared set rather than a per-row field because every Bhujerba map draws from the one
+// npcdic; a row cannot disagree with another about what a soldier is.
+bool IsGuardName(int16_t nameIdx);
+
+// Whether the guard identity is known at all. False would put the crowd key back to counting
+// "people"; it is true today and this exists so that stays a decision the data makes.
+bool HaveGuardIdentity();
 
 
 // How many rows the table holds (diagnostics only).

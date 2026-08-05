@@ -53,23 +53,34 @@ namespace {
 // shout_diag.cpp brackets it properly: largest PENALTY distance below, smallest CLEAN distance
 // above.
 constexpr Row kRows[] = {
-    { "byu_a01.src", 0x0D, 100, 387, 0.0f },
-    { "byu_a02.src", 0x0E, 100, 387, 0.0f },
-    { "byu_a03.src", 0x10, 100, 387, 0.0f },
-    { "byu_a04.src", 0x10, 100, 387, 0.0f },
-    { "byu_a07.src", 0x0B, 100, 387, 0.0f },
-    { "byu_a08.src", 0x35, 100, 387, 0.0f },
-    { "byu_a11.src", 0x0F, 100, 387, 0.0f },
-    { "byu_a12.src", 0x0F, 100, 387, 0.0f },
-    { "byu_a14.src", 0x0F, 100, 387, 0.0f },
-    { "byu_a15.src", 0x0F, 100, 387, 0.0f },
-    { "byu_a16.src", 0x0F, 100, 387, 0.0f },
-    { "byu_a17.src", 0x3B, 100, 387, 0.0f },
-    { "byu_a18.src", 0x32, 100, 387, 0.0f },
-    { "byu_b01.src", 0x16, 100, 387, 0.0f },
+    { "byu_a01.src", 0x0D, 100, 0.0f },
+    { "byu_a02.src", 0x0E, 100, 0.0f },
+    { "byu_a03.src", 0x10, 100, 0.0f },
+    { "byu_a04.src", 0x10, 100, 0.0f },
+    { "byu_a07.src", 0x0B, 100, 0.0f },
+    { "byu_a08.src", 0x35, 100, 0.0f },
+    { "byu_a11.src", 0x0F, 100, 0.0f },
+    { "byu_a12.src", 0x0F, 100, 0.0f },
+    { "byu_a14.src", 0x0F, 100, 0.0f },
+    { "byu_a15.src", 0x0F, 100, 0.0f },
+    { "byu_a16.src", 0x0F, 100, 0.0f },
+    { "byu_a17.src", 0x3B, 100, 0.0f },
+    { "byu_a18.src", 0x32, 100, 0.0f },
+    { "byu_b01.src", 0x16, 100, 0.0f },
 };
 
+// The complete soldier set (see shout_table.h). Two ids, and the npcdic has no third.
+constexpr int16_t kGuardNames[] = { 387, 1053 };
+
 } // namespace
+
+bool IsGuardName(int16_t nameIdx) {
+    for (int16_t g : kGuardNames)
+        if (g == nameIdx) return true;
+    return false;
+}
+
+bool HaveGuardIdentity() { return true; }
 
 const Row* ForSrcName(const char* srcName) {
     if (!srcName || !*srcName) return nullptr;
