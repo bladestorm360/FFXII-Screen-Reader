@@ -47,19 +47,6 @@ struct Row {
 // The row whose `srcName` matches, or nullptr. `srcName` is compared as an exact ASCII string.
 const Row* ForSrcName(const char* srcName);
 
-// IDENTITY FALLBACK, and nothing else (S134). Is `mapId` one of Bhujerba's streets?
-//
-// The script-name gate above is the real one, and it is what the instant fill still requires,
-// because only a module gives the meter variable's address. But S133's play log had the shout
-// sequence's own dialogue and `script modules: [0]=- ... [4]=-` on the same map, so on that build
-// the name never resolved and every feature stayed dark. This lets the SPOKEN METER and the two
-// keys work from the gauge alone while that is being fixed, without letting them speak for some
-// other gauge elsewhere in the game.
-//
-// The ids are the game's own planmapname area ids for Bhujerba, and map 804 is a MEASUREMENT --
-// the tester ran the sequence there. This is a narrowing gate, never a behaviour table: it decides
-// only whether a gauge already on screen may be called the infamy meter.
-bool MapIsShoutStreet(int mapId);
 
 // How many rows the table holds (diagnostics only).
 int Count();

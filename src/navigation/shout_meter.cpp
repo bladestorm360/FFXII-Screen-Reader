@@ -270,19 +270,17 @@ void __fastcall HookedGaugeSet(int newValue) {
 } // namespace
 
 bool PuzzleActive() {
-    // THE GAUGE IS THE PRIMARY SIGNAL, and identity only narrows it (S134). This used to require a
-    // resolved script module as well, and S133's play log is why it no longer does: the sequence ran
-    // -- its own dialogue is in the log -- while all five module slots read back empty, so every
-    // feature stayed dark on a map where all of them should have worked.
-    //
-    // A gauge on screen plus either identity is enough, and neither alone is: the script name is
-    // exact but currently unreliable, the map id is reliable but coarse, and a bare "some gauge is
-    // showing" would let this speak for any other gauge in the game.
-    if (!ShoutGauge::IsShown()) return false;
-    return s_module.valid || ShoutTable::MapIsShoutStreet(MapNames::CurrentMapId());
+    // TWO ENGINE-SIDE FACTS, both the script's own: this gauge was configured as the shout gauge
+    // (its condition triple is (200,200,100), which no other script in the game uses), and it is on
+    // screen right now. Nothing here consults a map id, and nothing depends on resolving a script
+    // module -- which is what let S133's build go dark on a map where the sequence was running.
+    return ShoutGauge::IsShoutGauge() && ShoutGauge::IsShown();
 }
 
 bool Init() {
+    // The condition hook decides WHICH gauge is on screen; the writer hook reads its value. Without
+    // the first, the second never arms and the feature stays correctly silent.
+    ShoutGauge::InitHooks();
     const bool ok = Hooks::InstallTyped(ShoutGauge::RVA_WRITER, &HookedGaugeSet, &s_orig);
     Log::Write("SHOUT", ok ? "gauge-writer hook installed (script setgaugecounter -> HUD)"
                            : "gauge-writer hook FAILED to install -- the infamy meter will not speak");
@@ -332,6 +330,7 @@ void OnMapTeardown() {
     s_burst         = Burst();
     s_moduleLogged  = false;
     s_active        = false;
+    ShoutGauge::OnMapTeardown();
     ShoutDiag::OnMapTeardown();
     ShoutFill::OnMapTeardown();
 }

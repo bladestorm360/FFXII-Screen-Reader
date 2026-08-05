@@ -63,31 +63,7 @@ constexpr Row kRows[] = {
     { "byu_b01.src", 0x16, 100, -1, 0.0f },
 };
 
-// Bhujerba's own planmapname area ids: the streets, the terraces and the shop interiors that carry
-// a shout script. 804 (Cloudborne Row) is confirmed by play -- the tester ran the sequence there.
-constexpr int kShoutMaps[] = {
-    803,  // Travica Way
-    804,  // Cloudborne Row      <- play-confirmed
-    805,  // Miners' End
-    806,  // Lhusu Square
-    809,  // Khus Skygrounds
-    810,  // Kaff Terrace
-    813,  // Targe's Arms
-    814,  // Rithil's Protectives
-    816,  // Mait's Magicks
-    817,  // Clio's Technicks
-    818,  // Bashketi's Gambits
-    819,  // The Staras Residence
-    820,  // The Cloudborne
-};
-
 } // namespace
-
-bool MapIsShoutStreet(int mapId) {
-    for (int id : kShoutMaps)
-        if (id == mapId) return true;
-    return false;
-}
 
 const Row* ForSrcName(const char* srcName) {
     if (!srcName || !*srcName) return nullptr;

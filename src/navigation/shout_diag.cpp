@@ -60,10 +60,10 @@ void Dump() {
     const ShoutGauge::State g = ShoutGauge::Read();
     char line[384];
     snprintf(line, sizeof(line),
-             "   gauge read=%d value=%d max=%d flags=0x%08X shown=%d (+0xC0=%u +0xC1=%u "
-             "mgr+0xC8=%u) | mapIsShoutStreet=%d puzzleActive=%d guide=%d skip=%d",
+             "   gauge read=%d value=%d max=%d flags=0x%08X shown=%d type(+0xC0)=%u +0xC1=%u "
+             "mgr+0xC8=%u | isShoutGauge=%d puzzleActive=%d guide=%d skip=%d",
              g.ok ? 1 : 0, g.value, g.max, g.flags, g.shown ? 1 : 0, g.styleC0, g.styleC1,
-             g.mgrFlags, ShoutTable::MapIsShoutStreet(MapNames::CurrentMapId()) ? 1 : 0,
+             g.mgrFlags, ShoutGauge::IsShoutGauge() ? 1 : 0,
              ShoutMeter::PuzzleActive() ? 1 : 0, ModMenu::PuzzleGuideOn() ? 1 : 0,
              ModMenu::PuzzleSkipOn() ? 1 : 0);
     Log::Write("NAV-PROBE", line);

@@ -3503,3 +3503,51 @@ Built + deployed, **NOT play-confirmed.**
 
 **KEYWORDS: EffectiveValue hidden row reads off context-gated setting single read path mod menu
 visibility predicate one place puzzle guide puzzle skip stored value persists**
+
+## Session 135 — 2026-08-05 — The exact flag: a gauge's CONDITION TRIPLE names which minigame it belongs to
+
+S134 gated the shout features on "a gauge is on screen, on a Bhujerba map". The tester's objection
+was the right one: the menu rows' visibility hangs off that predicate, so a loose gate is not a
+cosmetic problem, and a map list is the wrong shape for a puzzle that may be cross-map.
+
+**A CORPUS SWEEP KILLED THE OLD GATE OUTRIGHT.** All 1115 EBP2 scripts, checked for gauge natives:
+**126 modules use one and 46 drive a counter** — `mic_*`, `rsn_*`, `sav_*`, `gil_*`, `frs_*`,
+`srb_*` and an event script, besides Bhujerba's fourteen. **Every one of them uses `max = 100`**, so
+the maximum separates nothing either. The S134 fallback would have announced "Infamy" at several
+unrelated points in the game; only its map list was holding that back, and a map list was exactly
+what had to go.
+
+**THE CONDITION TRIPLE IS THE EXACT FLAG.** Every gauge is configured with
+`setgaugecountercondition(a,b,c)`, and across the whole corpus there are only five distinct triples:
+
+    (200, 200, 100)   byu   <- the shout minigame, and NOTHING else in the game
+    ( 90,  60,  30)   byu   (a second, unrelated configuration on byu_a04)
+    ( 60,  49,  28)   mic
+    ( 10,  50, 100)   rsn
+    (no condition call)     sav, gil, frs, srb
+
+So the script states outright which gauge it is building, in its own numbers. `ShoutGauge` hooks
+`FUN_00408560` (RVA `0x2E8560`) — the three-argument C function the native forwards to, arity
+counted from the callee — and arms on the RAW SCRIPT ARGUMENTS. A different triple disarms as
+decisively as ours arms.
+
+**ARM ON THE ARGUMENTS, NOT THE STORED FIELDS.** `FUN_00407300` multiplies the triple by 60 when the
+counter type is 1 (which the shout gauge is) and reorders it by `gauge+0xDC` before storing it at
+`+0xEA/+0xEC/+0xEE`. Matching the stored form would have been a fingerprint read back through two
+transformations — inference where the hook gives a measurement.
+
+`PuzzleActive()` is now exactly **`IsShoutGauge() && IsShown()`**: two engine-side facts, both the
+script's own. **No map id, and no dependence on resolving a script module** — which is what let
+S133's build go dark on a map where the sequence was demonstrably running. `MapIsShoutStreet` and
+its map list are deleted.
+
+**BONUS — the `+0xC0` open measurement is RESOLVED.** `FUN_00407300` reads `+0xC0 == 1` as "counter
+type 1" and scales by 60 on it, which is coherent with `FUN_004085B0` dispatching its painter on the
+same byte for 0/1/3. So **`+0xC0` is the counter TYPE**, and the "null the object when `+0xC0 != 0`"
+line in the writer is a Ghidra fold, exactly as suspected. Nothing in the mod ever branched on it.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: exact flag condition triple 200 200 100 setgaugecountercondition FUN_00408560 arming
+corpus sweep 46 gauge modules mic rsn sav gil frs max 100 everywhere no map list gauge type +0xC0
+resolved cross-map**
