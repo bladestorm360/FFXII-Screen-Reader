@@ -190,7 +190,9 @@ How much gets spoken aloud is up to you — see Combat verbosity below.
 * B: the infamy meter, as a percentage.
 * N: the people nearest you, each with a direction and a distance.
 
-The meter also speaks on its own whenever it moves, whether it rises or an Imperial hears you and it falls. Both keys are silent everywhere else in the game.
+The meter also speaks on its own whenever it moves, whether it rises or an Imperial hears you and it falls. The keys and the spoken meter work only while the shouting is actually running, and are silent everywhere else in the game.
+
+Two settings appear in the mod menu while you are shouting, and only then. Puzzle guide covers the spoken meter and the two keys, and starts on. Instant success fills the meter on your first shout, and starts off.
 
 #### The mod menu (F8)
 

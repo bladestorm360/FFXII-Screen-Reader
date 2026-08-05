@@ -151,7 +151,13 @@ enum class Id {
     // names it -- its only text is "<n> Bhujerbans heed your words" -- so there is no game string
     // to read instead. One word only; the direction of a change reuses StatDown above, and a
     // percentage reuses PercentSuffix, rather than inventing more.
-    Infamy,
+    // `InEarshot` / `NoGuardsInEarshot` are only ever spoken once a row carries a MEASURED earshot
+    // radius; with it unset the guard key gives distance and bearing and makes no safety claim.
+    Infamy, InEarshot, NoGuardsInEarshot,
+    // The two context-gated mod-menu rows for the same minigame (S132). Wording is the tester's own
+    // framing -- they asked for "the puzzle guide" and "instant success" as two separate toggles.
+    SettingPuzzleGuide, PuzzleGuideDesc, PuzzleGuideDescOff, PuzzleGuideDescOn,
+    SettingPuzzleSkip,  PuzzleSkipDesc,  PuzzleSkipDescOff,  PuzzleSkipDescOn,
 
     Count
 };

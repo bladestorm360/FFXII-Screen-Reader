@@ -23,6 +23,20 @@
 // repeat, and re-entering the map speaks again.
 namespace ShoutMeter {
 
+// IS A SHOUT SEQUENCE ACTUALLY RUNNING RIGHT NOW? Not "is the player in Bhujerba" -- the map script
+// is resident on those streets whether or not the puzzle is live, so module identity alone is too
+// coarse a gate for the keys and far too coarse for the write.
+//
+// The script itself answers it. `setgaugeshowstatus(1)` reaches `FUN_00408360`, which sets bit 2 of
+// `*(u32*)(gauge + 0xD8)` and clears bit 3; `setgaugeshowstatus(0)` reaches `FUN_00408190`, which
+// does the reverse. So bit 2 IS "the gauge is on screen", written by the sequence's own setup and
+// cleared by its own teardown. This returns true only when a table module is live AND that bit is
+// set, so every feature here is unreachable outside the sequence.
+//
+// Safe from any thread (a guarded read of a published pointer); it is also the mod menu's
+// visibility predicate for the two puzzle rows.
+bool PuzzleActive();
+
 // Installs the gauge-writer hook. Non-fatal on failure: the feature simply never speaks.
 bool Init();
 

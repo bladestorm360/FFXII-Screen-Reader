@@ -28,20 +28,20 @@ namespace {
 //
 // The four `byu_?01` stubs (w/x/y/z) contain no `setgaugecounter` call and are deliberately absent.
 constexpr Row kRows[] = {
-    { "byu_a01.src", 0x0D, 100, -1 },
-    { "byu_a02.src", 0x0E, 100, -1 },
-    { "byu_a03.src", 0x10, 100, -1 },
-    { "byu_a04.src", 0x10, 100, -1 },
-    { "byu_a07.src", 0x0B, 100, -1 },
-    { "byu_a08.src", 0x35, 100, -1 },
-    { "byu_a11.src", 0x0F, 100, -1 },
-    { "byu_a12.src", 0x0F, 100, -1 },
-    { "byu_a14.src", 0x0F, 100, -1 },
-    { "byu_a15.src", 0x0F, 100, -1 },
-    { "byu_a16.src", 0x0F, 100, -1 },
-    { "byu_a17.src", 0x3B, 100, -1 },
-    { "byu_a18.src", 0x32, 100, -1 },
-    { "byu_b01.src", 0x16, 100, -1 },
+    { "byu_a01.src", 0x0D, 100, -1, 0.0f },
+    { "byu_a02.src", 0x0E, 100, -1, 0.0f },
+    { "byu_a03.src", 0x10, 100, -1, 0.0f },
+    { "byu_a04.src", 0x10, 100, -1, 0.0f },
+    { "byu_a07.src", 0x0B, 100, -1, 0.0f },
+    { "byu_a08.src", 0x35, 100, -1, 0.0f },
+    { "byu_a11.src", 0x0F, 100, -1, 0.0f },
+    { "byu_a12.src", 0x0F, 100, -1, 0.0f },
+    { "byu_a14.src", 0x0F, 100, -1, 0.0f },
+    { "byu_a15.src", 0x0F, 100, -1, 0.0f },
+    { "byu_a16.src", 0x0F, 100, -1, 0.0f },
+    { "byu_a17.src", 0x3B, 100, -1, 0.0f },
+    { "byu_a18.src", 0x32, 100, -1, 0.0f },
+    { "byu_b01.src", 0x16, 100, -1, 0.0f },
 };
 
 } // namespace

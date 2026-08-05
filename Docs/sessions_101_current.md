@@ -3431,3 +3431,41 @@ Built, deployed, **NOT play-confirmed.**
 **KEYWORDS: shout minigame Bhujerba byu infamy meter gauge setgaugecounter instant fill script
 variable descriptor EBP2 src name burst coalescer B key N key phrase percent helper third write
 exception ebp_shout_census athena opcode erratum native table stride 32**
+
+## Session 132 — 2026-08-05 — Shout minigame: sequence-tight gating, two context-gated toggles, and the guard instrument
+
+Tester's follow-up to S131, three asks, all three answerable.
+
+**1. GATE TO THE SEQUENCE, NOT THE MAP.** S131 gated on "a byu script module is resident", which is
+true on those streets whether or not the puzzle is live. The script answers the tighter question
+itself: `setgaugeshowstatus(1)` reaches `FUN_00408360`, which sets **bit 2 of `*(u32*)(gauge+0xD8)`**
+and clears bit 3; `setgaugeshowstatus(0)` reaches `FUN_00408190` and does the reverse. So bit 2 IS
+"the gauge is on screen", written by the sequence's own setup and cleared by its own teardown.
+`ShoutMeter::PuzzleActive()` = a table module is live AND that bit is set, and it now gates the two
+keys, the spoken meter, the instant fill, and the menu rows.
+
+**2. THE GUARD AND THE EARSHOT ARE MEASURED, NOT GUESSED.** Neither is in the scripts and the
+tester's Bhujerba logs are all post-minigame, so `shout_diag.cpp` ships the instrument: every burst
+is captured with the npcdic census at that instant, tagged **CLEAN** or **PENALTY**, capped at 24
+per map visit. The guard is the id close on every PENALTY and far on every CLEAN; earshot is
+bracketed above by the largest penalty distance and below by the smallest clean distance. The `'`
+probe grew a shout section carrying the same census plus the gauge word and both toggles. Once
+those two numbers land, `guardNameIdx` / `earshotRadius` are a pure data edit and `N` filters to
+guards and speaks the verdict — the code path is already written and dormant.
+
+**3. CONTEXT-GATED MENU ROWS.** `ModMenu::Setting` gained an optional `visible()` predicate; Up,
+Down, Home, End and the opening announcement all walk visible rows only, and a hidden row's VALUE
+is untouched and still persists. Two rows use it, both keyed on `PuzzleActive`:
+**Puzzle guide** (default ON — it only informs) and **Instant success** (default OFF — **it writes
+game state, so it takes auto-walk's rule**: a feature that changes the game must be switched on
+deliberately, never sprung on an install).
+
+`shout_meter.cpp` hit 442 lines, so it split on two real seams rather than being left over budget:
+`shout_gauge.*` (one set of gauge offsets, three readers) and `shout_diag.*` (the instruments,
+log-only). Largest shout file is now 298 lines.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: puzzle active gauge 0xD8 shown bit setgaugeshowstatus FUN_00408360 FUN_00408190
+context-gated mod menu visible predicate puzzle guide instant success toggle guard census
+SHOUT-MEASURE CLEAN PENALTY earshot bracket shout_gauge shout_diag**

@@ -1,5 +1,6 @@
 #include "navigation/nav_probe.h"
 #include "navigation/exit_diag.h"
+#include "navigation/shout_diag.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/map_query.h"
 #include "navigation/map_seams.h"
@@ -380,6 +381,11 @@ void RunProbe() {
     // then left with zero callers, while three research passes argued about terrain attributes it would
     // have answered in one keypress.
     ExitDiag::LogWalkPolyClasses();
+
+    // The shout minigame's own state: which script module is live, the gauge and its shown bit, the
+    // two toggles, and the full npcdic census. That census is how the guard's identity gets measured
+    // -- run this standing beside whoever punished the last shout.
+    ShoutDiag::Dump();
 
     NavTrace::DumpTrail();
     Log::Write(kTag, "======== end NAV-PROBE ========");

@@ -210,7 +210,17 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
 | `B` | Bhujerba shout minigame: the infamy meter as a percentage | unproven — collision watch |
-| `N` | Bhujerba shout minigame: the NPCs nearest you, with bearing and distance | unproven — collision watch |
+| `N` | Bhujerba shout minigame: the guards nearest you, with bearing and distance | unproven — collision watch |
+
+> **Both keys answer only while the shouting sequence is actually RUNNING**, not merely while the
+> player is on a Bhujerba street. The gate is the game's own gauge-shown bit (`gauge+0xD8` bit 2,
+> written by the script's `setgaugeshowstatus`), so it opens and closes with the sequence itself.
+> Off it, and with the **Puzzle guide** setting off, both keys are silent no-ops with one log line.
+>
+> Two mod-menu rows are **context-gated to that same predicate** and appear only during the
+> sequence: **Puzzle guide** (default ON — the spoken meter and these two keys) and **Instant
+> success** (default OFF — one shout completes the minigame; it writes game state, so it follows
+> auto-walk's rule that the player must switch it on deliberately).
 | `Up` / `Down` | **Status Attributes page** and **an open Clan Primer entry:** previous / next entry in the virtual buffer | free on those pages |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
 

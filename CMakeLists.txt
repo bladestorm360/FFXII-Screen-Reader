@@ -140,6 +140,8 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/path_danger.cpp
     src/navigation/sneak_assist.cpp
     src/navigation/shout_table.cpp
+    src/navigation/shout_gauge.cpp
+    src/navigation/shout_diag.cpp
     src/navigation/shout_script.cpp
     src/navigation/shout_fill.cpp
     src/navigation/shout_meter.cpp

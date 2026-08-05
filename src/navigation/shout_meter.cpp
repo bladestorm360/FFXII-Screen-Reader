@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "navigation/shout_diag.h"
 #include "navigation/shout_fill.h"
+#include "navigation/shout_gauge.h"
 #include "navigation/shout_script.h"
 #include "navigation/shout_table.h"
 #include "navigation/entity_list.h"
@@ -17,36 +19,20 @@
 #include "navigation/player_state.h"
 #include "core/hooks.h"
 #include "core/logger.h"
-#include "core/mem_read.h"
 #include "core/stall_probe.h"
 #include "speech/phrase_format.h"
 #include "speech/phrasebook.h"
 #include "speech/speech.h"
+#include "ui/mod_menu.h"
 
 namespace ShoutMeter {
 namespace {
-
-// ---- The gauge HUD (CONFIRMED from FUN_004085B0 / FUN_00408250) --------------------------------
-//
-// `setgaugecounter` (script native 0x1AE) -> shim FUN_0034EA90 -> FUN_004085B0(int), whose single
-// argument IS the new counter value. THE DETOUR'S ARITY IS ONE INT, counted from the CALLEE's
-// decompile as S129 requires -- the shim above it decompiles as `void(void)` while actually reading
-// R9, and hooking THAT would have been the same 4-args-on-a-6-arg-function defect that cost the
-// shop menu a crash.
-constexpr uint32_t RVA_GAUGE_SET  = 0x2E85B0;   // FUN_004085B0(int newValue)
-constexpr uint32_t RVA_GAUGE_MGR  = 0x2A42D80;  // DAT_02B62D80: pointer to the gauge manager
-constexpr uint32_t MGR_GAUGE_PTR  = 0xC0;       // -> the gauge object
-constexpr uint32_t MGR_FLAGS      = 0xC8;       // & 2 suppresses the engine's own write
-constexpr uint32_t GAUGE_MAX_OFF  = 0xE0;
-constexpr uint32_t GAUGE_VAL_OFF  = 0xE4;
-constexpr uint32_t GAUGE_STYLE    = 0xC0;       // see the note in ReadGauge
 
 typedef void(__fastcall* Pfn_GaugeSet)(int);
 Pfn_GaugeSet s_orig = nullptr;
 
 // ---- State. Everything here is GAME THREAD ONLY except the two key flags -----------------------
 ShoutScript::Module s_module;
-bool s_censusLogged  = false;
 bool s_moduleLogged  = false;
 
 struct Burst {
@@ -61,34 +47,6 @@ Burst s_burst;
 
 std::atomic<bool> s_reqMeter{false};
 std::atomic<bool> s_reqGuard{false};
-
-// Read the live gauge. Re-resolved from the manager global EVERY time -- never cached across
-// frames, because the object is owned by the HUD and dies with it.
-//
-// NOTHING GATES ON THE STYLE BYTE. FUN_004085B0 as decompiled both nulls the gauge object when
-// *(gauge+0xC0) is non-zero AND dispatches its redraw on that same byte being 0/1/3, which cannot
-// both be true; the likely reading is that Ghidra folded two adjacent fields (+0xC0/+0xC1). Since
-// the value at +0xE4 is what the script asked for either way, the bytes are LOGGED and never
-// tested -- a measurement riding the diagnostics rather than a guess baked into a branch.
-bool ReadGauge(int* outValue, int* outMax, uint8_t* outC0, uint8_t* outC1, uint8_t* outMgrFlags) {
-    void* mgrSlot = Hooks::ResolveRva(RVA_GAUGE_MGR);
-    if (!mgrSlot) return false;
-    void* mgr = nullptr;
-    if (!MemRead::SafeReadPtr(mgrSlot, &mgr) || !mgr) return false;
-    if (outMgrFlags) MemRead::SafeReadU8(mgr, MGR_FLAGS, outMgrFlags);
-
-    void* gauge = MemRead::PtrAt(mgr, MGR_GAUGE_PTR);
-    if (!gauge) return false;
-    if (outC0) MemRead::SafeReadU8(gauge, GAUGE_STYLE, outC0);
-    if (outC1) MemRead::SafeReadU8(gauge, GAUGE_STYLE + 1, outC1);
-
-    uint32_t v = 0, mx = 0;
-    if (!MemRead::SafeReadU32(gauge, GAUGE_VAL_OFF, &v)) return false;
-    if (!MemRead::SafeReadU32(gauge, GAUGE_MAX_OFF, &mx)) return false;
-    if (outValue) *outValue = static_cast<int32_t>(v);
-    if (outMax)   *outMax   = static_cast<int32_t>(mx);
-    return true;
-}
 
 // THE ONE SPEECH CHOKE POINT for this surface. Both detectors -- the burst coalescer and the B key
 // -- funnel through here so the wording, the logging and the interrupt policy live in one place.
@@ -124,78 +82,93 @@ void EmitMeter(int value, int max, bool rising, bool interrupt, const char* why)
     Speech::Output(text, interrupt);
 }
 
-// One-off census of the NPCs a shout map carries, with their npcdic ids. THIS IS THE DELIVERABLE
-// that turns ShoutTable's `guardNameIdx = -1` into a measured value: the Imperials whose earshot
-// costs 30 points are not identifiable from the scripts, and the tester's existing Bhujerba logs
-// are all post-minigame, so the first play pass through the sequence is the only place the answer
-// can come from. Log-only, once per map.
-void LogNpcCensus() {
-    FVec3 me{};
-    if (!PlayerState::ReadPlayerPos(me)) return;
-    std::vector<EntityList::NearbyNPC> npcs;
-    const int n = EntityList::CollectNearestNPCs(me, 64, npcs);
-    char head[160];
-    snprintf(head, sizeof(head),
-             "NPC census on %s (map %d): %d NPC(s) -- the guard identity for ShoutTable comes from "
-             "whichever of these is present when the meter DROPS",
-             s_module.srcName, MapNames::CurrentMapId(), n);
-    Log::Write("SHOUT", head);
-    for (const EntityList::NearbyNPC& e : npcs) {
-        char line[96];
-        snprintf(line, sizeof(line), "  nameIdx=%-5d %6.1fm  ", e.nameIdx, e.dist2D);
-        Log::WriteW("SHOUT", line, e.label);
-    }
-}
-
-void SpeakNearestNpcs() {
+// The `N` key. Once ShoutTable carries a measured `guardNameIdx` this reports GUARDS ONLY, with the
+// earshot verdict when the radius is measured too. Until then it reports the nearest NPCs by the
+// game's own names -- useful, and honest about not knowing which of them matters.
+void SpeakGuards() {
     FVec3 me{};
     if (!PlayerState::ReadPlayerPos(me)) {
         Log::Write("SHOUT-KEY", "guard: player position unavailable -- silent");
         return;
     }
+    const int16_t guardIdx = s_module.row ? s_module.row->guardNameIdx : static_cast<int16_t>(-1);
+    const float   radius   = s_module.row ? s_module.row->earshotRadius : 0.0f;
+
     std::vector<EntityList::NearbyNPC> npcs;
-    const int n = EntityList::CollectNearestNPCs(me, 3, npcs);
-    if (n <= 0) {
-        Log::Write("SHOUT-KEY", "guard: no NPCs listed here");
-        Speech::Output(Phrase::Get(Phrase::Id::NoTargets), true);
+    EntityList::CollectNearestNPCs(me, 32, npcs);
+    if (guardIdx >= 0) {
+        std::vector<EntityList::NearbyNPC> guards;
+        for (const EntityList::NearbyNPC& e : npcs)
+            if (e.nameIdx == guardIdx) guards.push_back(e);
+        npcs.swap(guards);
+    }
+    if (npcs.size() > 3) npcs.resize(3);
+
+    if (npcs.empty()) {
+        // No guard anywhere on the map is a REAL answer when we know what a guard is, so say it.
+        // Not knowing yet is a different thing, and that one stays quiet.
+        Log::Write("SHOUT-KEY", guardIdx >= 0 ? "guard: none listed on this map"
+                                              : "guard: no NPCs listed here");
+        if (guardIdx >= 0) Speech::Output(Phrase::Get(Phrase::Id::NoGuardsInEarshot), true);
+        else               Speech::Output(Phrase::Get(Phrase::Id::NoTargets), true);
         return;
     }
+
     float facing = 0.0f;
     PlayerState::ReadCameraForwardStable(facing);
 
     std::wstring text;
-    for (int i = 0; i < n; ++i) {
+    bool anyInEarshot = false;
+    for (size_t i = 0; i < npcs.size(); ++i) {
         if (i) text += L". ";
         text += npcs[i].label + L", " +
                 NavCommon::DescribeDirectionRelative(me, npcs[i].pos, facing);
+        if (radius > 0.0f && npcs[i].dist2D <= radius) anyInEarshot = true;
     }
+    // The verdict is only ever appended when the radius is a MEASURED number. With `earshotRadius`
+    // still 0 the player gets distance and bearing and no claim about safety.
+    if (radius > 0.0f)
+        text += std::wstring(L". ") +
+                Phrase::Get(anyInEarshot ? Phrase::Id::InEarshot : Phrase::Id::NoGuardsInEarshot);
+
     Log::WriteW("SHOUT-KEY", "guard: ", text);
     Speech::Output(text, true);
 }
 
+// Both keys answer ONLY while the sequence is actually running and the guide is switched on.
+// Anywhere else they are silent no-ops with one log line -- the `;`/`7` precedent, never a spoken
+// "not available here".
+bool KeysAnswer(const char* which) {
+    if (!PuzzleActive()) {
+        char m[128];
+        snprintf(m, sizeof(m), "%s: no shout sequence running here -- silent no-op", which);
+        Log::Write("SHOUT-KEY", m);
+        return false;
+    }
+    if (!ModMenu::PuzzleGuideOn()) {
+        char m[128];
+        snprintf(m, sizeof(m), "%s: puzzle guide is switched off -- silent no-op", which);
+        Log::Write("SHOUT-KEY", m);
+        return false;
+    }
+    return true;
+}
+
 void DrainKeys() {
-    if (s_reqMeter.exchange(false, std::memory_order_acq_rel)) {
-        if (!s_module.valid) {
-            Log::Write("SHOUT-KEY", "meter: no shout script live here -- silent no-op");
+    if (s_reqMeter.exchange(false, std::memory_order_acq_rel) && KeysAnswer("meter")) {
+        const ShoutGauge::State g = ShoutGauge::Read();
+        if (!g.ok) {
+            Log::Write("SHOUT-KEY", "meter: gauge object unavailable -- silent");
         } else {
-            int v = 0, mx = 0;
-            uint8_t c0 = 0, c1 = 0, mf = 0;
-            if (!ReadGauge(&v, &mx, &c0, &c1, &mf)) {
-                Log::Write("SHOUT-KEY", "meter: gauge object unavailable -- silent");
-            } else {
-                char m[176];
-                snprintf(m, sizeof(m), "meter key: gauge +0xC0=%u +0xC1=%u mgr+0xC8=%u", c0, c1, mf);
-                Log::Write("SHOUT-KEY", m);
-                EmitMeter(v, mx, /*rising=*/true, /*interrupt=*/true, "meter key");
-            }
+            char m[176];
+            snprintf(m, sizeof(m), "meter key: gauge +0xC0=%u +0xC1=%u mgr+0xC8=%u flags=0x%08X",
+                     g.styleC0, g.styleC1, g.mgrFlags, g.flags);
+            Log::Write("SHOUT-KEY", m);
+            EmitMeter(g.value, g.max, /*rising=*/true, /*interrupt=*/true, "meter key");
         }
     }
-    if (s_reqGuard.exchange(false, std::memory_order_acq_rel)) {
-        if (!s_module.valid) {
-            Log::Write("SHOUT-KEY", "guard: no shout script live here -- silent no-op");
-        } else {
-            SpeakNearestNpcs();
-        }
+    if (s_reqGuard.exchange(false, std::memory_order_acq_rel) && KeysAnswer("guard")) {
+        SpeakGuards();
     }
 }
 
@@ -215,7 +188,6 @@ void RefreshModule() {
                      s_module.row->meterVarIdx, s_module.row->fillValue, names);
             Log::Write("SHOUT", m);
         }
-        if (!s_censusLogged) { s_censusLogged = true; LogNpcCensus(); }
         return;
     }
 
@@ -236,8 +208,10 @@ void __fastcall HookedGaugeSet(int newValue) {
 
     // The gauge's own value BEFORE the original overwrites +0xE4. FUN_004085B0 stores the argument
     // and only then dispatches its redraw, so this is the last moment the previous value exists.
-    int preSet = 0, maxV = 0;
-    const bool haveGauge = ReadGauge(&preSet, &maxV, nullptr, nullptr, nullptr);
+    const ShoutGauge::State pre = ShoutGauge::Read();
+    const int  preSet    = pre.value;
+    const int  maxV      = pre.max;
+    const bool haveGauge = pre.ok;
 
     if (s_orig) s_orig(newValue);
 
@@ -253,15 +227,21 @@ void __fastcall HookedGaugeSet(int newValue) {
     ++s_burst.setsThisInterval;
     ++s_burst.totalSets;
 
-    // Feature 3: a RISING set means the player just landed a shout. See shout_fill.h for the
-    // charter and the falsifier; it writes at most once per map visit and declines by default.
-    if (haveGauge && newValue > preSet) ShoutFill::TryInstantFill(s_module, preSet, newValue);
+    // Feature 3: a RISING set means the player just landed a shout. Three gates, in cost order --
+    // the player's own switch, then the sequence-live bit, then the falsifier inside TryInstantFill.
+    // See shout_fill.h for the charter; it writes at most once per map visit and declines by default.
+    if (haveGauge && newValue > preSet && ModMenu::PuzzleSkipOn() && PuzzleActive())
+        ShoutFill::TryInstantFill(s_module, preSet, newValue);
 }
 
 } // namespace
 
+bool PuzzleActive() {
+    return s_module.valid && ShoutGauge::IsShown();
+}
+
 bool Init() {
-    const bool ok = Hooks::InstallTyped(RVA_GAUGE_SET, &HookedGaugeSet, &s_orig);
+    const bool ok = Hooks::InstallTyped(ShoutGauge::RVA_WRITER, &HookedGaugeSet, &s_orig);
     Log::Write("SHOUT", ok ? "gauge-writer hook installed (script setgaugecounter -> HUD)"
                            : "gauge-writer hook FAILED to install -- the infamy meter will not speak");
     return ok;
@@ -294,14 +274,21 @@ void OnFieldFrame() {
     char m[176];
     snprintf(m, sizeof(m), "burst closed: %d -> %d over %d set(s)", start, value, sets);
     Log::Write("SHOUT", m);
-    EmitMeter(value, max, rising, /*interrupt=*/false, "burst");
+
+    // The measurement runs regardless of the guide toggle: it is log-only, it is the whole reason
+    // the guard identity and the earshot radius can ever be filled in, and a player who switched
+    // the SPEECH off has not asked for the diagnostics to stop.
+    ShoutDiag::CaptureBurst(s_module, rising, start, value);
+
+    if (ModMenu::PuzzleGuideOn())
+        EmitMeter(value, max, rising, /*interrupt=*/false, "burst");
 }
 
 void OnMapTeardown() {
     s_module        = ShoutScript::Module();
     s_burst         = Burst();
-    s_censusLogged  = false;
     s_moduleLogged  = false;
+    ShoutDiag::OnMapTeardown();
     ShoutFill::OnMapTeardown();
 }
 

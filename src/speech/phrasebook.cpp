@@ -135,6 +135,17 @@ const Row kTable[] = {
     EN(L"Game Over"),
     // Bhujerba shout minigame. Trailing space: it is a PREFIX, the same shape as HPPrefix above.
     EN(L"Infamy "),
+    EN(L"in earshot"),
+    EN(L"no guards in earshot"),
+    // Its two mod-menu rows (S132). Flag any rewording to the user before changing it.
+    EN(L"Puzzle guide"),
+    EN(L"Whether the mod helps with the shouting puzzle in Bhujerba."),
+    EN(L"Off says nothing about the puzzle and the B and N keys do nothing."),
+    EN(L"On speaks the infamy meter as it changes, and the B and N keys read the meter and who is nearby."),
+    EN(L"Instant success"),
+    EN(L"Whether one shout finishes the shouting puzzle in Bhujerba."),
+    EN(L"Off plays the puzzle as the game wrote it."),
+    EN(L"On fills the meter on your first shout, and the scene continues from there."),
 };
 
 #undef EN

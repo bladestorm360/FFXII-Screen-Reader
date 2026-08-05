@@ -5,6 +5,7 @@
 #include "speech/phrasebook.h"
 #include "speech/speech.h"
 #include "core/game_text.h"
+#include "navigation/shout_meter.h"
 
 #include <windows.h>
 
@@ -43,6 +44,10 @@ struct Setting {
     Id   desc;           // the setting-level sentence, spoken before the value's sentence
     const char* key;     // token used in the settings file; never spoken
     int  defValue;       // used when there is no stored file, or the stored value is out of range
+    // CONTEXT GATE (S132). Null = always visible, which is every row that predates this. When it
+    // returns false the row is skipped by the cursor and by the opening announcement -- the VALUE is
+    // untouched and still persists, so a setting stays where the player left it.
+    bool (*visible)();
 };
 
 const Setting kSettings[] = {
@@ -77,13 +82,55 @@ const Setting kSettings[] = {
     { Id::SettingTextGlyphs, Kind::Named, 2,
       { Id::TextGlyphsStandard,     Id::TextGlyphsPolish },
       { Id::TextGlyphsDescStandard, Id::TextGlyphsDescPolish },
-      Id::TextGlyphsDesc, "text_glyphs", 0 },
+      Id::TextGlyphsDesc, "text_glyphs", 0, nullptr },
+    // S132, tester's request: the two shout-minigame rows, CONTEXT-GATED to a running sequence.
+    //
+    // Default ON for the guide: it only ever tells the player something, and a puzzle whose whole
+    // content is invisible to them is exactly where the mod should be talking by default.
+    //
+    // Default OFF for the skip, on the auto-walk precedent three rows above: it WRITES GAME STATE and
+    // completes a story sequence, so it must be something the player deliberately switched on rather
+    // than something their first shout in Bhujerba surprised them with. One press of Right turns it
+    // on and it stays on.
+    { Id::SettingPuzzleGuide, Kind::Named, 2,
+      { Id::BeaconOff,          Id::BeaconOn },
+      { Id::PuzzleGuideDescOff, Id::PuzzleGuideDescOn },
+      Id::PuzzleGuideDesc, "puzzle_guide", 1, &ShoutMeter::PuzzleActive },
+    { Id::SettingPuzzleSkip, Kind::Named, 2,
+      { Id::BeaconOff,         Id::BeaconOn },
+      { Id::PuzzleSkipDescOff, Id::PuzzleSkipDescOn },
+      Id::PuzzleSkipDesc, "puzzle_skip", 0, &ShoutMeter::PuzzleActive },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
               "mod_menu.cpp kSettings and ModMenu::SettingId are out of sync");
 
 constexpr int kCount = static_cast<int>(SettingId::Count);
+
+bool RowVisible(int i) {
+    if (i < 0 || i >= kCount) return false;
+    return kSettings[i].visible == nullptr || kSettings[i].visible();
+}
+
+// Step the cursor `dir` places over VISIBLE rows only, wrapping. Returns the current index unchanged
+// when nothing is visible but it (or nothing at all is) -- the walk can never spin forever.
+int StepVisible(int from, int dir) {
+    for (int n = 0; n < kCount; ++n) {
+        from = (from + dir + kCount) % kCount;
+        if (RowVisible(from)) return from;
+    }
+    return from;
+}
+
+// The first/last visible row, for Home/End and for opening the menu on a hidden cursor.
+int FirstVisible() {
+    for (int i = 0; i < kCount; ++i) if (RowVisible(i)) return i;
+    return 0;
+}
+int LastVisible() {
+    for (int i = kCount - 1; i >= 0; --i) if (RowVisible(i)) return i;
+    return 0;
+}
 
 // Read from the game thread (CombatFormat::ShouldSpeakNow, on the message-bus hook) and written from
 // the input thread. Relaxed is enough: each is a lone byte-sized value with no ordering relationship
@@ -181,20 +228,22 @@ void LogState(const char* what, int i) {
 bool OnMenuNavKey(int vk) {
     if (!g_open.load(std::memory_order_relaxed)) return false;
     switch (vk) {
+        // All four walk VISIBLE rows only (S132). A context-gated row that is not currently
+        // applicable is skipped exactly as if it were absent from the table.
         case VK_UP:
-            g_cursor = (g_cursor + kCount - 1) % kCount;
+            g_cursor = StepVisible(g_cursor, -1);
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
         case VK_DOWN:
-            g_cursor = (g_cursor + 1) % kCount;
+            g_cursor = StepVisible(g_cursor, +1);
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
         case VK_HOME:
-            g_cursor = 0;
+            g_cursor = FirstVisible();
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
         case VK_END:
-            g_cursor = kCount - 1;
+            g_cursor = LastVisible();
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
         // Left and right are now DIRECTIONAL. They used to both advance, on the reasoning that every
@@ -281,6 +330,17 @@ bool AutoWalkOn() {
            == static_cast<int>(Beacon::On);
 }
 
+// S132. Read from the game thread (the gauge hook and the field frame) and the input thread (the
+// key handlers), so the same relaxed-atomic-load discipline as the rows above.
+bool PuzzleGuideOn() {
+    return g_values[static_cast<int>(SettingId::PuzzleGuide)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
+}
+bool PuzzleSkipOn() {
+    return g_values[static_cast<int>(SettingId::PuzzleSkip)].load(std::memory_order_relaxed)
+           == static_cast<int>(Beacon::On);
+}
+
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }
 
@@ -294,7 +354,7 @@ void Toggle() {
         Log::Write("MODMENU", "closed");
         return;
     }
-    g_cursor = 0;
+    g_cursor = FirstVisible();   // S132: never open on a context-gated row that does not apply now
     Speech::Output(std::wstring(Phrase::Get(Id::ModMenu)) + L". " + NameAndValue(g_cursor) + L".", true);
     Log::Write("MODMENU", "opened");
 }

@@ -37,6 +37,11 @@ struct Row {
     uint8_t     meterVarIdx;   // script variable the gauge counter is driven from
     uint8_t     fillValue;     // the script's OWN success threshold (`v >= N`), never a mod constant
     int16_t     guardNameIdx;  // npcdic id of the Imperials; -1 = not measured (see the note above)
+    // Earshot, in metres. 0 = NOT MEASURED, and while it is 0 the guard key reports distance and
+    // bearing without a verdict -- an invented radius would be worse than no answer. Filled from the
+    // bracket the shipped measurement produces: the largest distance at which a shout was PENALISED
+    // and the smallest at which one was CLEAN (see shout_meter.cpp's burst capture).
+    float       earshotRadius;
 };
 
 // The row whose `srcName` matches, or nullptr. `srcName` is compared as an exact ASCII string.

@@ -44,6 +44,11 @@ enum class Beacon : uint8_t { Off = 0, On = 1 };
 // only ever sounded if a route beacon happened to be running, because it lived behind the route
 // beacon's `g_active` flag. They are different features -- one leads you somewhere, one tells you
 // where the thing hitting you is -- and a player may well want the second without the first.
+// SOME ROWS ARE CONTEXT-GATED (Session 132, tester's request). A setting may carry a visibility
+// predicate; when it returns false the row is skipped by Up/Down/Home/End and by the menu's opening
+// announcement, exactly as if it were not in the table. Its VALUE is untouched and still persists --
+// only the row is hidden, so a puzzle setting the player set last week is still set when they next
+// reach that puzzle. A setting with no predicate is always visible, which is every older row.
 enum class SettingId : int {
     CombatVerbosity = 0,
     AudioBeacon,          // the ROUTE beacon
@@ -52,6 +57,10 @@ enum class SettingId : int {
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
     TextGlyphs,           // S130: which font atlas this install runs. Default Standard
+    // S132, both visible ONLY while a shout-minigame sequence is actually running (shout_meter.h's
+    // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
+    PuzzleGuide,          // the spoken meter and the B/N keys.       Default ON  -- it only informs
+    PuzzleSkip,           // one shout completes the minigame.        Default OFF -- it writes game state
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
@@ -74,6 +83,8 @@ Verbosity CombatVerbosity();
 bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
+bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
+bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get
