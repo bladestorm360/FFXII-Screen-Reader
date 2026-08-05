@@ -19,6 +19,7 @@
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
 #include "core/game_text.h"
+#include "core/message_macro.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
@@ -660,6 +661,8 @@ bool Init() {
     ok     &= EquipTargetReader::Init();  // the post-purchase "equip it to whom?" screen
     ok     &= ShopReader::Init();         // shop Buy/Sell/Bazaar item name+price+inventory on highlight
     ok     &= InventoryReader::Init();    // pause item lists: row quantity + active category name
+    MessageMacro::Init();                 // dialogue macros: the number in "<n> Bhujerbans heed ..."
+
     ok     &= GilReader::Init();          // `g` -> party gil total (field / shop / menus)
     ok     &= StatusReader::Init();       // Status screen: 3-page virtual buffer on the arrow keys
     PopupReader::Init();                  // NO-LIST confirm prompts (Game Over): no 0x8000 to hook

@@ -1,4 +1,5 @@
 #include "core/game_text.h"
+#include "core/message_macro.h"
 #include "core/game_glyphs.h"
 #include "core/game_glyphs_pl.h"
 
@@ -49,6 +50,10 @@ thread_local DecodeBail g_bail;
 // A scan of all 27 US st2e master-data files found 0x3F used ONLY for these eight, plus one stray
 // `0F 3F 46 00` in battle_pack.bin which fails the 0x81 test below and is left alone.
 constexpr uint8_t kSpriteSel = 0x3F, kSpriteP1 = 0x81, kSpriteLo = 0x8A, kSpriteHi = 0x91;
+// The macro printer (see the 0x2E note in the decode loop). `kMacroMax` rejects a cached value
+// that cannot be this line's -- macros the game substitutes are small counts, never six digits.
+constexpr uint8_t kMacroSel = 0x2E;
+constexpr int32_t kMacroMax = 99999;
 
 // Marker parked in the Unicode private-use area while decoding, resolved to a word afterwards.
 // Deferring the lookup keeps the decode loop free of std::wstring building and, more importantly,
@@ -304,13 +309,32 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 g_bail = { i + 1, buf[i + 1], "unknown escape selector" };
                 break;
             }
-            // Escapes that YIELD TEXT drop a marker here; the advance below is unchanged for all
-            // of them. Only the element-icon insert qualifies today. `0F 2E <80 90>`, the tutorial
-            // name-substitution slot (debug.md "full-screen SYSTEM NOTIFICATION banners"), is the
-            // known next candidate -- add it to this test, not to a second decode path.
+            // Escapes that YIELD TEXT emit here; the advance below is unchanged for all of them.
             if (buf[i + 1] == kSpriteSel && i + 3 < n && buf[i + 2] == kSpriteP1 &&
                 buf[i + 3] >= kSpriteLo && buf[i + 3] <= kSpriteHi) {
                 cur->push_back(static_cast<wchar_t>(kSpriteMark + (buf[i + 3] - kSpriteLo)));
+            }
+            // 0x2E IS THE MACRO PRINTER -- the number the game substitutes into its own dialogue,
+            // as in "<n> Bhujerbans heed your words". Confirmed by a Ghidra xref pass: the escape
+            // dispatcher FUN_002AC5F0's case 0x2E reads the macro table out of its render context
+            // at `param_1[0xE]`, and FUN_002E16B0 (the message-show path) is what puts it there.
+            //
+            // This decoder sees codec BYTES and has no render context, so it cannot follow that
+            // pointer. `MessageMacro` hooks the WRITER instead and keeps the last value; the script
+            // sets a macro immediately before showing the line that uses it, so the most recent
+            // write is the one this line wants. See message_macro.h.
+            //
+            // PURELY ADDITIVE: this selector already consumed its two parameters and emitted
+            // nothing, so every line WITHOUT a 0x2E decodes byte for byte as before. Only the lines
+            // that were silently losing a number change, which is the entire point.
+            else if (buf[i + 1] == kMacroSel) {
+                int32_t v = 0;
+                if (MessageMacro::Latest(&v) && v >= 0 && v <= kMacroMax) {
+                    const std::wstring digits = std::to_wstring(v);
+                    cur->append(digits);
+                }
+                // Out of range means the cached value is not this line's -- say nothing rather than
+                // put a wrong number in the player's ear. The gap reads as it did before.
             }
             i += 2 + static_cast<size_t>(params);
             continue;

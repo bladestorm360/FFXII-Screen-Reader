@@ -57,6 +57,7 @@ add_library(${PROJECT_NAME} SHARED
     src/core/stall_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
+    src/core/message_macro.cpp
     src/core/item_names.cpp
     src/speech/speech.cpp
     src/speech/phrasebook.cpp

@@ -3831,3 +3831,43 @@ battle menu remains a separate second job; it never goes through `FUN_005655f0`.
 
 **KEYWORDS: dump_mesmacro_xrefs ghidra script macro table 0x215F540 read side is the printer
 item quantity broken both menus qty >= 2 TryFocus early-out chain struck claim play beats code**
+
+## Session 144 — 2026-08-05 — The heed count SPEAKS: selector 0x2E is the macro printer
+
+The tester ran `dump_mesmacro_xrefs.java`; it answered the last unknown in one pass.
+
+**THE XREF RESULT WAS INFORMATIVE BY BEING SMALL.** Only THREE functions touch the macro table at
+`0x0215F540` — `FUN_002E1450` (an initialiser that zeroes all 8 slots, stride `0x100` = 32 × 8,
+confirming the layout), `FUN_002E16B0` (the message-show path) and `FUN_002E1B70` (the writer).
+**No escape handler names the table at all**, which is the finding: the printer never sees the
+global, it receives a pointer.
+
+`FUN_002E16B0` hands `&DAT_0215F540 + slot*0x100` to the renderer, and the escape dispatcher
+`FUN_002AC5F0`'s **`case 0x2E`** reads it back out of its render context at **`param_1[0xE]`**. So
+**selector 0x2E is the macro printer.**
+
+**WHAT SHIPPED.** `core/message_macro.*` hooks the WRITER, `FUN_002E1B70(slot, index, valA, valB)`
+(RVA `0x1C1B70`, four parameters counted from the callee per S129), and keeps the last value.
+`GameText::Decode` emits it on selector `0x2E`.
+
+**WHY CAPTURE THE WRITE RATHER THAN READ THE TABLE.** The decoder sees codec BYTES: it has no render
+context to follow `param_1[0xE]` through and no slot to index the global with. The script sets a
+macro immediately before showing the line that uses it, so the most recent write IS that line's
+value — and this needs no part of the escape's parameter encoding, which remains undecoded and
+unneeded.
+
+**THE CHANGE IS PURELY ADDITIVE.** `0x2E` already consumed its two parameters and emitted nothing,
+so every line WITHOUT one decodes byte for byte as before. Only the lines that were silently losing
+a number change — and `game_text.cpp:308` had already named this exact selector as "the known next
+candidate — add it to this test, not to a second decode path", which is where it went.
+
+**MEASURED, NOT GUESSED:** which of the pair the printer uses is not settled by the decompile, so
+the first write logs BOTH (`[MESMACRO] first macro write: slot=… valA=… valB=…`) and one play pass
+decides it. `valA` is spoken; a value outside `[0, 99999]` is treated as "not this line's" and the
+gap reads as before rather than putting a wrong number in the player's ear.
+
+Built + deployed, **NOT play-confirmed.** Expect *"Only 1 Bhujerban heeds your words"* and
+*"4 Bhujerbans heed your words"*.
+
+**KEYWORDS: selector 0x2E macro printer FUN_002AC5F0 param_1[0xE] FUN_002E16B0 render context
+FUN_002E1B70 writer hook message_macro additive decode heed count**
