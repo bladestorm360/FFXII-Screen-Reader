@@ -4745,12 +4745,12 @@ instance plus its actors. As longlong indices into the record (verified against 
 
 | field | byte off | meaning |
 |---|---|---|
-| `mod[0x00]` | `+0x00` | the loaded EBP2 image base |
+| `mod[0x00]` | `+0x00` | the module base — **the file base + 0x80**, see the correction below |
 | `mod[0x08]` | `+0x40` | storage-class **1** base |
 | `mod[0x09]` | `+0x48` | storage-class **0** base |
 | `mod[0x0B]` | `+0x58` | storage-class **4** base — the loader assigns `0x02099DF0` (RVA `0x1F79DF0`) to *every* module: the cross-script global int work array |
 | `mod[0x0C]` | `+0x60` | storage-class **5** base — `0x02099FF0`, the float globals |
-| `mod[0x0F]` | `+0x78` | the variable **descriptor table** (= `ebpBase + *(i32*)(ebp+0x28)`, filled at load) |
+| `mod[0x0F]` | `+0x78` | the variable **descriptor table** (= `base + *(i32*)(base+0x28)`; **not** "filled at load" — see below) |
 
 Class **3** is module-local: `ebpBase + *(u32*)(ebpBase + 0x40)`. Class **2** is per-actor and is
 resolved by CALLING `mod[0x13]` with a live VM context — there is no address to compute outside a
@@ -4772,9 +4772,36 @@ variable access in every script.
 (save/set/restore around every module entry point). The mod does not use it — scanning the five
 slots is cheaper to reason about and does not depend on when the engine sets it.
 
+### ⚠ CORRECTED (S137): the runtime module base is the FILE base + 0x80
+
+**`mod[0]` does not address the file header.** It addresses the **section directory**, which the
+file places at offset `0x80` and which announces itself with **`0x8000000B`**. Measured from a live
+`'` dump: record `+00` pointed at bytes `0B 00 00 80`, not at `EBP2`. Three sessions of shout
+features sat dark behind a module that never resolved, because the code checked for `EBP2` at `+0`.
+
+**THIS STRIKES THE S131 CLAIM that `+0x14`/`+0x24`/`+0x28`/`+0x2C`/`+0x48`/`+0x50` are "zero in the
+extracted file and filled by the loader's relocation pass".** They were never zero, and there is no
+relocation pass — they were read at the FILE base, 0x80 too early. At `base = file + 0x80` every
+field the loader uses is populated in the shipped file:
+
+| at base | byu_a01 value | what |
+|---|---|---|
+| `+0x14` | `0x9BA0` | the count table the loader walks |
+| `+0x28` | `0x2DD30` | the **variable descriptor table** (`mod[0x0F]`) |
+| `+0x40` | `0x180` | the class-3 storage base |
+| `+0x90` | — | the three name strings |
+
+**A MEASURED DESCRIPTOR, from the play log that first resolved a module:** `byu_a02.src` meter
+variable `0x0E` decoded as `desc = 0x000006B1` → **elemType 0 (u8), storage class 0, offset
+`0x6B1`**, and the write landed. Class 0 is `mod[9]`, i.e. per-module storage rather than the
+class-4 global that S131 inferred — so the meter is NOT self-evidently shared across the fourteen
+street scripts. Whether `mod[9]` is itself a shared allocation is not established; do not assume
+either way.
+
 ### A module names itself — the identity that replaced a mapId table
 
-**At file offset `0x110` every EBP2 image carries three NUL-terminated strings: a build stamp
+**At file offset `0x110` (runtime `base + 0x90`) every EBP2 image carries three NUL-terminated
+strings: a build stamp
 (`DD/MM HH:MM`), the author, and `<module>.src`.** This is FORMAT-LEVEL, not a per-map discovery:
 it parses correctly on **all 809** EBP2 files in the game — map scripts and event scripts alike —
 with the third string matching the file name every time, across 18 distinct author names.
@@ -4832,5 +4859,5 @@ contain the byte pair. There is no off-by-one on the native id; only on the opco
 
 **KEYWORDS: gauge setgaugecounter 0x1AE FUN_004085B0 0x2E85B0 DAT_02B62D80 gauge+0xE4 gauge+0xE0
 infamy meter shout minigame Bhujerba byu byu_a01 script variable descriptor FUN_00262440 storage
-class mod+0x78 0x02099DF0 class 4 global work array EBP2 src name 0x110 module identity athena
+class mod+0x78 module base file+0x80 section directory 0x8000000B src name 0x110 file 0x90 runtime athena
 opcode off by one CALLPOPA native table stride 32 dbgIndex 5140 distance 0x290 resolved**

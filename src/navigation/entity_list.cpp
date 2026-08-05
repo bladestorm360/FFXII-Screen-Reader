@@ -504,9 +504,10 @@ int CollectSceneObjectsByNameIdx(int16_t nameIdx, void** out, int cap) {
     return n;
 }
 
-int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out) {
+namespace {
+// The gather itself. Caller must NOT hold g_mutex; this takes it.
+void CollectNpcsOnce(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out) {
     out.clear();
-    if (maxOut <= 0 || !PlayerState::IsFieldActive()) return 0;
     std::lock_guard<std::mutex> lk(g_mutex);
     RefreshPositionsLocked(from);
     for (const EntityScan::Entity& e : g_entities) {
@@ -521,6 +522,29 @@ int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& ou
     std::sort(out.begin(), out.end(),
               [](const NearbyNPC& a, const NearbyNPC& b) { return a.dist2D < b.dist2D; });
     if (static_cast<int>(out.size()) > maxOut) out.resize(static_cast<size_t>(maxOut));
+}
+} // namespace
+
+int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out) {
+    out.clear();
+    if (maxOut <= 0 || !PlayerState::IsFieldActive()) return 0;
+
+    CollectNpcsOnce(from, maxOut, out);
+    if (!out.empty()) return static_cast<int>(out.size());
+
+    // NO NPCs YET IS USUALLY A STALE LIST, NOT AN EMPTY STREET. The handle-table containers stream
+    // in at different times, and the NPC one arrives LATE: the 2026-08-05 play log has a rescan at
+    // 22.6 s finding 7 objects with NPC=0 (exits and doors only) and the next at 41.8 s finding 21
+    // with NPC=14. Every crowd-key press in between landed in that window and was answered, quite
+    // truthfully and quite uselessly, with "no targets" while the player stood next to somebody.
+    //
+    // OnFieldFrame's auto-rescan is edge-triggered on the ACTIVE CONTAINER MASK, so NPCs appearing
+    // inside a container that was already active move no edge and trigger no rescan. Asking for a
+    // fresh scan when — and only when — the answer would otherwise be "nobody here" costs nothing
+    // in the normal case and closes that window. The retry runs OUTSIDE the lock because Rescan
+    // takes g_mutex itself.
+    Rescan();
+    CollectNpcsOnce(from, maxOut, out);
     return static_cast<int>(out.size());
 }
 

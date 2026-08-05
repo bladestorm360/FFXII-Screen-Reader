@@ -3639,3 +3639,40 @@ Built + deployed, **NOT play-confirmed.**
 
 **KEYWORDS: module base file+0x80 section directory 0x8000000B name at 0x90 descriptor table 0x2DD30
 no relocation pass S131 corrected guard pair 387 1053 Informed Sainikah earshot bracket 0.88 19.64**
+
+## Session 138 — 2026-08-05 — Instant success confirmed; the crowd key was reading a list the NPCs had not arrived in yet
+
+**INSTANT SUCCESS WORKS, PLAY-CONFIRMED:**
+
+    SHOUT-FILL WROTE byu_a02.src var 0x0E -> 100 (addr=...4B31 type=0 desc=0x000006B1,
+                storage was 22, gauge pre=22 new=23)
+
+The S137 base fix landed: the module resolved by name, the row's meter variable matched, and the
+falsifier held exactly — `storage(22) == newValue(23) - 1`, the relation the bytecode guarantees.
+The descriptor decodes as **elemType 0 (u8), class 0, offset 0x6B1**, so the meter is per-module
+storage rather than the class-4 global S131 inferred; `GameArchitecture.md` records that as measured
+and declines to conclude anything about cross-map sharing from it.
+
+**"NO TARGETS" WAS NOT A SHOUT-RANGE PROBLEM.** The rescan log dates it precisely:
+
+    22.6 s   rescan: 7 field objects  (NPC=0)   <- exits and doors only
+    28.5 s .. 34.9 s                            <- all five crowd-key presses
+    41.8 s   rescan: 21 field objects (NPC=14)  <- the NPCs finally appear
+
+The handle-table containers stream in at different times and the NPC one arrives LATE. Every press
+landed in that window, so the key answered truthfully — and uselessly — about an empty list while
+the player stood next to somebody.
+
+`OnFieldFrame`'s auto-rescan is edge-triggered on the ACTIVE CONTAINER MASK, so NPCs appearing
+inside a container that was ALREADY active move no edge and trigger no rescan. **`CollectNearestNPCs`
+now asks for a fresh scan when, and only when, the answer would otherwise be "nobody here"** — free
+in the normal case, and it closes the window for every caller, including the earshot instrument. A
+PENALTY capture taken in that window would have logged an empty NPC list and quietly poisoned the
+measurement.
+
+The retry runs outside the lock: `Rescan()` takes `g_mutex` itself and the gather already holds it.
+
+Built + deployed. **Instant success play-confirmed; the crowd-key fix is not.**
+
+**KEYWORDS: instant success confirmed SHOUT-FILL WROTE byu_a02 var 0x0E desc 0x6B1 class 0 u8
+no targets stale entity list NPC container streams late edge-triggered mask rescan on empty**
