@@ -188,7 +188,7 @@ How much gets spoken aloud is up to you — see Combat verbosity below.
 #### Bhujerba: shouting in the streets
 
 * B: the infamy meter, as a percentage.
-* N: the people nearest you, each with a direction and a distance.
+* N: how many people are around you to shout at, and where the nearest guard is.
 
 The meter also speaks on its own whenever it moves, whether it rises or an Imperial hears you and it falls. The keys and the spoken meter work only while the shouting is actually running, and are silent everywhere else in the game.
 

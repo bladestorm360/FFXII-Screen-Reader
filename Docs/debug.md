@@ -5400,3 +5400,30 @@ alone (`Podróżnik`, `Żółć`, `Ósma` all decode correctly unmodified).
 **KEYWORDS: Polish patch spolszczenie PL_ff12_v1.3 fan translation glyph override font00.dat
 advance width repaint l-stroke 0x81 u-acute collision block rule 0x18 text glyphs mod menu
 game_glyphs_pl.h autodetection impossible VBF repack in place**
+
+## OPEN — a route to a MOVING target aims at where it stood when the key was pressed (S139)
+
+**Reported from play 2026-08-05:** routing to a patrolling NPC walks the player to the position the
+target held at REQUEST time, not to where it is on arrival. The tester's workaround is to press the
+route key again once there; they explicitly deferred the fix.
+
+**The diagnosis is STRUCTURAL, not a defect in one call path.** `PathPlanner::Request` takes a fixed
+`FVec3`, and `RequestReplan` re-runs against the `g_objTarget` SNAPSHOT — there is no
+`g_objSceneObj`, so no live position is ever re-read by anything. Every route in the mod has always
+been to a point, and for exits and seams (which do not move) that is exactly right.
+
+**The fix, when it is taken:**
+1. `Request` gains an optional `void* sceneObj`, stored as `g_objSceneObj` beside the objective and
+   cleared on map teardown — a scene-object pointer is only valid inside the map it was read on.
+2. `OnGameFrame`, for an objective that carries one, re-reads `PlayerState::ReadSceneObjectPos`.
+3. Past a hysteresis threshold (start ~1.5–2 m, i.e. 2–3 steps) it updates `g_objTarget` and takes
+   the existing SILENT replan path, which already re-arms the beacon without speaking.
+
+`EntityList::GetCurrentTarget` already returns `outSceneObj`, so half the plumbing exists;
+`NavCommands::RouteToCurrent` is the call site. Fixed targets pass `nullptr` and keep today's
+behaviour byte for byte.
+
+**Why it is not a tail-end change.** `path_planner` is the most regression-prone subsystem in this
+project (the whole S84–S124 arc) and it interacts with the funnel, the corridor march, the surface
+goal, auto-walk and the beacon. A replan that fires too eagerly would stall the beacon or fight
+auto-walk. It needs its own session with play evidence.

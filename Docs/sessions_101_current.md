@@ -3676,3 +3676,36 @@ Built + deployed. **Instant success play-confirmed; the crowd-key fix is not.**
 
 **KEYWORDS: instant success confirmed SHOUT-FILL WROTE byu_a02 var 0x0E desc 0x6B1 class 0 u8
 no targets stale entity list NPC container streams late edge-triggered mask rescan on empty**
+
+## Session 139 — 2026-08-05 — Earshot stays unpinned on purpose; live-target routing recorded and deferred
+
+**EARSHOT.** The tester puts the guard's trigger at **about 3 steps (~2.25 m)**, "might be a little
+smaller" — one attempt at 3 steps did not trip him. With the captured `PENALTY` at 0.88 m and a
+`CLEAN` at 19.64 m, that is consistent, and it is still not a number worth shipping.
+
+**`earshotRadius` stays 0, and that is the honest answer rather than the lazy one. THE GUARD
+PATROLS.** A distance measured when the key was pressed is not the distance at the instant the shout
+resolved, so every static-radius sample carries a confound the sampling cannot remove — and the one
+disagreeing attempt is exactly what that confound looks like. A threshold shipped from it would say
+"in earshot" / "no guards in earshot" with a confidence the data does not support, and a false
+"clear" costs the player 30 points.
+
+**What ships instead is better than a threshold:** the crowd key already speaks the nearest guard's
+LIVE distance and bearing — "Bhujerban Sainikah, north, 5 steps". That is a fact at the moment it is
+spoken, needs no radius, is immune to the patrol confound, and the player (who now knows three steps
+is the danger line) can act on it directly. A boolean would have thrown that number away and put a
+guess in its place.
+
+**ROUTING TO A MOVING TARGET — recorded in `debug.md`, deferred by the tester.** Routes aim at where
+the target stood when the key was pressed. The cause is structural: `PathPlanner::Request` takes a
+fixed `FVec3` and `RequestReplan` re-runs against the snapshot; there is no `g_objSceneObj` and
+nothing re-reads a live position. For exits and seams — which do not move — that has always been
+correct, which is why it went unnoticed. The fix (optional `sceneObj` on the objective, re-read on
+the field frame, hysteresis, existing silent replan path) is written up in `debug.md`. It is not a
+tail-end change: `path_planner` is the project's most regression-prone subsystem and it interacts
+with the funnel, corridor march, surface goal, auto-walk and the beacon.
+
+Docs corrected: `N` is a crowd count plus the nearest guard, not a list of nearby people.
+
+**KEYWORDS: earshot 3 steps patrol confound not pinned live guard distance beats a boolean
+path_planner fixed FVec3 g_objTarget snapshot no g_objSceneObj moving target route deferred**

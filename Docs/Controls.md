@@ -210,7 +210,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
 | `B` | Bhujerba shout minigame: the infamy meter as a percentage | unproven — collision watch |
-| `N` | Bhujerba shout minigame: the guards nearest you, with bearing and distance | unproven — collision watch |
+| `N` | Bhujerba shout minigame: the crowd around you, and the nearest guard's bearing and distance | unproven — collision watch |
 
 > **Both keys answer only while the shouting sequence is actually RUNNING**, not merely while the
 > player is on a Bhujerba street. The gate is the game's own gauge-shown bit (`gauge+0xD8` bit 2,

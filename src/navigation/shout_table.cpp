@@ -47,11 +47,26 @@ namespace {
 // was one, and there is no Imperial anywhere on this map. Bhujerba is Ondore's city and its street
 // watch is his own sainikah.
 //
-// EARSHOT IS STILL 0. Leg 2 puts the trigger at roughly the engine's interaction reach -- the
-// tester's words were "I had to get pretty close" -- but "roughly interaction reach" is not a
-// number, and shout range and talk range are not the same quantity. The instrument in
-// shout_diag.cpp brackets it properly: largest PENALTY distance below, smallest CLEAN distance
-// above.
+// ---- EARSHOT: BRACKETED, AND DELIBERATELY NOT PINNED --------------------------------------------
+//
+// The captures give:
+//     PENALTY   meter 25 -> 0     387 at  0.88 m
+//     CLEAN     meter 23 -> 27    387 at 19.64 m
+// and the tester puts the trigger at **about 3 steps (~2.25 m)** from play, "might be a little
+// smaller" -- one attempt at 3 steps did NOT trip the guard.
+//
+// **`earshotRadius` STAYS 0 ANYWAY, and that is the honest answer rather than a lazy one.** THE
+// GUARD PATROLS. A distance measured when the key was pressed is not the distance at the instant
+// the shout resolved, so every static-radius sample carries a confound the sampling cannot remove,
+// and the one disagreeing attempt is exactly what that confound looks like. A threshold shipped
+// from it would speak "in earshot" / "no guards in earshot" with a confidence the data does not
+// support, and both errors are bad: a false "clear" costs the player 30 points.
+//
+// What ships instead is better than a threshold: the crowd key speaks the nearest guard's LIVE
+// DISTANCE AND BEARING ("Bhujerban Sainikah, north, 5 steps"). That is a fact at the moment it is
+// spoken, it needs no radius, it is immune to the patrol confound, and the player -- who now knows
+// three steps is the danger line -- can act on it directly. A boolean would have thrown that number
+// away and replaced it with a guess.
 constexpr Row kRows[] = {
     { "byu_a01.src", 0x0D, 100, 0.0f },
     { "byu_a02.src", 0x0E, 100, 0.0f },
