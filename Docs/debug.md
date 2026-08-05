@@ -5461,19 +5461,45 @@ codebase, releasing on its row DRAW (`FUN_00276be0`) with no pane-replay path
 project calls the `R` menu the *field menu* and reserves *party menu* for that menu's first command.
 User-facing wording uses the GAME's words.
 
-### 3. Item quantity in the battle menu
+### 3. Item quantity is BROKEN IN BOTH menus
 
-**The field side already works and must be verified, not rebuilt.** `inventory_reader.cpp` reads the
-owned count at row `+0x0E` (`OFF_R_QTY`, u16) and appends it (`:234-237`), hooking `FUN_005655f0`
-(RVA `0x4455F0`), which serves the party-menu lists and the equipment list (`:57`).
+**Tester report: the count is not announced in EITHER the field/Party menu or the Battle menu.**
 
-**The gap is the battle menu**, which does not go through that refresh, so its Items list almost
-certainly announces a name with no count. Confirm that, find the battle Items row layout (the
-`+0x0E` field may not have the same shape), and append the count on that path only.
+> ~~"The field side already works and must be verified, not rebuilt."~~ **STRUCK.** That came from
+> reading `inventory_reader.cpp:234-237` and seeing the code present. The tester has played it; that
+> outranks a code reading. **The RULE in the code is right, the BEHAVIOUR is absent** — which is a
+> different and more interesting bug than the missing feature I had written up.
 
-**One decision for the tester:** the field reader speaks the count only when `qty > 1`. In battle,
-"Potion 1" versus "Potion" is the difference between knowing it is your last one and finding out the
-hard way — so the battle path may want to state the count always.
+**THE RULE, confirmed by the tester: announce the quantity only when it is 2 OR GREATER.** A count of
+one is not worth saying. `inventory_reader.cpp:237` already implements exactly that (`if (qty > 1)`),
+so nothing about the rule needs changing.
+
+**WHERE THE FAILURE IS NOT.** The reader initialises — `[INV] InventoryReader initialized (item
+name+quantity on focus; category name on open/switch)` — and `TryFocus` **runs** (the `PERF` block
+records `calls=1` on two separate occasions), while **zero** item lines reach `SPEAK-OUT` in the same
+log. So the hook install and the dispatch are both fine. The failure is downstream, inside
+`TryFocus`'s early-out chain.
+
+**WHERE TO LOOK FIRST** — `TryFocus`'s returns, in order (`inventory_reader.cpp:194-230`):
+
+| line | early-out |
+|---|---|
+| `:196` | null owner / negative index |
+| `:200` | `ShopReader::OwnsSurface` |
+| `:207` | `PrimerReader::OwnsSurface` |
+| `:212` | `IsEmptyCategory` |
+| `:221` | `index >= li.count` |
+| `:227` | `id == 0xFFFF` (empty / mid-rebuild) |
+| `:230` | `name.empty()` |
+
+**Instrument these.** One log line naming which return fired is the whole diagnosis — the same
+"make the refusal say why" shape that cracked the shout module resolution in two sessions rather
+than five.
+
+**THE BATTLE MENU IS A SECOND, SEPARATE JOB.** It never goes through `FUN_005655f0`: it is its own
+system, releasing on its row DRAW (`FUN_00276be0` — `ingame_menu_reader.cpp:49`, `:160`). It needs
+its own row layout and its own announcement, and the field row's `+0x0E` count field must not be
+assumed to match.
 
 ### 4. The `<n>` dialogue macro renders empty — TRACED, one unknown left
 

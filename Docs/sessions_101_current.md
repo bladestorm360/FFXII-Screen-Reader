@@ -3796,3 +3796,38 @@ heed count is ground truth for who actually heard a shout.
 
 **KEYWORDS: setmesmacro 0x1A8 FUN_002E1B70 macro table 0x203F540 slot*0x20+index escape run 0F 28
 0F 29 0F 2E 0F 3C EscapeParamCount frames correctly substitution not implemented heed count**
+
+## Session 143 — 2026-08-05 — Ghidra script for the heed count; item quantity is broken in BOTH menus
+
+Two write-ups, no shipped code. Everything on the shout puzzle except the heed count is deferred to
+the next session at the tester's direction.
+
+**`ghidra\dump_mesmacro_xrefs.java`** — authored, ready for the tester to run (the launcher
+auto-discovers any new `.java` in the Active-scripts menu, so no `run_ghidra.bat` edit was needed).
+Read-only: `-process -noanalysis`, `setTemporary(true)`, nothing saved.
+
+It dumps every reference into the macro table at ABS `0x0215F540` (RVA `0x203F540`, 8 slots × 32
+entries × 8 bytes) and decompiles each function that touches it, then decompiles the escape
+dispatcher `FUN_002AC5F0` and the candidate 2-parameter handlers `FUN_003FFAB0 / 003FFC60 /
+003FFDA0 / 003FFEE0 / 003FFB90 / 003FFBC0`, plus the writer `FUN_002E1B70` and `setmesmacro`'s impl
+for the record. **The READ side is the printer** — that is the one unknown, and one pass reads the
+selector → handler → table-index chain off in a single output file. It also handles the case where
+the table is reached only by computed address, and says so rather than reporting nothing.
+
+**ITEM QUANTITY — MY EARLIER WRITE-UP WAS WRONG AND IS STRUCK.** I had recorded "the field side
+already works, so it is a VERIFY not a build", from reading `inventory_reader.cpp:234-237` and
+seeing the code present. **The tester has played it: the count is announced in NEITHER menu.** A
+code reading does not outrank play.
+
+The rule is confirmed unchanged — **announce only when the quantity is 2 or greater** — and
+`:237` already implements exactly that, so the RULE is right and the BEHAVIOUR is absent, which is a
+different bug from the missing feature I had written up.
+
+The log narrows it usefully: the reader initialises and `TryFocus` **runs** (`PERF` shows `calls=1`
+twice) while **zero** item lines reach `SPEAK-OUT`. So the hook and the dispatch are fine and the
+failure is inside `TryFocus`'s early-out chain — seven returns between `:196` and `:230`, tabulated
+in `debug.md`. **Instrument them:** one line naming which return fired is the whole diagnosis. The
+battle menu remains a separate second job; it never goes through `FUN_005655f0`.
+
+**KEYWORDS: dump_mesmacro_xrefs ghidra script macro table 0x215F540 read side is the printer
+item quantity broken both menus qty >= 2 TryFocus early-out chain struck claim play beats code**
