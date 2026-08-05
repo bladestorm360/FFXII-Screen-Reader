@@ -113,9 +113,24 @@ void SpeakCrowd() {
         return;
     }
 
+    // THE WINDOW. Counting everyone on the map was the first version's mistake -- the tester's words
+    // were "way, way too broad" -- because the question is who can hear a shout from HERE, and a
+    // street holds people the player will never reach.
+    //
+    // When the row carries a measured earshot, that is the window and the answer is exact. Until
+    // then the count is taken over a REPORTING window that is SPOKEN ALOUD, so it makes no hidden
+    // claim about the game's rules; it is expressed in the mod's own step unit so it means the same
+    // thing as every other distance the mod says. The play evidence puts the guard's real trigger
+    // at roughly the engine's interaction reach, so this is deliberately a little wider than that
+    // rather than a guess at the true number.
+    constexpr int kReportSteps = 10;
+    const bool  measured = (radius > 0.0f);
+    const float window   = measured ? radius
+                                    : NavCommon::GetUnitsPerStep() * static_cast<float>(kReportSteps);
+
     int civilians = 0, guards = 0;
     for (const EntityList::NearbyNPC& e : npcs) {
-        if (radius > 0.0f && e.dist2D > radius) continue;   // outside the game's own earshot
+        if (e.dist2D > window) continue;
         if (guardIdx >= 0 && e.nameIdx == guardIdx) ++guards;
         else                                        ++civilians;
     }
@@ -127,18 +142,26 @@ void SpeakCrowd() {
     } else {
         text = std::to_wstring(civilians) + L" " + Phrase::Get(Phrase::Id::People);
     }
-    // The window is named only when it is the game's own number.
-    if (radius > 0.0f) text += std::wstring(L" ") + Phrase::Get(Phrase::Id::InEarshot);
+    // Name the window every time, and name it for what it is: the game's own earshot once measured,
+    // otherwise a stated distance the player can hear and judge.
+    if (measured) {
+        text += std::wstring(L" ") + Phrase::Get(Phrase::Id::InEarshot);
+    } else {
+        text += std::wstring(Phrase::Get(Phrase::Id::WithinPrefix)) +
+                std::to_wstring(kReportSteps) + Phrase::Get(Phrase::Id::StepsSuffix);
+    }
 
-    // With no radius yet, a count alone has no scale, so the nearest few carry their distances and
-    // the player supplies the judgement the measurement will later supply for them.
-    if (radius <= 0.0f) {
+    // The nearest guard is the one thing worth a bearing: it is what the player would move away
+    // from. Civilians are a crowd to stand in, not individuals to find.
+    if (guards > 0) {
         float facing = 0.0f;
         PlayerState::ReadCameraForwardStable(facing);
-        const size_t show = npcs.size() < 3 ? npcs.size() : 3;
-        for (size_t i = 0; i < show; ++i)
-            text += L". " + npcs[i].label + L", " +
-                    NavCommon::DescribeDirectionRelative(me, npcs[i].pos, facing);
+        for (const EntityList::NearbyNPC& e : npcs) {
+            if (e.nameIdx != guardIdx || e.dist2D > window) continue;
+            text += L". " + e.label + L", " +
+                    NavCommon::DescribeDirectionRelative(me, e.pos, facing);
+            break;   // nearest first, so the first match is the nearest
+        }
     }
 
     Log::WriteW("SHOUT-KEY", "crowd: ", text);
@@ -316,12 +339,26 @@ void OnFieldFrame() {
     snprintf(m, sizeof(m), "burst closed: %d -> %d over %d set(s)", start, value, sets);
     Log::Write("SHOUT", m);
 
-    // The measurement runs regardless of the guide toggle: it is log-only, it is the whole reason
-    // the guard identity and the earshot radius can ever be filled in, and a player who switched
-    // the SPEECH off has not asked for the diagnostics to stop.
-    ShoutDiag::CaptureBurst(s_module, rising, start, value);
+    // A BURST THAT CHANGED NOTHING IS NOT AN EVENT, and must not be spoken. The idle decay reaches
+    // this hook after all: `changegaugecounterbyframe` tweens the bar down and the script then calls
+    // `setgaugecounter` with the value it has ALREADY reached, so every decay tick arrives here as a
+    // one-set burst whose start equals its end. The 2026-08-05 log is full of them --
+    // "26 -> 26", "25 -> 25", "24 -> 24" -- each one announced as a rise, which is the meter
+    // chattering its way down on its own while the player does nothing.
+    //
+    // This is NOT speech dedup: it does not compare against what was last said, and two identical
+    // real changes both announce. It is the difference between an event and no event. A shout that
+    // nobody heeds also lands here, and silence is right there too -- the game says "No one heeds
+    // your words" itself.
+    const bool changed = (value != start);
 
-    if (ModMenu::PuzzleGuideOn())
+    // The measurement runs regardless of the guide toggle AND regardless of whether anything
+    // changed: it is log-only, it is the whole reason the guard identity and the earshot radius can
+    // ever be filled in, and a player who switched the SPEECH off has not asked for the diagnostics
+    // to stop. Only real changes are worth a capture, though -- a decay tick measures nothing.
+    if (changed) ShoutDiag::CaptureBurst(s_module, rising, start, value);
+
+    if (changed && ModMenu::PuzzleGuideOn())
         EmitMeter(value, max, rising, /*interrupt=*/false, "burst");
 }
 

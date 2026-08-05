@@ -28,39 +28,45 @@ namespace {
 //
 // The four `byu_?01` stubs (w/x/y/z) contain no `setgaugecounter` call and are deliberately absent.
 //
-// ---- GUARD IDENTITY: the leading candidate, NOT yet shipped ------------------------------------
+// ---- GUARD IDENTITY: 387 "Bhujerban Sainikah", MEASURED ----------------------------------------
 //
-// The 2026-08-05 play log ran the sequence on map 804 (Cloudborne Row) and its object dump lists
-// exactly one plausible watcher among eight NPC identities:
+// The 2026-08-05 play log settles it, on three independent legs:
 //
-//     387  Bhujerban Sainikah   x1     <- "sainikah" is the game's word for SOLDIER
-//     386  Cloudborne Patron    x2         311  Archadian Wayfarer   x1
-//     388  Cloudborne Resident  x2         409  Lhusu Miner          x1
-//    1054  Informed Parijanah   x3        1137  Bhujerban Guru       x1
+//   1. The map's object dump lists eight NPC identities and exactly one soldier -- 387 "Bhujerban
+//      Sainikah" ("sainikah" is the game's own word for soldier). The others are Cloudborne Patron,
+//      Cloudborne Resident, Informed Parijanah, Bhujerban Guru, Lhusu Miner, Archadian Wayfarer.
+//   2. Five seconds before the penalty fired, the mod's own interaction reader spoke
+//      "Action: Bhujerban Sainikah" -- so the player was inside the ENGINE's interaction reach of
+//      one at the moment they shouted. No other NPC was that close.
+//   3. The penalty burst (meter 23 -> 0 over 25 sets) arrived in the same log line as the game's
+//      own rebuke: "Lies, exaggerations, and obfuscations! These are all prohibited in Bhujerba!
+//      And slandering His Excellency above all else!" -- His Excellency being the Marquis, whose
+//      guards these are.
 //
-// NOTE WHAT IS NOT THERE: no "Imperial". Bhujerba is Ondore's city and its street watch is his own
-// sainikah, so the assumption that the punisher is an Imperial -- carried from the palace sneak
-// sequence, where 694 really was one -- looks wrong for this map.
+// **IT IS NOT AN IMPERIAL.** That assumption came from the palace sneak sequence, where 694 really
+// was one, and there is no Imperial anywhere on this map. Bhujerba is Ondore's city and its street
+// watch is his own sainikah.
 //
-// **387 IS A CANDIDATE, NOT A MEASUREMENT.** One NPC of that name on one map, with no penalty
-// observed beside it, is nowhere near the 0.98 bar, and shipping it would have the crowd key
-// confidently miscount. It stays a comment until a PENALTY capture puts it close and the CLEAN
-// captures put it far -- which is exactly what shout_diag.cpp's instrument is for.
+// EARSHOT IS STILL 0. Leg 2 puts the trigger at roughly the engine's interaction reach -- the
+// tester's words were "I had to get pretty close" -- but "roughly interaction reach" is not a
+// number, and shout range and talk range are not the same quantity. The instrument in
+// shout_diag.cpp brackets it properly: largest PENALTY distance below, smallest CLEAN distance
+// above.
 constexpr Row kRows[] = {
-    { "byu_a01.src", 0x0D, 100, -1, 0.0f },
-    { "byu_a02.src", 0x0E, 100, -1, 0.0f },
-    { "byu_a03.src", 0x10, 100, -1, 0.0f },
-    { "byu_a04.src", 0x10, 100, -1, 0.0f },
-    { "byu_a07.src", 0x0B, 100, -1, 0.0f },
-    { "byu_a08.src", 0x35, 100, -1, 0.0f },
-    { "byu_a11.src", 0x0F, 100, -1, 0.0f },
-    { "byu_a12.src", 0x0F, 100, -1, 0.0f },
-    { "byu_a14.src", 0x0F, 100, -1, 0.0f },
-    { "byu_a15.src", 0x0F, 100, -1, 0.0f },
-    { "byu_a16.src", 0x0F, 100, -1, 0.0f },
-    { "byu_a17.src", 0x3B, 100, -1, 0.0f },
-    { "byu_a18.src", 0x32, 100, -1, 0.0f },
-    { "byu_b01.src", 0x16, 100, -1, 0.0f },
+    { "byu_a01.src", 0x0D, 100, 387, 0.0f },
+    { "byu_a02.src", 0x0E, 100, 387, 0.0f },
+    { "byu_a03.src", 0x10, 100, 387, 0.0f },
+    { "byu_a04.src", 0x10, 100, 387, 0.0f },
+    { "byu_a07.src", 0x0B, 100, 387, 0.0f },
+    { "byu_a08.src", 0x35, 100, 387, 0.0f },
+    { "byu_a11.src", 0x0F, 100, 387, 0.0f },
+    { "byu_a12.src", 0x0F, 100, 387, 0.0f },
+    { "byu_a14.src", 0x0F, 100, 387, 0.0f },
+    { "byu_a15.src", 0x0F, 100, 387, 0.0f },
+    { "byu_a16.src", 0x0F, 100, 387, 0.0f },
+    { "byu_a17.src", 0x3B, 100, 387, 0.0f },
+    { "byu_a18.src", 0x32, 100, 387, 0.0f },
+    { "byu_b01.src", 0x16, 100, 387, 0.0f },
 };
 
 } // namespace

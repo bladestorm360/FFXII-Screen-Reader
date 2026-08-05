@@ -37,11 +37,17 @@ void LogNpcs(const char* tag, const char* indent, int cap) {
 } // namespace
 
 void CaptureBurst(const ShoutScript::Module& mod, bool clean, int start, int end) {
-    if (s_captures >= kMaxCaptures || !mod.valid) return;
+    // ⚠ THIS MUST NOT REQUIRE A RESOLVED MODULE. It used to, and that single condition is why the
+    // 2026-08-05 play log contained a perfect penalty burst (23 -> 0 over 25 sets) and ZERO
+    // SHOUT-MEASURE lines: the module never resolved, so the one instrument that could name the
+    // guard and bracket its earshot silently declined to run. The module only supplies a label
+    // here; the measurement is the distances.
+    if (s_captures >= kMaxCaptures) return;
     ++s_captures;
     char head[224];
     snprintf(head, sizeof(head), "%s on %s: meter %d -> %d (%+d). Nearest NPCs at that instant:",
-             clean ? "CLEAN" : "PENALTY", mod.srcName, start, end, end - start);
+             clean ? "CLEAN" : "PENALTY", mod.valid ? mod.srcName : "(module unresolved)",
+             start, end, end - start);
     Log::Write("SHOUT-MEASURE", head);
     LogNpcs("SHOUT-MEASURE", "  ", 8);
 }

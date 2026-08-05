@@ -158,6 +158,9 @@ enum class Id {
     // many listeners around you as possible, so the guard key reports a CROWD rather than a list of
     // individuals. `People` is used until a measured guard id lets the count be split.
     People, Civilians, Guards,
+    // The REPORTING window the crowd key names aloud while the real earshot is unmeasured. It is
+    // spoken precisely so it is not a hidden claim about the game's rules.
+    WithinPrefix,
     // The two context-gated mod-menu rows for the same minigame (S132). Wording is the tester's own
     // framing -- they asked for "the puzzle guide" and "instant success" as two separate toggles.
     SettingPuzzleGuide, PuzzleGuideDesc, PuzzleGuideDescOff, PuzzleGuideDescOn,

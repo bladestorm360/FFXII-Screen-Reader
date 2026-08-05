@@ -3551,3 +3551,47 @@ Built + deployed, **NOT play-confirmed.**
 **KEYWORDS: exact flag condition triple 200 200 100 setgaugecountercondition FUN_00408560 arming
 corpus sweep 46 gauge modules mic rsn sav gil frs max 100 everywhere no map list gauge type +0xC0
 resolved cross-map**
+
+## Session 136 — 2026-08-05 — The meter works; the decay was chattering, the instrument was gated off, and the guard has a name
+
+First play log in which the shout features actually ran. `gauge condition (200, 200, 100) -> THIS IS
+THE SHOUT GAUGE` armed on entry, `meter key: 26/100` answered, and the penalty came through as
+`burst closed: 23 -> 0 over 25 set(s)` → "Infamy down, 0 percent". The exact flag works.
+
+**THE GUARD IS 387 "BHUJERBAN SAINIKAH", AND IT IS NOT AN IMPERIAL.** Three independent legs in one
+log: the map's object dump lists exactly one soldier among eight NPC identities; five seconds before
+the penalty the mod's own interaction reader spoke **"Action: Bhujerban Sainikah"**, so the player
+was inside the engine's interaction reach of one when they shouted; and the penalty burst arrived in
+the same breath as the game's rebuke — *"Lies, exaggerations, and obfuscations! … And slandering His
+Excellency above all else!"*, His Excellency being the Marquis whose guards these are. The Imperial
+assumption was carried over from the palace sneak sequence, where 694 really was one. **Shipped.**
+
+**THE IDLE DECAY WAS REACHING THE HOOK AND SPEAKING.** `changegaugecounterbyframe` tweens the bar
+down and the script then calls `setgaugecounter` with the value it has ALREADY reached, so every
+decay tick arrives as a one-set burst whose start equals its end — `26 -> 26`, `25 -> 25`,
+`24 -> 24`, each announced as a rise. The meter was narrating its own decay while the player did
+nothing. **A burst that changed nothing is not an event and is no longer spoken.** This is not
+speech dedup: it compares nothing against what was last said, and two identical real changes both
+announce. A shout nobody heeds also lands here, and silence is right there too — the game says "No
+one heeds your words" itself.
+
+**THE INSTRUMENT WAS GATED OFF BY ONE CONDITION.** `CaptureBurst` began `if (... || !mod.valid)
+return;`, and the module never resolved — so a log containing a textbook penalty burst contained
+**zero** SHOUT-MEASURE lines. The module only ever supplied a LABEL there; the measurement is the
+distances. It now runs whether or not a module resolved, and only on bursts that actually changed
+something (a decay tick measures nothing).
+
+**THE CROWD KEY COUNTED THE WHOLE MAP** — the tester's words were "way, way too broad". It now
+counts within a window: the row's measured earshot when there is one, otherwise a REPORTING window
+of 10 steps that is **spoken aloud**, so it makes no hidden claim about the game's rules, and is
+expressed in the mod's own step unit. The nearest guard gets a bearing (it is what the player would
+move away from); civilians stay a crowd to stand in rather than individuals to find.
+
+Earshot itself is still 0. The evidence puts the guard's trigger at roughly the engine's interaction
+reach, but that is not a number, and shout range and talk range are not the same quantity — the
+instrument brackets it properly next run.
+
+Built + deployed, **NOT play-confirmed.**
+
+**KEYWORDS: Bhujerban Sainikah 387 guard identity not Imperial idle decay chatter burst changed
+nothing CaptureBurst module gate crowd window 10 steps reporting window earshot unmeasured**

@@ -140,6 +140,7 @@ const Row kTable[] = {
     EN(L"people"),
     EN(L"civilians"),
     EN(L"guards"),
+    EN(L" within "),
     // Its two mod-menu rows (S132). Flag any rewording to the user before changing it.
     EN(L"Puzzle guide"),
     EN(L"Whether the mod helps with the shouting puzzle in Bhujerba."),
