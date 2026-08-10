@@ -73,6 +73,13 @@ enum class Id {
     LevelPrefix, HPPrefix, MPPrefix, LPPrefix, EXPPrefix, NextPrefix,
     OfJoiner, PercentSuffix, Queued,
 
+    // -- The one Libra word (battle_target_reader.cpp). USER-AUTHORIZED 2026-08-10, S147.
+    // `o` on an enemy asks for the Libra readout. When Libra is down the game shows a bar and no
+    // numbers, and it has no text anywhere saying so -- but staying silent here would be
+    // indistinguishable from a broken key, because `o` is a direct question the player just asked.
+    // This is the ONLY spoken exception in the file; the per-highlight autodetail path never says it.
+    LibraNotActive,
+
     // -- Field menu, Party screen: membership is a portrait POSITION plus an alpha dim, with no text
     // anywhere in the binary to read. USER-AUTHORIZED this conversation (Session 93), for exactly these
     // two words and no others. (char_select_reader.cpp)
@@ -126,12 +133,13 @@ enum class Id {
     // and on route loss -- player-initiated stops and self-announcing ones (arrival cue, combat,
     // map transition) stay silent per the silence-is-normal rule.
     SettingAutoWalk, AutoWalkDesc, AutoWalkDescOff, AutoWalkDescOn, AutoWalkStopped,
-    // S130: which font atlas this install runs, because the atlas IS the character map. A fan
-    // translation that repaints accented slots makes the stock table say the wrong letter, and the
-    // patch leaves nothing on disk to detect it by, so the player picks. The two VALUE words are
-    // its own rather than reusing Off/On: this is not a feature being switched on.
-    SettingTextGlyphs, TextGlyphsDesc,
-    TextGlyphsStandard, TextGlyphsPolish, TextGlyphsDescStandard, TextGlyphsDescPolish,
+    // (S130's six Text-glyphs ids were removed in S147 with the setting they named. Which font
+    // atlas this install runs is now DETECTED from the loaded font itself -- see GameText::
+    // DetectVariant -- so there is nothing left for the player to pick and nothing to say about it.)
+    // S147: autodetail. The Off/On VALUES reuse BeaconOff/BeaconOn -- they are generic. Wording
+    // user-approved 2026-08-10. What it switches is what gets VOLUNTEERED, never what is reachable:
+    // the `4`-`9` shop columns and `o` keep working identically in both modes.
+    SettingAutoDetail, AutoDetailDesc, AutoDetailDescOff, AutoDetailDescOn,
     // (S106's four sneak-assist ids were removed in S115 with the setting they named. The feature is
     // automatic on the maps `path_danger.cpp` lists, so it has no menu row and speaks nothing.)
 
@@ -165,6 +173,17 @@ enum class Id {
     // framing -- they asked for "the puzzle guide" and "instant success" as two separate toggles.
     SettingPuzzleGuide, PuzzleGuideDesc, PuzzleGuideDescOff, PuzzleGuideDescOn,
     SettingPuzzleSkip,  PuzzleSkipDesc,  PuzzleSkipDescOff,  PuzzleSkipDescOn,
+
+    // -- The summoned Esper's duration gauge (party_status.cpp, key 8). USER-AUTHORIZED 2026-08-10,
+    // S148, for this one word. The gauge is the lightning icon and pips beside the Esper's HP on the
+    // battle HUD: icon art, with no string behind it anywhere -- the same case as Infamy above.
+    // The COUNT reuses OfJoiner ("5 of 5") rather than adding a second joiner.
+    //
+    // DELIBERATELY NOT A UNIT. The backing pair (BtlWork+0x5AD8/+0x5ADC) is seeded from a per-Esper
+    // constant and nothing in the read path establishes whether it depletes with time or with
+    // actions, so the word names the gauge and claims nothing about what it counts. `PARTY` logs the
+    // raw floats on every press; once a summon has been watched to its end this can be sharpened.
+    SummonGauge,
 
     Count
 };

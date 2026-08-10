@@ -171,6 +171,11 @@ void OnNavKey(int vk) {
         // F11, not F9: the game owns F9 ("Hide On-Screen Keyboard", S112). Bare press only --
         // Shift+F11 belongs to NVDA; the guard is in input_tracker's edge registration.
         case VK_F11:        ModMenu::CycleSetting(ModMenu::SettingId::AudioBeacon);     break;
+        // F7, same arrangement again: the shortcut for the setting the F8 menu also holds. It
+        // changes only what the mod VOLUNTEERS -- the shop's `4`-`9` columns and `o`'s Libra readout
+        // answer identically whichever way it is set, because a toggle that took away a way to ASK
+        // would be a regression rather than a setting.
+        case VK_F7:         ModMenu::CycleSetting(ModMenu::SettingId::AutoDetail);      break;
         // F10 IS NOT BOUND (Session 115). It held the sneak-assist toggle from S107 to S114; that
         // feature now acts automatically on the maps `path_danger.cpp` names and has no setting to
         // switch, so the key went back to the game. Do not re-bind it without checking the
@@ -191,9 +196,9 @@ void OnNavKey(int vk) {
         case VK_OEM_7:      NavProbe::Request();              break;  // '  diagnostic probe (game thread)
         // 4-9: CONTEXT-GATED. While an equipment comparison is on screen (a shop list highlight or
         // the equip-to-whom screen) these address its per-character COLUMNS; everywhere else 4-7
-        // keep their party-slot meaning and 8/9 do nothing. The gate is structural -- a live,
-        // class-validated panel -- not a cached flag, so leaving the shop restores party status
-        // with no state to get stuck.
+        // keep their party-slot meaning, 8 reads the summoned Esper and 9 does nothing. The gate is
+        // structural -- a live, class-validated panel -- not a cached flag, so leaving the shop
+        // restores party status with no state to get stuck.
         case '4': case '5': case '6': case '7':
         case '8': case '9': {
             const int n = vk - '4' + 1;                       // 4 -> column 1 ... 9 -> column 6
@@ -202,7 +207,11 @@ void OnNavKey(int vk) {
             // Same structural gate as the equipment columns -- a class-validated live window, no
             // cached flag -- so leaving the screen restores party status with nothing to get stuck.
             if (SaveReader::PartyMemberKey(n)) break;
-            if (vk <= '7') PartyStatus::SpeakSlot(vk - '4');  // 8/9 stay silent outside a shop
+            // 8 = the summoned Esper (S148). It is NOT roster slot 4: an Esper is absent from roster
+            // list 3 entirely, which is why 4-7 could never reach it. Silent when none is out, the
+            // same way 7 is silent with no guest -- so outside a summon 8 behaves exactly as before.
+            if (vk == '8')      PartyStatus::SpeakEsper();
+            else if (vk <= '7') PartyStatus::SpeakSlot(vk - '4');   // 9 stays silent outside a shop
             break;
         }
         case VK_OEM_COMMA:  CombatLog::StepBack();            break;  // ,  combat log: older

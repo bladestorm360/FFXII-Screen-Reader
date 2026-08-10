@@ -443,10 +443,9 @@ void TagDoorwaysAndDropSignTwins(std::vector<Entity>& out, bool logDetail) {
         Log::Write("NAV-DIAG", m);
         // THE SAME GRACE-WINDOW BUG SESSION 83 FIXED IN THE OTHER TWO PASSES, still live here.
         // RescanLocked carries an entity over when its scene object is missing from the fresh list,
-        // and it cannot tell "the engine stopped reporting it" from "we just deleted it" -- a
-        // filtered object is a LIVE engine object whose transform keeps reading, so `lastSeenMs`
-        // keeps being refreshed and it never ages out. Without this the twin came straight back,
-        // permanently, while this pass logged the deletion on every single rescan.
+        // and it cannot tell "the engine stopped reporting it" from "we just deleted it" -- and this
+        // pass deletes the same live twin on every scan, so without the explicit signal it is
+        // re-admitted every time while the deletion is logged every time.
         // RECORD THE PAIRING BEFORE THE ERASE. The twin is about to go, but the FACT that a
         // text-only same-named sign stood beside this doorway is exactly what distinguishes a
         // shopfront from an ordinary door or gate -- and until now it was computed here and thrown

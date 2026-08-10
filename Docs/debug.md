@@ -2556,7 +2556,28 @@ Two surfaces the tester reported as reading **nothing at all**. Both belong to t
 which the mod has never touched. **Reported only — no RE done, no function identified. Do not
 implement from a guess; find the surface first.**
 
-### 1. The multi-item reward panel
+### 1. The multi-item reward panel — SURFACE FOUND (Session 147), still not play-confirmed
+
+> ⚠ **STRUCK, Session 147:** ~~"It is **not** the single-item obtained toast the mod already reads
+> (`message_reader.cpp`, `FUN_0035e070`, text at `widget+0xC8`) — that one is a one-line toast with
+> no title and no quantity column. This is a multi-row list with a heading."~~
+>
+> **It IS that function.** `FUN_0035e070` has a row loop, a separate quantity field and a gil kind —
+> everything this entry said it lacked. The claim was made from the mod's own one-line *usage* of the
+> function rather than from its body, and it then stood for 75 sessions as a reason not to look there.
+> Descriptor layout, row kinds and the `0F 31` composition are in `GameArchitecture.md` §Session 147.
+>
+> **WHAT IS STILL OPEN is why it is silent, and that has NOT been guessed at.** Across all twenty
+> archived dev logs the reader's init line appears twenty times and its
+> `diag: item popup proc FUN_0035e070 fired` line appears **zero** times — so there is no evidence the
+> surface was ever visited in a dev session, and the S143 lesson applies: *before instrumenting a
+> refusal, confirm the surface was even visited.* S147 shipped the descriptor logging (mode, row
+> count, layout flags, and every row as `[item N xQ]` / `[gil N]`) plus an explicit line when the
+> composed buffer decodes to nothing. One hunt reward now separates "never fired", "fired with an
+> empty descriptor" and "fired but the text would not decode".
+>
+> The original observations below are kept because the SHAPE they describe is confirmed correct —
+> only the "different surface" conclusion was wrong.
 
 A bordered panel with a **title line** (the bill/quest name, e.g. `Red & Rotten in the Desert`), a
 rule under it, then one row per reward:
@@ -5534,3 +5555,367 @@ since the heed count is ground truth for who actually heard a shout.
 ### 5. Routing to a moving target
 
 See the entry above this block — cause, fix and risk are already written up there.
+
+## Session 147 — what shipped, and the two things that need a play to settle
+
+**KEYWORDS: tester report status R1 character switch instance letter Dire Rat B libra o key autodetail
+F7 polish diacritics automatic font00.dat detect exit reachability water bit23 strict flood hunt
+reward panel power conduit dungeon interactables friction log corpus tester logs**
+
+### OPEN — the dungeon device ("power conduit"): a control-surface cost, measured
+
+**Tester, 2026-08-10:** *"Takes a little bit of fumbling around in the dungeons to get to this power
+conduit thing. It's a little bit of a pain in the ass but it's doable."*
+
+Logged rather than fixed, at the user's direction: the dungeon needs its own pass and there is no
+save near it (`Saves\` holds one file, `FFXII_005`). Recorded so the next session starts from evidence
+rather than a re-investigation.
+
+**What it costs today, in keypresses.** A dungeon device lands in `Category::Object`
+("Interactables") through the `kind == 5` branch of `ClassifyByNameKey` (`entity_classify.cpp:205-217`)
+— *provided* it is named or interactive at scan time, because `entity_scan.cpp:330-347` drops nameless
+non-interactive objects (`s_dropKind5` is the counter that says when that bites). Reaching it is then
+`=` x8 (or `-` x3) around the eleven-category ring, `]` xN through everything in that category, and
+`\`. That is the "fumbling".
+
+**What is NOT available as a shortcut.** The engine keeps **exactly one** interaction target and
+offers no cycling (`interact_target.h:15-19`, 0.98) — so a "next device" key cannot come from the
+game; it would have to come from the mod's own list. And `;` already names the engine's chosen target
+but deliberately does not route to it (`interact_target.cpp` calls no `PathPlanner`).
+
+**Neither Raithwall's Tomb nor Barheim appears anywhere in `Docs\`** — this is new ground, not a
+regression in something already understood.
+
+### The tester's five other reports, and where each landed
+
+| Report | Outcome |
+|---|---|
+| Status menu does not update on R1 | **FIXED.** One missing event: `FUN_002c2c50` (RVA `0x1A2C50`). The cycle was never observed because it happens inside category `0xa`, which the reader filters out as per-frame — correctly. |
+| Instance letters not spoken in the targeting menu | **FIXED.** `battle_target_reader.cpp` had a SECOND enemy-naming path that decoded `actor+0x18` inline while `;` and `p` used `BattleState::DisplayNameForActor`. Only the latter ever grew the letter. One path now. |
+| Libra support for viewing enemies | **BUILT** on `o` (and volunteered by autodetail). The flag Session 32 could not find is `*(u32*)(P + 0x10F68) & 2`. Weaknesses **are** included — `BtlChr+0x40`, suppressed for Libra-proof marks and bosses. A first pass wrongly reported them unobtainable; see below. |
+| Autodetail | **BUILT** on `F7` + the `F8` menu, default Off, exactly to the spec in `Controls.md`. |
+| Polish diacritics automatic | **BUILT** — detected from the loaded font atlas. See below; this does NOT on its own close the tester's diacritics defect. |
+| Hunt rewards not read | Surface **found** (it was the function we already hooked); silence not yet explained; instrument shipped. |
+| Exits/doors you cannot reach | **Instrumented, not changed.** See below. |
+
+### SOLVED — enemy elemental weakness is `BtlChr + 0x40` (Session 147, after getting it wrong first)
+
+**The first answer this session gave was: "they are not obtainable, and the game does not show them
+under Libra either." Both halves were wrong, and the user said so.** Libra draws a `Weak:` row of
+element icons on the target panel; the mask behind it is a single byte on the BtlChr; and it was
+already arriving in the vitals snapshot this mod's own hook receives, at snapshot `+0x89`. The full
+chain, the Libra gate, and the `????` boss flag are in `GameArchitecture.md` §Session 147.
+
+**THE LESSON, and it is the second time this shape has cost a session: a negative result is only as
+good as the shape you searched for.** The three checks below are all still TRUE. Every one of them is
+also irrelevant, because each asked about a structure the answer does not have — a four-mask quartet,
+and a field on the enemy record. The answer was one byte on the combatant. Nothing in the search
+would ever have found it, and "I looked hard and found nothing" felt like evidence anyway.
+
+The correction that would have worked, and is the rule now: **when a search comes back empty,
+re-derive what the DISPLAY reads.** The game draws the thing, so something reads it — start at the
+draw call and walk backwards. That takes minutes and cannot produce a false negative. In this case
+`FUN_002bfd20` hands `panel+0x149` straight to `FUN_00295d90`, which emits message `0x2331`
+(*"Weak: "*) and then one element sprite per set bit; two hops back from there is `bc+0x40`.
+
+Kept below because they remain correct, and because the next session should not re-run them:
+
+- The Weak / Absorb / Half / Immune quartet the project already holds (record `+0x3C..+0x3F`) is on
+  the **equipment** record. Its only consumers are `FUN_00374280` / `FUN_003745c0`, which copy it into
+  the equip-preview scratch globals `_DAT_02ae96a0..ac` — the 0x36F-0x374 preview UI, not the battle
+  path.
+- The per-actor enemy record at `actor+0xE68` carries no affinity field; its reads in the damage range
+  (`FUN_00388660` `+0x20`, `FUN_00390ab0` `+0x12`) are unrelated.
+- Element multipliers are applied inside the ~110 `FUN_0038c9xx`-`FUN_0038dxxx` formula functions and
+  are not preserved (already recorded at 0.98). The action record `+0x13` is the only element source
+  for an ATTACK — which is a different question from the target's weakness, and conflating the two is
+  part of how the wrong conclusion got its confidence.
+
+> ⚠ A fourth bullet stood here and is **STRUCK**: ~~"And the game itself does not show them under
+> Libra. Libra reveals HP/MP numbers, level and traps. Speaking a weakness would be inventing a fact
+> the screen never states."~~ It does show them. Worse, this was the bullet that turned three
+> offset-level negatives into a *design* justification, which is what made the answer feel finished.
+> **A claim about what the GAME displays needs the same evidence as a claim about an offset** — and
+> this one was written from recollection, not from the draw call.
+
+Settled in passing, at 0.99: `result +0x42..+0x51` and `target +0x17C..+0x18A` are **per-status
+countdown timers**, eight i16 slots indexed by `statusMasterRec+0x06`. That **STRIKES**
+`notes\combat_re_2026_07_20_damage.md:302`, which labels them "resistance/affinity overrides" at 0.90
+— a wrong lead that would have eaten this session had it been trusted.
+
+### OPEN — the exit reachability contradiction, now measurable
+
+**The tester asked for a filter; the user reframed it as a correctness bug, and the archive agrees.**
+Our own dev logs have been printing the contradiction on adjacent lines for weeks:
+
+```
+[NAV-DIAG] raw=0x0FA00000 eff=0x0FA00000 type=0 count=3077  *** UNWALKABLE (bit23) ***
+[NAV-DIAG] routable? "Exit, Garamsythe Waterway: East Waterway Control"
+                     at (235.0,9.0,36.0) poly=99 eff=0x1FA00000 walk=1 reach=1
+[NAV-DIAG] exits: controllers=1 surfaces=1 listed=1 | dropped: ... unreachable=0
+```
+
+`0x1FA00000` has bit 23 set. The census calls that poly class unwalkable; the routability line calls
+the exit standing on it reachable. `NavMesh::Walkable` has been the poly TYPE mask alone since S96, and
+`NavReach` inherits it — so the flood crosses the flooded channels, and **`unreachable=` is `0` in
+every archived log while `reachability filter disabled:` has never appeared once.** The listing filter
+has never dropped anything, in any session, ever.
+
+**AND THE SAME ARCHIVE KILLS THE OBVIOUS FIX.** `"Exit, Bhujerba: Travica Way" poly=443
+eff=0x0FA00000 walk=1 reach=1` — identical flags, a map with no water, in a log where four routes
+succeeded. Bit 23 also marks ledge and out-of-bounds geometry under perfectly good exit seams. So
+re-arming it is struck twice over: S96 did exactly that and had to revert it (399 of 690 floor prims
+refused on map 311, and it cost the tester a working exit), and Travica Way is a live counterexample.
+
+**What shipped is a measurement, not a change.** `NavReach` now runs a SECOND flood beside the
+permissive one that also refuses `NavMesh::TerrainRefused` polys, published separately as
+`ReachableStrict` and read ONLY by the routability line, which gained `terrain=` and `strict=`.
+Nothing filters on it.
+
+**The decision rule is written down in advance so the next session is not an argument:** if
+`strict=0` tracks the exits the player genuinely cannot reach **and stays `1` on Travica Way and the
+other working bit-23 exits**, it becomes the listing filter's second gate. If it fails either half it
+is the wrong instrument too, and the next candidate is named from that log rather than from a theory.
+
+**Still missing:** no archived dev log contains a ROUTE REQUEST to a Waterway exit — those sessions
+listed the exits but never pressed `\` on one. So the listing half is measured and the routing half
+needs one Garamsythe pass (East Spur Waterway, route to Central Spur Stairs and to No. 10 Channel).
+
+### The Polish diacritics defect is NOT closed by making detection automatic
+
+`GameText::DetectVariantOnce` removes the most likely cause — **a setting the player never set reads
+as Standard** — and it strikes the "autodetection is not available" claim with a measurement (twenty
+bytes, ten advance widths; see `GameArchitecture.md` §Session 147). It does **not** on its own prove
+the mapping works.
+
+The other two candidates from the S140 backlog stand: whether the mapping is applied on the read path
+the tester's text actually takes, and whether more than sixteen slots moved. **This is the one item
+where a tester log is the right evidence** — the dev machine has no fan patch installed, so our own
+logs structurally cannot show the defect. Per the log-corpus rule in `CLAUDE.md`, that satisfies the
+first half (a tester reported it) and still needs the second: **ask the user to point at the log**
+rather than sweeping `Tester Logs\`.
+
+On the dev machine the confirmation is one line: `[TEXT] font atlas DETECTED: standard (advance field
+at record+0xNN, 10/10 slots matched)`. If it instead prints `font atlas UNRECOGNISED` with a dump of
+values, the loader's record layout is not the file's and that dump is the fix.
+
+### The log-corpus rule, learned the hard way this session
+
+`<game>\x64\logs\` is the dev archive and the default evidence for everything. `Tester Logs\` is
+opened only on a reported issue AND an explicit pointer from the user. This session reached for the
+tester folder first, found no Waterway routing, and concluded the reachability defect was "not
+measurable from any archived log" — while the measurement sat in nineteen of our own twenty logs.
+Reaching for the wrong corpus did not merely waste the search; it produced a confident wrong answer.
+Now recorded in `CLAUDE.md` under Key Paths and Auditing rules.
+
+## FIXED — stale entities never left the tracker (S147 reported, S148 fixed it on the third try)
+
+> **RESOLVED 2026-08-10 — and the framing was the fix.** The user, after two wrong diagnoses:
+> *"you're still tracking it as if kills matter, when what we want is a stale entity pruner… entities
+> will appear on the map but will not disappear when consumed or teleporting away or leaving."*
+>
+> **`sceneObj+0x14` bit `0x40` = present in the world.** Set for live party, live enemies **and
+> treasure chests**; clear for a defeated enemy and for never-spawned reserve slots. Because
+> treasures keep it set, it is a PRESENCE test rather than a liveness test, so one rule prunes a
+> corpse, a departed NPC, a consumed chest and a cleared trigger alike. Applied in BOTH the
+> handle-table walk and the actor-pool walk — the pool walk only sees what the handle walk did not
+> list, so pruning in one alone would have re-admitted everything through the other. Every prune
+> logs itself. Full derivation: `GameArchitecture.md`, *"sceneObj + 0x14 bit 0x40"*.
+>
+> **Three diagnoses, in order: an HP gate (S147), a stale pointer (S148), a presence bit (S148).**
+> The first two were mechanisms that fit the symptom and were never measured; both were proposed
+> with an ally caveat and a code comment that made them read as finished. What ended it was the
+> user refusing the frame — twice — and a counter that had been shipped alongside the failed fix.
+> **Neither wrong answer was wrong about a fact; both were wrong about the QUESTION.** "Why does a
+> dead enemy stay?" has no good answer. "Why does anything stay?" has exactly one.
+
+> **PLAY RESULT, 2026-08-10, on the S148 build — READ THIS FIRST.** The fix below is real and stays,
+> but it is **not** what holds a corpse in the list. The new counter settled it in one press:
+> `[NAV] grace: carried=0 evicted=0 filtered=2`, once in a whole session, while `Enemy=1` persisted
+> across 25 rescans and a dismissed Belias answered `]` for 13+ seconds. **`carried=0` means the
+> grace window never saw these entities at all** — `EntityScan::Build` is producing them on every
+> single scan.
+>
+> So S147's first half was right after all: **the scan keeps listing them.** My S148 replacement
+> premise (a stale pointer kept alive by the merge) was wrong for these two cases in the same way
+> S147's was — asserted from a mechanism that fit, not from a measurement. **Two sessions running,
+> the cause was picked before the counter existed.** The counter now exists; use it.
+>
+> **Candidate, measured only, in the object dump the user captured:** within the character
+> containers `sceneObj+0x14` reads `0xF0` for the live party, a live Giza Rabbit **and Belias**, and
+> `0xB0` for the DEFEATED Hyena and four never-spawned reserve slots. Bit `0x40` is the difference,
+> and `0x20` beside it is already known as "model loaded". Treasures read `0x70` and are listed
+> correctly, so `0x40` can never be a global gate — combatants only. **It does not explain Belias**,
+> which still reads `0xF0` after dismissal. `entity_scan.cpp` counts it and filters on nothing.
+>
+> **The measurement still missing:** a `'` dump taken WHILE an Esper is summoned, diffed against one
+> taken after dismissal. No log in the archive has a before/after pair.
+
+**KEYWORDS: dead enemy tracker not disappearing killed corpse entity list grace window lastSeenMs
+RefreshPositionsLocked kEntityGraceMs KIND_DEAD s_poolKind5 ACTOR_ACTIVE_BIT BC_CURHP buffer growth
+Category::Enemy entity_scan BuildLocked actor pool HP gate struck stale pointer**
+
+**Report (the user, in play):** *"when killing enemies, they are not disappearing properly from the
+enemy tracker… we don't want a massive buffer of enemies building up over time, even if they are
+cleared on map change."*
+
+### THE FIX (S148): `lastSeenMs` had two writers, and the wrong one won
+
+`RefreshPositionsLocked` (`entity_list.cpp`) now **skips any entity the latest scan did not produce**
+— no transform read, no stamp — leaving `RescanLocked` as the field's only writer. The 2 s grace
+window then measures what it was written to measure and a killed enemy ages out. Counters
+`carried=/evicted=/filtered=` were added to a `[NAV] grace:` line, because nothing in the codebase
+had ever reported what that merge did.
+
+### ~~"There are TWO independent defects here"~~ — HALF STRUCK. There was ONE, and it was defect 2
+
+**The user, correcting S147:** *"the entity itself disappears, so there's no need to hang on to it…
+you just need to ensure the live delta is tracking and getting rid of stale entities. HP gate is the
+wrong solution."*
+
+**~~Defect 1 (no HP test in the actor-pool walk) and its proposed fix are STRUCK.~~** The
+measurements below are all still true — the `KIND_DEAD` skip really does tally zero in 602/602
+rescans — but they were assembled on top of a premise stated from recollection rather than measured:
+*"a corpse is a live scene object with a perfectly readable transform"*, i.e. that the pool goes on
+reporting the dead. **It does not.** The scan drops the corpse on its own; what kept it listed was
+the merge putting it back. An HP gate would have added a second liveness test to fix a bug in a
+third, and `feedback_hook_arity` aside, it would also have needed an ally exemption that nothing
+would ever have exercised.
+
+**The lesson is S147's own, applied to S147:** a negative result is only as good as the shape you
+searched for — and a *positive* claim about what the engine keeps alive needs the same evidence an
+offset does. Dressing it in a design rationale ("and here is the ally caveat") is what made it read
+as finished.
+
+**What follows is kept as the record of what was measured.** Read `1.` as struck.
+
+**1. ~~Nothing in the field scan ever asks whether a combatant is alive.~~ STRUCK — see above.**
+
+`EntityScan::BuildLocked`'s actor-pool walk (`entity_scan.cpp:169-224`) admits a combatant on three
+gates: the slot has a `def` pointer, `ACTOR_ACTIVE_BIT` is set, and the scene-kind nibble is not
+`KIND_DEAD`. There is **no HP test at any point**, and the kind test is measurably inert:
+
+```
+602 x  "0 actor-pool entr(ies) skipped as KIND_DEAD(5)"      <- every rescan, all 20 archived dev logs
+  0 x  any non-zero value
+```
+
+That counter exists precisely because the line was suspect — its own comment says *"If this tally is
+ever non-zero on a field map, that premise is false and the skip has to go."* It has never been
+non-zero, which settles the opposite point: **the skip has never removed anything, so it is not what
+drops a dead enemy, and nothing else is.** While the corpse's actor slot stays active, `Build`
+re-lists it as `Category::Enemy` on every single rescan.
+
+Compare `battle_target_reader.cpp`, which has had the right liveness test all along and uses **two**
+signals — scene-kind `KIND_DEAD` **and** `curHP == 0`. The nav side uses neither usefully. And the HP
+is already one guarded read away inside the loop that needs it: `def` IS the BtlChr (`ACTOR_DEF_PTR`
+= `+0x698`), so `SafeReadU32(def, BC_CURHP)` sits beside the `DEF_KIND_BYTE` read that is already
+there.
+
+**2. Even if the pool DID stop reporting it, the grace window could never age it out.**
+
+`RescanLocked` (`entity_list.cpp:98-114`) carries an entity that has stopped being reported until
+`now - lastSeenMs > kEntityGraceMs` (2000 ms). But `RefreshPositionsLocked` (`:152`) stamps
+`it->lastSeenMs = GetTickCount64()` for **every** entity whose transform still reads, every field
+frame. So `lastSeenMs` never goes stale and the 2 s window never expires.
+
+**THIS IS THE WHOLE BUG, and it needed one correction to be right about WHY.** ~~"a corpse is a live
+scene object with a perfectly readable transform"~~ — struck. The corpse is *gone*; what still reads
+is the mod's own **stale scene-object pointer**, into memory the engine has released but not yet
+recycled. Same observable, opposite mechanism, and the difference decides the fix: an object the
+engine still owns argues for asking it whether it is alive (the HP gate), while a dangling pointer
+argues for not consulting it at all. The shipped fix skips carried entities entirely — which also
+stops the mod reading coordinates out of freed memory for up to two seconds, a second defect nobody
+had noticed because the first one hid it.
+
+**This exact failure is already written down twice in this codebase, for a different case.**
+`entity_list.cpp:105-110` and `entity_scan.h:216` both say: *"a filtered object is a LIVE engine
+object, so RefreshPositionsLocked keeps reading its transform and keeps stamping `lastSeenMs`, so it
+can never age out of the grace window. Once carried in, it stays for the life of the map."* The fix
+adopted there was `EntityScan::WasFilteredThisScan` — an **explicit "we removed it" signal** that
+bypasses the window rather than an absence-based timeout. A dead enemy needs the same shape, and for
+the same reason (S83's lesson: *the grace window re-admitted everything every filter deleted*).
+
+### Why it is bounded by the map, and why that is still not good enough
+
+`g_entities.clear()` on map change (`entity_list.cpp:292`) is the only thing that empties the list, so
+growth is bounded by the number of distinct combatant scene objects visited on one map. On a map where
+the player fights repeatedly — or one with respawns — that is exactly the "massive buffer" the report
+describes, and every stale entry is one more `]` press between the player and a live target.
+
+### What the archive did NOT have, and the instrument that shipped instead
+
+**No dev log contained a kill.** `Enemy=` reads `0` in 582 rescans and `3` in 20; nothing showed the
+post-kill state, so the observed behaviour was the user's play report and nothing else.
+
+The instrument S147 specified was ~~`N combatant(s) admitted with curHP==0`~~ — an instrument for the
+struck defect, and it would have measured zero forever. What shipped is the counter for the merge,
+which is where the bug actually was:
+
+```
+[NAV] grace: carried=N (within 2000ms) evicted=N (aged out) filtered=N (explicit)
+```
+
+Silent when all three are zero. `evicted` going non-zero after a kill, and `carried` coming back to
+zero, is the falsifier this defect never had.
+
+**The instrument must match the defect, not the hypothesis.** S147 was right that a counter had to
+come first and still specified the wrong counter, because it had already committed to a cause. The
+one that shipped reports what the code *does* (how many entries the merge kept, dropped, refused)
+rather than what a theory predicts, which is why it stays useful now that the theory is struck.
+
+### Rules that survived the strike
+
+1. **Do NOT delete the `KIND_DEAD` skip** because it measures zero. It is inert on the field, but the
+   constant is owned by the combat track and `phyre_types.h` already labels its name wrong. Removing
+   it is a separate, unmeasured change. Left in place; S148 did not touch it.
+2. **No HP gate in the nav scan, ever.** Beyond being unnecessary, the same walk files `KIND_ALLY` as
+   `Category::NPC`, and a KO'd party member is revivable and still worth listing. A comment in
+   `RefreshPositionsLocked` says so at the point where somebody would next be tempted.
+3. **An explicit removal signal beats a timeout for a deliberate drop.** `WasFilteredThisScan` stays,
+   and its justification is now the right one: the filters delete a LIVE object the scan keeps
+   finding, so without the signal every rescan re-admits it. (It was previously justified by "it can
+   never age out", which was true only because of the bug fixed here.)
+
+## FIXED — the Status screen's L1/R1 switch was cut off by "Regen" (S147 shipped it, S148 fixed it)
+
+**KEYWORDS: status screen L1 R1 character switch Regen interrupted ailment grid focus 2C390A00
+FUN_002c2c50 menuCtx+0x110 StatusReader TryFocus claim block two speakers interrupt=true**
+
+**Report (the user, in play):** *"your fix for pressing l1/r1 to switch characters on the status
+screen worked, but it's being interrupted by 'regen'… the mod is reading one of the active status
+effects just after the character name, which is undesired."*
+
+The log had it verbatim, same millisecond, on every switch:
+
+```
+[STATUS] page: owner=…2C390840 "Balthier"
+[SPEAK-OUT] Balthier
+[READER] focus owner=…2C390A00 index=0
+[READER]   item: "Regen"
+[SPEAK-OUT] Regen
+```
+
+**Two speakers, two policies, one surface — the notice-board failure again.** `FUN_002c2c50` refills
+the ailment grid (`menuCtx+0x110`) as part of the screen's refresh; the game answers by re-firing
+focus index 0 on that pane; the **generic** `MenuReader::OnFocus` speaks it with `interrupt=true`
+(`menu_reader.cpp:342`), beating `StatusReader`'s name, which also used `interrupt=true`. Neither
+speaker is wrong on its own and neither looks wrong in isolation, which is why nothing in the code
+reads as a bug — the same shape as the notice board's Status column vanishing to a 125 ms race.
+
+The content was redundant besides: those statuses are already group 3 of `StatusReader`'s own virtual
+buffer.
+
+**Fix: arbitrate at the one documented claim point.** `StatusReader` had no claim predicate at all;
+`menu_reader.cpp:217-235` is where a reader takes a surface (`PrimerReader::OnHuntFocus`,
+`SaveReader::TryFocus`). Added `StatusReader::TryFocus`, claiming a **one-shot** armed by
+`HookedStatusRefresh` after it announces, consumed by the first focus event that follows, and
+rejected unless the owner is not our own container and the index is 0.
+
+**It is a transition latch, not speech dedup, and it must stay one.** The ailment pane is
+player-navigable — the archive reaches `index=1` on it — so a blanket mute would have silenced real
+navigation. The latch also disarms on the first focus event of any kind and on `Deactivate`, so it
+can never lie in wait across a press. Every consumption logs
+`[STATUS] ailment focus swallowed: owner=… index=… (ctrl=… ailmentGrid=…)` — one per switch and none
+per navigation is the proof, and the two pointers are printed side by side so a later session can
+tighten the one-shot into a plain structural test if they always match.

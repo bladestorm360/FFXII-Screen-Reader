@@ -152,6 +152,11 @@ using MenuState::IsTitleMenu;
 // current item has none (silence beats a wrong or invented string). Runs on the
 // input thread.
 void DescribeHotkey() {
+    // FIRST REFUSAL: in battle, with an enemy under the target cursor, `o` is the Libra readout.
+    // It is structurally silent everywhere else (no committed/browsed enemy target => false), so
+    // this cannot shadow the description bar outside combat. Same shape `;` uses with
+    // InteractTarget::SpeakCurrent, and for the same reason: one key, two surfaces, one owner each.
+    if (BattleTargetReader::SpeakTargetDetail()) return;
     std::wstring desc = TextCapture::CurrentHelpText();
     if (desc.empty()) return;
     Log::WriteW("READER", "  describe: ", desc);
@@ -228,6 +233,11 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     // string).
     if (PrimerReader::OnHuntFocus(owner, index)) return;
     if (SaveReader::TryFocus(owner, index)) return;
+    // The Status screen's L1/R1 switch refills its ailment grid, and the focus that causes used to be
+    // spoken over the character name this reader's sibling had just announced -- "Balthier" cut off
+    // by "Regen", every switch, both speakers using interrupt=true. StatusReader claims that one
+    // event and nothing else; the pane keeps speaking under the player's own cursor. (S148)
+    if (StatusReader::TryFocus(owner, index)) return;
 
     // Build what we'll speak: pop-up button label (code-fixed by index), or the
     // focused row's "name" / "name: value".

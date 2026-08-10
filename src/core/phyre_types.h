@@ -76,6 +76,13 @@ constexpr uint32_t BC_KIND       = 0x05;   // u8  0 = party side (IsPartySide); 
 constexpr uint32_t BC_MAXHP      = 0x24;   // i32 (btlAtelGetHpMaxFromPartySlot)
 constexpr uint32_t BC_MAXMP      = 0x28;   // i16 (btlAtelGetMpMaxFromPartySlot)
 constexpr uint32_t BC_STATUS_A   = 0x3C;   // u32 status word A
+// ELEMENT WEAKNESS, one byte, bits 0..7 = Fire Lightning Ice Earth Water Wind Holy Dark -- the same
+// bit order as the element sprites and BattleState::ElementName. This is the mask the game itself
+// draws as the target panel's "Weak:" row under Libra: FUN_00329220 copies it to snapshot +0x89,
+// and FUN_002bfd20 hands that byte to FUN_00295d90, which emits message 0x2331 ("Weak: ") followed
+// by one 0x4B27+bit element string per set bit. NOT a quartet -- Absorb/Half/Immune belong to the
+// EQUIPMENT record and are never shown here.
+constexpr uint32_t BC_WEAK_MASK  = 0x40;   // u8  element weakness bits (Libra's "Weak:" row)
 constexpr uint32_t BC_CURHP      = 0x48;   // i32 (btlAtelGetHpNowFromPartySlot)
 constexpr uint32_t BC_CURMP      = 0x4C;   // i16 (btlAtelGetMpNowFromPartySlot)
 constexpr uint32_t BC_STATUS_B   = 0x64;   // u32 status word B
@@ -84,6 +91,15 @@ constexpr uint32_t BC_STATUS_B   = 0x64;   // u32 status word B
 // FUN_00300ce0, so it is the game's own "does this character have an MP gauge" test.
 constexpr uint32_t BC_MP_GUARD_A = 0x6C;   // i8
 constexpr uint32_t BC_MP_GUARD_B = 0x7C;   // i8
+// The two 16-byte EXTENDED status masks, OR'd together to give ~128 further status bits. The HUD
+// snapshot carries the OR at its own +0x4C..+0x5B (FUN_00329220's 4x4 copy loop), which is how the
+// LIBRA-PROOF bit was found: FUN_002bfd20 tests snapshot +0x51 bit 1 -- extended bit 41 -- and when
+// it is set it blanks the HP digits AND zeroes the weakness row's alpha. That is the game hiding a
+// mark's or boss's vitals behind "????" even with Libra up.
+constexpr uint32_t BC_EXT_A      = 0x68;   // u8[16] extended status mask A
+constexpr uint32_t BC_EXT_B      = 0x78;   // u8[16] extended status mask B (OR'd with A)
+constexpr uint32_t BC_EXT_LIBRAPROOF_BYTE = 5;    // index into that OR: bits 40..47
+constexpr uint8_t  BC_EXT_LIBRAPROOF_BIT  = 0x02; // ...bit 41 = "no Libra info for this unit"
 // Progression. FUN_00312280 writes all three when an enemy dies: EXP capped at 99,999,999, LP at
 // 99,999, and the level loop bumps +0x1C2 one step at a time. Corroborated by the status-menu block
 // (GameArchitecture.md) and by license_reader.cpp, which already reads +0x190 as current LP.

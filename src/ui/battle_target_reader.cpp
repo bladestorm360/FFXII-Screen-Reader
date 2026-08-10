@@ -1,4 +1,6 @@
 #include "ui/battle_target_reader.h"
+#include "ui/mod_menu.h"               // AutoDetailOn (whether the Libra detail volunteers itself)
+#include "ui/text_capture.h"           // ResolveStringById -- THE message-id resolver, game thread only
 #include "battle/battle_state.h"
 #include "battle/battle_state_diag.h"
 #include "core/game_text.h"
@@ -48,6 +50,8 @@ constexpr uint32_t RVA_BSTATE    = 0x1F7BE80;  // DAT_0209be80 (ptr) -> P (battl
 
 constexpr uint32_t OFF_TARGETID  = 0x9FD8;    // *(int)(P+0x9FD8) = highlighted target handle
 constexpr uint32_t OFF_GATE      = 0x10F78;   // *(P+0x10f78) != 0 = target selection active
+constexpr uint32_t OFF_LIBRA_FLAGS = 0x10F68; // *(u32)(P+0x10f68) -- HUD flag word; see LibraActive()
+constexpr uint32_t LIBRA_BIT     = 0x2;       // bit 1 = "enemy vitals are numbers" = Libra is up
 constexpr uint32_t OFF_PANEL_ID  = 0x288;     // *(u32)(panel+0x288) = the unit this nameplate draws
 
 // Actor pool, BtlChr and scene-kind layout: core/phyre_types.h owns them (this file used to keep
@@ -95,6 +99,179 @@ void ClearCache() {
 
 void* Pstate() { return PtrAt(Hooks::ResolveRva(RVA_BSTATE), 0); }
 
+// ---- LIBRA -------------------------------------------------------------------------------------
+// Is the party's Libra up right now? This is the game's OWN answer, mirrored into the battle-HUD
+// context once per frame, so reading it costs one guarded u32 and calls nothing:
+//
+//   FUN_0030c300 (0x1EC300)  walks the 9 party slots, skips the KO'd, returns 1 when any LIVING
+//                            member carries bit 30 of (BtlChr+0x64 | BtlChr+0x3C)      <- Libra
+//   FUN_0028e290:58-62       mirrors that into bit 1 of *(u32*)(P + 0x10F68), every frame
+//   FUN_00290100 (0x170100)  the getter the game itself uses: *(u32*)(P + 0x10F68) >> 1 & 1
+//
+// What the game does with it is exactly the branch this file already has: FUN_002bfd20:139-141 sets
+// its show-numbers flag when the target is a party member OR this bit is up, and FUN_002c0400 draws
+// the HP as DIGITS when that flag is set and blanks them (0xFFFFFFFF) when it is not. So "Libra up"
+// and "the enemy's HP is a number rather than a bar" are the same fact, and mirroring it here is
+// reading the game's display, not bypassing it.
+//
+// This replaces the "there is no pre-Libra HP-visible flag to read" note that stood from Session 32:
+// the old hunt looked for a bit on the ENEMY's BtlChr (it tried status bit 0x10000, which is the
+// forced-max-display bit and reads 0 on an un-Libra'd enemy). Libra is a bit on a PARTY member.
+bool LibraActive() {
+    void* P = Pstate();
+    uint32_t flags = 0;
+    if (!P || !MemRead::SafeReadU32(P, OFF_LIBRA_FLAGS, &flags)) return false;
+    return (flags & LIBRA_BIT) != 0;
+}
+
+// THE "Weak: " LABEL, and why it is cached rather than resolved on demand.
+//
+// It is the GAME's word (message id 0x2331, the same one FUN_00295d90 puts at the head of the row it
+// draws), so it must be read, not invented. But the one sanctioned resolver --
+// TextCapture::ResolveStringById -- is GAME THREAD ONLY, and `o` runs on the input thread. Adding a
+// private ResolveMsgCodec here is exactly what text_capture.h asks callers not to do; it already
+// exists because two files had each grown one.
+//
+// So it is resolved once from HookedSnapshot, which runs on the game thread every time a target
+// nameplate renders -- necessarily before `o` can mean anything, because there has to be a target.
+// The string is locale-fixed and never changes, so one resolve per session is all it needs.
+// If it is somehow still empty, the caller speaks the element names bare rather than inventing a
+// label for them.
+constexpr int MSG_WEAK_LABEL = 0x2331;
+std::mutex   g_weakLabelMx;
+std::wstring g_weakLabel;
+
+std::wstring WeakLabel() {
+    std::lock_guard<std::mutex> lk(g_weakLabelMx);
+    return g_weakLabel;
+}
+
+// GAME THREAD ONLY.
+void CacheWeakLabel() {
+    {
+        std::lock_guard<std::mutex> lk(g_weakLabelMx);
+        if (!g_weakLabel.empty()) return;
+    }
+    std::wstring s = TextCapture::ResolveStringById(MSG_WEAK_LABEL);
+    if (s.empty()) return;                       // try again on the next render
+    std::lock_guard<std::mutex> lk(g_weakLabelMx);
+    g_weakLabel = s;
+}
+
+// IS THIS UNIT LIBRA-PROOF? Marks, bosses and rare game show "????" instead of vitals even with
+// Libra up, and that is a real per-target flag rather than missing data: FUN_002bfd20 tests
+//     if ((*(u8*)(panel + 0x111) & 2) != 0) { iVar19 = 1; iVar18 = 0; }
+// which zeroes the weakness row's alpha AND drops the HP back to blanked digits. `panel+0x111` is
+// snapshot +0x51, and the snapshot's +0x4C..+0x5B is `bc[0x68+i] | bc[0x78+i]` -- so this is
+// extended status bit 41 on the target.
+//
+// The mod honours it. Reading a weakness the screen is deliberately withholding would be the mod
+// out-revealing the game, which is a different failure from a missing readout and a worse one.
+bool LibraSuppressed(void* bc) {
+    uint8_t a = 0, b = 0;
+    if (!bc) return false;
+    MemRead::SafeReadU8(bc, BC_EXT_A + BC_EXT_LIBRAPROOF_BYTE, &a);
+    MemRead::SafeReadU8(bc, BC_EXT_B + BC_EXT_LIBRAPROOF_BYTE, &b);
+    return ((a | b) & BC_EXT_LIBRAPROOF_BIT) != 0;
+}
+
+// The Libra readout. Everything here is data the game itself reveals once Libra is up, and every
+// value is already sitting in the vitals snapshot FUN_00329220 builds for the nameplate -- this
+// reads it straight off the BtlChr instead, which is the same numbers by the same offsets.
+//
+// THE WEAKNESS CLAUSE, and the mistake that nearly lost it (Session 147). This function first
+// shipped saying weaknesses "are NOT in the game's data anywhere the mod can reach". That was wrong,
+// and the two searches behind it were both true and both beside the point: there is no
+// Weak/Absorb/Half/Immune QUARTET on the enemy (that shape belongs to the EQUIPMENT record, and its
+// only consumers are the equip-preview scratch globals), and there is no affinity field on the enemy
+// record at actor+0xE68. The mask is ONE BYTE on the BtlChr -- `bc+0x40` -- and it was already
+// arriving in the snapshot this very file's hook receives, at +0x89.
+//
+// The game's own chain, which is what settles both the data and the gate:
+//     FUN_00329220   snapshot+0x89 <- bc+0x40
+//     FUN_002bfd20   FUN_00295d90(0x80, panel+0x200, *(u8*)(panel+0x149))
+//     FUN_00295d90   emits message 0x2331 ("Weak: ") then one 0x4B27+bit element string per set bit
+//     ...and that row's alpha is ramped by FUN_00290100() -- the same Libra flag LibraActive() reads.
+// So the row is exactly Libra-gated, and mirroring the screen means weaknesses and nothing else:
+// Absorb / Half / Immune (0x232F / 0x2330 / 0x232E) appear only on the equipment detail panels.
+//
+// The NAMES are the game's own via BattleState::ElementNames -- same bit order, already shipped --
+// and so is the label. Nothing here is a mod-authored word.
+std::wstring LibraDetail(void* bc) {
+    if (!bc) return std::wstring();
+    std::wstring out;
+    auto add = [&](const std::wstring& s) {
+        if (s.empty()) return;
+        if (!out.empty()) out += L", ";
+        out += s;
+    };
+
+    uint8_t level = 0;
+    if (MemRead::SafeReadU8(bc, BC_LEVEL, &level) && level > 0)
+        add(Phrase::Get(Phrase::Id::LevelPrefix) + std::to_wstring(level));
+
+    // MP is an i16 pair, and plenty of enemies have no MP gauge at all. The gate is the GAME's own
+    // test, not "is max MP above zero": btlAtelGetMpMaxFromPartySlot returns 0 unless both guard
+    // bytes have their sign bit clear, and the same guard appears independently in the HUD builder
+    // and the MP clamp. A gauge-less enemy is omitted rather than announced as "MP 0 of 0".
+    uint8_t gA = 0xFF, gB = 0xFF;
+    uint16_t curMPu = 0, maxMPu = 0;
+    if (MemRead::SafeReadU8(bc, BC_MP_GUARD_A, &gA) && MemRead::SafeReadU8(bc, BC_MP_GUARD_B, &gB) &&
+        static_cast<int8_t>(gA) >= 0 && static_cast<int8_t>(gB) >= 0 &&
+        MemRead::SafeReadU16(bc, BC_CURMP, &curMPu) && MemRead::SafeReadU16(bc, BC_MAXMP, &maxMPu) &&
+        static_cast<int16_t>(maxMPu) > 0) {
+        add(Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(static_cast<int16_t>(curMPu))
+            + L"/" + std::to_wstring(static_cast<int16_t>(maxMPu)));
+    }
+
+    // Statuses, as the game's own words. BattleState::StatusNames has always been able to do this;
+    // it had simply never been pointed at an enemy. A clean enemy adds nothing -- silence, not
+    // "no statuses".
+    uint32_t sa = 0, sb = 0;
+    MemRead::SafeReadU32(bc, BC_STATUS_A, &sa);
+    MemRead::SafeReadU32(bc, BC_STATUS_B, &sb);
+    add(BattleState::StatusNames(sa | sb));
+
+    // Weaknesses last, because they are the longest clause and the one the player is most often
+    // waiting for the rest to get out of the way of. A zero mask adds NOTHING -- a non-elemental
+    // enemy draws no icons, so "no weaknesses" would be a sentence the screen never shows.
+    if (!LibraSuppressed(bc)) {
+        uint8_t weak = 0;
+        if (MemRead::SafeReadU8(bc, BC_WEAK_MASK, &weak) && weak != 0) {
+            const std::wstring names = BattleState::ElementNames(weak);
+            if (!names.empty()) add(WeakLabel() + names);
+        }
+    }
+
+    return out;
+}
+
+// The HP clause, in ONE place. Allies always show numbers; an enemy shows a percentage until Libra
+// is up and then shows numbers, mirroring the gauge-vs-digits swap the game makes on the same
+// condition. Both callers (the highlight announce and the `;` key) used to carry their own copy of
+// this branch, which is how they would have drifted apart.
+std::wstring HpClause(void* bc, bool ally) {
+    uint32_t curHPu = 0, maxHPu = 0;
+    MemRead::SafeReadU32(bc, BC_CURHP, &curHPu);
+    MemRead::SafeReadU32(bc, BC_MAXHP, &maxHPu);
+    const int32_t rawCur = static_cast<int32_t>(curHPu), rawMax = static_cast<int32_t>(maxHPu);
+    if (rawMax <= 0) return std::wstring();
+    // SPOKEN NUMBERS GO THROUGH THE GAME'S CLAMP; the PERCENTAGE DOES NOT.
+    //
+    // The clamp is a display rule (FUN_002fef30: party side caps at 9999, everything else at 1e9), so
+    // it belongs on the digits the player hears. It must NOT touch the ratio below: clamping a
+    // bubbled ally's current to 9999 while its max stayed 7319 would compute 137%, and clamping both
+    // would flatten a real difference to a flat 100%. A fraction wants the raw pair.
+    //
+    // For an ENEMY the clamp is a no-op by construction (cap 1e9), which is the point of taking the
+    // game's own selector -- a boss over 9999 HP still reports its real number under Libra.
+    if (ally || LibraActive())
+        return std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix)
+             + std::to_wstring(BattleState::DisplayHp(bc, rawCur)) + L"/"
+             + std::to_wstring(BattleState::DisplayHp(bc, rawMax));
+    return L", " + PhraseFormat::Percent(Phrase::Id::HPPrefix, rawCur, rawMax);
+}
+
 inline bool NonZero(const FVec3& p) { return !(p.x == 0.0f && p.y == 0.0f && p.z == 0.0f); }
 
 // Baked confirmation of the target position sources (for the diagnostic log).
@@ -123,8 +300,10 @@ bool ResolveActorPos(void* actor, void* sceneObj, FVec3& out, PosDiag* d) {
     return false;
 }
 
-// Combatant name (actor+0x18) + faction (scene-kind nibble) from the actor pool, matching the BtlChr
-// via *(actor+0x698)==bc. Returns the name (empty if not found / unprintable); *ally set from kind.
+// Combatant DISPLAY name (name + instance letter) + faction (scene-kind nibble) from the actor pool,
+// matching the BtlChr via *(actor+0x698)==bc. Returns the name (empty if not found / unprintable);
+// *ally set from kind. The one pool scan is what earns this helper its existence -- it answers name,
+// faction, position and dead-ness together -- but the NAMING inside it is BattleState's, not its own.
 // When posOut is non-null, also reads the unit's live world position (scene node, else actor cache)
 // and sets *havePosOut; fills *diagOut with both sources for the confirmation log.
 // *deadOut is set when the unit's scene-kind says it has been removed/killed (KIND_DEAD), so callers
@@ -144,9 +323,15 @@ std::wstring NameForBtlChr(void* bc, bool* ally, FVec3* posOut = nullptr, bool* 
     for (uint32_t i = 0; i < count; ++i) {
         void* actor = reinterpret_cast<char*>(base) + static_cast<size_t>(i) * ACTOR_STRIDE;
         if (PtrAt(actor, ACTOR_DEF_PTR) != bc) continue;
-        const uint8_t* codec = reinterpret_cast<const uint8_t*>(PtrAt(actor, ACTOR_NAME_STR));
-        std::wstring nm = GameText::Decode(codec, 128);
-        if (!GameText::IsMostlyPrintable(nm)) return std::wstring();
+        // ONE naming path for enemies. BattleState::DisplayNameForActor is NameForActor (actor+0x18,
+        // printable-gated) PLUS the instance letter from InstanceIndex -- the same helper `;` and `p`
+        // already call. This loop used to decode actor+0x18 inline, which is exactly why the
+        // targeting-menu highlight said "Steeling" while `;` said "Steeling B" for the same unit:
+        // two name paths, and only one of them ever grew the letter. Do not re-inline it.
+        // A lone enemy still has no letter -- InstanceIndex returns 0 and that is the correct answer,
+        // not a miss.
+        std::wstring nm = BattleState::DisplayNameForActor(actor);
+        if (nm.empty()) return std::wstring();
         void* sceneObj = PtrAt(actor, ACTOR_SCENEOBJ);
         uint8_t kind = 0xFF, def5 = 0xFF;
         SafeReadU8(sceneObj, SCENEOBJ_KIND, &kind);
@@ -172,18 +357,16 @@ std::wstring NameForBtlChr(void* bc, bool* ally, FVec3* posOut = nullptr, bool* 
 void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
     if (name.empty()) return;
 
-    uint32_t curHPu = 0, maxHPu = 0;
-    SafeReadU32(bc, BC_CURHP, &curHPu);
-    SafeReadU32(bc, BC_MAXHP, &maxHPu);
-    int32_t curHP = static_cast<int32_t>(curHPu), maxHP = static_cast<int32_t>(maxHPu);
+    std::wstring text = name + HpClause(bc, ally);
 
-    std::wstring text = name;
-    if (maxHP > 0) {
-        if (ally) {
-            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
-        } else {
-            text += L", " + PhraseFormat::Percent(Phrase::Id::HPPrefix, curHP, maxHP);
-        }
+    // AUTODETAIL: volunteer the full Libra readout behind the short line, never instead of it, and
+    // never as a second Speech::Output -- one utterance, so nothing can race it. OFF (the default)
+    // leaves this line byte-identical to what it has always been. There is deliberately NO
+    // "Libra not active" here: that answers the `o` KEY, and on a per-highlight line it would nag
+    // on every cursor move, which is exactly the filler the standing rule forbids.
+    if (ModMenu::AutoDetailOn() && !ally && LibraActive()) {
+        const std::wstring detail = LibraDetail(bc);
+        if (!detail.empty()) text += L". " + detail;
     }
 
     char utf8[256];
@@ -229,6 +412,7 @@ void* HookedSnapshot(void* bc, int p2, void* outBuf, int p4) {
     STALL_SCOPE("BattleTarget::HookedSnapshot");
     if (g_wantTargetBc && bc) {
         g_wantTargetBc = false;                 // take only the first (the target) per render
+        CacheWeakLabel();                       // game thread: the one place `o`'s label can be read
         bool ally = false; FVec3 pos; bool havePos = false; PosDiag pd;
         std::wstring name = NameForBtlChr(bc, &ally, &pos, &havePos, &pd);
         if (!name.empty()) {
@@ -392,6 +576,16 @@ bool ResolveTarget(ResolvedTarget& out) {
 bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
     ResolvedTarget t;
     if (!ResolveTarget(t) || !t.havePos) return false;
+    // AN ALLY IS ROUTABLE ONLY WHILE YOU ARE ACTUALLY AIMING AT ONE. The user's case for keeping it:
+    // *"too far away for a heal, track them with p until close enough"* -- so a LIVE ally selection
+    // is a legitimate destination and a blanket refusal (which this was, briefly) throws that away.
+    // What must not survive is a STALE one: the game's commitment record does not clear when the
+    // action that aimed at a party member finishes, so a leftover would otherwise keep routing to
+    // the leader's own party for the rest of the fight.
+    if (t.ally && !t.browsing && !t.acting) {
+        Log::Write("TARGET", "p: SILENT -- stale ALLY commitment (not browsing, not acting)");
+        return false;
+    }
     posOut = t.pos;
     labelOut = t.name;
     return true;
@@ -433,26 +627,77 @@ bool SpeakTargetStatus() {
         return false;
     }
 
-    uint32_t curHPu = 0, maxHPu = 0;
-    MemRead::SafeReadU32(t.bc, BC_CURHP, &curHPu);
-    MemRead::SafeReadU32(t.bc, BC_MAXHP, &maxHPu);
-    const int32_t curHP = static_cast<int32_t>(curHPu), maxHP = static_cast<int32_t>(maxHPu);
-
-    std::wstring text = t.name;
-    if (maxHP > 0) {
-        if (t.ally) {
-            // Allies show real numbers; enemies show a percentage, mirroring the gauge the game
-            // draws (there is no pre-Libra HP-visible flag to read).
-            text += std::wstring(L", ") + Phrase::Get(Phrase::Id::HPPrefix) + std::to_wstring(curHP) + L"/" + std::to_wstring(maxHP);
-        } else {
-            text += L", " + PhraseFormat::Percent(Phrase::Id::HPPrefix, curHP, maxHP);
-        }
+    // `;` NEVER REPORTS AN ALLY. User instruction, twice over: *"if not actively targeting an enemy,
+    // it should be no-op"*, then, after a build that still spoke on a BROWSED ally, *"; is still
+    // pinging an active target even when p says no target, and it's usually an ally."*
+    //
+    // The log says why a browsing test was not enough: `ResolveTarget: "Basch" BROWSING ally hp=14638
+    // havePos=1`, press after press. The select-UI browse state sits on a party member and stays
+    // there, so "browsing" is not the fleeting aim it sounds like -- it is the resting state. And
+    // because `;` returns TRUE when it speaks, every one of those presses consumed the key and the
+    // FIELD interact readout it falls through to (InteractTarget::SpeakCurrent) became unreachable.
+    // That is the actual harm: not a wrong word, a whole branch of the key silently deleted.
+    //
+    // So ally-ness is the test here, matching `o` (SpeakTargetDetail), which has refused allies from
+    // the day it was written. `p` keeps the softer rule on purpose -- routing to a party member you
+    // are aiming a heal at is useful, reading their HP over the interact prompt is not.
+    if (t.ally) {
+        Log::Write("TARGET", "; SILENT: target is an ALLY -- `;` answers for enemies only, "
+                             "falling through to the interact-target readout");
+        return false;
     }
+
+    std::wstring text = t.name + HpClause(t.bc, t.ally);
     // Mod-emitted qualifier, and ONLY for a real commitment that has not started executing. A
     // browsed target reaches here now, and it is neither acting nor queued -- calling it "queued"
     // would be a fabricated state. It gets no suffix, matching what this key said when it worked.
     if (!t.browsing && !t.acting) text += std::wstring(L", ") + Phrase::Get(Phrase::Id::Queued);
 
+    Speech::Output(text, /*interrupt=*/true);
+    return true;
+}
+
+// The `o` key, in battle. Returns TRUE only when it spoke, so MenuReader::DescribeHotkey can fall
+// through to the help text everywhere this has nothing to say -- the same first-refusal shape `;`
+// already uses with InteractTarget::SpeakCurrent.
+//
+// No enemy target => SILENT and false. `o` keeps every meaning it already had; a player pressing it
+// on a menu row is not asking about a monster.
+//
+// Enemy targeted but Libra down => "Libra not active." This is a USER-INSTRUCTED exception to the
+// never-speak-filler rule (granted 2026-08-10) and it is not filler: `o` is a direct question, and
+// silence here is indistinguishable from a broken mod. It fires on the KEY only -- the
+// per-highlight autodetail path in AnnounceTargetBc deliberately never says it.
+bool SpeakTargetDetail() {
+    ResolvedTarget t;
+    if (!ResolveTarget(t) || t.ally || !t.bc) return false;
+
+    if (!LibraActive()) {
+        Log::Write("TARGET", "o: Libra not active");
+        Speech::Output(Phrase::Get(Phrase::Id::LibraNotActive), /*interrupt=*/true);
+        return true;
+    }
+
+    // Baked falsifier for the whole Libra model, printed once per session. Bit 30 of
+    // (BtlChr+0x64 | +0x3C) is Libra by derivation, not by measurement -- if this ever names a
+    // different status, LibraActive() is reading the wrong thing and the feature must be pulled.
+    static bool s_loggedBit = false;
+    if (!s_loggedBit) {
+        s_loggedBit = true;
+        char b[128];
+        char nm[64];
+        Log::ToUtf8(BattleState::StatusName(30, /*includeSuppressed=*/true), nm, sizeof(nm));
+        snprintf(b, sizeof(b), "libra bit30 = \"%s\" (must be the game's own Libra)", nm);
+        Log::Write("TARGET", b);
+    }
+
+    std::wstring text = t.name + HpClause(t.bc, /*ally=*/false);
+    const std::wstring detail = LibraDetail(t.bc);
+    if (!detail.empty()) text += L". " + detail;
+
+    char utf8[320];
+    Log::ToUtf8(text, utf8, sizeof(utf8));
+    Log::Write("TARGET", (std::string("o: ") + utf8).c_str());
     Speech::Output(text, /*interrupt=*/true);
     return true;
 }

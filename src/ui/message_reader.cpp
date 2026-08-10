@@ -118,11 +118,54 @@ void SpeakAndStash(const std::wstring& text, const char* logPrefix) {
 // already substituted into the template's `0f 31` slots, so this is the final, ready-to-speak
 // string — no macro binding left to do. One fire per popup: the widget self-destructs on case 2
 // when its animation ends, so there is no pagination and no repeat.
-void OnItemPopup(void* widget) {
+void OnItemPopup(void* widget, void* msg) {
     if (!widget) return;
+
+    // THE REWARD-PANEL INSTRUMENT (Session 147). Print the DESCRIPTOR beside the composed text, once
+    // per fire, because those two disagreeing is the only way this surface can be silent while the
+    // hook is alive -- and until now the log could not tell the two apart.
+    //
+    // `msg+8` -> the descriptor the caller filled in (FUN_0035e070:53). Its shape, from the row loop:
+    //     +0x00 i16  title/mode     (`local_6e8[0] = (this == 0)`)
+    //     +0x04 i16  ROW COUNT      (the loop bound: `0 < psVar2[2]`)
+    //     +0x08 u8   layout flags   (bit 0 picks the bordered multi-row panel over the plain toast)
+    //     +0x0C      ROW ARRAY, stride 8: i32 kind (0 = item, 1 = gil), then for kind 0 the item id
+    //                in the low half and the QUANTITY at +6; for kind 1 the raw amount, suffixed
+    //                with message 0x833.
+    //
+    // ⚠ THIS FUNCTION IS THE MULTI-ITEM REWARD PANEL. debug.md's S72 entry says "it is NOT the
+    // single-item obtained toast the mod already reads" and that is STRUCK: it is exactly this
+    // function. A row loop, a separate quantity field and a gil kind are all right here -- the
+    // reader was simply only ever exercised on one-item pickups, and nobody had read the body.
+    void* d = nullptr;
+    if (msg && MemRead::SafeReadPtr(reinterpret_cast<char*>(msg) + 8, &d) && d) {
+        int16_t mode = 0, rows = 0;
+        uint8_t flags = 0;
+        MemRead::SafeReadS16(d, 0x00, &mode);
+        MemRead::SafeReadS16(d, 0x04, &rows);
+        MemRead::SafeReadU8(d, 0x08, &flags);
+        char b[192];
+        int n = snprintf(b, sizeof(b), "reward panel: mode=%d rows=%d flags=0x%02X |", mode, rows, flags);
+        for (int i = 0; i < rows && i < 8 && n > 0 && n < static_cast<int>(sizeof(b)); ++i) {
+            int32_t kind = 0, payload = 0;
+            int16_t qty = 0;
+            MemRead::SafeReadInt(reinterpret_cast<char*>(d) + 0x0C + i * 8,     &kind);
+            MemRead::SafeReadInt(reinterpret_cast<char*>(d) + 0x0C + i * 8 + 4, &payload);
+            MemRead::SafeReadS16(d, 0x0C + i * 8 + 6, &qty);
+            n += snprintf(b + n, sizeof(b) - n, kind == 1 ? " [gil %d]" : " [item %d x%d]",
+                          kind == 1 ? payload : (payload & 0xFFFF), qty);
+        }
+        Log::Write("MSGTEXT", b);
+    }
+
     const uint8_t* p = reinterpret_cast<const uint8_t*>(widget) + OFF_POPUP_TEXT;
     std::wstring text = GameText::Decode(p, POPUP_TEXT_CAP);
-    if (!GameText::IsMostlyPrintable(text)) return;
+    if (!GameText::IsMostlyPrintable(text)) {
+        // Say WHY it went quiet. A composed buffer that decodes to nothing is a DIFFERENT defect
+        // from a hook that never fired, and without this line they are the same silence.
+        Log::WriteW("MSGTEXT", "reward panel: composed text unreadable, staying silent. raw: ", text);
+        return;
+    }
     SpeakAndStash(text, "item: ");
 }
 
@@ -174,7 +217,7 @@ uintptr_t HookedItemPopup(void* widget, void* msg) {
     if (msg && MemRead::SafeReadInt(msg, &msgCase)) {
         if (msgCase == 1) {                       // case 1 = build/compose
             g_toastLive.store(true, std::memory_order_relaxed);
-            OnItemPopup(widget);
+            OnItemPopup(widget, msg);
         } else if (msgCase == 2) {                // case 2 = the animation ended, widget self-destructs
             g_toastLive.store(false, std::memory_order_relaxed);
         }

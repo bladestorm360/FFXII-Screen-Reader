@@ -55,6 +55,9 @@ const Row kTable[] = {
     EN(L"Level "), EN(L"HP "), EN(L"MP "), EN(L"LP "), EN(L"EXP "), EN(L"Next "),
     EN(L" of "), EN(L" percent"), EN(L"queued"),
 
+    // -- The one Libra word. USER-AUTHORIZED 2026-08-10 (S147).
+    EN(L"Libra not active."),
+
     // -- Field menu, Party screen (portrait position + alpha dim only; no string exists). USER-AUTHORIZED.
     // POSITIONAL TABLE: these two must sit at the SAME index as in phrasebook.h's enum. The
     // static_assert only checks the COUNT, so inserting at the wrong offset silently shifts every later
@@ -115,13 +118,13 @@ const Row kTable[] = {
     EN(L"Off never moves the character."),
     EN(L"On walks the route automatically after the route key. Combat, menus, or your own movement stop it instantly."),
     EN(L"Auto-walk stopped."),
-    // S130: font-atlas variant. Flag the wording to the user before rewording.
-    EN(L"Text glyphs"),
-    EN(L"Which font the game is running. Set this to match your install, or accented letters will be read as the wrong letter."),
-    EN(L"Standard"),
-    EN(L"Polish translation"),
-    EN(L"Standard is the unmodified game, in any language it shipped in."),
-    EN(L"Polish translation is the PL fan patch, which reuses accented letter slots for Polish ones."),
+    // (S130's six Text-glyphs rows were removed in S147. The font variant is DETECTED from the
+    // loaded atlas now, so there is no row to name and nothing for the player to decide.)
+    // S147: autodetail. User-approved 2026-08-10; flag the wording to the user before rewording.
+    EN(L"Auto detail"),
+    EN(L"Whether the extra detail about the highlighted thing is read out on its own, or only when you ask for it."),
+    EN(L"Off reads the detail only when you ask: the equipment columns on 4 to 9, and Libra on the describe key."),
+    EN(L"On also reads it as you move: the equipment comparison in a shop, and the Libra readout on a targeted enemy. Both still answer the keys as well."),
     // (S106's four sneak-assist rows were removed in S115. The feature became automatic on the
     // danger-table maps, so it has no menu row and no words -- and an unused row here would be an
     // invented label waiting to be re-used for something it was not written for.)
@@ -150,6 +153,8 @@ const Row kTable[] = {
     EN(L"Whether one shout finishes the shouting puzzle in Bhujerba."),
     EN(L"Off plays the puzzle as the game wrote it."),
     EN(L"On fills the meter on your first shout, and the scene continues from there."),
+    // The summoned Esper's duration gauge (S148). Trailing space: a PREFIX, like HPPrefix above.
+    EN(L"Summon gauge "),
 };
 
 #undef EN

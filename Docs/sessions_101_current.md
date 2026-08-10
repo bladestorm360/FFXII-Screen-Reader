@@ -3964,3 +3964,341 @@ FUN_0031eb20 case 0xB FUN_002f95d0 per-actor MP FUN_00309ec0 FUN_003093b0 rec+0x
 Technicks silent FUN_0027ce70 shared by items listKind 0xB for BOTH cannot discriminate STRIKES
 FUN_0027e530 item draw S143 field quantity struck calls=1 was the title screen identify by the branch
 that wrote the field MP on highlight autodetail exception**
+
+## Session 147 — 2026-08-10 — The tester's report list: five fixes, two instruments, one negative result
+
+**KEYWORDS: TesterReports.txt status screen R1 L1 FUN_002c2c50 instance letter DisplayNameForActor
+libra FUN_0030c300 0x10F68 bit30 o key LibraNotActive autodetail F7 ModMenu polish diacritics
+automatic DetectVariantOnce font00.dat advance width fingerprint text glyphs removed exit
+reachability bit23 ReachableStrict terrain strict hunt reward FUN_0035e070 descriptor row quantity
+gil power conduit interactables friction log corpus tester logs elemental weakness negative result
+status timer 0x17C struck**
+
+Worked from `TesterReports.txt` (seven items; controller support excluded by the user), plus two
+requirements the user added mid-session and one more after that.
+
+### Shipped
+
+1. **Status screen follows L1/R1.** The character cycle happens inside `FUN_002c2320` category `0xa`
+   — per-frame input, which the reader filters out on purpose — so nothing ever observed it and the
+   virtual buffer kept the previous character's pre-rendered strings. The EVENT is `FUN_002c2c50`
+   (RVA `0x1A2C50`, `void(uint32_t)`): the two cycle handlers call it only when `menuCtx+0xDE0`
+   actually moved, and it is the screen's own refresh, so by the time the original returns every
+   field `BuildBuffer` reads describes the new character. Three call sites in 33,105 functions; the
+   third is cat-1 CREATE and is a no-op by construction under the existing `g_active` gate.
+2. **The instance letter reaches the targeting menu.** `battle_target_reader.cpp` had TWO enemy-naming
+   paths: `ResolvedTarget` used `BattleState::DisplayNameForActor` (letter) while the local
+   `NameForBtlChr` decoded `actor+0x18` inline (no letter) — and the latter is what the highlight
+   announce runs on. `;` said "Steeling B" while the target cursor said "Steeling". One path now.
+   The machinery was correct the whole time; it was never called.
+3. **Libra, on `o`.** `LibraActive()` = `*(u32*)(P + 0x10F68) & 2`. `HpClause()` is now the single HP
+   choke point (ally OR Libra ⇒ numbers), and `SpeakTargetDetail()` adds Level, MP (behind the game's
+   own MP-gauge guard) and statuses. `o` tries it first and falls through to the description bar, the
+   same first-refusal shape `;` uses. With no enemy targeted it is silent and `o` is unchanged.
+4. **Autodetail on `F7`** + an `F8` row, default Off, built to the `Controls.md` spec. Two consumers,
+   each appending to its surface's existing line rather than speaking again: the shop's per-character
+   comparison, and the Libra readout. `4`-`9` and `o` answer identically in both modes.
+5. **The Polish glyph mapping is automatic** and the `Text glyphs` row is gone.
+
+### Two instruments, deliberately not fixes
+
+6. **Exit reachability.** `NavReach` gained a second flood that refuses `TerrainRefused` polys,
+   published as `ReachableStrict` and read only by the routability line (`terrain=`, `strict=`).
+   Nothing filters on it. The decision rule for promoting it is written into `nav_reach.h`.
+7. **The hunt-reward panel.** The descriptor at `msg+8` is now logged per fire (mode, row count,
+   layout flags, and each row as `[item N xQ]` / `[gil N]`), and an unreadable composed buffer says so
+   instead of returning silently.
+
+### Findings
+
+- **THE LIBRA FLAG IS ON A PARTY MEMBER, NOT ON THE ENEMY.** Session 32 searched the enemy's BtlChr,
+  rejected status bit `0x10000` (correctly — it is the forced-max-display bit), and concluded no flag
+  existed. `FUN_0030c300` walks the nine party slots and returns 1 when any living member carries bit
+  30 of `(bc+0x64 | bc+0x3C)`; `FUN_0028e290` mirrors it into `P+0x10F68` bit 1 every frame. **A
+  search that fails tells you about the place you searched, not about the thing.**
+- **"AUTODETECTION IS NOT AVAILABLE" WAS A CLAIM ABOUT THE DISK.** S130 established that the PL patch
+  repacks the VBF in place and leaves no marker — true, and beside the point, because the thing being
+  detected is which atlas the GAME LOADED. S130 even wrote the marker down without recognising it:
+  the patch *"adjusts ten advance widths"*. Twenty differing bytes, ten records, and that is a
+  fingerprint. **When a fact is recorded as a side note in the sentence that declares something
+  impossible, read the side note again.**
+- **THE REWARD PANEL WAS THE FUNCTION WE ALREADY HOOKED.** S72 wrote *"it is not the single-item
+  obtained toast the mod already reads"* — from the mod's one-line USAGE of `FUN_0035e070`, not from
+  its body. The body has a row loop, a separate quantity field and a gil kind. **A claim about what a
+  function is, derived from how we happen to call it, is not a measurement** — and this one stood for
+  75 sessions as a reason not to look there.
+- **A NEGATIVE RESULT IS ONLY AS GOOD AS THE SHAPE YOU SEARCHED FOR.** This session first reported
+  *"enemy elemental weaknesses are not obtainable, and the game does not show them either"* — both
+  false, and the user corrected it. The three checks behind it were all TRUE and all irrelevant: they
+  asked about a four-mask QUARTET and about a field on the ENEMY RECORD, and the answer is one byte
+  on the BtlChr (`+0x40`), already arriving in the vitals snapshot this mod's own hook receives.
+  The rule now: **when a search comes back empty, re-derive what the DISPLAY reads** — the game draws
+  it, so something reads it. Two hops back from `FUN_00295d90` was the whole answer, in minutes.
+  A second failure sits inside the first: the conclusion was propped up by a claim about what the GAME
+  SHOWS, written from recollection rather than from the draw call. **That needs the same evidence as
+  an offset does**, and dressing an offset-level negative in a design rationale is what made it feel
+  finished. Weakness now SHIPS, Libra-gated, and suppressed for the `????` marks and bosses.
+- **A COUNTER THAT NEVER FIRED IS EVIDENCE ABOUT THE SESSION, NOT THE CODE.** The reward reader's
+  init line appears in all twenty dev logs and its fire line in none — which says the surface was
+  never visited, not that the reader is broken. Same shape as the S143 `calls=1` mistake, caught this
+  time before anything was instrumented for a bug that may not exist.
+- **THE LOG CORPUS.** `<game>\x64\logs\` is ours and is the default evidence; `Tester Logs\` needs a
+  reported issue AND an explicit pointer from the user. This session reached for the tester folder
+  first and concluded the reachability defect was "not measurable from any archived log" — while it
+  sat in nineteen of our own twenty. Now a rule in `CLAUDE.md`.
+
+### Struck this session
+
+- `GameArchitecture.md` battle-target block: ~~"no Libra HP-visible flag found"~~ (the rejection of
+  `0x10000` stands; the conclusion does not).
+- `game_glyphs_pl.h`, `game_text.h`, `Controls.md`: ~~"autodetection is not available / selection is
+  a player setting"~~.
+- `debug.md` S72: ~~"it is not the single-item obtained toast the mod already reads"~~.
+- `notes\combat_re_2026_07_20_damage.md:302`: ~~"`+0x42..+0x51` resistance/affinity overrides"~~ —
+  they are per-status countdown timers (0.99, producer and consumer agree).
+- `Controls.md`: the `F7` reservation is spent, and the autodetail section is no longer "unbuilt".
+
+### Owed
+
+- **NEXT SESSION: killed enemies never leave the entity list.** Reported in play 2026-08-10, after
+  Libra was confirmed working. Two independent defects, both written up in `debug.md` § "OPEN —
+  killed enemies never leave the entity list": the field scan has no HP test and its `KIND_DEAD` skip
+  measures **zero in 602 rescans across all 20 dev logs**, so nothing drops a corpse; and even if the
+  pool stopped reporting it, `RefreshPositionsLocked` re-stamps `lastSeenMs` every frame for any
+  readable transform, so the 2 s grace window can never expire. The instrument comes first — no dev
+  log contains a kill.
+- Play-confirm all five fixes.
+- **The weakness clause needs BOTH halves of its gate exercised**: an ordinary enemy with Libra up
+  must name elements that match the icons on screen, and a MARK or BOSS with Libra up must say
+  nothing about weakness (and read HP as a percentage, because the game blanks its digits too). If a
+  weakness is spoken there, `LibraSuppressed` has the wrong bit and the clause comes out until it is
+  right — over-revealing is worse than not reading.
+- **One Garamsythe pass** (East Spur Waterway → Central Spur Stairs, → No. 10 Channel) to settle the
+  routing half of the reachability question and to see `strict=` disagree with `reach=`.
+- **One hunt reward** to make the panel's descriptor line print.
+- The Polish defect still needs the TESTER's log, on the tester's patched install, with the user
+  pointing at it.
+
+## Session 148 — 2026-08-10 — The tracker's second writer, the Esper's own field, and one word too many
+
+**KEYWORDS: dead enemy eviction lastSeenMs RefreshPositionsLocked grace window carried evicted
+esper summon BtlWork 0x5AD4 0x5B04 gauge key 8 SpeakEsper ReadBtlChr status screen Regen ailment
+focus StatusReader TryFocus claim block HP gate struck stale pointer**
+
+Three items the user carried in from S147, each with their own play evidence behind it.
+
+### 1. Killed enemies never left the entity list — and the S147 diagnosis was half wrong
+
+**The user struck the proposed fix before it was built:** *"the entity itself disappears, so there's
+no need to hang on to it… you just need to ensure the live delta is tracking and getting rid of
+stale entities. HP gate is the wrong solution."* They were right.
+
+`lastSeenMs` had **two writers**. `RescanLocked` stamped everything the scan produced — correct — and
+`RefreshPositionsLocked` stamped anything whose transform still read, which is every nav hotkey
+press. A killed enemy leaves the scan, gets carried by the grace window, and its carried copy keeps a
+**stale scene-object pointer** that still reads against memory the engine has released but not
+recycled. So the second writer re-stamped it forever and the 2 s window could never expire.
+
+Fix: `RefreshPositionsLocked` now skips any entity the latest scan did not produce (`lastSeenMs !=
+g_lastScanMs`) — no read, no stamp, keep the last known position. One writer again. That also stops
+the mod dereferencing a dangling pointer for two seconds, which nobody had noticed because the first
+defect hid it.
+
+**What S147 got wrong, and it is worth keeping:** it asserted *"a corpse is a live scene object with
+a perfectly readable transform"* — from recollection, not measurement — and everything else followed
+from that. Same observable, opposite mechanism, and the mechanism is what picks the fix: an object
+the engine still owns argues for asking it whether it is alive; a dangling pointer argues for not
+consulting it at all. **S147's own lesson, applied to S147: a claim about what the engine keeps alive
+needs the same evidence an offset does.** Dressing it in a design rationale — "and here is the ally
+caveat for the HP gate" — is what made it read as finished.
+
+The instrument was wrong for the same reason. S147 specified `N combatant(s) admitted with curHP==0`,
+which would have measured zero forever. What shipped counts what the merge actually did:
+`[NAV] grace: carried=N evicted=N filtered=N`, silent when all three are zero. **An instrument must
+report what the code does, not what the hypothesis predicts** — that one survives the theory being
+struck.
+
+Kept deliberately: the inert `KIND_DEAD` skip (removing it is a separate unmeasured change) and
+`WasFilteredThisScan`, whose justification is now the right one — the filters delete a LIVE object the
+scan keeps finding, so without an explicit signal every rescan re-admits it.
+
+### 2. The summoned Esper reads on `8` — found by reading the WRITER, not by hunting slots
+
+The screenshot settled the display question the user asked: the Esper's HP is drawn **as numbers**
+(`Belias 9999 9999`), the same two-number row as the party member above it, not a bare bar.
+
+It is in **no roster slot at all**, which is why `4`-`7` could never reach it. From the summon-commit
+`FUN_00306760` (action class `DAT_022c215c == 1` = the thirteen Espers), conf 0.98:
+
+```c
+*(u32*)(W + 0x5B04) |= 1;                    // summon-mode bit
+*(u8 *)(W + 0x5AD4) = actionRec[0x26];       // the ESPER's BtlChr index
+*(float*)(W+0x5AD8) = *(float*)(W+0x5ADC) = FUN_002fa0e0(summonerBc, esperIdx);   // gauge cur/max
+```
+
+What pins `0x5AD4` as a BtlChr index is the line below it: the same byte goes to `FUN_00320a40`,
+whose whole body is the BtlChr-array arithmetic the mod already uses. **Read the mode bit first** —
+the index is not cleared on dismiss, only the bit is.
+
+`PartyStatus::ReadSlot` split into `ReadBtlChr` + a thin wrapper, and `SpeakSlot`'s wording moved into
+one `SpeakVitals` so the Esper line cannot drift from the party line. `8` keeps its existing priority
+chain, so the shop comparison is untouched, and it is silent with no Esper out.
+
+**The general lesson: the writer of the state names the state.** The obvious route was to hunt the
+five roster lists (`FUN_0031b9f0`, `W+0x5A48/5A5A/5A6C/5A7E/5A90`, nine u16 each) for whichever one
+gains an entry during a summon — a probe, a play session, and an answer good only until some other
+mode used the same slot. Reading the commit function instead gave a named field and its lifetime in
+one pass. **A slot hunt is what you do when you have not found the writer yet.**
+
+The gauge's **unit is deliberately not asserted**: `FUN_002fa0e0` returns a per-Esper constant
+(master record `+0x32`) stored into both halves of the pair, so the decompile says how big the gauge
+is and nothing about what depletes it. One phrasebook word (user-authorized this session), naming the
+gauge and claiming no unit, with the raw float pair logged on every press so one watched summon can
+sharpen it.
+
+### 3. "Regen" cut off the character name on the Status screen
+
+S147's L1/R1 fix worked; the log had the rest verbatim, same millisecond, every switch: `[STATUS]
+page: "Balthier"` then `[READER] item: "Regen"`, both `interrupt=true`. `FUN_002c2c50` refills the
+ailment grid as part of the refresh, the game re-fires focus index 0 on that pane, and the **generic**
+menu reader spoke it over ours. **Two speakers, two policies, one surface — the notice board again,
+and again neither speaker looks wrong on its own.**
+
+`StatusReader` had no claim predicate at all. Added `StatusReader::TryFocus` to `menu_reader.cpp`'s
+one claim block, claiming a **one-shot** armed by `HookedStatusRefresh` after it announces. It is a
+transition latch, not dedup: the ailment pane is player-navigable (the archive reaches `index=1`), so
+it keeps speaking under the player's own cursor, and the latch disarms on the first focus event of any
+kind and on `Deactivate`. Every consumption logs `ailment focus swallowed:` with both the pane and the
+ailment-grid pointer, so a later session can tighten the one-shot into a structural test if they
+always match.
+
+### PLAY RESULT, same day — item 1 is NOT fixed, and the counter is why we know
+
+**`[NAV] grace: carried=0 evicted=0 filtered=2`**, once in a whole session, with `Enemy=1` across 25
+rescans and a dismissed Belias still answering `]` 13 s later. **`carried=0` means the grace window
+never saw these entities** — the scan produces them every time. The second-writer fix is real and
+stays; it is simply not what was holding them.
+
+**So S147's first half was right and my replacement premise was wrong the same way S147's was.** Both
+sessions named a mechanism that fit the symptom and neither measured it first. The difference this
+time is that the counter shipped alongside the fix, so one press falsified it instead of another
+session. **That is the whole argument for the instrument, and it just paid for itself against its own
+author.**
+
+Candidate now MEASURED ONLY (`entity_scan.cpp`, filters on nothing): `sceneObj+0x14` bit `0x40` reads
+clear for the defeated Hyena and four never-spawned reserve slots, set for the live party, a live
+Giza Rabbit **and Belias**. Treasures read `0x70` and list correctly, so it can only ever be a
+combatant test. It does not explain Belias; that needs a dump taken while an Esper is summoned,
+diffed against one after dismissal.
+
+### Also shipped after the first play round
+
+- **Config `Battle Speed` spoke mojibake** (`Battle Speed: æÏèêïêäæÍUÍÒ`) while every other row on
+  that screen read correctly — so NOT the glyph table, and not the Polish mapping. The row classifies
+  as one of the three enum builders but has no per-option strings; the log proved it by producing the
+  **identical bytes for two different option indices** on the value-change path. `config_reader.cpp`
+  now refuses a row whose options are not distinct and logs its class + raw bytes. Note the guard that
+  should have caught it: `IsMostlyPrintable` was widened in S130 to count Latin-1 accented characters
+  so French/Polish text survives — which is exactly why an all-accented garbage run now scores 100%.
+- **`;` and `p` were locked onto an ally.** The game's commitment record does not clear when an action
+  aimed at a party member finishes, so `;` answered "Basch" forever — and since it returns TRUE when
+  it speaks, the FIELD interact readout it falls through to became unreachable. `;` now reports an
+  ally only while `browsing` or `acting`; `p` refuses allies outright.
+
+### Built, deployed, NOT yet play-confirmed
+
+All three need the same session: kill several enemies and watch `evicted=` go non-zero and `carried=`
+return to zero; summon an Esper and press `8`, then again as the gauge runs down (the `PARTY` log's
+`gauge=%.2f/%.2f` is what settles the unit); switch characters on the Status screen and confirm the
+name completes, then navigate the ailment pane by hand and confirm it still speaks.
+
+### S148 round 3 — the tracker, answered from two `'` dumps and a counter
+
+**Party members were listed because the drop hung off the ACTOR POOL.** `FactionOf(poolActor)` needs
+the object to be in the pool, and it usually is not: in one field session the own-party drop fired in
+**4 rescans out of 26**, with `actorPool=0 poolAnswered=0` in six of them. `]` walked the player
+through "Vaan. Northeast, 2 steps". Replaced by a pool-independent test in the handle-table walk
+itself — `BattleState::PartySceneHandles` reads the battle-work party table (the one `GambitsEnabled`
+already walks) and the handle decomposes to the `(container, slot)` the walk is standing on
+(`selector = (h>>16)&0xF`, `slot = h&0xFFFF`; generation deliberately ignored). The pool route stays
+as a second net. **A drop that only works when an unrelated subsystem happens to be populated is not
+a drop.**
+
+**The Esper survived dismissal because nothing about it changes.** Two `'` dumps — one while Belias
+was summoned, one 13 s after "Dismiss Belias? Yes" — are **identical in every field the mod reads**:
+`kind=8 en=1 flags=00030800 r14=F0`, only the position differs. So no liveness test could ever have
+caught it, the `0x40` candidate does not fire on it, and the question was never "is it still alive"
+but "why is it listed at all". Answer: it is admitted by NAME, and its scene KIND is **8** — which
+`FUN_0025bad0`, the engine's own near-object candidate filter (0.99, already in `nav_rva.h`), accepts
+none of. The engine never offers a kind-8 object to the player. Named characters on a kind outside
+`{1,4,5,7}` are now dropped unless the engine is actively offering an interaction on them.
+
+**`;` now refuses allies outright.** A browsing test was not enough: `ResolveTarget: "Basch" BROWSING
+ally havePos=1`, press after press — the select-UI browse state RESTS on a party member. And because
+`;` returns TRUE when it speaks, every press consumed the key and the field interact readout became
+unreachable. **The harm was not a wrong word, it was a whole branch of the key silently deleted.**
+`p` keeps the softer rule (ally allowed while browsing/acting) because routing to an ally you are
+aiming a heal at is the user's own stated use for it.
+
+**Party HP `14638/7319` is CORRECT — no change.** The screenshot shows `Basch 9999 7319` and
+`Belias 9999 9999`; the mod reads `14638/7319` and `12786/12786`. Both rows reconcile under one rule:
+the HUD caps each number at 9999. So the game itself draws current over max, Bubble does not raise
+the stored max, and per the user's own test ("if current was over max in the screenshot, leave it")
+nothing is wrong. Two rows agreeing under one rule is also an independent check that `BC_CURHP` and
+`BC_MAXHP` are the right offsets.
+
+### S148 round 4 — the stale-entity pruner, and the HP display clamp
+
+**Play-confirmed by the user:** party members and the Esper are out of the tracker; the HP clamp is
+correct (Belias capped at 9999, verified with sighted help). Remaining at that point: defeated
+enemies still listed.
+
+**The tracker fix, third diagnosis and the right one.** The user rejected the frame twice — first
+*"HP gate is the wrong solution"*, then *"you're still tracking it as if kills matter, when what we
+want is a stale entity pruner"*. `sceneObj+0x14` bit `0x40` is a PRESENCE flag: set for live party,
+live enemies **and treasure chests**, clear for a defeated enemy and for never-spawned reserve slots.
+Treasures keeping it set is what makes it general — one test prunes a corpse, a departed NPC, a
+consumed chest and a cleared trigger. Applied in BOTH walks: the pool walk only sees what the handle
+walk did not list, so pruning in one alone re-admits through the other. Measured before it shipped
+(0 before a kill, 1 across 35 rescans after), and every prune names itself in the log.
+
+**Three diagnoses: an HP gate, a stale pointer, a presence bit.** The first two were mechanisms that
+fit the symptom and were never measured. **Neither was wrong about a fact; both were wrong about the
+QUESTION.** "Why does a dead enemy stay?" admits no good answer — it invites a kill detector.
+"Why does anything stay?" admits exactly one.
+
+**The HP display clamp — `FUN_002fef30`.** The mod spoke `14638/7319` where the party screen draws
+`9999/7319`. Not a bad offset: verified against a Status-screen screenshot (independently read by a
+sighted third party) covering all six characters, `+0x24` matched the MAX column **6/6 exactly** and
+`+0x48` matched the HP column exactly on the three without the `HP x2` licence augment, reading `2x`
+max on the three with it. The clamp was simply missing. Shipped as `BattleState::DisplayHp`, applied
+to **both** halves of every spoken pair — clamping only the current would have said "9999 of 7319",
+and the Esper "12786 of 9999". Cap is party-side only (`BC_KIND == 0` → 9999, else 1e9), so a boss
+over 9999 HP still reports its real number.
+
+**The 20% low-HP latch — RESOLVED as a decision, not a calculation.** With `HP x2` the current sits
+above max, so the ratio starts near 200% and the warning fires at 10% of what the character can
+actually absorb. The user worked the alternatives and chose: *"you might just have to do 20% of max
+hp regardless… that way when current HP does drop to 20% of max HP the low HP warning will still
+fire."* An overmax buffer is a temporary cushion on top of your max, not a bigger pool to re-scale
+against.
+
+**`BC_MAXHP` is the right denominator, and that is now settled rather than assumed.** Called as
+`FUN_002fef30(bc, 0, 0)`, the clamp function defaults its output pointer to **`param_1 + 0x24`** — so
+`+0x24` is that function's own result: base plus twelve equipment/licence sources, already through
+the party-side 9999 clamp. It is the game's computed max, not a raw stat. That also retro-justifies
+the display clamp: the same function produces the number and the cap.
+
+The comparison was rewritten to be *correct* for `post > denom` rather than to prevent it (a multiply
+instead of a divide, exact at the boundary), with a comment naming the two "fixes" a future reader
+will be tempted by.
+
+**Corrected in the same round:** the first version widened that multiply to int64 and justified it
+with "a boss with tens of millions of HP cannot overflow it". The user: *"low HP shouldn't be firing
+on enemies… this only ever fires for player characters."* Correct — the test is inside the `party`
+branch and no enemy ever reaches it. **A justification for a case the code cannot enter is not a
+weaker argument, it is a false one**, and it was the same dress-a-claim-in-a-rationale habit this
+session had already struck twice elsewhere. The comparison now lives inside the party branch where
+its bounds are self-evident (max <= 9999 by the game's own clamp), and the comment says so. The
+one-shot status-name dump was **removed** — the decision made its question moot, and an instrument
+with no question left is dead weight.

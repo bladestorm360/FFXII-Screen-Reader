@@ -1,5 +1,7 @@
 #include "ui/shop_reader.h"
 #include "ui/inventory_reader.h"
+#include "ui/equip_compare.h"          // the per-character comparison autodetail volunteers
+#include "ui/mod_menu.h"               // AutoDetailOn
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -128,6 +130,26 @@ void OnShopHighlight(void* container) {
 
     std::wstring line = name + L", " + std::to_wstring(price) + Phrase::Get(Phrase::Id::GilSuffix) + L", "
                       + std::to_wstring(inv) + Phrase::Get(Phrase::Id::InInventorySuffix);
+
+    // AUTODETAIL (S147). With it ON the per-character equipment comparison volunteers itself here
+    // instead of waiting for `4`-`9`. Appended to THIS line rather than spoken separately, because
+    // this reader is the surface's one emit point and a second speaker would race it -- that race is
+    // exactly how the notice board lost its Status column.
+    //
+    // OFF is the default and leaves this line byte-identical to what it always was. The keys keep
+    // working in BOTH modes: EquipCompare::LineFor is what `4`-`9` call too, and neither of them
+    // consults this setting.
+    //
+    // Columns that resolve to nothing (a character who cannot equip it, an empty slot) return an
+    // empty string and are simply skipped -- silence, not "column 4: nothing".
+    if (ModMenu::AutoDetailOn() && EquipCompare::IsLive()) {
+        const int cols = EquipCompare::ColumnCount();
+        for (int n = 1; n <= cols; ++n) {
+            const std::wstring col = EquipCompare::LineFor(n);
+            if (!col.empty()) line += L". " + col;
+        }
+    }
+
     Log::WriteW("SHOP", afterCategory ? "item (queued):" : "item:", container, line);
     Speech::Output(line, /*interrupt=*/!afterCategory);
 }

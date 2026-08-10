@@ -29,6 +29,35 @@ void* Work();
 void* BtlChrForSlot(int slot);
 constexpr int kRosterSlots = 9;
 
+// ---- the summoned Esper ------------------------------------------------------------------------
+// An Esper is NOT in roster list 3, which is why keys 4-7 can never reach it: it gets its own HUD
+// row (bit 0x800 of DAT_02089340, gated on FUN_003135c0) and its own field on BtlWork.
+//
+// From the summon-commit function FUN_00306760, action class DAT_022c215c == 1 -- the Esper-summon
+// class, action ids 0x106..0x112, i.e. exactly the thirteen Espers (confidence 0.98):
+//
+//   *(u32*)(W + 0x5B04) |= 1;                          // summon-mode bit; FUN_003135e0 reads it,
+//                                                      // and case 2 (dismiss) clears it again
+//   *(u8 *)(W + 0x5AD5) = summonerBtlChr[0x04];        // control index := the SUMMONER's charId
+//   *(u8 *)(W + 0x5AD4) = actionRec[0x26];             // <-- the ESPER's BtlChr index
+//   *(float*)(W + 0x5AD8) = *(float*)(W + 0x5ADC) = FUN_002fa0e0(summonerBc, esperIdx);
+//
+// What pins 0x5AD4 as a BtlChr INDEX rather than a master-data id is the use right below it: the
+// same byte is handed to FUN_00320a40, whose entire body is `idx < 0x28 ? W + 8 + idx*0x1C8 : 0` --
+// byte for byte the BtlChr-array arithmetic BtlChrForSlot already uses.
+//
+// Null unless an Esper is actually out. Every caller must stay SILENT on null, never announce
+// "no Esper" -- the standing no-filler rule, same as key 7 with no guest.
+void* EsperBtlChr();
+
+// The Esper's duration gauge -- the lightning icon and pips drawn beside its HP on the HUD.
+// W+0x5AD8 current, W+0x5ADC max, both floats, both seeded at summon from FUN_002fa0e0 = byte +0x32
+// of the per-Esper master record. THE UNIT IS NOT ESTABLISHED by the decompile: +0x32 is a per-Esper
+// constant and nothing in the read path says whether it counts down with time or with actions. Do
+// not name it in speech as though it were either. False when no Esper is out or the pair is
+// unreadable.
+bool EsperGauge(float* cur, float* max);
+
 // ---- the party leader ------------------------------------------------------------------------
 // FUN_00327150 reimplemented. `*(u8*)(W + 0x5AA4)` is the leader's BtlChr index.
 // This REPLACES the `*(u8*)(bc + 5) == 0` test, which matches every roster character, not the
@@ -71,6 +100,47 @@ std::wstring CharacterName(uint8_t charId);
 // copies bit 2 -> party-record bit 7, `<< 5`), and the field gambit screen FUN_00567b60 stores the
 // same getter's result as its master on/off.
 bool GambitsEnabled(uint32_t sceneHandle, bool* outResolved);
+
+// ---- THE GAME'S OWN HP DISPLAY CLAMP -------------------------------------------------------------
+// Every HP number the mod speaks goes through here. Replicates FUN_002fef30 (abs 0x2FEF30, RVA
+// 0x1DEF30), which ends:
+//
+//     cVar9 = *(char *)(btlChr + 5);            // BC_KIND -- 0 = party side
+//     if (value < 1) out = 1;
+//     else { cap = 1000000000; if (cVar9 == '\0') cap = 9999;
+//            out = (cap < value) ? cap : value; }
+//
+// `param_1` is a BtlChr on two independent counts: `+0x05` is the field phyre_types.h already
+// documents as "0 = party side", and a few lines up the same function tests `charId - 0x1B < 0xD` --
+// the exact guest range battle_state.cpp already carries. Confidence 0.99.
+//
+// WHY IT MATTERS. Bubble doubles CURRENT HP in memory without touching the stored max, so a bubbled
+// level-99 character reads e.g. 14638/7319 while the party screen draws 9999/7319. Verified against
+// a Status-screen screenshot on all six characters at once: the mod's `+0x24` matched the MAX column
+// exactly 6/6, and `+0x48` matched the HP column exactly on the three WITHOUT the `HP x2` icon and
+// read exactly 2x max on the three WITH it. The offsets were never wrong; the clamp was missing.
+//
+// THE CAP IS PARTY-SIDE ONLY, which is the whole reason to take the game's selector rather than
+// hardcode 9999: an enemy gets 1e9, i.e. no clamp, so a boss with more than 9999 HP still reports
+// its real number.
+//
+// THE FLOOR IS DELIBERATELY NOT REPLICATED. `if (value < 1) out = 1` belongs to that function's
+// max-HP recompute, where a max of zero is meaningless. Applied to CURRENT hp it would turn a KO'd
+// character into "1 HP" -- a number the player would act on. A dead ally must read 0.
+int32_t DisplayHp(void* bc, int32_t value);
+
+// ---- the party's own scene handles, WITHOUT the actor pool ---------------------------------------
+// Fills `out` with the SCENE HANDLE of each live party member (`DAT_022c8080 + i*0xC0 + 0x04`, count
+// `DAT_022c8064`, at most 4 = 3 party + guest -- the table GambitsEnabled already walks). Returns how
+// many were written.
+//
+// WHY THIS EXISTS. The nav scan used to answer "is this me?" with FactionOf(poolActor), which needs
+// the object to be in the ACTOR POOL -- and it usually is not. Measured on the S148 build, one field
+// session: the own-party drop fired in **4 rescans out of 26**, with `actorPool=0 poolAnswered=0` in
+// six of them, so the player's own party was listed as navigable NPCs nearly all the time ("Vaan.
+// Northeast, 2 steps"). This table is battle-work state, populated whether or not the pool is, which
+// is what makes it the right source for a question about party membership.
+int PartySceneHandles(uint32_t* out, int cap);
 
 // ---- actor pool ------------------------------------------------------------------------------
 void* ActorForBtlChr(void* bc);          // scan actor+0x698 == bc

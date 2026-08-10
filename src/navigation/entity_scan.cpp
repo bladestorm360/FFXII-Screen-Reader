@@ -42,6 +42,13 @@ int s_charByName = 0;   // characters admitted ONLY because they resolve a name 
 int s_poolKind5  = 0;   // actor-pool entries skipped as KIND_DEAD, a constant documented as misnamed
 int s_knownName  = 0;   // objects speaking the PERSONAL npcdic name because the player knows it
                         // (odd slot; e.g. "Arjie" rather than "Nomad").
+// S148, both dropped in the handle-table walk itself so they never depend on the actor pool.
+int s_dropAbsent   = 0; // sceneObj+0x14 bit 0x40 clear -- the engine has stopped presenting it
+std::vector<std::string> s_absentLines;   // up to 8, so a WRONG prune names itself in the log
+int s_dropOwnParty = 0; // matched a live scene handle in the battle-work party table
+int s_dropOddKind  = 0; // a named character whose scene KIND the engine's own candidate filter
+                        // rejects -- the summoned Esper (kind 8) and whatever it leaves behind
+int s_lastOddKind  = -1;// the last such kind seen, so a NEW one is visible instead of silent
 
 // ---- What the name-or-interaction rule REMOVES -------------------------------------------------
 // The rule is "the game names it, or the engine is offering an interaction on it". These say what
@@ -179,6 +186,22 @@ void ScanCombatants(std::vector<Entity>& out) {
         void* sceneObj = PtrAt(actor, NavRva::ACTOR_SCENEOBJ);
         if (!sceneObj || AlreadyListed(out, sceneObj)) continue;
 
+        // THE SAME PRESENCE TEST THE HANDLE WALK APPLIES, and it has to be here or the drop leaks.
+        // This pass only sees objects the handle walk did NOT list -- and as of S148 the handle walk
+        // DROPS an absent object rather than listing it, so every corpse it prunes would arrive here
+        // looking like a fresh combatant nobody had claimed yet. `AlreadyListed` cannot tell "not
+        // listed because it is new" from "not listed because we just refused it". Full derivation of
+        // bit 0x40: nav_rva.h, READY_PRESENT_BIT.
+        {
+            uint8_t ready = 0;
+            if (SafeReadU8(sceneObj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
+                (ready & NavRva::READY_PRESENT_BIT) == 0) {
+                ++s_dropAbsent;
+                NoteFiltered(sceneObj);
+                continue;
+            }
+        }
+
         // Enemy vs ally = the scene-kind nibble: kind==3 => ally, kind==5 => dead/removed (drop),
         // else => enemy.
         //
@@ -249,6 +272,11 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     s_poolOverlapNamed = 0;
     s_poolParty  = 0;
     s_poolFoe    = 0;
+    s_dropOwnParty = 0;
+    s_dropOddKind  = 0;
+    s_lastOddKind  = -1;
+    s_dropAbsent   = 0;
+    s_absentLines.clear();
     s_facLines.clear();
     s_filtered.clear();
     ResetNameStats();
@@ -258,6 +286,11 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     if (!base) return 0;
     void* leader = PlayerState::ReadLeaderSceneObject();
     CollectActorPoolObjects(s_poolObjs);
+    // Read ONCE per scan, not per object: the table is at most four entries and cannot change while
+    // one scan runs. The leader is dropped separately (it is `leader` above), so this is the other
+    // two plus a guest.
+    uint32_t partyHandles[8] = {};
+    const int partyHandleCount = BattleState::PartySceneHandles(partyHandles, 8);
 
     for (uint32_t c = 0; c < NavRva::HANDLE_TABLE_CONTAINERS; ++c) {
         void* table = static_cast<char*>(base) + static_cast<size_t>(c) * NavRva::HANDLE_TABLE_STRIDE;
@@ -359,6 +392,105 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             if (pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f) continue;
             if (AlreadyListed(out, obj)) continue;
 
+            // ---- STALE ENTITY PRUNER: the engine has stopped presenting this object --------------
+            //
+            // NOT a dead-enemy rule. `sceneObj+0x14` bit 0x40 is a PRESENCE flag and the categories
+            // fall out of it cleanly, which is what makes it general:
+            //
+            //   SET    live party, live enemies, AND treasure chests / field gimmicks (0x70, 0xF0)
+            //   CLEAR  a defeated enemy, and reserve slots that were never spawned (0xB0)
+            //
+            // Bit 0x20 beside it is already known to the mod as "model loaded"
+            // (NavRva::READY_MODEL_BIT, from the engine's own interaction predicate FUN_002675c0);
+            // 0x40 is its neighbour. Because treasures keep it SET, this can never be a "combatants
+            // only" special case -- it prunes an NPC that walked off, a chest that was consumed, a
+            // trigger that was cleared and a corpse by the same test, which is the pruner that was
+            // actually wanted rather than a kill detector.
+            //
+            // MEASURED BEFORE IT WAS APPLIED, over two play sessions: a counter on exactly this
+            // condition read 1 across 35 rescans while exactly one defeated Hyena stayed listed and
+            // `Enemy=1` refused to fall, and 0 before the kill. The object dump behind it is in
+            // debug.md.
+            //
+            // NoteFiltered is MANDATORY (Session 83): the object stays in the handle table, so the
+            // scan re-finds and re-drops it every pass -- without the explicit signal the caller's
+            // grace window re-admits it every time and the drop reports success while changing
+            // nothing.
+            {
+                uint8_t ready = 0;
+                if (SafeReadU8(obj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
+                    (ready & NavRva::READY_PRESENT_BIT) == 0) {
+                    ++s_dropAbsent;
+                    if (s_absentLines.size() < 8) {
+                        char al[192];
+                        char nm[96]; Log::ToUtf8(name, nm, sizeof(nm));
+                        snprintf(al, sizeof(al),
+                                 "absent: [%u:%u] +0x14=0x%02X kind=%u \"%s\" at (%.1f,%.1f,%.1f)",
+                                 c, i, ready, kind, nm, pos.x, pos.y, pos.z);
+                        s_absentLines.emplace_back(al);
+                    }
+                    NoteFiltered(obj);
+                    continue;
+                }
+            }
+
+            // ---- YOUR OWN PARTY IS NOT A DESTINATION, and the pool cannot be asked ----------------
+            //
+            // S148, reported in play: *"party is indeed not being ignored by the NPC tracker… there is
+            // no reason the player needs to track party members on the map."* The drop existed, but it
+            // hung off FactionOf(poolActor) two hundred lines below, which needs the object to be in
+            // the ACTOR POOL. Measured in one field session on the S148 build: the own-party drop fired
+            // in **4 rescans out of 26**, with `actorPool=0 poolAnswered=0` in six of them -- so `]`
+            // walked the player through "Vaan. Northeast, 2 steps" and "Penelo. East, 2 steps" most of
+            // the time. A drop that only works when an unrelated subsystem happens to be populated is
+            // not a drop.
+            //
+            // BattleState::PartySceneHandles reads the battle-work party table instead (the one
+            // GambitsEnabled already walks), which is populated regardless. The handle decomposes the
+            // same way the mod's own handle-table resolver does -- `selector = (h>>16) & 0xF`,
+            // `slot = h & 0xFFFF` -- so it is compared against the (container, slot) this walk is
+            // standing on, with the generation nibble deliberately ignored: a stale generation on a
+            // live party member is still that party member.
+            //
+            // NoteFiltered is MANDATORY (Session 83): these are live objects the scan re-finds every
+            // pass, so without the explicit signal the grace window re-admits every one of them.
+            {
+                bool isOwnParty = false;
+                for (int p = 0; p < partyHandleCount; ++p) {
+                    if (((partyHandles[p] >> 16) & 0xF) == c &&
+                        (partyHandles[p] & 0xFFFF) == i) { isOwnParty = true; break; }
+                }
+                if (isOwnParty) { ++s_dropOwnParty; NoteFiltered(obj); continue; }
+            }
+
+            // ---- A KIND THE ENGINE ITSELF REFUSES TO OFFER ---------------------------------------
+            //
+            // THE SUMMONED ESPER, and what is left of it after a dismissal. Belias reads scene KIND 8,
+            // and `FUN_0025bad0` -- the game's own near-object candidate filter, recorded at 0.99 in
+            // nav_rva.h -- accepts kind 1 (talk), 4 (both), 5 (action) and 7 (talk) and **rejects
+            // everything else**. So the engine never offers a kind-8 object to the player at all; the
+            // mod listed it only because it has a NAME.
+            //
+            // This is why the Esper survived a dismissal in the tracker. Two `'` dumps, one taken
+            // while it was summoned and one 13 s after "Dismiss Belias? Yes", are IDENTICAL in every
+            // field the mod reads -- `kind=8 en=1 flags=00030800 r14=F0`, only the position differs.
+            // Nothing about that object changes when the Esper leaves, so no liveness test could ever
+            // have caught it and the candidate bit 0x40 does not fire on it either. What is wrong is
+            // admitting it in the first place: your own summon is not a place to walk to, before or
+            // after it goes away.
+            //
+            // Scoped to CHARACTERS ADMITTED BY NAME. An object the engine is actively offering an
+            // interaction on keeps its entry whatever its kind says -- `interactive` is a live
+            // engine offer and outranks this.
+            if (isCharacter && !interactive &&
+                kind != NavRva::KIND_TALK_TARGET && kind != 4 &&
+                kind != NavRva::KIND_ACTION_GIMMICK && kind != 7) {
+                ++s_dropOddKind;
+                s_lastOddKind = kind;
+                NoteFiltered(obj);
+                continue;
+            }
+
             Entity e;
             e.sceneObj = obj;
             e.flags = flags;
@@ -419,9 +551,14 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
                 }
 
                 // The player's own party is not something to navigate to (tester's call). NoteFiltered
-                // is MANDATORY here: a party member is a live engine object, so its transform keeps
-                // refreshing `lastSeenMs` and the caller's grace window would carry it back forever
-                // while this pass logged the drop on every rescan -- the exact failure Session 83 hit.
+                // is MANDATORY here: a party member is a live engine object this pass finds and drops
+                // on EVERY scan, so without the explicit signal the caller's grace window re-admits it
+                // every time while this pass logs the drop -- the exact failure Session 83 hit.
+                //
+                // SECOND NET ONLY, since S148: this route needs the object to be in the ACTOR POOL and
+                // it usually is not, so the pool-independent handle test above is what actually keeps
+                // the party out of the list. Kept because when the pool DOES answer it also answers
+                // faction, and the two verdicts should not be able to disagree.
                 if (party) { ++s_poolParty; NoteFiltered(obj); continue; }
 
                 // Only a POSITIVE foe verdict re-files anything. Guest/Ally/Neutral/Unknown keep the
@@ -539,6 +676,29 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
              cc[(int)Category::GateCrystal], cc[(int)Category::Treasure],
              cc[(int)Category::Items], gated, s_poolObjs.size(), s_poolOverlap);
     Log::Write("NAV", msg);
+
+    // The three S148 drops, on their own line so they are greppable and cannot be truncated off the
+    // end of the inclusion line.
+    //   absent   -- the stale pruner. Should rise when something dies, despawns or is consumed and
+    //               fall back as the engine recycles the slot. If it is 0 while the player can still
+    //               hear a corpse, bit 0x40 is the wrong flag and it goes.
+    //   ownParty -- should equal the non-leader party members on screen.
+    //   oddKind  -- 1 exactly while an Esper exists, 0 otherwise. Any kind other than 8 here is a NEW
+    //               population and wants looking at before it is trusted.
+    if (s_dropAbsent > 0 || s_dropOwnParty > 0 || s_dropOddKind > 0) {
+        char dm[224];
+        snprintf(dm, sizeof(dm),
+                 "handle-walk drops: %d ABSENT (sceneObj+0x14 bit 0x40 clear) | "
+                 "%d own-party (by scene handle, pool-independent) | "
+                 "%d named character(s) on a kind the engine's own filter rejects (last kind=%d)",
+                 s_dropAbsent, s_dropOwnParty, s_dropOddKind, s_lastOddKind);
+        Log::Write("NAV", dm);
+    }
+    // EVERY PRUNE NAMES ITSELF, capped at 8 per scan. This is the falsifier that matters: the risk of
+    // a presence test is that it removes something the player still needs, and a bare count could not
+    // tell "one corpse" from "one NPC we just deleted by mistake".
+    for (const std::string& al : s_absentLines) Log::Write("NAV-DIAG", al.c_str());
+
     if (s_charByName > 0 || s_poolKind5 > 0 || s_dropKind1 > 0 || s_dropKind5 > 0 ||
         s_dropOther > 0 || s_namelessAct > 0 || s_poolOverlap > 0 || OddSlotWins() > 0) {
         // 768, not 512: the line already measured 507 characters in the field before this session

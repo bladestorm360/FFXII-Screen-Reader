@@ -14,9 +14,14 @@
 // and the nested FUN_00329220 (per-unit vitals snapshot); we announce the current target on change.
 //
 // Speech mirrors the top-left TARGET INFO panel (NEVER the lower-right HUD):
-//   - enemy = "<name>, HP <pct> percent"  (percentage from real cur/max; no MP, no numbers)
+//   - enemy = "<name>, HP <pct> percent"  (percentage from real cur/max)
+//     ...unless LIBRA is up, when it reads "<name>, HP <cur> of <max>" — the game makes exactly the
+//     same swap on exactly the same condition (FUN_002c0400 draws digits or blanks them off the
+//     flag FUN_002bfd20 builds from FUN_00290100). See LibraActive() in the .cpp.
 //   - ally  = "<name>, HP <cur> of <max>" — "ally" includes the player-controlled leader
 //     (self-target, def+5==0), not only party-side scene-kind==3.
+// Names carry the instance letter ("Dire Rat B") — every enemy name in this file comes from
+// BattleState::DisplayNameForActor, and there is exactly ONE naming path here on purpose.
 // Memory-only, SEH-guarded reads; the name is the game's own (decoded via GameText).
 namespace BattleTargetReader {
 
@@ -44,5 +49,24 @@ bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut);
 // TRUE only if it spoke. `;` falls through to InteractTarget::SpeakCurrent() on false, so the same
 // key reads the battle target in combat and the field interaction target outside it.
 bool SpeakTargetStatus();
+
+// `o` — the LIBRA readout for the enemy the cursor is on: HP as numbers, Level, MP (only when the
+// game's own MP-gauge guard says the unit has one), any statuses, and the ELEMENTAL WEAKNESSES —
+// all of it in the game's own words.
+//
+// Three outcomes, and the middle one is the reason this returns bool:
+//   - no enemy target        -> SILENT, returns false; `o` keeps its existing meaning (help text).
+//   - enemy, but Libra down  -> speaks "Libra not active." and returns true.
+//   - enemy, Libra up        -> speaks the readout and returns true.
+//
+// The weakness clause mirrors the game's own "Weak:" row, which Libra ramps into view on the target
+// panel: mask at `BtlChr+0x40`, names via `BattleState::ElementNames`, label from message `0x2331`.
+// It is OMITTED for a unit the game marks Libra-proof (marks and bosses, the "????" case — extended
+// status bit 41), because the mod must never out-reveal the screen. Only weaknesses are spoken:
+// Absorb / Half / Immune belong to the equipment panels and are not part of what Libra shows.
+//
+// With autodetail ON the same readout is also volunteered on each target change, queued behind the
+// short line; the "Libra not active" line is NEVER part of that path. Thread-safe (input thread).
+bool SpeakTargetDetail();
 
 } // namespace BattleTargetReader

@@ -450,6 +450,15 @@ constexpr uint32_t SCENEOBJ_TALK_ID     = 0xDC;     // u16 talk payload id   (0x
 constexpr uint16_t PAYLOAD_ID_INHERIT   = 0xFFFF;   // "take it from the map's own object record"
 constexpr uint32_t SCENEOBJ_READY_OFF   = 0x14;     // u8; & 0x20 = model loaded
 constexpr uint8_t  READY_MODEL_BIT      = 0x20;
+// Bit 0x40 on the SAME byte = "this object is PRESENT in the world" (Session 148, measured).
+// Observed values, one object dump plus a counter run across two play sessions:
+//   0xF0  live party members, a live enemy      -> present
+//   0x70  treasure chests, field gimmicks       -> present (so this is NOT a combatant-only bit)
+//   0xB0  a DEFEATED enemy, and reserve slots that were never spawned -> absent
+// The entity scan prunes on it, which is what finally removed corpses without a kill detector and
+// without an HP test. Treasures keeping it SET is the load-bearing observation: it means the rule is
+// about PRESENCE, not about being alive, so a despawned NPC or a consumed chest goes the same way.
+constexpr uint8_t  READY_PRESENT_BIT    = 0x40;
 constexpr uint8_t  SCENEOBJ_CLASS_MASK  = 0xE0;     // high 3 bits of the +0x03 type byte
 constexpr uint8_t  SCENEOBJ_CLASS_INTERACT = 0x60;  // class 3 == an interactable object
 // The story gate is written by FUN_0026ba60(obj, enable) (RVA 0x14BA60), whose only caller

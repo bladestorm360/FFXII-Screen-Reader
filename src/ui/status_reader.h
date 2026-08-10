@@ -51,4 +51,20 @@ void Shutdown();
 // the return to decide whether Home/End should fall through to the combat log.
 bool OnMenuNavKey(int vk);
 
+// A CLAIMING READER, called from MenuReader::OnFocus's one claim block. Returns TRUE when this
+// reader has taken responsibility for the focus event and the generic path must stay silent.
+//
+// It claims exactly one thing: the focus the L1/R1 character switch CAUSES. FUN_002c2c50 refills the
+// ailment grid (menuCtx+0x110) as part of the screen's refresh, the game re-fires focus index 0 on
+// that pane, and the generic reader spoke it with interrupt=true in the same millisecond this reader
+// spoke the new character's name -- so the name was cut off by "Regen" on every switch. Two speakers
+// with two policies on one surface; the notice-board failure again, and the same fix: arbitrate.
+//
+// NOT a dedup filter and NOT a mute. The claim is a ONE-SHOT armed by the refresh and consumed by the
+// first focus event that follows, so it detects a specific transition rather than suppressing a
+// repeat -- the ailment pane is player-navigable (the archived logs reach index 1) and must keep
+// speaking under the player's own cursor. Those statuses are also already the third group of this
+// reader's own buffer, so nothing is lost.
+bool TryFocus(void* owner, int index);
+
 } // namespace StatusReader

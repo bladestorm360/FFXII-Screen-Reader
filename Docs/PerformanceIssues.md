@@ -224,3 +224,20 @@ only sensible cut:
 
 Everything else is unchanged from Session 100's table; `nav_mesh.cpp` is still 5 lines from the cap
 and still wants `nav_edges.cpp`.
+
+## Re-measured 2026-08-10 (Session 148)
+
+| File | Lines | Delta this session | Note |
+|---|---|---|---|
+| `ui/menu_reader.cpp` | 713 | +5 | One claim line (`StatusReader::TryFocus`) plus its comment. The claim block is a single documented choke point — a second one elsewhere is exactly the bug it exists to prevent — so this had to land here. |
+| `navigation/entity_list.cpp` | 610 | +32 | The grace-window counters and the rewritten `RefreshPositionsLocked` header. Both belong to the merge, which is this file's job. |
+| `battle/battle_state.cpp` | 507 | +35 | `EsperBtlChr` / `EsperGauge` beside `BtlChrForSlot`, which is where every other BtlWork accessor lives. Just over the cap now; the next addition here should take `battle_state_esper.cpp` rather than push further. |
+| `ui/status_reader.cpp` | 407 | +34 | `TryFocus` and its latch. Under the cap. |
+| `battle/party_status.cpp` | 176 | +52 | The `ReadBtlChr` split and the shared `SpeakVitals`. Net well under; the refactor removed a duplicate wording path rather than adding one. |
+
+`navigation/entity_scan.cpp` and `navigation/entity_postscan.cpp` were touched for comment
+corrections only and did not change length materially.
+
+**Nothing was split this session, deliberately.** All three changes are single-choke-point edits in
+files that already own the behaviour, and none of the new code is a candidate to move on its own. The
+one to watch is `battle_state.cpp`, which crossed 500 with the Esper accessors.

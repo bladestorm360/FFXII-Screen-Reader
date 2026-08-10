@@ -2134,9 +2134,17 @@ for the highlight menu.** The reader that hooked it spoke nothing.
   whose `panel+0x288 == *(P+0x9FD8)` (gate on `+0x10f78`), then grab `bc` in the nested `FUN_00329220`.
   Name = actor pool (`*(actor+0x698)==bc` → `actor+0x18`); **real** HP `bc+0x48`/`bc+0x24`; faction =
   scene-kind `*(u8)( *(actor+0x10) + 0x0e ) & 0x0f` (`3`=ally, else enemy). Speech: **enemy** = HP
-  percentage (no Libra HP-visible flag found — BtlChr status bit `0x10000` was WRONG, read 0 for the
-  un-Libra'd enemy); **ally** = HP numbers. Src: `src/ui/battle_target_reader.{h,cpp}`.
+  percentage, **ally** = HP numbers. Src: `src/ui/battle_target_reader.{h,cpp}`.
   (The older `notes/battle_target_vitals_2026_07_10.md` id→`FUN_002367a0`→actor path is SUPERSEDED.)
+  > ⚠ **PARTLY STRUCK (Session 147):** ~~"no Libra HP-visible flag found"~~. The flag exists, and an
+  > enemy now reads real NUMBERS while Libra is up — `*(u32*)(P + 0x10F68) & 2`, the game's own
+  > per-frame mirror of `FUN_0030c300`. The rejection of `0x10000` was RIGHT; only the search was
+  > wrong. **Libra is a status on a PARTY member (bit 30 of `bc+0x64 | bc+0x3C`), never a bit on the
+  > enemy** — which is why looking at the enemy could not have found it. Full chain in the Session 147
+  > section at the end of this file.
+  > Also corrected there: the name on this path now carries the **instance letter** ("Dire Rat B").
+  > This file's `actor+0x18` decode was a SECOND naming path that never grew one; there is exactly one
+  > now, `BattleState::DisplayNameForActor`.
 
 **Field-menu "Select a character" (Status) reader — DEFERRED (Session 31, NOT working).** Chooser
 controller `FUN_00285290` (RVA `0x165290`, POLLED, not a 0x8000 owner); cursor-set `FUN_00285a10(slot)`
@@ -4900,3 +4908,300 @@ contain the byte pair. There is no off-by-one on the native id; only on the opco
 infamy meter shout minigame Bhujerba byu byu_a01 script variable descriptor FUN_00262440 storage
 class mod+0x78 module base file+0x80 section directory 0x8000000B src name 0x110 file 0x90 runtime athena
 opcode off by one CALLPOPA native table stride 32 dbgIndex 5140 distance 0x290 resolved**
+
+## Session 147 — the Libra flag, the status L1/R1 event, the font fingerprint, the reward panel
+
+**KEYWORDS: libra FUN_0030c300 FUN_00290100 0x10F68 bit30 enemy HP numbers status screen L1 R1
+FUN_002c2c50 0x1A2C50 character switch instance letter DisplayNameForActor font00.dat advance width
+fingerprint DetectVariant autodetection struck reward panel FUN_0035e070 additemmes row array
+quantity gil 0x833 status timer 0x17C strict reach terrain bit23**
+
+### LIBRA — the "HP-visible" flag, found (conf 0.98). STRIKES "there is no flag to read"
+
+Session 32 recorded *"no Libra HP-visible flag found — BtlChr status bit `0x10000` was WRONG, read 0
+for the un-Libra'd enemy"*, and the enemy readout has been percentage-only ever since. The rejection
+of `0x10000` was correct — it is the forced-max-display bit (`FUN_00329220:102-124`, the Disease /
+Bubble path). **The hunt failed because it looked on the ENEMY. Libra is a status on a PARTY member.**
+
+| Fact | Value | Conf |
+|---|---|---|
+| Libra predicate | `FUN_0030c300` (RVA **`0x1EC300`**) — walks the 9 party slots, skips the KO'd, returns 1 when any LIVING member has **bit 30** of `(BtlChr+0x64 \| BtlChr+0x3C)` | 0.98 |
+| Per-frame mirror | `FUN_0028e290:58-62` writes it to **bit 1 of `*(u32*)(P + 0x10F68)`**, `P = DAT_0209be80` (RVA `0x1F7BE80`) | 0.99 |
+| Getter the game uses | `FUN_00290100` (RVA **`0x170100`**) = `*(u32*)(P + 0x10F68) >> 1 & 1` | 0.99 |
+| What it drives | `FUN_002bfd20:130,139-141` — show-numbers flag = (target is a party member) OR this bit; `FUN_002c0400` (RVA `0x1A0400`) draws HP as DIGITS when set and passes `0xFFFFFFFF` (blank) when clear | 0.98 |
+
+So **"Libra is up" and "the enemy's HP is a number rather than a bar" are the same fact**, and the
+mod mirrors the game's own swap rather than bypassing it. Corroboration: `FUN_002f82f0`, the
+trap-visibility toggle (Libra's other documented effect), is driven by the same predicate.
+
+Mod side: `BattleTargetReader::LibraActive()` — one guarded u32 read, no game call. `HpClause()` is
+the single HP choke point; `LibraDetail()` adds Level (`bc+0x1C2`), MP (`bc+0x4C`/`+0x28`, gated on
+the game's own `BC_MP_GUARD_A/B` sign test), statuses (`BattleState::StatusNames`) and the elemental
+weaknesses (see the next block).
+
+### ENEMY ELEMENTAL WEAKNESS = `BtlChr + 0x40`, ONE BYTE (conf 0.98)
+
+> ⚠ **STRIKES this section's own first version**, written earlier in Session 147: *"ELEMENTAL
+> WEAKNESSES ARE NOT AVAILABLE… the game's own Libra does not show weaknesses either, so speaking
+> them would invent a fact the screen never states."* **Both halves are false.** Libra draws a
+> `Weak:` row of element icons on the target panel, and the mask behind it was already arriving in
+> the vitals snapshot the mod's own hook receives.
+
+The chain, end to end:
+
+```
+BtlChr + 0x40  (u8)   bits 0..7 = Fire Lightning Ice Earth Water Wind Holy Dark
+   FUN_00329220     *(char*)(snapshot + 0x89) = (char)bc[0x10]     // int* index 0x10 == byte 0x40
+   FUN_002bfd20     FUN_00295d90(0x80, panel + 0x200, *(u8*)(panel + 0x149))   // panel+0xC0 = snapshot
+   FUN_00295d90     (RVA 0x175D90)  emits FUN_002f9860(0x2331) == "Weak: "
+                    then FUN_002f9860(0x4B27 + bit) per set bit == the eight element sprite strings
+   panel + 0x200 -> widget (panel+0x60 -> +0x30 -> +0x18 -> +0x60 -> [0]); its colour word +0x24
+                    carries an ALPHA ramped by panel+0x282/+0x284 — which FUN_002bfd20:151-176 drives
+                    from FUN_00290100(), THE LIBRA FLAG.
+```
+
+So the row is Libra-gated by the same predicate as the HP digits, and **only weaknesses are shown**:
+`FUN_00295d90` hardcodes `0x2331` and has exactly one caller. Absorb / Half / Immune
+(`0x232F` / `0x2330` / `0x232E`) appear only in the three equipment detail panels.
+
+**THE LIBRA-PROOF FLAG (the `????` marks and bosses) — extended status bit 41.** Same function:
+`if ((*(u8*)(panel + 0x111) & 2) != 0) { iVar19 = 1; iVar18 = 0; }` zeroes the weakness row's alpha
+**and** blanks the HP digits. `panel+0x111` is snapshot `+0x51`, and snapshot `+0x4C + i` is
+`bc[0x68+i] | bc[0x78+i]` (`FUN_00329220`'s 4×4 copy loop) — so the bit lives in the extended status
+mask, byte 5, bit 1. The mod honours it: `BattleTargetReader::LibraSuppressed`.
+
+**WHY THE FIRST SEARCH MISSED IT, recorded because the negatives are still TRUE and still useless.**
+There genuinely is no Weak/Absorb/Half/Immune **quartet** on the enemy — that shape belongs to the
+**equipment** record (`+0x3C..+0x3F`) and its only consumers are the equip-preview scratch globals
+`_DAT_02ae96a0..ac` (`FUN_00374280` / `FUN_003745c0`). There genuinely is no affinity field on the
+per-actor enemy record at `actor+0xE68`. And no element survives to the damage-apply site. All three
+hold; none of them is about a **single byte on the BtlChr**. The lesson is in `debug.md`: a negative
+result is only as good as the shape you searched for — when one comes back empty, re-derive what the
+DISPLAY reads, because the game draws it, so something reads it.
+
+**Adjacent and deliberately NOT identified:** `bc+0x41`, `+0x42`, `+0x43`, `+0x44`, which
+`FUN_00329220` copies to snapshot `+0x8A..+0x8D`. Nothing displays them. The equipment quartet's
+order is a tempting fit for them and that guess is precisely what produced the struck claim above.
+
+### `+0x42..+0x51` / `target+0x17C..+0x18A` are PER-STATUS TIMERS, not affinity (conf 0.99)
+
+**STRIKES `notes\combat_re_2026_07_20_damage.md:302`** — *"i16 x8 resistance/affinity overrides"*,
+self-rated 0.90. Producer and consumer agree: `FUN_00385570:36-56` walks the extended status bits at
+`bc+0x68`/`bc+0x78`, takes the timer-slot index from `statusMasterRec+0x06` (`0xFF` = no timer),
+reads `*(i16*)(bc + 0x17C + slot*2)`, decrements it, and writes the result to `result + 0x42 + slot*2`.
+Eight i16 slots. Writer of the live array: `FUN_0030ea40:26`.
+
+### Status screen — the L1/R1 character switch is `FUN_002c2c50` (RVA `0x1A2C50`, conf 0.99)
+
+`FUN_002c2320` category `0xa` is per-frame input and must not carry an announcement (already
+recorded). The cycle itself is an EVENT: `FUN_002c2240` (R1 / pad RIGHT) and `FUN_002c2200`
+(L1 / pad LEFT) call `FUN_0027f360` / `FUN_0027ed10` — the writers of `menuCtx+0xDE0` — and **only
+when the index actually moved** do they play SE `0x51` and call `FUN_002c2c50(ctrl)`.
+
+`FUN_002c2c50` is the screen's own refresh: ailment grid (`menuCtx+0x110`), portrait child, then
+`FUN_002c2cd0` -> `FUN_003fead0(0)`, the attribute-panel fill. **Exactly three call sites in all
+33,105 functions** — those two plus `FUN_002c2320:100` inside cat-1 CREATE. Signature
+`void(uint32_t)`. Hooked by `status_reader.cpp`; the CREATE site is a no-op by construction because
+`g_active` is only set after `s_origCtrl` returns.
+
+### `font00.dat` — the fan-patch fingerprint. STRIKES "autodetection is not available"
+
+S130 concluded a fan translation cannot be detected because the patch repacks the VBF in place. True
+of the DISK, and beside the point: the question is which atlas the GAME LOADED. S130 also recorded
+the marker without recognising it — the patch *"adjusts ten advance widths"*.
+
+Diffed byte for byte, stock vs `PL_ff12_v1.3` `us/font00.dat` (both 46,876 bytes): **exactly 20
+differing bytes, in 10 records, every one an advance width** (stored twice per record, `+0x0C` and
+`+0x10`).
+
+| slot | 60 | 61 | 62 | 84 | 85 | 86 | 98 | 117 | 118 | 179 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| stock | 21 | 21 | 21 | 22 | 22 | 22 | 24 | 19 | 36 | 36 |
+| PL | 20 | 24 | 24 | 17 | 18 | 18 | 20 | 11 | 11 | 11 |
+
+Runtime read: font manager `DAT_01f811f8` (RVA **`0x1EE11F8`**, via `FUN_001b5fa0`);
+`FUN_0017f8c0(slot)` (RVA **`0x5F8C0`**) -> `FUN_001e9860(mgr, slot)` -> `FUN_001fdec0` — a **red-black
+tree lookup returning `node+0x24`**, so the in-memory record is the LOADER's layout, not the file's.
+`GameText::DetectVariantOnce` therefore does not assume a field: it walks every 4-byte offset and
+matches the ten values against the stock or PL vector, so the advance field is *located* by
+measurement. No match means log the values and stay Standard. The `Text glyphs` mod-menu row is gone.
+
+### The multi-item reward panel IS `FUN_0035e070` — STRIKES the S72 "different surface" claim
+
+`debug.md`'s S72 entry says of the hunt-reward panel: *"It is not the single-item obtained toast the
+mod already reads (`message_reader.cpp`, `FUN_0035e070`) — that one is a one-line toast with no title
+and no quantity column."* **Wrong on both counts.** The function has a row loop; nobody had read its
+body. Descriptor at `msg+8`:
+
+```
++0x00  i16  mode / title flag        (FUN_0035e070:53 -> local_6e8[0] = (mode == 0))
++0x04  i16  ROW COUNT                (the loop bound at :101)
++0x08  u8   layout flags             (bit 0 = the bordered multi-row panel; clear = the plain toast)
++0x0C  row array, stride 8:
+         i32 kind   0 = item, 1 = gil
+         kind 0: item id in the low half of +4, QUANTITY as i16 at +6
+         kind 1: raw amount at +4, suffixed with message id 0x833 ("gil")
+```
+
+Rows render into three 0x180-byte slots and compose into `widget+0xC8` through a `0F 31` template
+(`FUN_002b4090`, cap `0x4A0`) — which is the buffer the mod already decodes, so the reader may well
+have been right all along. **Why it is silent is NOT yet established**: across all 20 archived dev
+logs the init line appears 20 times and `diag: item popup proc FUN_0035e070 fired` **zero** times, so
+there is no evidence the surface was ever visited in a dev session. S147 shipped the descriptor
+logging instead of a guess.
+
+### `NavReach::ReachableStrict` — a measurement, not a gate
+
+A second flood beside the permissive one, refusing `NavMesh::TerrainRefused` polys, published
+separately and read only by the exit-scan routability line (`terrain=` / `strict=`). It exists
+because our own logs print `*** UNWALKABLE (bit23) ***` for a poly class and, lines later,
+`walk=1 reach=1` for the exit standing on one — and `unreachable=0` in every log ever. **Nothing may
+filter on it** until a log shows it going 0 on a genuinely unreachable exit while staying 1 on
+Bhujerba's Travica Way, which carries the same flags and routes fine. Re-arming bit 23 itself is
+struck twice over: S96 tried and reverted it, and Travica Way is a live counterexample.
+
+## Session 148 — the summoned Esper's BtlChr, and its duration gauge
+
+**KEYWORDS: esper summon BtlWork 0x5AD4 0x5AD8 0x5ADC 0x5B04 FUN_00306760 FUN_00320a40 FUN_003135e0
+FUN_003135c0 FUN_0031b9f0 roster lists summon gauge pips key 8 party status Belias**
+
+### The Esper is NOT in any roster slot — it has its own field on BtlWork (conf 0.98)
+
+Keys `4`-`7` read roster list 3 (`W+0x5A7E`) and can never reach an Esper, because an Esper is not
+in that list at all. From the summon-commit function **`FUN_00306760`**, action class
+`DAT_022c215c == 1` — the Esper-summon class, action ids `0x106`..`0x112`, i.e. exactly the thirteen
+Espers:
+
+```c
+case 1:                                                   // Esper summon
+  *(u32*)(W + 0x5B04) |= 1;                               // summon-mode bit
+  *(u8 *)(W + 0x5AD5) = summonerBtlChr[0x04];             // control index := the SUMMONER's charId
+  *(u8 *)(W + 0x5AD4) = actionRec[0x26];                  // <-- the ESPER's BtlChr INDEX
+  iVar4 = FUN_002fa0e0(summonerBc, actionRec[0x26]);      // per-Esper master record byte +0x32
+  *(float*)(W + 0x5AD8) = *(float*)(W + 0x5ADC) = (float)iVar4;   // gauge: current, then max
+  lVar6 = FUN_00320a40(actionRec[0x26]);
+  FUN_0030c470(lVar6, summonerBc[0x1C2], 0);              // esper level := summoner level
+```
+
+| offset | width | meaning |
+|---|---|---|
+| `W + 0x5AD4` | u8 | **the summoned Esper's BtlChr index**; NOT cleared on dismiss |
+| `W + 0x5AD5` | u8 | control index — during a summon this is the SUMMONER's charId |
+| `W + 0x5AD8` | f32 | duration gauge, current (the pips beside the Esper's HP) |
+| `W + 0x5ADC` | f32 | duration gauge, max — seeded equal to current at summon |
+| `W + 0x5B04` | u32 | battle sub-mode bits; **bit 0 = summon active**, set here, cleared by case 2 |
+
+**What pins `0x5AD4` as a BtlChr index** rather than a master-data id is the use directly below it:
+the same byte goes to `FUN_00320a40`, whose entire body is `idx < 0x28 ? W + 8 + idx*0x1C8 : 0` —
+byte for byte the BtlChr-array arithmetic `BtlChrForSlot` already uses.
+
+**Read the mode bit FIRST.** `0x5AD4` is not cleared on dismiss (only the bit is), so reading the
+index alone keeps naming the last Esper summoned for the rest of the session.
+
+Shipped as `BattleState::EsperBtlChr` / `EsperGauge`, spoken on key `8`.
+
+### The gauge's UNIT is not established, and must not be asserted
+
+`FUN_002fa0e0(summonerBc, esperIdx)` returns byte `+0x32` of the per-Esper master record
+(`DAT_02ebf130`, header `+0x08` stride / `+0x0C` records, relocated by `FUN_0020e600`). It is a
+per-Esper constant, stored into both halves of the pair — so the decompile says how big the gauge is
+and nothing about what depletes it. The spoken word therefore names the gauge and claims no unit;
+`party_status.cpp` logs the raw float pair on every press so one watched summon can settle it.
+
+### The five roster lists — `FUN_0031b9f0(slot, list)` (conf 0.99)
+
+The resolver behind `FUN_00320ab0`. Bound check `FUN_00322c50(0x17, slot)` is `slot < 9`; each list
+is **9 x u16** BtlChr indices, `>= 0x28` empty:
+
+| list | base | note |
+|---|---|---|
+| 0 | `W + 0x5A48` | |
+| 1 | `W + 0x5A5A` | |
+| 2 | `W + 0x5A6C` | |
+| **3** | **`W + 0x5A7E`** | the unmasked master party — the one the mod reads (slots 0-2 active, 3 guest, 4-8 reserve) |
+| 4 | `W + 0x5A90` | |
+
+Lists 0/1/2/4 have not been characterised. **None of them was needed for the Esper** — that hunt was
+avoided entirely by reading the summon commit instead, which is the general lesson: the writer of the
+state names the state, and a slot hunt is what you do when you have not found the writer yet.
+
+### `FUN_0031b770(bcIdx)` — BtlChr index -> field actor
+
+`idx < 0x28`, then scan the actor pool (`FUN_00236850` count, `FUN_00236820(i)`) for the actor whose
+`+0x698` def pointer equals `W + 8 + idx*0x1C8`. The inverse of `BtlChrForActor`, and the reason a
+summoned Esper resolves a name through `NameForBtlChr`: while it is out it has a pool actor.
+
+### The HP DISPLAY CLAMP — `FUN_002fef30` (abs `0x2FEF30`, RVA `0x1DEF30`), conf 0.99
+
+**KEYWORDS: HP cap 9999 clamp display Bubble HP x2 party side BC_KIND boss over 9999 DisplayHp**
+
+The game's own rule, from the tail of that function:
+
+```c
+cVar9 = *(char *)(btlChr + 5);                 // BC_KIND -- 0 = party side
+if (value < 1) out = 1;
+else { cap = 1000000000; if (cVar9 == '\0') cap = 9999;
+       out = (cap < value) ? cap : value; }
+```
+
+**`param_1` is a BtlChr on two independent counts:** `+0x05` is the field `phyre_types.h` already
+documents as *"0 = party side"*, and a few lines above, the same function tests
+`charId - 0x1B < 0xD` — the exact guest range `0x1B..0x27` that `battle_state.cpp` carries.
+
+**The cap is PARTY-SIDE ONLY.** Anything else gets `1e9`, i.e. no clamp — which is why the mod takes
+the game's selector rather than hardcoding 9999: a boss with more than 9999 HP still reports its real
+number under Libra.
+
+**Why it was needed.** Bubble (the `HP x2` icon on the Status screen) doubles **current** HP in memory
+without touching the stored max, so a bubbled level-99 character reads `14638/7319` while the party
+screen draws `9999/7319`. Verified against one Status-screen screenshot covering all six characters:
+`+0x24` matched the MAX column **6/6 exactly**, and `+0x48` matched the HP column exactly on the three
+*without* the icon (Balthier 8437, Fran 6174, Ashe 6171) and read exactly `2 x max` on the three
+*with* it (Vaan 17026/8513, Basch 14638/7319, Penelo 12026/6013). **The offsets were never wrong; the
+clamp was missing.** Belias likewise reads `12786/12786` and draws `9999/9999`.
+
+Shipped as `BattleState::DisplayHp(bc, value)`. Applied to **both** halves of every spoken HP pair —
+clamping only the current would have said *"9999 of 7319"* and the Esper *"12786 of 9999"*.
+
+**Two deliberate departures, both load-bearing:**
+- **The floor is NOT replicated.** `if (value < 1) out = 1` belongs to that function's max-HP
+  recompute, where a max of zero is meaningless. On CURRENT hp it would turn a KO'd ally into
+  "1 HP" — a number the player would act on. A dead ally must read 0.
+- **Percentages and thresholds use the RAW pair.** `HpClause`'s enemy percentage and
+  `CombatEvents::CheckVitals`' 20% latch and KO test are ratios, not display. Clamping a bubbled
+  ally's current to 9999 against a max of 7319 computes 137%; clamping both flattens a real
+  difference to 100%. The clamp is for digits the player hears, nothing else.
+
+### `sceneObj + 0x14` bit `0x40` = PRESENT IN THE WORLD (Session 148, measured)
+
+**KEYWORDS: stale entity pruner presence bit 0x40 READY_PRESENT_BIT defeated enemy despawn corpse
+tracker sceneObj 0x14 model loaded 0x20**
+
+Same byte as the already-known "model loaded" bit `0x20` (which the engine's own interaction
+predicate `FUN_002675c0` tests). Observed values:
+
+| value | objects | verdict |
+|---|---|---|
+| `0xF0` | live party members, a live enemy | present |
+| `0x70` | **treasure chests, field gimmicks** | present |
+| `0xB0` | a DEFEATED enemy; reserve slots never spawned | absent |
+
+**Treasures keeping the bit SET is the load-bearing observation.** It means `0x40` is not "is a live
+combatant" but "is in the world", so one test prunes a corpse, a despawned NPC, a consumed chest and
+a cleared trigger alike. That is why the entity scan applies it as a **general stale-entity pruner**
+and not as a kill detector — the user's own framing, and the correct one: *"you're still tracking it
+as if kills matter, when what we want is a stale entity pruner."*
+
+**Measured before it was applied.** A counter on exactly this condition read `0` before a kill and
+`1` across 35 consecutive rescans afterwards, while `Enemy=1` refused to fall and one defeated Hyena
+stayed listed. Applied in BOTH walks — the handle table and the actor pool — because the pool walk
+only sees what the handle walk did not list, so a prune in one is an admission in the other.
+
+Every prune logs itself (`[NAV-DIAG] absent: [c:slot] +0x14=0x.. kind=.. "name" at (x,y,z)`, capped
+at 8 per scan): the risk of a presence test is that it removes something still wanted, and a bare
+count cannot tell one corpse from one NPC deleted by mistake.
+
+**What this REPLACED, and why none of it was needed:** an HP gate on the actor-pool walk (S147's
+proposal, struck by the user — the fix is not about death), a liveness test on the BtlChr, and a
+`KIND_DEAD` skip that has measured zero in 602/602 rescans and is still inert. None of them would
+have caught a consumed chest or a departed NPC; this does.

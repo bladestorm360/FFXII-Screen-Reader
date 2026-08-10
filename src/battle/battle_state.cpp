@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 #include <cstdio>
+#include <cstring>
 
 namespace BattleState {
 namespace {
@@ -57,6 +58,13 @@ constexpr uint32_t OFF_LEADER    = 0x5AA4;     // u8 leader BtlChr index
 constexpr uint32_t OFF_BC_ARRAY  = 0x08;
 constexpr uint32_t BC_STRIDE     = 0x1C8;
 constexpr uint32_t BC_COUNT      = 0x28;
+
+// The summoned Esper. Derivation and confidence: battle_state.h, EsperBtlChr.
+constexpr uint32_t OFF_ESPER_BCIDX = 0x5AD4;   // u8  BtlChr index of the Esper that is out
+constexpr uint32_t OFF_ESPER_GCUR  = 0x5AD8;   // f32 duration gauge, current
+constexpr uint32_t OFF_ESPER_GMAX  = 0x5ADC;   // f32 duration gauge, max (both seeded at summon)
+constexpr uint32_t OFF_SUB_MODE    = 0x5B04;   // u32 battle sub-mode bits; bit 0 = summon active
+constexpr uint32_t SUB_MODE_SUMMON = 0x1;
 
 // BC_CHARID / BC_KIND and the actor-pool / scene-kind layout: core/phyre_types.h
 using namespace PhyreTypes;
@@ -162,6 +170,37 @@ void* BtlChrForSlot(int slot) {
     return static_cast<char*>(w) + OFF_BC_ARRAY + static_cast<size_t>(idx) * BC_STRIDE;
 }
 
+void* EsperBtlChr() {
+    void* w = Work();
+    if (!w) return nullptr;
+    // THE MODE BIT FIRST. The index byte is not cleared on dismiss -- only the bit is (FUN_00306760
+    // case 2) -- so reading the index alone would go on naming the last Esper summoned for the rest
+    // of the session.
+    uint32_t mode = 0;
+    if (!SafeReadU32(w, OFF_SUB_MODE, &mode) || (mode & SUB_MODE_SUMMON) == 0) return nullptr;
+    uint8_t idx = 0xFF;
+    if (!SafeReadU8(w, OFF_ESPER_BCIDX, &idx)) return nullptr;
+    if (idx >= BC_COUNT) return nullptr;                    // the same bound FUN_00320a40 applies
+    return static_cast<char*>(w) + OFF_BC_ARRAY + static_cast<size_t>(idx) * BC_STRIDE;
+}
+
+bool EsperGauge(float* cur, float* max) {
+    if (!cur || !max) return false;
+    void* w = Work();
+    if (!w) return false;
+    uint32_t mode = 0;
+    if (!SafeReadU32(w, OFF_SUB_MODE, &mode) || (mode & SUB_MODE_SUMMON) == 0) return false;
+    uint32_t rawCur = 0, rawMax = 0;
+    if (!SafeReadU32(w, OFF_ESPER_GCUR, &rawCur) || !SafeReadU32(w, OFF_ESPER_GMAX, &rawMax))
+        return false;
+    // Both are floats; MemRead has no float reader and adding one for two fields is not worth a
+    // widened interface, so take the bits and reinterpret. memcpy, not a pointer cast: the cast is
+    // a strict-aliasing violation and MSVC is entitled to reorder around it.
+    std::memcpy(cur, &rawCur, sizeof(float));
+    std::memcpy(max, &rawMax, sizeof(float));
+    return true;
+}
+
 
 void* LeaderBtlChr() {
     void* w = Work();
@@ -174,6 +213,36 @@ void* LeaderBtlChr() {
 void* LeaderActor() { return ActorForBtlChr(LeaderBtlChr()); }
 
 void* BtlChrForActor(void* actor) { return PtrAt(actor, NavRva::ACTOR_DEF_PTR); }
+
+int32_t DisplayHp(void* bc, int32_t value) {
+    // Unreadable kind => treat it as NOT party side, i.e. do not clamp. Guessing "party" here would
+    // silently cap a boss's real HP at 9999 and there would be nothing in the line to show it.
+    uint8_t kind = 0xFF;
+    const bool partySide = bc && SafeReadU8(bc, BC_KIND, &kind) && kind == 0;
+    const int32_t cap = partySide ? 9999 : 1000000000;
+    return (value > cap) ? cap : value;
+}
+
+int PartySceneHandles(uint32_t* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    // Same STATIC array + same bound the game's own FUN_00272ee0 walk uses; see GambitsEnabled below,
+    // which resolves a single handle out of it. No actor pool, no BtlWork magic -- just the table.
+    void* recs   = Hooks::ResolveRva(RVA_PARTY_RECS);
+    void* countp = Hooks::ResolveRva(RVA_PARTY_COUNT);
+    if (!recs || !countp) return 0;
+    uint32_t count = 0;
+    if (!SafeReadU32(countp, 0, &count)) return 0;
+    if (count > PARTY_SLOT_MAX) count = PARTY_SLOT_MAX;
+
+    int n = 0;
+    for (uint32_t i = 0; i < count && n < cap; ++i) {
+        char* rec = static_cast<char*>(recs) + static_cast<size_t>(i) * PARTY_STRIDE;
+        uint32_t h = 0;
+        if (!SafeReadU32(rec, PARTY_HANDLE, &h) || h == 0) continue;
+        out[n++] = h;
+    }
+    return n;
+}
 
 bool GambitsEnabled(uint32_t sceneHandle, bool* outResolved) {
     if (outResolved) *outResolved = false;

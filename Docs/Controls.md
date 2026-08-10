@@ -157,13 +157,13 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 ## Mod-reserved keys (all STANDALONE — no Shift)
 | Key | Mod function | Conflict status |
 |---|---|---|
-| `o` | Describe / read focused tooltip | free |
+| `o` | Describe / read focused tooltip — **and, with an enemy under the battle target cursor, the LIBRA readout** (HP as numbers, Level, MP where the unit has a gauge, statuses, and elemental weaknesses). Says **"Libra not active."** when an enemy is targeted and Libra is down; falls through to the tooltip everywhere else, so no existing meaning was taken away. The weakness clause is omitted for the marks and bosses the game itself refuses Libra on — the mod does not out-reveal the screen (S147) | free |
 | `t` | **Re-read the last line of DIALOGUE** — a conversation page, a prompt, or an obtained-item toast. **Silent unless one of those is actually on screen** (Session 130). It was never "repeat whatever the reader last said" — only those three surfaces ever fed it — but nothing cleared the line when the box closed, so it went on repeating a finished conversation in the field, in menus and mid-battle | free |
 | `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim. **With Auto-walk On in the `F8` menu (Session 100) it also WALKS you there** — see the Auto-walk section | free |
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
-| `F7` | *(reserved — autodetail)* nothing is bound to it; do not take this key. **See the autodetail note below — Session 125 established what its first consumer should be** | reserved |
+| `F7` | **Autodetail — Off ⇄ On (Session 147).** Speaks the new setting. Same value the `F8` menu holds. Changes only what is VOLUNTEERED: the shop equipment comparison on each highlight, and the Libra readout on each target change. `4`-`9` and `o` answer identically in both modes | free — reserved from S90, spent in S147 |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
 | `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY (S112):** with Shift, Ctrl or Alt held it does nothing, because **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys. **Moved off `F9`, which belongs to the game** | free |
 | `F9` | **NOT A MOD KEY — the GAME uses it** for *Hide On-Screen Keyboard* (S112). Left alone deliberately | game-owned |
@@ -181,7 +181,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `5` | Party: slot 2 status — or comparison character 2 | free |
 | `6` | Party: slot 3 status — or comparison character 3 | free |
 | `7` | Party: **guest** slot status (silent when there is no guest) — or comparison character 4 | free |
-| `8` | Equipment comparison, character 5. Does nothing outside a shop / equip screen | free — measured in play (S125) |
+| `8` | The **summoned Esper**: name, statuses, HP and its summon gauge. Silent when no Esper is out — or, in a shop / on an equip screen, equipment comparison for character 5 | free — measured in play (S125) |
 | `9` | Equipment comparison, character 6. Does nothing outside a shop / equip screen | free — measured in play (S125) |
 | `U` | License board: current License Points (also announced on board entry) | free |
 | `g` | Party **gil** total (field / shop / menus; silent on the title screen) | free — no game/mod binding uses G |
@@ -194,6 +194,11 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > survive a hard exit, and the readout now speaks **status names** read from the game's own table.
 > Roster list 3 has **nine** slots (0-2 active, 3 guest, 4-8 reserve) and the game's own bound
 > check is literally `slot < 9`; keys `4`/`5`/`6` cover 0-2 and `7` covers the guest.
+>
+> **`8` is NOT roster slot 4 (Session 148).** A summoned Esper is absent from roster list 3
+> altogether, which is why no party key could ever reach it — it gets its own HUD row and its own
+> field on BtlWork (`+0x5AD4`, gated on the summon bit at `+0x5B04`). `8` reads that directly, and
+> adds the summon gauge the Esper alone has. Same silence rule as `7`.
 >
 > **An empty or unreadable slot is SILENT — standing user instruction.** It must never announce
 > "Empty slot" or any other filler; it behaves like every other mod key with nothing to report. The
@@ -308,13 +313,14 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > | Audio beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
 > | Target beacon | Off / **On** (default) | A separate repeating sound that tracks the enemy your party is fighting, panned toward it. **Session 95 split this off from the route beacon**, which it used to be part of — it now plays in battle whether or not you had a route running, and switching the route beacon off no longer takes it with it. Still battle-only: it sounds when your party has committed to a target and stops when the fight does. |
 > | Target beacon volume | 20% / 40% / 60% / 80% / **100%** (default) | How loud that sound plays. |
-> | Text glyphs | **Standard** (default) / Polish translation | **Session 130.** Which font the game is running, because in FFXII the font atlas *is* the character map — a slot's meaning is whatever the font draws there. Leave it on Standard for any unmodified install, in any of the twelve languages. Set it to Polish translation if you installed the PL fan patch (`spolszczenie`), which repaints sixteen accented letter slots to Polish ones: without it every ą ć ę ł ń ś ź ż is read as the letter that used to live in that slot. The mod cannot detect the patch — it repacks the game archive in place and leaves nothing behind to test — so this is the one setting that describes your install rather than your preference. |
+> | ~~Text glyphs~~ | — | ⚠ **REMOVED, Session 147.** The row existed because *"the mod cannot detect the patch — it repacks the game archive in place and leaves nothing behind to test"*. **That claim is STRUCK.** It is true of the DISK and beside the point: what the setting described was which atlas the GAME LOADED, and the patch's own marker was written down in S130 without being recognised — it *"adjusts ten advance widths"*. The two `font00.dat` files differ in exactly 20 bytes, all of them those ten advances, so `GameText::DetectVariantOnce` reads them back through the game's own font manager and picks the table itself. Nothing to set; a stale `text_glyphs=1` in an old settings file is ignored. |
+> | Auto detail | **Off** (default) / On | **Session 147.** Whether the extra detail about the highlighted thing is VOLUNTEERED, or only answered when you ask. Off is exactly today's behaviour: the shop's per-character equipment comparison on `4`-`9`, and the Libra readout on `o`. On adds both to the highlight itself — queued behind the short line, never interrupting it — and takes nothing away, because both keys keep answering in both modes. `F7` is the shortcut. |
 > | Auto-walk | **Off** (default) / On | **Session 100.** With it On, `\` does not just speak the route and start the beacon — the mod walks your character along it, steering with the same directions the voice speaks. It stops the instant you touch a movement key (W/A/S/D or the arrows), the instant combat starts, when you arrive, when a menu opens, and after 15 seconds of no progress ("Auto-walk stopped"). It never re-starts on its own — press `\` again. **Gamepad players:** the mod cannot see the stick, so the stick does NOT cancel it — tap any movement key or use this toggle. |
 >
 > Neither volume goes to zero on purpose — each beacon has its own Off, so a switched-on beacon is
 > never silent for a reason you cannot hear.
 >
-> `F4` toggles Combat verbosity and `F11` toggles the Audio beacon, both from anywhere without
+> `F4` toggles Combat verbosity, `F7` toggles Auto detail and `F11` toggles the Audio beacon, all from anywhere without
 > opening the menu. Each route changes the same stored value and speaks the same confirmation.
 > **`F11` is the route beacon only** — the target beacon has no shortcut key and is changed from the
 > menu. (~~`F9`~~ is **STRUCK**: the game owns it — see the `F9` row above, S112. This paragraph said
@@ -434,23 +440,27 @@ move, so the shop stays on demand; the Equipment screen concerns one character a
 two changed stats, which is short enough to volunteer. Tester-confirmed 2026-08-03: *"you put the
 delta reader on keypress which is perfect."*
 
-### What AUTODETAIL should do with this (F7, still unbuilt)
+### AUTODETAIL — BUILT, Session 147 (`F7` + the `F8` row)
 
-Autodetail is the planned **toggle** that reads the relevant stats on highlight instead of on
-keypress. When it is built, this is its first and best-defined consumer:
+Autodetail is the **toggle** that reads the relevant detail on highlight instead of on a keypress.
+The shop comparison is its first consumer; the Libra readout is its second.
 
-- **OFF (default, today's behaviour):** shop comparison on `4`-`9` only; the Equipment screen keeps
-  its automatic single-character line, which is already short enough to be welcome.
-- **ON:** the shop comparison volunteers itself on each highlight too — **queued, never
-  interrupting**, so the item name and price are heard first. `EquipCompare::LineFor` already
-  produces exactly the per-column text this needs; the only new work is the trigger and the toggle.
-- The keys must keep working in BOTH modes. Autodetail changes what is *volunteered*, never what is
-  *reachable* — a toggle that removed a way to ask is a regression, not a setting.
-- Emit through the surface's existing choke point (`ShopReader` for the list,
-  `EquipTargetReader` for the equip screen), not a new speaker. Two speakers on one surface race,
-  and the plainer line wins — that is exactly how the notice board lost its Status column.
-- Follow the existing pattern for a toggle of this kind: a `ModMenu` row plus a bare-key shortcut,
-  the way Combat verbosity pairs the `F8` menu with `F4`.
+- **OFF (default, today's behaviour):** shop comparison on `4`-`9` only, Libra on `o` only; the
+  Equipment screen keeps its automatic single-character line, which is already short enough to be
+  welcome.
+- **ON:** each volunteers itself on its own highlight too — **queued, never interrupting**, so the
+  item name and price (or the enemy's name and HP) are heard first.
+- The keys keep working in BOTH modes. Autodetail changes what is *volunteered*, never what is
+  *reachable* — a toggle that removed a way to ask would be a regression, not a setting.
+- Each surface emits through its own existing choke point (`ShopReader` for the list,
+  `BattleTargetReader::AnnounceTargetBc` for the target line) and **appends to that line rather than
+  speaking a second time**. Two speakers on one surface race, and the plainer line wins — that is
+  exactly how the notice board lost its Status column.
+- One thing autodetail must NOT carry: the `o` key's **"Libra not active."** answer. That is a reply
+  to a question the player asked; volunteered on every cursor move it would be pure nag, and the
+  never-speak-filler rule stands everywhere the player did not ask.
+- It follows the existing pattern for a toggle of this kind — a `ModMenu` row plus a bare-key
+  shortcut, the way Combat verbosity pairs the `F8` menu with `F4`.
 
 Worth stating plainly because it will be tempting: the Equipment screen's automatic line is **not**
 autodetail already existing. It is one line about one character on a screen whose whole purpose is

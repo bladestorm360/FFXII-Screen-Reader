@@ -209,7 +209,12 @@ NPC-trigger path needs Phase 4 first.
 - [x] Heal event capture — same applier, signed delta
 - [x] KO event capture — party side is the game's own message `0x10`; enemy side is ours (below)
 - [ ] Status apply event capture (`FUN_0030e360` mode 3/4) — the last open Tier-2 gap
-- [ ] Critical / element / weakness flag annotations — critical probably does not exist (§5.5)
+- [~] Critical / element / weakness flag annotations — **enemy elemental WEAKNESS is DONE** (Session
+  147): `BtlChr+0x40`, spoken by the Libra readout on `o`, Libra-gated and suppressed for the `????`
+  marks and bosses. (A first pass this session wrongly called it unobtainable; struck in `debug.md`
+  and `GameArchitecture.md`.) Still open: `critical`, which probably does not exist (§5.5), and the
+  per-hit element ANNOTATION on a damage line, which is a different question — no element survives to
+  the apply site, so a damage line cannot say which element landed.
 - [ ] Combat-log message templates added to phrasebook (12 locales) — now tiny; the game supplies
   almost all of it
 - ~~[ ] Critical-event auto-speech: party-member KO~~ — the game says it (`0x10`); ours would duplicate
@@ -220,9 +225,11 @@ NPC-trigger path needs Phase 4 first.
 - [ ] User test: smoke flow (enter battle, take hits, open log, scroll, close)
 - [ ] User test: continuous FIFO across battle boundary verified
 
-**Reported silent, not yet diagnosed (Session 72)** — details in `debug.md` § "Clan / Hunt surfaces":
-- [ ] Multi-item reward panel (titled bill name + `gil` / `Potion x 2` / `Teleport Stone x 1` rows)
-- [ ] Hunt notice board — "Which bill would you like to read?", 3-column cursored Mark/Rank/Status list
+**Reported silent (Session 72)** — details in `debug.md` § "Clan / Hunt surfaces":
+- [~] Multi-item reward panel — **surface FOUND in Session 147: it is `FUN_0035e070`, the function
+  the mod already hooks.** S72's "different surface" claim is struck. Why it is silent is still open;
+  the descriptor logging that settles it in one hunt is shipped.
+- [x] Hunt notice board — built in Session 87 (`src\ui\choice_reader.{h,cpp}`)
 
 ## Phase 8: Remaining menus
 
@@ -249,3 +256,18 @@ NPC-trigger path needs Phase 4 first.
 
 See `debug.md` for tried-and-failed approaches and solved problems, and
 `GameArchitecture.md` for the RVA / offset / struct registry.
+
+## Session 147 additions (2026-08-10) — from `TesterReports.txt`
+
+- [x] Status screen: L1/R1 character switch re-reads (`FUN_002c2c50`)
+- [x] Enemy instance letter in the battle targeting menu (one naming path)
+- [x] Libra readout on `o` — HP numbers, Level, MP, statuses, elemental weaknesses;
+      `"Libra not active."` when it is down; the weakness clause omitted for Libra-proof units
+- [x] Autodetail (`F7` + `F8` row, default Off) — shop comparison and Libra volunteered on highlight
+- [x] Polish glyph mapping detected automatically from the loaded font atlas; `Text glyphs` row removed
+- [~] Exit reachability: instrumented (`terrain=` / `strict=`), fix deferred to the measurement
+- [~] Hunt-reward panel: surface found, descriptor logging shipped, silence not yet explained
+- [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there
+- [ ] **Killed enemies never leave the entity list** (reported in play 2026-08-10). No HP test in the
+      field scan, and the grace window cannot age out a live transform. Two defects, both written up
+      in `debug.md`; add the counter before changing an admission rule

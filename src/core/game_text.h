@@ -19,15 +19,18 @@ namespace GameText {
 // nothing in the file can be trusted to describe it. See game_glyphs_pl.h for how the real mapping
 // was recovered and what each entry rests on.
 //
-// It is a player setting rather than autodetection because the patch repacks the game archive in
-// place: it leaves no loose file, no marker and no version string to test.
+// ⚠ STRUCK (Session 147): ~~"It is a player setting rather than autodetection because the patch
+// repacks the game archive in place: it leaves no loose file, no marker and no version string to
+// test."~~ True of the DISK, and irrelevant -- what the setting described was which atlas the GAME
+// LOADED, and that is in memory. The patch changes ten advance widths in `font00.dat` and nothing
+// else, which is a deterministic fingerprint; `DetectVariantOnce` in the .cpp reads them back
+// through the game's own font manager and locates the advance field by matching rather than by
+// assuming a struct layout. There is no setting and no mod-menu row any more.
 enum class Variant : uint8_t { Standard = 0, PolishPatch = 1 };
 
-// Set by ModMenu when the player changes the setting, and once at startup from the stored value.
-// Lock-free: a relaxed atomic, read on the game thread inside the decode loop, written on the input
-// thread. GameText deliberately does not include ui/mod_menu.h -- the dependency runs the other way,
-// exactly as it does for SetElementSpriteResolver.
-void SetVariant(Variant v);
+// Which atlas the running game is using. DETECTED, never set: nothing outside game_text.cpp chooses
+// this. A relaxed atomic, written once on the first decode after the font manager exists and read
+// on the game thread inside the decode loop.
 Variant GetVariant();
 
 // Decode a NUL-terminated codec byte string into a wide string. Reads at most

@@ -13,9 +13,27 @@
 // the correct letter is the one that makes the word. Each entry below carries the witnesses that
 // fixed it; they are complete words from the game's own data, not inference from frequency.
 //
-// The patch installs by REPACKING THE VBF IN PLACE (`ff12-vbf.exe -r ff12data ..\FFXII_TZA.vbf`),
-// so there are no loose files to detect and no marker to stat. Selection is therefore a player
-// setting, not autodetection — see ModMenu's Text glyphs row.
+// ⚠ STRUCK (Session 147): ~~"The patch installs by REPACKING THE VBF IN PLACE, so there are no loose
+// files to detect and no marker to stat. Selection is therefore a player setting, not autodetection
+// — see ModMenu's Text glyphs row."~~
+//
+// The repack claim is true and the conclusion did not follow. "No marker on disk" is not "no marker",
+// because the thing being detected is not a file — it is WHICH ATLAS THE GAME LOADED, which is in
+// memory the moment the font manager exists. And this very file already recorded the marker without
+// recognising it: the patch "adjusts ten advance widths". Diffed byte for byte, the two `font00.dat`
+// files (both 46,876 bytes) differ in EXACTLY 20 bytes — ten records, each with its duplicated
+// advance pair at +0x0C/+0x10 changed, and nothing else. That is a deterministic fingerprint.
+//
+//   slot  60  61  62   84  85  86   98  117 118  179
+//   stock 21  21  21   22  22  22   24  19  36   36
+//   PL    20  24  24   17  18  18   20  11  11   11
+//
+// `GameText::DetectVariantOnce` reads them back through the game's own font manager. There is no
+// setting and no ModMenu row any more — the mod knows which table it is holding without being told.
+//
+// The METHOD below is unaffected and still stands: the character metadata really does still name the
+// stock letters, so the MAPPING had to come from the patch's own translated text. Only the "you must
+// ask the player which one" conclusion is struck.
 
 #include <cstdint>
 

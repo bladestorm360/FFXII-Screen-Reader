@@ -19,9 +19,12 @@ Every rule below is **non-negotiable**. Violating any of them is a blocking fail
 - **Conflict with External File Loader**: both want the `dinput8.dll` slot. If a
   user has ELF installed, our install is incompatible without further work.
   Document in `README.md`. (If we revisit later: chain-load ELF from our DllMain.)
-- **Exception**: reading `FFXII-Screen-Reader-Latest.log` is always permitted (needed
-  for debugging). Full path:
-  `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII-Screen-Reader-Latest.log`
+- **Exception — THE LOGS.** Reading `FFXII-Screen-Reader-Latest.log` **and the whole archive
+  beside it** is always permitted (needed for debugging):
+  `…\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII-Screen-Reader-Latest.log`
+  `…\FINAL FANTASY XII THE ZODIAC AGE\x64\logs\FFXII-Screen-Reader-YYYY-MM-DD_HH-MM-SS.log`
+  See **THE LOG CORPUS** under Auditing rules — that archive is the default evidence for every
+  question, and it is NOT the same corpus as `Tester Logs\`.
 - **NEVER MANUALLY EDIT `mod_config.ini`** — neither the repo copy
   (`config\mod_config.ini.template`) nor the deployed copy (`x64\modules\mod_config.ini`).
   The mod's RVA byte-validator + AOB self-healer is the **only** legitimate writer of
@@ -369,10 +372,35 @@ never built; do not reintroduce it, and do not "restore" an open key.
 
 ### Auditing rules
 
+#### THE LOG CORPUS — two directories, and only one of them is evidence (CRITICAL)
+
+**`<game>\x64\logs\` is THE log corpus.** It holds OUR OWN archived dev logs, alongside the live
+`x64\FFXII-Screen-Reader-Latest.log`. **The user is the DEVELOPER, not a tester** — these are their
+own play sessions. Every routine analysis starts here, sweeps here, and counts here. Reading it is
+always permitted (see the Exception above).
+
+**`Tester Logs\<name>\` is NOT part of normal analysis.** A tester-submitted log may be opened only
+when **BOTH** hold:
+1. a tester has reported an issue, **and**
+2. the user has **explicitly pointed at a log in that folder** for that issue.
+
+It is never swept "to see what's there", never grepped speculatively, and **never mixed into a
+corpus-wide count** — a tester's build, settings and install are not ours, so a number taken from
+their log cannot be compared with one taken from ours. When a tester-only defect needs their log,
+**ask for the pointer**; do not go looking. (This complements
+`feedback_read_the_testers_own_log.md`: when the user DOES point you at one, that log is then the
+authority for that defect — the rule here is about which corpus you reach for unprompted.)
+
+**Why (Session 147):** a session investigating a reachability regression reached for `Tester Logs\`
+first, found nothing relevant, and concluded the defect was "not measurable from any archived log".
+It was measurable — the contradiction was sitting in nineteen of our own twenty dev logs the whole
+time. Reaching for the wrong corpus did not just waste the search; it produced a confident wrong
+answer and nearly cost the session its actual finding.
+
 - **ALWAYS** check logs first when debugging — read the mod log before theorizing.
 - **ALWAYS** log all diagnostic data to external file. Every significant runtime decision
   must be logged. Previous sessions archived as
-  `FFXII-Screen-Reader-YYYY-MM-DD_HH-MM-SS.log`.
+  `x64\logs\FFXII-Screen-Reader-YYYY-MM-DD_HH-MM-SS.log`.
 - **ALWAYS** update `Docs\GameArchitecture.md` when log analysis, Frida tracing, or
   Ghidra RE confirms new RVAs, offsets, or class structures.
 - **ALWAYS** keep `MEMORY.md` (in `~/.claude/projects/D--Games-Dev-Custom-FFXII/memory/`)
@@ -469,8 +497,13 @@ D:\Games\Dev\Custom\FFXII\
   `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\`
 - **Game exe:**
   `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII_TZA.exe`
-- **Mod log:**
+- **Mod log (live):**
   `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII-Screen-Reader-Latest.log`
+- **Mod log ARCHIVE — our own dev sessions, and THE default evidence corpus:**
+  `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\logs\`
+- **Tester-submitted logs — RESTRICTED, see THE LOG CORPUS under Auditing rules:**
+  `D:\Games\Dev\Custom\FFXII\Tester Logs\<name>\` — opened only on a reported issue **and** an
+  explicit pointer from the user. Never swept, never counted alongside ours.
 - **Tolk: runtime-only, NEVER vendored.** No `#include "Tolk.h"` anywhere; no
   build dependency. `speech.cpp` uses `LoadLibrary("Tolk.dll")` + `GetProcAddress`
   with hand-rolled typedefs. The user deploys `Tolk.dll` and

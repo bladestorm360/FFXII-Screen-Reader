@@ -65,7 +65,7 @@ enum class SettingId : int {
     TargetBeacon,         // the in-combat target ping, gated on combat but not on a route
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
-    TextGlyphs,           // S130: which font atlas this install runs. Default Standard
+    AutoDetail,           // S147: volunteer the detail on highlight instead of on a key. Default Off
     // S132, both visible ONLY while a shout-minigame sequence is actually running (shout_meter.h's
     // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
     PuzzleGuide,          // the spoken meter and the B/N keys.       Default ON  -- it only informs
@@ -76,6 +76,13 @@ enum class SettingId : int {
 // play-confirmed the tester made it automatic on the two maps `path_danger.cpp` names -- so there is
 // nothing left for a player to choose. A settings file still carrying `sneak_assist=1` is harmless:
 // `Load()` ignores keys it does not know, by design.
+//
+// REMOVED Session 147: `TextGlyphs`. S130 added it on the belief that a fan translation could not be
+// detected -- true of the DISK (the Polish patch repacks the archive in place and leaves no marker),
+// but not of the LOADED FONT, which is the thing the setting was actually describing. The patch
+// changes ten advance widths in `font00.dat`, and `GameText::DetectVariant` reads them back from the
+// game's own font manager, so the mod now knows which atlas it is reading without being told. A
+// stale `text_glyphs=1` in an existing settings file is harmless for the same reason as above.
 
 // Loads the persisted settings and registers the input callbacks. Safe to call before Speech is up.
 bool Init();
@@ -92,6 +99,7 @@ Verbosity CombatVerbosity();
 bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
+bool AutoDetailOn();       // S147: whether detail is VOLUNTEERED on highlight. Never gates a key
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
 

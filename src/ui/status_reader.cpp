@@ -11,6 +11,7 @@
 
 #include <Windows.h>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -33,6 +34,16 @@ constexpr uint32_t RVA_STATUS_CTRL = 0x1A2320;   // FUN_002c2320(ctrl, packet) â
 // page" is exactly `ret == 2`, and the idle per-frame path costs one integer compare. Shared with
 // the license board's `F` overlay, which is why the handler is gated on g_active.
 constexpr uint32_t RVA_OVERLAY_INPUT = 0x1A1A80;
+// FUN_002c2c50(ctrlOrMinusOne) -- the screen's OWN refresh, and the L1/R1 character-switch event.
+// The cycle lives in FUN_002c2320 category 0xa, which is PER-FRAME input and is filtered out below
+// on purpose; the cycle handlers FUN_002c2240 (R1/RIGHT) and FUN_002c2200 (L1/LEFT) call this ONLY
+// when FUN_0027f360 / FUN_0027ed10 actually moved menuCtx+0xDE0, so it is an event, not a poll.
+// It then refills the ailment grid (+0x110), rebuilds the portrait child, and runs FUN_002c2cd0 ->
+// FUN_003fead0(0), the attribute-panel fill -- so by the time the original returns, every field
+// BuildBuffer reads already describes the NEW character.
+// Exactly three call sites in all 33,105 functions: those two, plus FUN_002c2320:100 inside cat-1
+// CREATE. That third one is harmless by construction -- see HookedStatusRefresh.
+constexpr uint32_t RVA_STATUS_REFRESH = 0x1A2C50;
 constexpr uint32_t RVA_RESOLVE_MSG   = 0x1D9860; // FUN_002f9860(id)     -> codec ptr
 constexpr uint32_t RVA_RESOLVE_DEF   = 0x23D330; // FUN_0035d330(cat,id) -> record, codec @ +0x18
 
@@ -73,10 +84,13 @@ constexpr uint32_t DEF_CAT_STATUS = 0x1A;
 
 typedef uint64_t (*Pfn_Wnd)(void*, void*);
 typedef int (*Pfn_OverlayInput)(void*, uint32_t, uint32_t, uint32_t, uint32_t);
+// ONE argument -- counted from the CALLEE's decompile, not from a call site (CLAUDE.md arity rule).
+typedef void (*Pfn_Refresh)(uint32_t);
 typedef const uint8_t* (*Pfn_ResolveMsg)(int);
 typedef const uint8_t* (*Pfn_ResolveDef)(uint32_t, uint32_t);
 Pfn_Wnd          s_origCtrl    = nullptr;
 Pfn_OverlayInput s_origOverlay = nullptr;
+Pfn_Refresh      s_origRefresh = nullptr;
 
 // ---- state (game thread snapshots; input thread navigates) --------------------------------------
 std::mutex        g_mutex;
@@ -86,6 +100,8 @@ VB::VirtualBuffer g_buffer;                   // the Attributes page
 bool              g_haveBuffer = false;
 std::wstring      g_attrLabel[A_ROWS];        // cached: the labels never change within a session
 bool              g_labelsCached = false;
+// Armed by HookedStatusRefresh, consumed by the first focus event that follows. See TryFocus.
+bool              g_switchFocusArmed = false;
 
 // ---- game calls: isolated so no C++ object is live inside a __try scope (SEH rule) --------------
 const uint8_t* ResolveMsgCodec(int id) {
@@ -241,6 +257,7 @@ void Deactivate() {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_active = false;
     g_ctrl = nullptr;
+    g_switchFocusArmed = false;   // never carry a claim out of the screen that armed it
     g_haveBuffer = false;
     g_buffer = VB::VirtualBuffer();
 }
@@ -257,6 +274,28 @@ uint64_t HookedCtrl(void* ctrl, void* packet) {
     if (cat == CAT_CREATE) RefreshAndAnnounce(ctrl);
     else                   Deactivate();
     return ret;
+}
+
+// The character changed (L1/R1). Rebuild and re-announce from the top, so the switch names whoever
+// you landed on before reading their rows -- the buffer's first entry IS the character name.
+//
+// The g_active gate is the SURFACE-LIVENESS test every hook in this file carries, NOT a dedup filter.
+// It is also what makes the third call site (cat-1 CREATE) a no-op by construction: g_active is set
+// only inside RefreshAndAnnounce, which HookedCtrl runs AFTER s_origCtrl returns -- so on the way in,
+// this fires while g_active is still false and does nothing, and CREATE announces exactly once.
+// Same idiom HookedOverlayInput uses below.
+void HookedStatusRefresh(uint32_t param) {
+    if (s_origRefresh) s_origRefresh(param);   // original FIRST: it is what fills the new character's panels
+    STALL_SCOPE("StatusReader::Refresh");
+    bool active;
+    { std::lock_guard<std::mutex> lk(g_mutex); active = g_active; }
+    if (!active) return;
+    RefreshAndAnnounce(nullptr);
+    // ARM THE CLAIM. s_origRefresh above refilled the ailment grid, and the game answers that with a
+    // focus event on the grid which the generic reader would speak over the name we just said. Arm
+    // AFTER the announce: RefreshAndAnnounce is what makes the name the thing being interrupted, and
+    // arming before it would leave the flag set through a refresh that spoke nothing.
+    { std::lock_guard<std::mutex> lk(g_mutex); g_switchFocusArmed = true; }
 }
 
 // ret 2 = closed back to the Attributes page; 1 = opened/switched (a summary page now owns the
@@ -277,17 +316,20 @@ namespace StatusReader {
 
 bool Init() {
     InputTracker::SetMenuNavCallback(&OnMenuNavKey);
-    bool ok = Hooks::InstallTyped(RVA_STATUS_CTRL,   &HookedCtrl,         &s_origCtrl);
-    ok     &= Hooks::InstallTyped(RVA_OVERLAY_INPUT, &HookedOverlayInput, &s_origOverlay);
+    bool ok = Hooks::InstallTyped(RVA_STATUS_CTRL,    &HookedCtrl,          &s_origCtrl);
+    ok     &= Hooks::InstallTyped(RVA_OVERLAY_INPUT,  &HookedOverlayInput,  &s_origOverlay);
+    ok     &= Hooks::InstallTyped(RVA_STATUS_REFRESH, &HookedStatusRefresh, &s_origRefresh);
     Log::Write("STATUS", ok
         ? "StatusReader initialized (Attributes page virtual buffer; Up-Down = entry, "
-          "Left-Right = group, Home-End = ends; returns to it via FUN_002c1a80)"
+          "Left-Right = group, Home-End = ends; returns to it via FUN_002c1a80; "
+          "L1/R1 character switch via FUN_002c2c50)"
         : "StatusReader: a hook FAILED to install â€” see Hooks log.");
     return ok;
 }
 
 void Shutdown() {
     InputTracker::SetMenuNavCallback(nullptr);
+    Hooks::Uninstall(RVA_STATUS_REFRESH);
     Hooks::Uninstall(RVA_OVERLAY_INPUT);
     Hooks::Uninstall(RVA_STATUS_CTRL);
     Deactivate();
@@ -328,6 +370,37 @@ bool OnMenuNavKey(int vk) {
         Log::WriteW("STATUS", "nav:", nullptr, line);
         Speech::Output(line, /*interrupt=*/true);
     }
+    return true;
+}
+
+// GAME thread, from MenuReader::OnFocus's claim block. Contract and reasoning: status_reader.h.
+bool TryFocus(void* owner, int index) {
+    void* ctrl = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (!g_active || !g_switchFocusArmed) return false;
+        // ONE SHOT. Disarm on the first focus event that arrives, whether or not it is the one we
+        // were waiting for, so a refresh that produced no grid focus cannot leave the claim lying in
+        // wait for the player's next press.
+        g_switchFocusArmed = false;
+        ctrl = g_ctrl;
+    }
+    // Never claim our OWN container: that is the Status/Equipment window this reader already speaks
+    // through its virtual buffer, and swallowing its focus would silence the screen's own entry.
+    if (owner == ctrl) return false;
+    // The rebuild resets the grid cursor to the top, so the event it causes is always index 0. A
+    // player moving through that pane produces a moving index, and those must keep speaking.
+    if (index != 0) return false;
+
+    // Logged on every consumption -- this is the falsifier. One line per L1/R1 press and none per
+    // navigation is what proves the latch is detecting the switch rather than muting the pane. The
+    // ailment-grid pointer goes in beside the owner: if the two always match, a later session can
+    // tighten this from a one-shot to a plain structural test on the pane itself.
+    void* ctx = PauseCtx();
+    char m[160];
+    snprintf(m, sizeof(m), "ailment focus swallowed: owner=%p index=%d (ctrl=%p ailmentGrid=%p)",
+             owner, index, ctrl, ctx ? PtrAt(ctx, C_AILMENT) : nullptr);
+    Log::Write("STATUS", m);
     return true;
 }
 

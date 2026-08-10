@@ -213,9 +213,12 @@ void ApplyFallbackLabels(std::vector<Entity>& out);
 // THE CALLER'S GRACE WINDOW MUST CONSULT IT. RescanLocked carries an entity over when its scene object
 // is missing from the fresh list, to survive the handle table streaming an object out for a frame --
 // and it cannot otherwise tell "the engine stopped reporting it" from "we just filtered it out". A
-// filtered object is a LIVE engine object, so its transform keeps reading, so `lastSeenMs` keeps being
-// refreshed, so it never ages out: once carried it is permanent for the life of the map, while Build
-// goes on logging the drop on every rescan. That is a filter that logs success and changes nothing.
+// filtered object is a LIVE engine object that Build will keep finding and keep dropping, so carrying
+// it re-admits it on every rescan while Build logs the drop again: a filter that logs success and
+// changes nothing. A timeout is the right instrument for an ABSENCE; a deliberate removal needs an
+// explicit signal, which is what this pair is. (Before S148 this note also said such an entry could
+// never age out at all. That was true of the time, but the cause was RefreshPositionsLocked re-stamping
+// `lastSeenMs` off a still-readable transform -- a bug, now fixed there, not a property of filtering.)
 void NoteFiltered(void* sceneObj);
 bool WasFilteredThisScan(void* sceneObj);
 

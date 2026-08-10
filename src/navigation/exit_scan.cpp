@@ -422,12 +422,23 @@ void ScanExits(std::vector<Entity>& out) {
             char n8[80] = {};
             for (size_t k = 0; k < c.label.size() && k < 79; ++k)
                 n8[k] = (c.label[k] < 128) ? static_cast<char>(c.label[k]) : '?';
-            char m[240];
+            // `terrain=` and `strict=` are the S147 measurement, and they are the two columns this
+            // line was missing every time it printed the contradiction it was built to expose:
+            //   terrain=1 -- the leader's own floor test refuses this exit's poly (bit 23). The
+            //               census in the same log has been calling those polys UNWALKABLE all along.
+            //   strict=   -- whether a terrain-REFUSING flood still reaches it. This is the candidate
+            //               second gate, and it filters nothing yet: the verdict needs one log in
+            //               which it goes 0 on an exit the player cannot reach AND stays 1 on
+            //               Bhujerba's Travica Way, which carries the same flags and routes fine.
+            char m[300];
             snprintf(m, sizeof(m),
-                     "  routable? \"%s\" at (%.1f,%.1f,%.1f) poly=%d eff=0x%08X walk=%d reach=%d",
+                     "  routable? \"%s\" at (%.1f,%.1f,%.1f) poly=%d eff=0x%08X walk=%d reach=%d "
+                     "terrain=%d strict=%d",
                      n8, c.pos.x, c.pos.y, c.pos.z, ep, haveFlags ? ee : 0u,
                      (ep != NavMesh::kNoPoly && NavMesh::Walkable(ep)) ? 1 : 0,
-                     (ready && NavReach::Reachable(c.pos, kExitReachTol)) ? 1 : 0);
+                     (ready && NavReach::Reachable(c.pos, kExitReachTol)) ? 1 : 0,
+                     (ep != NavMesh::kNoPoly && NavMesh::TerrainRefused(ep)) ? 1 : 0,
+                     (ready && NavReach::ReachableStrict(c.pos, kExitReachTol)) ? 1 : 0);
             Log::Write("NAV-DIAG", m);
         }
     }

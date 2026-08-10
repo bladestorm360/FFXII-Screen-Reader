@@ -2,10 +2,13 @@
 #include "ui/menu_state.h"
 #include "ui/text_capture.h"
 #include "core/game_text.h"
+#include "core/logger.h"
 #include "core/mem_read.h"
 
 #include <Windows.h>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 
 // Config value read (new-game / options screens). Row array at ctrl+0xE8 (stride 0x18, see
 // MenuState::ConfigRowWidget). Two enum layouts, per FUN_0023ed80's type switch:
@@ -95,6 +98,57 @@ std::wstring OptionLabel(void* row, ValueRow kind, int idx) {
     if (!ReadOptionBytes(row, kind, idx, buf, sizeof(buf), &len) || len == 0) return std::wstring();
     std::wstring s = GameText::Decode(buf, len);
     return GameText::IsMostlyPrintable(s) ? s : std::wstring();
+}
+
+// IS THIS ROW REALLY AN ENUM OF LABELS? A row that classifies as one of the three enum builders but
+// whose options are drawn as GAUGE BLOCKS rather than words has no per-option string anywhere, and
+// walking to "the selected cell's label" lands on bytes that are not text. Config's **Battle Speed**
+// does exactly this: it spoke `Battle Speed: æÏèêïêäæÍUÍÒ` while every other row on the same screen
+// ("Battle Mode: Wait", "Target Lines: On", "Cursor Position: Default") read correctly.
+//
+// THE MEASUREMENT THAT NAMES IT, straight out of the log: the value-change path
+// (RowValueAtNewValue -> OptionLabel(row, kind, nv)) produced the IDENTICAL string for two different
+// `nv` values, one after the other. An enum's label is per-option by definition, so a row that
+// answers the same bytes for two distinct option indices is not an enum, whatever its builder is.
+// That is a structural fact about the data, not a guess about the glyphs -- and it cannot misfire on
+// a real enum, because two options of one setting are never the same word.
+//
+// Undecidable (only one option reads) => treat it as an enum and speak, which is the pre-existing
+// behaviour. This is a REFUSAL, not a repair: the correct read for the row is still unknown, so the
+// mod says nothing rather than mojibake, and logs what it would need to do the job properly.
+bool HasPerOptionLabels(void* row, ValueRow kind) {
+    uint8_t a[256], b[256];
+    size_t la = 0, lb = 0;
+    if (!ReadOptionBytes(row, kind, 0, a, sizeof(a), &la) || la == 0) return true;   // undecidable
+    if (!ReadOptionBytes(row, kind, 1, b, sizeof(b), &lb) || lb == 0) return true;   // undecidable
+    if (la != lb) return true;
+    return memcmp(a, b, la) != 0;
+}
+
+// One line per distinct row, so a cursor parked on the offender cannot flood the file. What the next
+// session needs to fix this properly is all here: the class pointer (the builder address stored at
+// row+0 by FUN_00244f50 -- FUN_0023ed80's type switch maps type -> builder, and type 10 ->
+// FUN_0023e400 is a SEVENTH builder ClassifyValueRow does not know), the kind it matched, the
+// selected index, and the bytes that were being decoded as a label.
+void LogRefusedRow(void* row, ValueRow kind, int sel) {
+    static void* s_seen[8] = {};
+    for (void* p : s_seen) if (p == row) return;
+    for (void*& p : s_seen) if (!p) { p = row; break; }
+
+    void* cls = nullptr;
+    uint8_t raw[16] = {};
+    size_t len = 0;
+    __try { cls = *reinterpret_cast<void* const*>(row); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    ReadOptionBytes(row, kind, sel < 0 ? 0 : sel, raw, sizeof(raw), &len);
+
+    char hex[64] = {};
+    for (size_t i = 0; i < len && i < 16; ++i) snprintf(hex + i * 3, 4, "%02X ", raw[i]);
+    char m[256];
+    snprintf(m, sizeof(m),
+             "config row REFUSED (no per-option labels -- not an enum): row=%p class=%p kind=%d "
+             "sel=%d bytes=[%s]",
+             row, cls, static_cast<int>(kind), sel, hex);
+    Log::Write("READER", m);
 }
 
 // FUN_0023ebe0 slider: the gauge child (*(*(row+0x60))) holds the current value at +0x18 and the
@@ -187,8 +241,11 @@ std::wstring RowValue(void* row) {
             return InlineCodecValue(row, OFF_GFX_FMTBUF);
         case ValueRow::KeyBindC5C0:
             return ControlsBindingValue(row);
-        default:                        // E770 / D6B0 / DB40 enums
-            return OptionLabel(row, kind, SelectedIndex(row, kind));
+        default: {                      // E770 / D6B0 / DB40 enums
+            const int sel = SelectedIndex(row, kind);
+            if (!HasPerOptionLabels(row, kind)) { LogRefusedRow(row, kind, sel); return std::wstring(); }
+            return OptionLabel(row, kind, sel);
+        }
     }
 }
 
@@ -200,6 +257,9 @@ std::wstring RowValueAtNewValue(void* row, int nv) {
         if (!ReadSlider(row, &val, &max)) return std::wstring();
         return FormatSlider(static_cast<uint32_t>(nv), max);   // nv is the new gauge value
     }
+    // Same refusal as RowValue: this path is where the defect was MEASURED (two different `nv`,
+    // identical bytes), so it must not keep speaking what the other path now declines to.
+    if (!HasPerOptionLabels(row, kind)) return std::wstring();
     return OptionLabel(row, kind, nv);                          // nv is the new option index
 }
 

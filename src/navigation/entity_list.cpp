@@ -57,6 +57,11 @@ CursorId               g_cursor;
 // removes nobody.
 constexpr uint64_t kEntityGraceMs = 2000;
 
+// The timestamp RescanLocked stamped onto everything the last scan actually produced. It is what
+// lets RefreshPositionsLocked below tell a live entity from one that is merely being CARRIED
+// through the grace window, without either of them needing a second flag on the record.
+uint64_t g_lastScanMs = 0;
+
 // Full rebuild, then carry over anything that has only just stopped being reported.
 int RescanLocked() {
     std::vector<Entity> fresh;
@@ -95,6 +100,7 @@ int RescanLocked() {
         (void)carried;
         e.lastSeenMs = now;
     }
+    int nCarried = 0, nEvicted = 0, nFiltered = 0;
     for (const auto& old : g_entities) {
         if (!old.sceneObj) continue;                       // fixed exits are rebuilt every scan anyway
         bool stillThere = false;
@@ -102,15 +108,34 @@ int RescanLocked() {
         if (stillThere) continue;
         // MISSING BECAUSE WE DELETED IT, not because the engine stopped reporting it.
         //
-        // This loop cannot tell those apart on its own, and the difference is permanent: a filtered
-        // object is a LIVE engine object, so RefreshPositionsLocked keeps reading its transform and
-        // keeps stamping `lastSeenMs`, so it can never age out of the grace window. Once carried in,
-        // it stays for the life of the map -- while the scan goes on logging the drop on every single
-        // rescan. That is a filter that reports success and changes nothing, and it silently undid
-        // both the shadow drop and the unplaced-character pass.
-        if (EntityScan::WasFilteredThisScan(old.sceneObj)) continue;
-        if (old.lastSeenMs == 0 || now - old.lastSeenMs > kEntityGraceMs) continue;   // really gone
+        // This loop cannot tell those apart on its own, and the window is the wrong instrument for
+        // the first case: a filtered object is a LIVE engine object that the scan will keep finding
+        // and keep dropping, so carrying it for two seconds means every rescan re-admits it and logs
+        // the drop again -- a filter that reports success and changes nothing. It silently undid both
+        // the shadow drop and the unplaced-character pass. An explicit "we removed it" signal is the
+        // right shape for a deliberate removal; a timeout is only right for an absence.
+        //
+        // (Until S148 this comment also said the entry could NEVER age out, because
+        // RefreshPositionsLocked re-stamped `lastSeenMs` off a still-readable transform. That was
+        // true, and it was a bug in RefreshPositionsLocked rather than a property of filtering --
+        // fixed there. The signal below is still the right mechanism and stays.)
+        if (EntityScan::WasFilteredThisScan(old.sceneObj)) { ++nFiltered; continue; }
+        if (old.lastSeenMs == 0 || now - old.lastSeenMs > kEntityGraceMs) { ++nEvicted; continue; }
+        ++nCarried;
         fresh.push_back(old);                              // keep it, with its last known position
+    }
+
+    // THE FALSIFIER FOR THE GRACE WINDOW. Nothing used to report what this loop did, which is why a
+    // window that could never expire (see RefreshPositionsLocked) sat unnoticed through twenty
+    // archived dev logs -- every one of them showed the drop tallies from the scan and nothing at
+    // all about what the merge then put back. `evicted` going non-zero after a kill is the proof
+    // that a dead enemy leaves; `carried` staying high across successive rescans is the proof that
+    // it does not. Silent when all three are zero, which is the normal case, so it costs nothing.
+    if (nCarried || nEvicted || nFiltered) {
+        char m[160];
+        snprintf(m, sizeof(m), "grace: carried=%d (within %llums) evicted=%d (aged out) filtered=%d (explicit)",
+                 nCarried, static_cast<unsigned long long>(kEntityGraceMs), nEvicted, nFiltered);
+        Log::Write("NAV", m);
     }
 
     // LABELLING RUNS HERE, NOT INSIDE Build -- after the merge above, so the list that gets numbered
@@ -125,33 +150,52 @@ int RescanLocked() {
     EntityScan::ApplyPlayerLabels(fresh);
     EntityScan::NumberDuplicateLabels(fresh, detail);
 
+    g_lastScanMs = now;
     g_entities.swap(fresh);
     return static_cast<int>(g_entities.size());
 }
 
 
-// Re-read live positions for the current set; drop objects whose transform no longer
-// reads (despawned / mid-teardown). Keeps identity (scene-object ptr) stable so focus
-// survives. Caller holds g_mutex.
+// Re-read live positions and ranges for the current set. Keeps identity (scene-object ptr) stable
+// so focus survives. Never removes anything -- eviction is RescanLocked's job. Caller holds g_mutex.
+//
+// ONLY THE SCAN MAY STAMP `lastSeenMs`, so an entity that RescanLocked is merely CARRYING through
+// the grace window is skipped entirely here: no transform read, no stamp. Both halves matter.
+//
+//  * The stamp. A carried entity still holds the scene-object pointer it had when the scan last saw
+//    it, and that memory is not recycled the moment the engine drops the object, so the transform
+//    read goes on succeeding. Stamping on that basis made `lastSeenMs` measure "when was a pointer
+//    last readable" instead of "when did the scan last see this" -- and since every nav hotkey
+//    refreshes, the 2 s window could then never expire. A killed enemy stayed listed for the life of
+//    the map, which is exactly the reported defect.
+//  * The read. Dereferencing that same stale pointer for up to two seconds is guarded and cannot
+//    fault, but it can hand back coordinates belonging to whatever now occupies the memory. The last
+//    position the scan actually saw is the better answer, and it is already in the record.
+//
+// S148. The S147 write-up blamed the actor-pool walk for having no HP test and proposed adding one;
+// the user's play evidence is that the entity DOES disappear from the game, so there was never
+// anything to gate -- the tracker simply was not noticing. Do not reintroduce an HP gate here: the
+// same walk files allies as NPCs, and a KO'd party member is revivable and still worth listing.
+//
+// The comment this replaced claimed the function dropped objects whose transform stopped reading.
+// The body was changed to keep them; only the comment survived.
 void RefreshPositionsLocked(const FVec3& playerPos) {
-    for (auto it = g_entities.begin(); it != g_entities.end();) {
-        if (it->fixed) {   // exit/map-jump: fixed world pos, no scene node — keep pos, just re-range
-            it->dist2D = NavCommon::Distance2D(playerPos, it->pos);
-            ++it;
+    for (auto& e : g_entities) {
+        // exit/map-jump: fixed world pos, no scene node -- keep pos, just re-range.
+        // Carried-through-the-window: same treatment, and for the reasons in the header above.
+        if (e.fixed || e.lastSeenMs != g_lastScanMs) {
+            e.dist2D = NavCommon::Distance2D(playerPos, e.pos);
             continue;
         }
         FVec3 p;
-        if (!PlayerState::ReadSceneObjectPos(it->sceneObj, p)) {
+        if (!PlayerState::ReadSceneObjectPos(e.sceneObj, p)) {
             // A single failed transform read is streaming noise, not a despawn. Keep the last known
             // position and let the grace window in RescanLocked decide when the object is really gone.
-            it->dist2D = NavCommon::Distance2D(playerPos, it->pos);
-            ++it;
+            e.dist2D = NavCommon::Distance2D(playerPos, e.pos);
             continue;
         }
-        it->pos = p;
-        it->lastSeenMs = GetTickCount64();
-        it->dist2D = NavCommon::Distance2D(playerPos, p);
-        ++it;
+        e.pos = p;
+        e.dist2D = NavCommon::Distance2D(playerPos, p);
     }
 }
 

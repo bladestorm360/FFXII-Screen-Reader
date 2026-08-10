@@ -36,6 +36,20 @@ bool Ready();
 // walkable sample, so a zero-tolerance test would report real exits as unreachable.
 bool Reachable(const FVec3& p, float tolerance);
 
+// MEASUREMENT ONLY (Session 147). The same question answered off a second flood that also refuses
+// terrain the leader's class cannot enter (bit 23 -- water, lava, bog, out of bounds), so the two
+// answers can be compared in a log instead of argued about.
+//
+// **NOTHING MAY FILTER ON THIS.** It exists because our own archived logs print, on adjacent lines,
+// a census calling a poly `*** UNWALKABLE (bit23) ***` and a routability line calling the exit
+// standing on it `walk=1 reach=1` -- and `unreachable=0` in every log ever recorded, because the
+// permissive flood crosses the Waterway's flooded channels. Whether THIS is the right second gate is
+// exactly what is being measured: it must go false on the exits the player genuinely cannot reach
+// AND stay true on the working bit-23 exits (Bhujerba's Travica Way is the control -- same flags,
+// routes fine). If it fails either half it is the wrong instrument too, and the log will say so.
+// Do not promote it to a filter before that measurement exists. See nav_reach.cpp.
+bool ReachableStrict(const FVec3& p, float tolerance);
+
 // Diagnostics: cells in the reachable set (0 until the fill starts).
 int CellCount();
 

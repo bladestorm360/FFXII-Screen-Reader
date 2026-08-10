@@ -132,12 +132,41 @@ void CheckVitals(void* tgtBc, int32_t hpDelta) {
     if (!MemRead::SafeReadU32(tgtBc, BC_CURHP, &cur) ||
         !MemRead::SafeReadU32(tgtBc, BC_MAXHP, &mx) || mx == 0) return;
 
+    // ---- THE 20% THRESHOLD IS 20% OF **MAX**, AND CURRENT IS ALLOWED TO EXCEED IT ---------------
+    //
+    // User's decision, S148, after working the alternatives through: *"you might just have to do 20%
+    // of max hp regardless… that way when current HP does drop to 20% of max HP the low HP warning
+    // will still fire."*
+    //
+    // WHAT MADE THIS LOOK BROKEN. With the licence-board `HP x2` augment, CURRENT sits above max --
+    // Basch reads 14638 against a max of 7319 -- so the ratio starts at ~200% and the warning fires
+    // at 1464, which is 10% of what he can actually absorb. That is a real consequence and it is
+    // ACCEPTED, not overlooked: 20% of your max is a meaningful danger line, and an overmax buffer
+    // is a temporary cushion sitting on top of it, not a bigger pool to re-scale against.
+    //
+    // `BC_MAXHP` IS THE RIGHT DENOMINATOR, and that is settled rather than assumed: `FUN_002fef30`
+    // called as `FUN_002fef30(bc, 0, 0)` defaults its output pointer to `param_1 + 0x24`, so +0x24 is
+    // that function's own computed result -- base plus twelve equipment/licence sources, already
+    // through the party-side 9999 clamp. It is the game's own max, not a raw stat.
+    //
+    // DO NOT "FIX" THE >100% CASE. A future reader will see current above max and want to clamp the
+    // numerator, or swap the denominator for the current-at-full-health value. Both change when the
+    // warning fires, and neither is what was asked for. The comparison below is written to be
+    // correct for post > denom rather than to prevent it.
+    //
+    // DisplayHp on the denominator is a no-op today (the game already clamped +0x24) and is here to
+    // state the rule: the threshold is 20% of the max the player is shown, never of a raw field.
+    //
+    // PARTY ONLY. The comparison lives inside the `party` branch below and is not evaluated for
+    // anything else, so nothing here reasons about enemy HP magnitudes -- an earlier revision of this
+    // comment justified a widened integer type with a boss that can never reach the code.
     Latch& l = LatchFor(tgtBc);
 
     // We run on ENTRY -- the calculator fills the result struct before the applier applies it -- so
     // the BtlChr still holds the PRE-apply HP and the post value is pre + delta.
     const int32_t post  = static_cast<int32_t>(cur) + hpDelta;
     const bool    party = BattleState::IsPartySide(tgtBc);
+
 
     // One line per lethal blow, so a KO that fails to announce says WHY instead of just going
     // quiet. Cheap: only reached when something actually took damage.
@@ -149,8 +178,16 @@ void CheckVitals(void* tgtBc, int32_t hpDelta) {
     }
 
     if (post > 0) {
-        // Alive. Party members get the 20% warning; an enemy's HP fraction is not actionable.
-        if (party && post <= static_cast<int32_t>(mx) / 5) {
+        // Alive. THE WARNING IS PARTY-ONLY -- an enemy's HP fraction is not actionable, and the
+        // threshold is never even computed for one. Everything below is therefore reasoning about
+        // party HP alone: max is <= 9999 (the game's own clamp), current tops out around twice that
+        // with an overmax buffer, so the multiply cannot overflow and needs no widening.
+        //
+        // Multiply rather than divide so the boundary is exact: 7319/5 truncates to 1463, and
+        // `post * 5 <= 7319` gives the same answer without the rounding step.
+        if (party &&
+            static_cast<int32_t>(post) * 5 <=
+                BattleState::DisplayHp(tgtBc, static_cast<int32_t>(mx))) {
             if (!l.low) {
                 l.low = true;
                 const std::wstring who =

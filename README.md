@@ -14,7 +14,7 @@ Pathfinding directions can change abruptly if the game moves the camera. Directi
 
 Walking close to a wall is the most common cause of that flip. In a narrow street, an alley or a doorway the game pulls the camera in tight and swings it around to keep you in shot, and it can turn a long way in a moment. Because directions are camera-relative, a route that was "keep going north" can become "go south" while you are still walking the same way down the same wall — nothing has gone wrong, the frame the directions are given in has rotated. If it happens, step away from the wall and press the directions key again: with the camera back behind you the reading settles. This is the game's own camera behaviour and the mod cannot stop it without breaking battle targeting, which locks onto enemies through that same camera.
 
-Enemy HP is given as a percentage rather than a number. Party members and allies give real numbers. Libra to be implemented once I have access to the spell.
+Enemy HP is given as a percentage rather than a number, the same way the game gives you a bar rather than digits. Party members and allies give real numbers. With Libra up the enemy gives real numbers too, and O reads the rest of what Libra reveals.
 
 Not yet read: the bodies of the full-page Handbook tutorials. Both are pre-rendered images rather than text. 
 
@@ -97,6 +97,7 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
 * F6: give the selected object your own name, taken from the clipboard.
+* F7: switch Auto detail on or off — see the mod menu below.
 * F11: turn the audio beacon on or off. It only responds to F11 on its own — hold Shift, Ctrl or Alt and it does nothing, so Shift+F11 stays yours for your screen reader.
 * F8: open or close the mod menu.
 
@@ -138,6 +139,7 @@ Map exits cannot be named this way. They come from the map's own script rather t
 * 5: second party member.
 * 6: third party member.
 * 7: guest, when you have one.
+* 8: the summoned Esper, when one is out — its name, statuses, HP and summon gauge.
 
 These work on the field as well as in battle.
 
@@ -205,18 +207,18 @@ The settings it holds:
 * Audio beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Target beacon — On or Off. The separate sound that tracks the enemy your party is fighting, described above. On is the default.
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
-* Text glyphs — Standard or Polish translation. Standard is the default and is right for any unmodified copy of the game, in any language. Choose Polish translation only if you installed the Polish fan patch, which reuses sixteen accented letter slots for Polish letters; without this setting those letters are read as the wrong letter.
+* Auto detail — Off or On. Off reads the extra detail only when you ask for it: the equipment comparison on 4 to 9, and Libra on O. On also reads it as you move — the equipment comparison as you go down a shop list, and the Libra readout as you move the target cursor between enemies — after the short line, never instead of it. Both keys keep working either way. Off is the default.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 
-F4 switches Combat verbosity and F11 switches the Audio beacon, both without opening the menu, so you can change either of them in the middle of a fight. Your choices are remembered between sessions.
+F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 
 Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it.
 
 #### Reading
 
-* O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help, which is what it used to read on the Equipment screen. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on.
+* O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help, which is what it used to read on the Equipment screen. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on. With an enemy under the target cursor in battle it reads what Libra reveals — HP as numbers, level, MP where the enemy has any, any statuses on it, and what it is weak to — or says Libra is not active. Marks and bosses that shrug off Libra give you the same nothing they give a sighted player.
 * T: repeat the last line of dialogue — a conversation page, a prompt, or an obtained-item message. Silent when none of those is on screen.
 * U: current License Points, on the License Board.
 * ': write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.

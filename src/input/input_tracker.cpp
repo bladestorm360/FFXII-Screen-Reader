@@ -86,6 +86,8 @@ constexpr int DIK_O = 0x18, DIK_T = 0x14, DIK_LBRACKET = 0x1A, DIK_RBRACKET = 0x
 // 7 reads roster slot 3, the GUEST slot (list 3 has nine slots: 0-2 active, 3 guest, 4-8 reserve).
 constexpr int DIK_4 = 0x05, DIK_5 = 0x06, DIK_6 = 0x07, DIK_7 = 0x08;
 // 8 and 9 join them for the shop's per-character equipment comparison, which can show six columns.
+// Outside a shop, 8 reads the SUMMONED ESPER (S148) -- not a roster slot, which is why it needed its
+// own key: an Esper is absent from roster list 3 entirely, so 4-7 can never address it.
 //
 // THEIR FREEDOM IS NOT PROVEN. Session 112's lesson is that the game's Controls screen omits
 // bindings it really has (it never listed F9 = Hide On-Screen Keyboard), and probe_equip_compare's
@@ -128,7 +130,7 @@ constexpr int DIK_W = 0x11, DIK_A = 0x1E, DIK_S = 0x1F, DIK_D = 0x20;
 // never defined and no edge was ever registered, so `case VK_F6:` has been dead code ever since and
 // pressing F6 did precisely nothing. Confirmed in play by the tester, and again by the label store:
 // 127 records, zero of them named.
-// F7 is deliberately ABSENT: it is reserved for autodetail and must not be bound to anything else.
+// F7: autodetail, Off <-> On (Session 147 -- the key was RESERVED for it from S90 and is now spent).
 // F8: open/close the mod's own settings menu.
 // F10 is NOT bound (Session 115). It carried the sneak-assist toggle from S107 to S114; that feature
 // now acts automatically on the maps `path_danger.cpp` names and has no setting, so the key went back
@@ -141,7 +143,8 @@ constexpr int DIK_W = 0x11, DIK_A = 0x1E, DIK_S = 0x1F, DIK_D = 0x20;
 // Keyboard` / `Space Close`). The mod cannot swallow keys, so while the audio beacon sat on F9 every
 // toggle also flipped that full-screen panel. The beacon moved to **F11**; DIK_F9 is now unused by
 // the mod and left to the game. Absence from a rebinding UI is not evidence a key is free.
-constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F8 = 0x42, DIK_F11 = 0x57;
+constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F7 = 0x41, DIK_F8 = 0x42,
+              DIK_F11 = 0x57;
 // Ctrl/Alt scan codes for the BARE-KEY guard below. (DIK_LSHIFT / DIK_RSHIFT are already declared
 // with the movement keys above.)
 constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0xB8;
@@ -153,7 +156,7 @@ constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0x
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[27]{};   // 0-15 + 20-26 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[28]{};   // 0-15 + 20-27 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -433,6 +436,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 combat verbosity
     DInputEdge(VK_F5,         g_extraDown[15],(dik[DIK_F5]         & 0x80) != 0, true);  // F5 all/story-gated
     DInputEdge(VK_F6,         g_extraDown[20],(dik[DIK_F6]         & 0x80) != 0, true);  // F6 label from clipboard
+    DInputEdge(VK_F7,         g_extraDown[27],(dik[DIK_F7]         & 0x80) != 0, true);  // F7 autodetail
     DInputEdge(VK_F8,         g_extraDown[21],(dik[DIK_F8]         & 0x80) != 0, true);  // F8 mod menu
     // F11 audio beacon -- BARE PRESS ONLY (Session 112, tester instruction). **Shift+F11 is an NVDA
     // command the tester needs while playing**, and the mod cannot swallow keys, so an unguarded F11
@@ -456,7 +460,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true);  // 5  party slot 2 status
     DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true);  // 6  party slot 3 status
     DInputEdge('7',           g_extraDown[9],(dik[DIK_7]          & 0x80) != 0, true);  // 7  guest slot status
-    DInputEdge('8',           g_extraDown[23],(dik[DIK_8]         & 0x80) != 0, true);  // 8  equip column 5
+    DInputEdge('8',           g_extraDown[23],(dik[DIK_8]         & 0x80) != 0, true);  // 8  equip column 5 / summoned Esper
     DInputEdge('9',           g_extraDown[24],(dik[DIK_9]         & 0x80) != 0, true);  // 9  equip column 6
     // COLLISION WATCH for 8/9 (see their DIK note above). The mod cannot swallow a key, so if the
     // game also binds one, BOTH happen and the player gets a surprise action. Rather than assert

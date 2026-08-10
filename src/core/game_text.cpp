@@ -2,10 +2,14 @@
 #include "core/message_macro.h"
 #include "core/game_glyphs.h"
 #include "core/game_glyphs_pl.h"
+#include "core/hooks.h"      // ResolveRva -- the font manager + the glyph-record getter
+#include "core/mem_read.h"   // guarded reads of the loaded font records
+#include "core/logger.h"     // the detection verdict, and the bytes when it fails
 
 #include <Windows.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cwctype>
 
 namespace GameText {
@@ -30,6 +34,108 @@ void BuildGlyphTable(Variant v) {
         for (const auto& o : kGlyphPolish) g_glyph[o.byte] = o.ch;
     }
     g_glyphReady.store(true, std::memory_order_release);
+}
+
+// ---- WHICH FONT ATLAS IS LOADED — detected, not asked (Session 147) ------------------------------
+//
+// STRIKES "autodetection is not available" (game_glyphs_pl.h, debug.md S130). That claim was about
+// the DISK, and it is true there: the Polish patch repacks the VBF in place, leaves no loose file
+// and no version marker, and its own font metadata still names the stock letters. But the thing the
+// setting was describing was never a file on disk -- it was WHICH ATLAS THE GAME LOADED, and that is
+// sitting in memory in the font manager.
+//
+// THE FINGERPRINT, measured by diffing the two `font00.dat` files byte for byte (both 46,876 bytes):
+// they differ in EXACTLY 20 bytes, in 10 records, and every one of those 20 is an advance width
+// (the file stores it twice per record, at +0x0C and +0x10). S130 saw this and wrote it down --
+// "the patch adjusts ten advance widths" -- without noticing that ten adjusted widths ARE the marker.
+//
+//   slot  60  61  62   84  85  86   98  117 118  179     (record ordinal == slot; byte = slot+0x20)
+//   stock 21  21  21   22  22  22   24  19  36   36
+//   PL    20  24  24   17  18  18   20  11  11   11
+//
+// HOW THIS READS THEM WITHOUT KNOWING THE STRUCT. `FUN_0017f8c0(slot)` hands back the loaded record,
+// but it comes out of a std::map (`FUN_001fdec0` is a red-black-tree lookup returning `node+0x24`),
+// so the in-memory layout is the LOADER's, not the file's, and guessing which field is the advance
+// would be exactly the kind of unvalidated assumption this project keeps paying for. So it does not
+// guess: it walks every 4-byte-aligned offset in the record and asks whether the ten values sitting
+// at that offset spell the stock vector or the PL vector. Ten values matching a specific vector by
+// accident is not a thing that happens, and the offset that matches IS the advance field -- located
+// by measurement rather than assumed.
+//
+// If NEITHER vector matches, that is a fact worth having: the record layout moved, or the game
+// updated its font. It logs the bytes it saw and stays on Standard, which is every unmodified
+// install in all twelve languages -- so an unrecognised font can only ever leave behaviour where it
+// already was, never make it worse.
+constexpr int      kFpSlots = 10;
+constexpr uint32_t kFpSlot [kFpSlots] = { 60, 61, 62, 84, 85, 86, 98, 117, 118, 179 };
+constexpr uint32_t kFpStock[kFpSlots] = { 21, 21, 21, 22, 22, 22, 24,  19,  36,  36 };
+constexpr uint32_t kFpPolish[kFpSlots] = { 20, 24, 24, 17, 18, 18, 20,  11,  11,  11 };
+
+constexpr uint32_t RVA_FONT_MGR    = 0x1EE11F8;  // DAT_01f811f8 -- the font manager (FUN_001b5fa0)
+constexpr uint32_t RVA_GLYPH_REC   = 0x5F8C0;    // FUN_0017f8c0(slot) -> loaded glyph record
+constexpr uint32_t kRecScan        = 0x24;       // bytes of the record we are willing to look at
+
+typedef void* (*Pfn_GlyphRecord)(uint32_t);
+
+void* GlyphRecord(uint32_t slot) {
+    auto fn = reinterpret_cast<Pfn_GlyphRecord>(Hooks::ResolveRva(RVA_GLYPH_REC));
+    if (!fn) return nullptr;
+    __try { return fn(slot); } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+
+std::atomic<bool> g_variantDetected{false};
+
+void DetectVariantOnce() {
+    if (g_variantDetected.exchange(true)) return;         // one attempt per process, whatever it finds
+
+    // The manager is created during boot; until it exists there is nothing to read and no honest
+    // answer to give, so re-arm and let the next caller try again.
+    void* mgr = nullptr;
+    if (!MemRead::SafeReadPtr(Hooks::ResolveRva(RVA_FONT_MGR), &mgr) || !mgr) {
+        g_variantDetected.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    uint32_t rec[kFpSlots][kRecScan / 4] = {};
+    for (int i = 0; i < kFpSlots; ++i) {
+        void* r = GlyphRecord(kFpSlot[i]);
+        if (!r) { g_variantDetected.store(false, std::memory_order_relaxed); return; }
+        for (uint32_t off = 0; off < kRecScan; off += 4) {
+            if (!MemRead::SafeReadU32(r, off, &rec[i][off / 4])) {
+                g_variantDetected.store(false, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+
+    for (uint32_t off = 0; off < kRecScan; off += 4) {
+        bool stock = true, polish = true;
+        for (int i = 0; i < kFpSlots; ++i) {
+            if (rec[i][off / 4] != kFpStock[i])  stock  = false;
+            if (rec[i][off / 4] != kFpPolish[i]) polish = false;
+        }
+        if (stock == polish) continue;                    // both or neither -- not the advance field
+        const Variant v = polish ? Variant::PolishPatch : Variant::Standard;
+        g_variant.store(v, std::memory_order_relaxed);
+        BuildGlyphTable(v);
+        char b[160];
+        snprintf(b, sizeof(b),
+                 "font atlas DETECTED: %s (advance field at record+0x%02X, 10/10 slots matched)",
+                 polish ? "Polish fan patch" : "standard", off);
+        Log::Write("TEXT", b);
+        return;
+    }
+
+    // No vector matched. Print what was actually there -- this is the one line that turns "detection
+    // failed" into a fix, and without it the next session would be re-deriving the fingerprint.
+    char b[320];
+    int n = snprintf(b, sizeof(b), "font atlas UNRECOGNISED (staying standard). slot values:");
+    for (int i = 0; i < kFpSlots && n > 0 && n < static_cast<int>(sizeof(b)); ++i) {
+        n += snprintf(b + n, sizeof(b) - n, " [%u]", kFpSlot[i]);
+        for (uint32_t off = 0; off < kRecScan && n < static_cast<int>(sizeof(b)); off += 4)
+            n += snprintf(b + n, sizeof(b) - n, "%s%u", off ? "," : "=", rec[i][off / 4]);
+    }
+    Log::Write("TEXT", b);
 }
 
 // Where the last decode on this thread gave up. See DecodeBail in the header for why this matters.
@@ -285,6 +391,13 @@ void ResolveSprites(std::wstring& s) {
 // Decode simply concatenates -- which reproduces the previous behaviour exactly, since 0x03 used to
 // fall through the `default: return 1` arm and emit nothing.
 bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>& pages) {
+    // Detect the font atlas before the first character is mapped. It lives HERE, at the one funnel
+    // every decode in the mod passes through, rather than in an Init: the font manager does not
+    // exist yet when the mod initialises, and the first string the mod ever decodes must already be
+    // using the right table. One relaxed load per decoded STRING (not per character), and once it
+    // succeeds this is a single predictable branch forever after.
+    if (!g_variantDetected.load(std::memory_order_relaxed)) DetectVariantOnce();
+
     pages.clear();
     g_bail = DecodeBail{};
     if (!p) return false;
@@ -451,10 +564,9 @@ void SetElementSpriteResolver(SpriteNameFn fn) {
     g_spriteResolver = fn;
 }
 
-void SetVariant(Variant v) {
-    g_variant.store(v, std::memory_order_relaxed);
-    BuildGlyphTable(v);
-}
+// (S130's SetVariant went with the mod-menu row in S147. Nothing outside this file chooses the
+// variant any more -- DetectVariantOnce reads it off the loaded atlas. Re-adding a setter would put
+// back the way a wrong answer could be persisted and then trusted forever.)
 
 Variant GetVariant() { return g_variant.load(std::memory_order_relaxed); }
 
