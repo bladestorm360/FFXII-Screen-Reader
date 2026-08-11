@@ -79,7 +79,7 @@ constexpr uint32_t OFF_CELL_CATEGORY = 0x10;    // CATEGORY word codec ("Weapon"
 // Bit 0x1000 is set by `FUN_0055e090`, which walks every LEARNED cell and promotes its four
 // orthogonal neighbours — that is the board's adjacency rule, and it is the ONLY place reachability
 // exists. `FUN_00323600` (below) has no adjacency test of any kind, which is why a node three tiles
-// past the frontier was announced "can learn" and then buzzed when confirmed.
+// past the frontier was announced as available and then buzzed when confirmed.
 //
 // Reading the same word the game branches on is what makes the spoken status agree with the sound by
 // construction, rather than by a second model that can drift out of step with it.
@@ -244,9 +244,13 @@ std::wstring JobDesc(int job) {
 // happen?" -- because that is the only part of the node's state the player cannot already work out.
 //
 //   learned              -> "learned"
-//   reachable            -> "can learn"   (Confirm responds: the purchase prompt, or the game's own
+//   reachable            -> "available"   (Confirm responds: the purchase prompt, or the game's own
 //                                          not-enough-LP message)
 //   prerequisites unmet  -> NOTHING       (Confirm is a no-op with a buzzer)
+//
+// "available" rather than "can learn", by user decision after play-confirming the fix: the word
+// states the node's standing without promising an outcome the LP might not support, and the game's
+// own "insufficient license points" message already speaks (play-confirmed) when it does not.
 //
 // AFFORDABILITY IS DELIBERATELY NOT SPOKEN, and CELL_AFFORDABLE is read only into the log. The line
 // already carries the node's LP cost, `U` reads the character's total, and the game itself puts up a
@@ -256,7 +260,7 @@ std::wstring JobDesc(int job) {
 //
 // nullptr = SAY NOTHING, and that is the answer when the prerequisites are not met. The game has no
 // wording for that state -- the board draws it as a dim icon, and a cell carries no codec but its
-// category word -- so inventing one would be a fabricated label. Silence also makes "can learn" a
+// category word -- so inventing one would be a fabricated label. Silence also makes "available" a
 // claim the mod only ever makes when FUN_0055cd40 would really respond to Confirm.
 //
 // A faulted read leaves `flags` at 0, which lands on the reachable test and appends nothing: a bad
@@ -269,7 +273,7 @@ std::wstring JobDesc(int job) {
 const wchar_t* StatusWordFromFlags(uint32_t flags) {
     if (flags & CELL_LEARNED)      return Phrase::Get(Phrase::Id::Learned);
     if (!(flags & CELL_REACHABLE)) return nullptr;                            // Confirm buzzes
-    return Phrase::Get(Phrase::Id::CanLearn);                                 // Confirm responds
+    return Phrase::Get(Phrase::Id::Available);                                 // Confirm responds
 }
 
 // ---- announcements ------------------------------------------------------------------------------

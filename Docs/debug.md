@@ -6005,3 +6005,11 @@ in 140 ms at area load. It is NOT a restoration of the S52 content-setter reader
 **Instrument:** the inert repeats are counted per slot and logged once at 64 —
 `end latch idled 64x on wnd=…`. Presence proves the loop was real; **absence on the reported
 tutorial box means this diagnosis is wrong** and needs re-testing on the tester's build.
+
+**PLAY-CONFIRMED (same session), and the spoken word is `available`, not `can learn`.** The user:
+*"license board works perfectly, even announces the game's own 'insufficient license points' when
+failing to learn."* That settles the one thing left open — the not-enough-LP popup is
+`FUN_002ce2f0(board, 10)`, not the `FUN_0057c480` surface `message_reader` covers, so whether it
+spoke was unknown. It does, in the game's own wording, at the moment it matters. `Phrase::Id::CanLearn`
+became `Available`: "can learn" promises an outcome the player's LP might not support, and the mod
+deliberately does not read the LP.

@@ -72,7 +72,7 @@ enum class Id {
     // already carries the node's cost, `U` reads the total, and the GAME puts up its own message when
     // you confirm a node you cannot pay for — so the mod would be pre-empting the player's own
     // arithmetic. The board status answers one question only: will Confirm do anything?
-    Learned, CanLearn, LockedUpper,
+    Learned, Available, LockedUpper,
     LicenseBoard, LicenseBoardSuffix, LicensePointsSuffix,
 
     // -- Gauges / status labels (status_reader.cpp, party_status.cpp, battle_target_reader.cpp)

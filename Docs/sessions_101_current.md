@@ -4475,3 +4475,19 @@ and compares a speed), safe numbers (FFXII walking is ~5-6 m/s, so even 4x at 10
 `CLAUDE.md` gained **NEVER COUNT FRAMES** under the no-polling rule, with the edge-vs-level lesson
 beside it, since both defects this session were the same mistake in different clothes: **treating a
 frame-rate-dependent quantity as if it were time.**
+
+### 4. PLAY-CONFIRMED, and one word changed
+
+*"license board works perfectly, even announces the game's own 'insufficient license points' when
+failing to learn."* Both halves of this session are now play-confirmed by the user.
+
+That report also closes a loose end I had flagged as unknown: the not-enough-LP popup is
+`FUN_002ce2f0(board, 10)`, **not** the `FUN_0057c480` menu-message surface `message_reader` covers,
+so whether it spoke was an open question. It does. Nothing to build, and the case for keeping
+affordability out of the status word is now measured rather than argued -- **the game says it, at the
+moment it matters, in its own wording.**
+
+**`can learn` -> `available`** (`Phrase::Id::CanLearn` -> `Available`). The user's call: "can learn"
+promises an outcome the player's LP might not support, and the mod deliberately does not read the LP.
+"Available" states the node's standing and leaves the arithmetic where it belongs. Same three states,
+same flag word, one string and one enumerator.

@@ -15,9 +15,10 @@
 //     job + current LP via a dedicated proc hook. The STATUS is read off the focused cell's own
 //     flag word (cell+0x18) -- the one word FUN_0055cd40's Confirm branch tests -- so the spoken
 //     word and the game's accept/buzz decision cannot disagree. It answers ONE question, "will
-//     Confirm do anything here": learned / can learn / (silence, when the prerequisites are not met
+//     Confirm do anything here": learned / available / (silence, when the prerequisites are not met
 //     and Confirm is a no-op). Affordability is NOT spoken -- the cost is in the line, `U` gives the
-//     total, and the game shows its own message on a node you cannot pay for.
+//     total, and the game's own "insufficient license points" message speaks (play-confirmed) when
+//     you confirm a node you cannot pay for.
 //   * `U` key -> current LP (only while the license board is open; silent otherwise).
 //
 // CONTRACT (same as the other readers): read-only, SEH-guarded memory reads. The only game
