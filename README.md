@@ -158,13 +158,17 @@ The Gambit screen reads as you move through it — no mod key. The top row is th
 
 Up and Down move between slots and read the whole slot. Left and Right move across the three parts of one slot — the on/off switch, the condition, the action — and read only the part you land on, since you heard the rest a moment ago. Choosing a new condition or action reads as you browse it.
 
+#### Clan Primer
+
+Opening a Bestiary, Hunts or Traveller's Tips entry reads its page, and turning the page reads the new one. Up and Down step through the open page a line at a time, Home and End jump to its start or end, and O re-reads it.
+
 #### Buying and equipping (4 to 9)
 
 Shops and the "equip to whom" screen draw a column of numbers per character showing what an item would do to their stats. The mod reads those columns on the number keys: 4 is the first character, 5 the second, and so on up to 9 for the sixth. It speaks the character, the stat, and which way it moves — "Vaan: Attack Power up 12, Evade down 3". A character the item cannot go on, or a stat that does not change, says nothing.
 
 It is on a keypress rather than automatic because six characters times two stats is far too much to hear every time the cursor moves. A key you did not press costs you nothing; press only the characters you are choosing between.
 
-The field menu's own Equipment screen is the exception, and deliberately so: it compares one character, usually one or two stats. 4 reads it.
+The field menu's own Equipment screen compares one character, usually one or two stats. 4 reads it there too, and with Auto detail on it also reads as you move.
 
 New in this build: item and equipment descriptions now read the elements as words. The game draws those as small pictures — "Element: Fire", "Immune: Fire, Lightning" — so they were silently dropped before. Equipment that blocks four or more status effects used to read as "Various status effects", which is the game's own shorthand; the mod now names them.
 
@@ -198,7 +202,7 @@ Two settings appear in the mod menu while you are shouting, and only then. Puzzl
 
 #### The mod menu (F8)
 
-F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
+F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
 
 The settings it holds:
 
