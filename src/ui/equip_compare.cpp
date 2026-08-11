@@ -1,5 +1,6 @@
 #include "ui/equip_compare.h"
 #include "ui/equip_target_reader.h"
+#include "ui/mod_menu.h"                // AutoDetailOn -- the per-highlight preview is VOLUNTEERED
 #include "ui/shop_reader.h"
 #include "ui/text_capture.h"
 
@@ -384,7 +385,24 @@ void HookedAttrFill(int cmdId, int arg) {
     STALL_SCOPE("EquipCompare::HookedAttrFill");
     const std::wstring line = ComposeAttrPreview();
     if (line.empty()) return;
+    // LOG UNCONDITIONALLY, SPEAK ONLY WHEN VOLUNTEERING IS ON. The line is still composed and
+    // recorded either way, so a log keeps answering "what would it have said" (diagnostics go to the
+    // log, never to speech).
     Log::WriteW("EQUIP", "preview:", line);
+    // THE AUTO-DETAIL GATE, missing since this hook was written (S125) and reported in play
+    // 2026-08-11: *"the delta comparison is vocalizing automatically in the unequip menu with
+    // autodetail off, and it should not be."*
+    //
+    // This is the definition of what that setting controls -- `mod_menu.h:68`, S147: "volunteer the
+    // detail on highlight instead of on a key. Default Off". A per-highlight stat line IS volunteered
+    // detail, and this was the one such path that never asked. `shop_reader.cpp:145` already gates
+    // the very same EquipCompare output on it, so the two surfaces disagreed about one setting.
+    //
+    // IT DOES NOT GATE THE KEY, and must not: `mod_menu.h:102` is explicit that AutoDetail "never
+    // gates a key", and `EquipCompare::LineFor(1)` returns this exact line to the `4` handler in
+    // nav_commands.cpp. So with the setting off the preview is still one keypress away -- nothing
+    // becomes unreachable, it just stops speaking on its own.
+    if (!ModMenu::AutoDetailOn()) return;
     Speech::Output(line, /*interrupt=*/false);
 }
 
