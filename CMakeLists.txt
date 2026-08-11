@@ -5,6 +5,13 @@ project(FFXII-Screen-Reader LANGUAGES C CXX RC)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---- Dev tree root ----
+# Derived from this file's own location (…/Dev/Custom/FFXII/<this project>), so the
+# whole tree can be moved to any drive or folder without editing a single path.
+# Override with -DDEV_ROOT=... only if this project is relocated on its own.
+get_filename_component(DEV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(DEV_ROOT "${DEV_ROOT}" CACHE PATH "Root of the Dev tree (holds SDL3-source, tolk, MinHook_134_bin)")
+
 # ---- MinHook (inline hooking library, BSD-2 license) ----
 # Vendored source under include/MinHook/. Same source layout as DQ7R uses.
 add_library(MinHook STATIC
@@ -32,7 +39,7 @@ target_include_directories(MinHook PRIVATE
 # that install. DQ7R's deploy script does copy it; ours deliberately does not. The RELEASE
 # zip does ship it (Docs\release_procedure.md) — deploy, link and release are three separate
 # questions, exactly as they are for Tolk.
-set(FFXII_SDL3_SOURCE "D:/Games/Dev/SDL3-source" CACHE PATH
+set(FFXII_SDL3_SOURCE "${DEV_ROOT}/SDL3-source" CACHE PATH
     "Path to the SDL3 source tree (release-3.4.4 or newer)")
 set(SDL_SHARED       ON  CACHE BOOL "" FORCE)
 set(SDL_STATIC       OFF CACHE BOOL "" FORCE)
