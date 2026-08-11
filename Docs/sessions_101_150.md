@@ -1,14 +1,20 @@
-# FFXII-Screen-Reader — Session Log (Sessions 101–current)
+# FFXII-Screen-Reader — Session Log (Sessions 101–150)
 
 Continues `sessions_051_100.md`, which is closed at **Session 100** (the adjacency march +
 auto-walk build).
 
+**CLOSED at Session 150** (the tester-report session: dialogue audit, collected treasure, the
+equipment instrument). Continues in `sessions_151_current.md`.
+
 Entry format is mandatory: `## Session N — YYYY-MM-DD — [track] <title>`, where `N` is a single,
 global, monotonically increasing integer shared by all parallel tracks. Never a date-only header,
-never a letter sub-session. Before appending, grep this file for the highest `## Session N` AND
-check `git log` for an unlogged session after it; the next session takes `N+1`. Split again after
-Session 150 (`sessions_101_150.md` + `sessions_151_current.md`). Every entry carries a KEYWORDS
-line for grep.
+never a letter sub-session. Before appending, grep the CURRENT file for the highest `## Session N`
+AND check `git log` for an unlogged session after it; the next session takes `N+1`. Every entry
+carries a KEYWORDS line for grep.
+
+**Note on the count:** this file holds 48 entries for Sessions 101–150, not 50. `Session 110` has
+no entry and its number must never be reused; `Session 147` and `Session 148` have separate entries
+but share one commit (`367b10f`) because the same files carry both.
 
 ## Session 101 — 2026-07-31 — [navigation] The goal is a SURFACE: the route now ends where walking first touches the seam
 
@@ -4491,3 +4497,276 @@ moment it matters, in its own wording.**
 promises an outcome the player's LP might not support, and the mod deliberately does not read the LP.
 "Available" states the node's standing and leaves the arithmetic where it belongs. Same three states,
 same flag word, one string and one enumerator.
+
+## Session 150 — 2026-08-11 — [nav+menus] The tester is two builds behind, and the presence bit never covered treasure
+
+**KEYWORDS: TesterReports controller dialogue re-arm FUN_002e16b0 already fixed V0.6.1 audit
+InputTracker hotkey not defect treasure collected FUN_002fafd0 0x1DAFD0 award Diamond Armlet
+FUN_002faf60 def+0x04 def+0x06 X10 Z10 setuptreasure FUN_00355210 talktreasure FUN_0025d5e0 ACTION
+bit 0.55 struck READY_PRESENT_BIT 0x40 consumed chest false DAT_02ec3e60 DAT_02ec3ea0 TRAP not
+treasure FUN_002fa740 FUN_002f8060 FUN_002f82f0 Libra treasure_state NoteFiltered s_dropTaken
+offhand shield 0x41 FUN_0057cf20 FUN_003fd360 slot+0x40 OnCategoryRefresh six silent exits
+instrument IsEmptyCategory equip_compare preview FUN_003fe720 two call sites**
+
+Four tester reports. The Mariam's Tomb pathfinding one was deferred to its own session and then
+**WITHDRAWN the same day — it was not a defect.** Verified in play by the user and the tester: the
+statue would not route because **the doors leading to it had not been opened**. There was no route to
+plan and the planner said so correctly. Nothing was changed and nothing needs to be.
+Of the other three, **one needed no code at all, one was a real defect whose standing explanation was
+wrong, and one could not be root-caused and shipped an instrument instead.**
+
+**The framing that unlocked it: the tester is on V0.6.1-Shotgun-Build (Sessions 128-146).** Trunk is
+three commits ahead — `367b10f` (S147+S148) and `6d8abda`+`211f492` (S149). Reading the report
+against *their* build rather than trunk is what separated "already fixed" from "open". The build is
+visible in the log header; check it first, every time a report arrives.
+
+### 1. Controller dialogue "reads once, won't read a second time" — ALREADY FIXED, no code
+
+Audited **every** text-bearing surface for the hunted defect class: a *game-content* announcement
+whose delivery depends on the mod having observed a keypress. **Zero found** (0.97).
+`dialogue_reader`, `choice_reader` (both detectors — the tick reads the game's own cursor
+`widget+0x58`), `message_reader` (both surfaces), `popup_reader`, `primer_reader`, `menu_reader` are
+all driven by game hooks or game-side state. `text_capture`, `virtual_buffer`, `menu_state` never
+speak. Every surviving `InputTracker::` call site is a mod **hotkey** the player presses to request
+something — legitimate, not the bug class.
+
+The symptom is a **re-arm** failure, and it is device-blind. In `git show
+140d868:src/ui/dialogue_reader.cpp` the only re-arms are the `+0xC0` end latch and `ForgetLivePages`.
+The latch is read *pre-call*, so it is invisible whenever something else tears the box down; the
+message then re-shows on a recycled widget with the same `base` and `off == 0`, the retained page key
+matches, and it goes silent. **That is exactly the hole `FUN_002e16b0` was added to close in S149.**
+
+The original fix was **Session 91**, not 52 — S52 introduced the defect, S91 deleted
+`SetConfirmCallback` and moved pagination onto `widget+0x8A`. S91's own "still unexercised" note
+named the mid-dialogue Yes/No and the telop banners as where a regression would land first; both are
+now covered and were checked here.
+
+**Flagged, out of scope:** three surfaces carry game content a pad-only player cannot reach at all,
+because the only route is a keyboard hotkey — `t` re-read, `o` describe, and the line-by-line
+virtual-buffer walks (Status, Clan Primer). Each surface's *entry* line is game-driven, so a pad
+player hears the first line and cannot step through the rest. That is the standing gamepad TODO at
+`input_tracker.h:9`, not a regression.
+
+### 2. Collected treasure never left the list — and the docs said it did
+
+**STRIKES a claim standing as fact in three places** (`GameArchitecture.md`, `nav_rva.h`,
+`entity_scan.cpp`): that the S148 presence bit `sceneObj+0x14 & 0x40` prunes "a consumed chest".
+It was never measured — it was inferred from *unopened* treasure reading `0x70`, which says nothing
+about what happens when one is taken.
+
+**The refutation was already in our own log archive.**
+`x64\logs\FFXII-Screen-Reader-2026-08-10_12-08-35.log:1133-1145` dumps two treasure slots the game
+**never placed** — world origin, `layers=0` — both reading `r14=70`, bit `0x40` **set**, while the
+never-spawned *enemy* reserve reads `0xB0`, bit clear. On these objects the bit is unconditional;
+`0x80` is what separates the populations. Corroborated by `Treasure=` counts that are flat across
+30, 20 and 39 rescans in three sessions. **So the pruner already ran on every treasure and could
+never fire on one.** Third session running that a mechanism which fit the symptom was asserted
+without measuring — see S147 and S148.
+
+**THE TRAP TRAP.** The first pass identified `FUN_002fa740` / `FUN_002f8060` / ring `DAT_02ec3ea0`
+as the treasure store. **They are the TRAP system.** Five proofs, the first of which is that
+`GameArchitecture.md` *already recorded* `FUN_002f82f0` — which walks that same mask — as the Libra
+trap-visibility toggle: no button press (per-frame from the actor tick at distance <= 1.3), an AoE
+applied to every party member in radius, one shared model across all 32 slots, and the dbg name
+`settrapresource`. Treasure's ring is **`DAT_02ec3e60`**. Both systems have a per-map presence mask,
+a percentage spawn roll and X×10/Z×10 records; that is why it was convincing. **Check this file
+before trusting a newly-derived family that resembles one already in it.**
+
+**Why nothing on the object can answer.** The engine never writes a treasure's identity onto its
+scene object: `FUN_00355210` decodes the def from a script-bytecode literal, places the object, and
+discards the id. Every per-object candidate failed the 0.98 bar — the ACTION bit `+0x1C & 0x004` is
+**0.55** (and would blink LIVE treasure out of the list, because `talktreasure` disarms it via
+`FUN_0025d5e0(obj, 2)` for the entire message window), the model bit 0.35, the presence bit useless.
+
+**The fix reads the AWARD, which is an event and carries the record.** `FUN_002fafd0`
+(RVA **`0x1DAFD0`**, 3 params) is identified beyond doubt by the **Diamond Armlet** branch — the only
+place in the binary that swaps the whole common/rare item pair on `BtlChr+0x6B & 2 || +0x7B & 2`.
+Position comes out of the same record the placement used (`FUN_002faf60`: `x = (s16)(def+0x04)/10`,
+`z = (s16)(def+0x06)/10`), and `FUN_00355210` placed the object at exactly those floats — so a
+collected treasure is named by **the coordinates the game itself used to put it there**, not by a
+mod-side guess about proximity. New module `navigation/treasure_state.cpp`; the scan drops
+`Category::Treasure` only, after classification, via `NoteFiltered`. Cleared on map change, because
+a def with `+0x09 == 0xFF` re-rolls its spawn every map load.
+
+**Fail-safe and instrumented,** which is S148's one lesson that paid for itself: a record is only
+written by a real award, a coordinate that matches nothing leaves the entry listed (the old
+behaviour), and `treasure: collected idx=N at (x, z)` sits beside the scan's new
+`N collected treasure` drop counter.
+
+**PLAY-CONFIRMED, same day (user).** Collected treasure leaves the nav list. That also settles the
+one link the decompile could not: **the scene transform does read back the floats the placement
+wrote**, so the award record's `(s16)/10` coordinates identify the object exactly and the 0.25 m
+`kMatchTol` is slack, not a search radius. The whole design — award hook, coordinate identity, drop
+via `NoteFiltered` — is confirmed end to end.
+
+### 3. Offhand shields do not read — INSTRUMENT ONLY, not diagnosed
+
+**Not a slot-dispatch bug: the mod has no equipment-slot dispatch.** The candidate list is claimed by
+struct SHAPE via `InventoryReader::TryFocus`. Slot-to-category is game-side — `FUN_003fd360` writes
+`category = slot + 0x40`, so **`0x41` is the offhand** — and `FUN_0057cf20` case `0x41` is the one
+category with a bespoke branch: it merges shields *and* ammunition (`FUN_00252fa0(2)` + `(4)`) and
+has two paths that hand back a **NULL row array**.
+
+**Why it could not be diagnosed, which is the finding:** `OnCategoryRefresh` had **six early exits
+that were bare `return`s with no log line**, so a category that failed to announce left nothing
+behind — "the claim misfired", "the game gave us a null list" and "the mod never reached this screen"
+were indistinguishable. Our own corpus (21 archived logs + Latest) contains **zero equipment-screen
+play**. Three candidates, none above 0.35; under the bar, so nothing was fixed.
+
+Shipped: each exit now names its gate and carries
+`owner / rows / scroll / table / raw180 / tab / count / src / textId`, and the
+`empty category -- claimed and SILENT` line gained its owner and index. The `(owner, gate)` guard is
+a **cache, not a counter cap** — a cap gets spent early and is dead for the rejection that matters
+hours in, which is the repair `dialogue_reader.cpp:116-119` already needed.
+
+**Corrected while here:** `equip_compare.h` claimed the Equipment stat preview "is announced
+automatically on each highlight". `FUN_003fe720` has exactly two call sites — the 4-row action list
+and the 5-slot list — and **neither is the candidate-item list**. It announces per SLOT and is silent
+while the player cursors the candidates.
+
+### Play-confirm gates
+
+- talk to an NPC on a **controller**, close, talk again -> it re-speaks
+- collect a treasure with the nav list open -> `treasure: collected` appears AND the `Treasure=`
+  count falls by one; **absence of the drop while that line is present means the match tolerance or
+  the transform assumption is wrong**, and the two log lines say which
+- leave and re-enter the map -> the drop counter returns to 0 (the record set is retired). Whether a
+  given treasure comes BACK is the game's own percentage roll and is not what this gate tests
+- open the offhand slot with shields owned -> read the three-way discriminator in the log
+
+### 4. The ABSENT pruner was dropping a SAVE CRYSTAL — scoped to characters
+
+Asked mid-session whether dead enemies ever actually started disappearing. **They never have, and the
+corpus says so plainly:** all four archived logs containing `Enemy>0` (2026-08-10) have **zero**
+`handle-walk drops:` lines — they predate S148 entirely. So the pruner has never once been observed
+firing on its target.
+
+The one and only `absent:` line in the whole archive, from `Latest.log`:
+
+```
+absent: [0:14] +0x14=0x30 kind=4 "Save Crystal" at (227.6,13.0,26.4)
+```
+
+**It deleted a Save Crystal** — a landmark a blind player routes to in order to save the game. That
+is far worse than the corpse the filter exists to remove, and it is exactly the failure the block's
+own comment warned about ("the risk of a presence test is that it removes something the player still
+needs").
+
+**Root cause: the bit was measured on COMBATANTS and applied to the whole handle table.** S148
+measured `0xF0` live party/enemy and `0xB0` defeated/never-spawned — all characters — then assumed it
+generalised. It does not. This session proved treasure sets it **unconditionally** (`0x70` even on
+slots never placed), and the crystal above reads `0x30` with it **clear** while sitting in plain
+sight. On gimmicks the bit takes both values and means neither.
+
+**Fix: the drop is gated on `isCharacter` (scene category 5-7), the population it was measured on.**
+A corpse is a character; a crystal, gate, door and treasure are not, so none can reach it again. The
+corpse case is untouched — a defeated enemy still reads `0xB0` and is still a character. The pool
+walk needs no change: `ACTOR_ACTIVE_BIT` already gates it and it holds only combatants.
+
+**PLAY-CONFIRMED, same day (user): "enemy pruner confirmed working".** And the `absent:` census
+proves it took nothing else with it — **98 drops in one dungeon run, every one of them
+`+0x14=0xB0 kind=1` on a named enemy** (Zombie Warrior ×52, Ghoul ×46). Zero crystals, zero
+treasure, zero NPCs, zero gates, zero exits. `own-party` held at 2 per rescan and `oddKind` at 0.
+
+That is the first log in the project's history in which this filter has been observed firing on its
+target at all — S148 shipped it, but every archived log containing `Enemy>0` predated the code.
+
+### 5. The offhand shield defect, narrowed by the new instrument (same day)
+
+The instrument from §3 was played the same session and the log is decisive about where the defect is
+**not**:
+
+```
+[INV] category: owner=…BF63DC0 "SHIELDS"        <- the mod DOES reach the screen
+[READER] pane owner=…2CC22BA0 focus=…BF63DC0 focused=0 rowOff=0x0
+[READER] unclaimed pane: obj0 RVA=0x2DDFE0 win=…BF63DC0 -- no reader spoke for it
+[DESC] decoded: "Evade 15  Magick Evade  0 / Element: None / License Needed: Shields 3"
+```
+
+- **`IsEmptyCategory` is NOT misfiring** — no `empty category -- claimed and SILENT` line. Hypothesis
+  H1 (0.35) is **dead**.
+- **None of the six `OnCategoryRefresh` gates closed** — no `category declined at` line. The category
+  name announces normally.
+- The description panel paints real shield stats, so shields ARE on screen.
+
+**TWO WRONG READINGS OF THIS LOG, BOTH CORRECTED THE SAME DAY — record them, because both were
+"evidence" that would have sent the fix somewhere useless:**
+
+1. **"`unclaimed pane RVA=0x2DDFE0` means the shield list has no reader."** That line is
+   **once per DISTINCT CLASS** (`menu_reader.cpp:567`, `s_seenCls[12]`). It fired the first time that
+   class was ever unclaimed and can never log again — including for WEAPONS. It says nothing about
+   shields being special.
+2. **"The `[DESC]` lines around SHIELDS but not WEAPONS mean the readers differ."** `[DESC]` is a
+   log-only paint capture, **hard-capped at 10** (`text_capture.cpp:283`). Its absence later is spent
+   budget, not meaning.
+
+**The user's objection is what broke it open:** *"they wouldn't use a different menu class for one
+slot in one menu when all the others work."* Correct — and re-reading with that in mind, **every**
+`[READER] focus owner=` line in the entire equipment session is `owner=…BF60D00`, the 5-SLOT
+selector. There is no focus line for the candidate list in EITHER case, because `menu_reader.cpp:472`
+skips that log when `InventoryReader::TryFocus` claims the row.
+
+So the honest comparison is:
+
+```
+28.781  focus owner=…BF60D00 index=0        <- land on the WEAPON slot
+29.015  category: owner=…BF63DC0 "WEAPONS"
+29.015  item: owner=…BF63DC0 "Chopper"      <- first candidate, SAME millisecond
+29.296  item: "Magoroku"   29.765  item: "Chopper"
+
+13.203  category: owner=…BF63DC0 "SHIELDS"  <- and nothing. Three times, two owners.
+```
+
+**Same class, same owner, same code path.** The difference is that the row array yields no row at the
+instant the re-fired focus arrives. That fits `FUN_0057cf20` case `0x41` and nothing else: it is the
+only category that takes a **stub path in the first switch** (`_Dst = 0; iVar2 = 0;`) and then builds
+its array in a second pass merging TWO pools (`FUN_00252fa0(2)` shields + `(4)` ammunition), with two
+distinct exits that free and NULL the array. A different BUILD ORDER, not a different window.
+
+**Adding ROW_CHAIN is NOT the fix** and was rejected: that is a different mechanism (row array at
+`rowOff`, name at `+0x10`), and `InventoryReader` demonstrably claims this window already.
+
+### 5b. ROOT CAUSE — it is EMPTY-vs-EQUIPPED, not shields, and not a category at all
+
+The second instrumented log settled it, and **the `0x41`-branch hypothesis above is STRUCK.** The
+user's own framing is what pointed at it: *"it's not the slot that's the issue, it's confirming into
+the slot to read the menu. the slot should read empty since it has nothing equipped."*
+
+Measured (`Latest.log`, 01:43:14):
+
+```
+14.343  pane owner=…BCB7D00 focus=…BCB7D00 focused=1   -> "Off-hand"   (slot list, fine)
+14.828  [INV] category: owner=…BCBADC0 "SHIELDS"        <- Confirm INTO the slot
+14.828  pane owner=…C979BA0 focus=…BCB7D00 focused=0
+14.828  unclaimed pane: obj0 RVA=0x2DDFE0 win=…BCBADC0
+15.281  pane owner=…C979BA0 focus=…BCBADC0 focused=0
+```
+
+**Not one `[INV]` line of any kind follows** — not `item:`, not `empty category`, not `list
+declined`, not any of the six category gates. So `InventoryReader::TryFocus` was never CALLED, which
+means `menu_reader.cpp:472` short-circuited on `IsFocusedPane(owner)`. And note `DAT_0208ebc0` DOES
+become the candidate list (`focus=…BCBADC0` at 15.281) — what never arrives is a `0x8000` focus
+event carrying that owner.
+
+**The mechanism.** A pane's first `0x8000` is gated out (the focus pointer has not flipped yet),
+stashed, and replayed by `HookedFocusSet` — that replay is what makes the first row of any entered
+submenu speak. **But that `0x8000` only exists when the game MOVES the cursor onto the currently
+equipped item.** Confirm into a slot with NOTHING equipped and the cursor is already at row 0: no
+cursor movement, no focus message, nothing stashed, and the list opens silent. Control falls to the
+`else if (newWin)` census branch, which by design speaks nothing.
+
+The WEAPON slot worked in the very same log **only because Murasame was equipped** — which is what
+made this look category-specific for most of the session. It is not. It would hit any slot the
+player has left bare.
+
+**Fix:** the census block already specified the remedy — *"the RVA gets measured first and the
+announce ships gated on it."* It is measured now (`0x2DDFE0` = `FUN_003fdfe0`), so that one class
+announces its first row on entry via `InventoryReader::TryFocus(newWin, 0)`. **Row 0 is right by
+construction, not a guess:** reaching that branch means no focus event moved the cursor, which is the
+same condition as the list sitting at its top row. When something IS equipped the stash replay claims
+it and this never runs. Every other unclaimed pane stays exactly as silent as before.
+
+**Three wrong readings in one session on this one defect** — a per-class log line, a capped paint
+dump, and a category-shaped hypothesis — every one of them a throttled diagnostic mistaken for a
+measurement. The instruments that finally settled it were the ones that name *which branch declined*,
+not the ones that report what was seen.

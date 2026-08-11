@@ -12,6 +12,7 @@
 
 #include <Windows.h>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -120,6 +121,56 @@ bool IsEmptyCategory(void* w) {
     return true;
 }
 
+// Every early exit from OnCategoryRefresh below used to be a bare `return` -- SIX of them, none of
+// them logged. A category that failed to announce therefore left NOTHING behind, and the surface
+// could not be diagnosed at all: the offhand/shield report of 2026-08-11 ("selecting a shield doesn't
+// read them") could not even be told apart from "the mod never reached that screen". This names WHICH
+// gate closed and carries the values that separate the candidates, in one line shape.
+//
+// This is a silent-if-wrong reader with no diagnostic, which is the bug choice_reader.cpp already
+// learned the hard way (see LogReject in dialogue_reader.cpp for the same pattern).
+//
+// LOG-ONLY, and the (owner, gate) cache is log volume control, not speech dedup -- FUN_005655f0 is
+// event-driven (screen open + tab change), never per-frame, so this cannot flood; the cache only
+// stops a held tab key from repeating one identical line. Deliberately a CACHE and not a counter cap:
+// a cap gets spent early in a session and is then dead for the one rejection that matters hours in,
+// which is exactly what dialogue_reader.cpp:116-119 had to be repaired for.
+void NoteCategoryGate(void* w, const char* gate, uint32_t raw180, int tabIdx, int tabCount,
+                      int src, uint32_t textId) {
+    static void*       s_lastOwner = nullptr;
+    static const char* s_lastGate  = nullptr;
+    if (w == s_lastOwner && gate == s_lastGate) return;   // same surface, same gate -> already said
+    s_lastOwner = w;
+    s_lastGate  = gate;                                   // literal pointers: identity compare is exact
+    char m[256];
+    snprintf(m, sizeof(m),
+             "category declined at %s: owner=%p rows=%p scroll=%p table=%p raw180=0x%08X "
+             "tab=%d/%d src=%d textId=%u",
+             gate, w, PtrAt(w, OFF_C_ROWS), PtrAt(w, OFF_C_SCROLL), PtrAt(w, OFF_C_TABLE),
+             raw180, tabIdx, tabCount, src, textId);
+    Log::Write("INV", m);
+}
+
+// The four silent exits AFTER ReadList has succeeded. Together with NoteCategoryGate above and the
+// `list declined` line in TryFocus, every path by which this reader can decline to speak now names
+// itself -- which is what the 2026-08-11 offhand report needed and did not have.
+//
+// Worth stating plainly because it is the shape of the whole defect: `category: "SHIELDS"` announced
+// three times and NOT ONE `item:` line followed, while the weapon slot announced its first candidate
+// in the SAME millisecond as its category. Same window class, same owner, same code path -- so the
+// question was never "which reader owns this surface", it was "which of these five returns fired".
+void NoteRowGate(void* owner, const char* gate, int index, int count, unsigned id) {
+    static void*       s_lastOwner = nullptr;
+    static const char* s_lastGate  = nullptr;
+    if (owner == s_lastOwner && gate == s_lastGate) return;
+    s_lastOwner = owner;
+    s_lastGate  = gate;
+    char m[192];
+    snprintf(m, sizeof(m), "row declined at %s: owner=%p index=%d count=%d id=0x%04X",
+             gate, owner, index, count, id);
+    Log::Write("INV", m);
+}
+
 // FUN_005655f0(container, ...): announce the category this refresh is switching to. Runs BEFORE the
 // original, so the name is spoken ahead of the item the original's FUN_002d47c0 re-fire delivers.
 void OnCategoryRefresh(void* w) {
@@ -127,29 +178,47 @@ void OnCategoryRefresh(void* w) {
     if (!w) return;
 
     uint32_t raw180 = 0;
-    if (!SafeReadU32(w, OFF_C_180, &raw180)) return;
+    if (!SafeReadU32(w, OFF_C_180, &raw180)) {
+        NoteCategoryGate(w, "tab-bitfield unreadable", 0, -1, -1, -1, 0);
+        return;
+    }
     const int32_t v = static_cast<int32_t>(raw180);
     const int tabIdx   = (v << 6)  >> 27;          // bits[25:21], sign-extended exactly as the game does
     const int tabCount = (v << 11) >> 27;          // bits[20:16]
-    if (tabCount < 1 || tabIdx < 0 || tabIdx >= tabCount) return;
+    if (tabCount < 1 || tabIdx < 0 || tabIdx >= tabCount) {
+        NoteCategoryGate(w, "tab index out of range", raw180, tabIdx, tabCount, -1, 0);
+        return;
+    }
 
     void* table = PtrAt(w, OFF_C_TABLE);
-    if (!table) return;
+    if (!table) {
+        NoteCategoryGate(w, "no tab table", raw180, tabIdx, tabCount, -1, 0);
+        return;
+    }
 
     // The tab's entry in the table is indirected through the per-tab saved state (FUN_005655f0:19).
     uint8_t srcRaw = 0;
-    if (!SafeReadU8(w, OFF_C_TABST + static_cast<uint32_t>(tabIdx) * 8 + 6, &srcRaw)) return;
+    if (!SafeReadU8(w, OFF_C_TABST + static_cast<uint32_t>(tabIdx) * 8 + 6, &srcRaw)) {
+        NoteCategoryGate(w, "per-tab state unreadable", raw180, tabIdx, tabCount, -1, 0);
+        return;
+    }
     int src = static_cast<int8_t>(srcRaw);
     if (src < 0) src = 0;                          // the game clamps -1 to 0 the same way
 
     uint32_t textId = 0;
-    if (!SafeReadU32(table, static_cast<uint32_t>(src) * 8 + OFF_TAB_TEXT, &textId)) return;
+    if (!SafeReadU32(table, static_cast<uint32_t>(src) * 8 + OFF_TAB_TEXT, &textId)) {
+        NoteCategoryGate(w, "tab text id unreadable", raw180, tabIdx, tabCount, src, 0);
+        return;
+    }
 
     // Prefer the id cache TextCapture already fills from the game's own resolver -- no game call on
     // the common path. Fall back to the getter the first time an id is seen this session.
     std::wstring name = TextCapture::StringById(static_cast<int>(textId));
     if (name.empty()) name = DecodeName(ResolveMsgCodec(static_cast<int>(textId)));
-    if (name.empty()) return;                      // no readable text -> silent, never fabricated
+    if (name.empty()) {                            // no readable text -> silent, never fabricated
+        NoteCategoryGate(w, "category name did not decode", raw180, tabIdx, tabCount, src, textId);
+        return;
+    }
 
     Log::WriteW("INV", "category:", w, name);
     Speech::Output(name, /*interrupt=*/true);
@@ -209,25 +278,74 @@ bool TryFocus(void* owner, int index) {
     ListInfo li{};
     if (!ReadList(owner, &li)) {
         // Not one of ours, or a shape we cannot read -> let the generic path try, as before.
-        if (!IsEmptyCategory(owner)) return false;
+        if (!IsEmptyCategory(owner)) {
+            // THE LAST SILENT DECLINE ON THIS SURFACE, and the one the 2026-08-11 offhand log
+            // narrowed the shield defect down to. That log proves the mod REACHES the screen --
+            // `category: owner=…BF63DC0 "SHIELDS"` is announced, and the description decoder reads
+            // each shield's stats correctly -- but no `item:` line ever follows, and neither the
+            // `empty category` claim nor any `category declined at` gate fired. So the row read is
+            // failing HERE, and this was the one exit with nothing to say about why.
+            //
+            // The three pointers are the whole answer: `ReadList` wants all of rows/scroll/table,
+            // `IsEmptyCategory` wants rows NULL but the other two live. A shield list that reads
+            // rows=null scroll=null means the container is mid-rebuild; rows=live with a bad count
+            // means `FUN_0057cf20`'s two-pool `0x41` branch built something this reader mis-sizes.
+            // Same log-only (owner, gate) cache discipline as NoteCategoryGate above.
+            static void* s_lastDeclined = nullptr;
+            if (owner != s_lastDeclined) {
+                s_lastDeclined = owner;
+                void*    scroll = PtrAt(owner, OFF_C_SCROLL);
+                uint16_t n = 0;
+                if (scroll) SafeReadU16(scroll, OFF_S_COUNT, &n);
+                char m[208];
+                snprintf(m, sizeof(m),
+                         "list declined (not ours / unreadable shape): owner=%p index=%d rows=%p "
+                         "scroll=%p table=%p count=%u",
+                         owner, index, PtrAt(owner, OFF_C_ROWS), scroll,
+                         PtrAt(owner, OFF_C_TABLE), static_cast<unsigned>(n));
+                Log::Write("INV", m);
+            }
+            return false;
+        }
         // An empty category IS ours. CLAIM it and say NOTHING: returning false here would hand the
         // cell to the generic painted-cell path, which reads the previous category's stale paint.
         // Nothing to announce is not a reason to invent "empty" -- be silent (never-speak-filler).
         // The name itself was already spoken by OnCategoryRefresh, so the switch is still audible.
         ConsumeCategoryAnnounce(owner);            // nothing follows it; do not leave the flag pending
-        Log::Write("INV", "empty category -- claimed and SILENT (row array null, scroll count clamped to 1)");
+        // Carry the owner and index: this claim is the mod's ONLY path to deliberate silence on this
+        // surface, so if it ever fires on a POPULATED list it is indistinguishable from the reader
+        // being broken. FUN_005655f0 nulls +0xE0 at the top of every refresh before rebuilding it, so
+        // a focus delivered inside that window reads null on a list that is about to have rows --
+        // pairing this line with OnCategoryRefresh's owner is what tells the two apart.
+        char m[160];
+        snprintf(m, sizeof(m),
+                 "empty category -- claimed and SILENT (row array null, scroll count clamped to 1): "
+                 "owner=%p index=%d", owner, index);
+        Log::Write("INV", m);
         return true;
     }
-    if (index >= li.count) return false;
+    if (index >= li.count) {
+        NoteRowGate(owner, "index past row count", index, li.count, 0xFFFF);
+        return false;
+    }
 
     void* row = reinterpret_cast<char*>(li.rows) + static_cast<size_t>(index) * ROW_STRIDE;
 
     uint16_t id = 0xFFFF;
-    if (!SafeReadU16(row, OFF_R_ID, &id)) return false;
-    if (id == 0xFFFF) return false;                // empty / mid-rebuild -> let the generic path try
+    if (!SafeReadU16(row, OFF_R_ID, &id)) {
+        NoteRowGate(owner, "row id unreadable", index, li.count, 0xFFFF);
+        return false;
+    }
+    if (id == 0xFFFF) {                            // empty / mid-rebuild -> let the generic path try
+        NoteRowGate(owner, "row id 0xFFFF (empty / mid-rebuild)", index, li.count, id);
+        return false;
+    }
 
     std::wstring name = DecodeName(reinterpret_cast<const uint8_t*>(PtrAt(row, OFF_R_NAME)));
-    if (name.empty()) return false;                // unreadable -> fall through rather than invent
+    if (name.empty()) {                            // unreadable -> fall through rather than invent
+        NoteRowGate(owner, "name did not decode", index, li.count, id);
+        return false;
+    }
 
     // The count is spoken only above 1: a row exists only if you own at least one, so a bare name
     // already means exactly one. This is what keeps Key Items and Magicks from reading "... 1".

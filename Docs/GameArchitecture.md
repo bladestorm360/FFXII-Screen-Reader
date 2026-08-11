@@ -5228,14 +5228,29 @@ predicate `FUN_002675c0` tests). Observed values:
 | value | objects | verdict |
 |---|---|---|
 | `0xF0` | live party members, a live enemy | present |
-| `0x70` | **treasure chests, field gimmicks** | present |
+| `0x70` | **treasure, field gimmicks** | **always set — carries no information** |
 | `0xB0` | a DEFEATED enemy; reserve slots never spawned | absent |
 
-**Treasures keeping the bit SET is the load-bearing observation.** It means `0x40` is not "is a live
-combatant" but "is in the world", so one test prunes a corpse, a despawned NPC, a consumed chest and
-a cleared trigger alike. That is why the entity scan applies it as a **general stale-entity pruner**
-and not as a kill detector — the user's own framing, and the correct one: *"you're still tracking it
-as if kills matter, when what we want is a stale entity pruner."*
+The entity scan applies it as a **general stale-entity pruner** and not as a kill detector — the
+user's own framing, and the correct one: *"you're still tracking it as if kills matter, when what we
+want is a stale entity pruner."* For combatants and NPCs that is measured and it stands.
+
+> **STRUCK — Session 150.** This paragraph used to read: *"Treasures keeping the bit SET is the
+> load-bearing observation. It means `0x40` is not 'is a live combatant' but 'is in the world', so
+> one test prunes a corpse, a despawned NPC, **a consumed chest** and a cleared trigger alike."*
+>
+> **The treasure clause is false.** It was never measured — it was inferred from unopened treasure
+> reading `0x70`. Refuted by `x64\logs\FFXII-Screen-Reader-2026-08-10_12-08-35.log:1133-1145`, which
+> dumps two treasure slots the game **never placed** (world origin, `layers=0`) still reading
+> `r14=0x70`, bit `0x40` **set** — while the never-spawned *enemy* reserve in the same dump reads
+> `0xB0`, bit clear. On these objects the bit is set unconditionally; bit `0x80` is what separates
+> the two populations. Corroborated by a flat `Treasure=5` across 30 rescans, never decrementing.
+>
+> **Consequence:** the pruner already runs on every treasure, in both walks, and *provably cannot
+> ever fire on one*. That is the tester report of 2026-08-11 — collected treasure never leaves the
+> list. Do not widen this bit to fix it; collected state lives in a different backing store
+> (see **Treasure spawn and collection** below). The corpse / despawned-NPC / cleared-trigger half
+> of the original claim is unaffected and remains measured.
 
 **Measured before it was applied.** A counter on exactly this condition read `0` before a kill and
 `1` across 35 consecutive rescans afterwards, while `Enemy=1` refused to fall and one defeated Hyena
@@ -5249,4 +5264,102 @@ count cannot tell one corpse from one NPC deleted by mistake.
 **What this REPLACED, and why none of it was needed:** an HP gate on the actor-pool walk (S147's
 proposal, struck by the user — the fix is not about death), a liveness test on the BtlChr, and a
 `KIND_DEAD` skip that has measured zero in 602/602 rescans and is still inert. None of them would
-have caught a consumed chest or a departed NPC; this does.
+have caught a departed NPC; this does. (The original sentence also claimed "a consumed chest" here —
+struck above, and struck in Session 150. Collected treasure is handled separately, below.)
+
+---
+
+## Treasure — spawn, award, and how a COLLECTED one is detected (Session 150)
+
+**Do not call these chests.** There is no opening animation; the game's own script natives are
+`setuptreasure` / `talktreasure` / `settreasureflag`, and the mod has always used
+`Category::Treasure` (npcdic 434 "Treasure", 468 "Urn").
+
+### ⚠ FIRST: `FUN_002fa740` / `FUN_002f8060` / `DAT_02ec3ea0` are the TRAP system, NOT treasure
+
+This cost most of a session and is the single most useful thing in this section. That family looks
+exactly like treasure — a per-map presence mask, a spawn roll with a percentage, a record table with
+X×10/Z×10, a "consume" that clears the mask bit — and it is traps. Five independent proofs:
+
+1. **This file already said so** (the `sceneObj` / Libra section): `FUN_002f82f0`, which walks that
+   same `DAT_02ec3ea0` mask, is the **trap-visibility toggle** gated on the 0.98-confidence Libra
+   predicate `FUN_0030c300`.
+2. **No button press.** `FUN_002f8060` is reached per-frame from the actor tick
+   (`FUN_00233f70:45` → `FUN_00310db0:67`) and fires on distance `<= 1.3`. Treasure needs Confirm.
+3. **It is an AoE.** `FUN_002fb8c0` returns *every party member* within `record+0x0A`, and the
+   caller applies an effect to each.
+4. **One shared model for all 32 slots** (`DAT_02b5ec94`, set once). Treasure has many models.
+5. **The dbg name** — `settrapresource`, `settrapshowstatus`.
+
+The treasure ring is **`DAT_02ec3e60`** (RVA `0x2DA3E60`), written by `FUN_002fb430` (`0x1DB430`);
+3 × `{mapId @+0, presenceMask @+4, decidedMask @+8}`.
+
+### The definition record (script-bytecode data, not a table in memory)
+
+| off | type | meaning |
+|---|---|---|
+| `+0x00` | u8 | treasure index — bit position in the map's presence mask |
+| `+0x04` | s16 | world **X × 10** |
+| `+0x06` | s16 | world **Z × 10** |
+| `+0x08` | u8 | bits 0-5 yaw in 60ths (negated); bit `0x40` randomise gil |
+| `+0x09` | s8 | one-time global flag id; **`0xFF` = respawner** |
+| `+0x0A` | u8 | spawn % |
+| `+0x0B` | u8 | gil-vs-item % |
+| `+0x0C`/`+0x0E` | u16 | common / rare item (no Diamond Armlet) |
+| `+0x10`/`+0x12` | u16 | common / rare item (Diamond Armlet equipped) |
+| `+0x14`/`+0x16` | u16 | gil, no armlet / armlet |
+
+**There is no enumerable record table.** `FUN_002faed0` takes ONE def; each def reaches the handlers
+as a **script-bytecode literal** decoded by `FUN_002650b0(ctx, _, encoded)` — pure segment-base
+arithmetic on `DAT_02099d70`, whose `param_2` is unused. So treasure cannot be enumerated the way
+the trap records can.
+
+### The three functions that matter
+
+| what | function | RVA | notes |
+|---|---|---|---|
+| `setuptreasure` INIT | `FUN_00354400` | `0x234400` | 4 params. Rolls the spawn via `FUN_002faed0`; stashes the encoded def in the VM state block |
+| `setuptreasure` SIMPLE | `FUN_00355210` | `0x235210` | 3 params. **Has the def AND the scene object together** — decodes the def, `FUN_002faf60` → position, `FUN_0026af80(obj, …)` places it |
+| **award** | `FUN_002fafd0` | **`0x1DAFD0`** | **3 params**, returns the item id. Sole call site `FUN_0050faf0:21` |
+
+`FUN_002fafd0` is identified beyond doubt by the **Diamond Armlet branch** — the only place in the
+binary that swaps the whole common/rare pair on `BtlChr+0x6B & 2 || +0x7B & 2`. It sets the one-time
+save flag (`FUN_0032ad70`), clears the presence bit, and rolls gil-vs-item then common-vs-rare.
+
+### Why the mod reads the AWARD and not the object — and how it identifies which treasure
+
+**The engine never writes a treasure's identity onto its scene object.** `FUN_00355210` places the
+object and discards the id; nothing on the object carries the def, the index, or the flag. Every
+per-object candidate was tested against the 0.98 bar and failed:
+
+- `+0x1C & 0x004` (ACTION) — **0.55**. `talktreasure` (`FUN_00355830`) disarms it via
+  `FUN_0025d5e0(obj, 2)` for the *whole message window*, so a live treasure reads ACTION-clear
+  mid-interaction; and the converse ("ACTION clear ⇒ collected") is false for story-gated objects
+  too. The only setter anywhere is `FUN_0026b4a0`, and no caller passes a constant 2.
+- `+0x14 & 0x20` (model loaded) — 0.35. `FUN_003ec700` writes a *model-instance* field, never a
+  scene object, and that path is trap-side anyway.
+- `+0x14 & 0x40` (presence) — **useless**: set unconditionally on treasure, see the strike above.
+
+So the mod hooks the **award** instead. Position falls out of the same record the placement used
+(`FUN_002faf60`: `x = (s16)(def+0x04)/10`, `z = (s16)(def+0x06)/10`, y = 0), and
+`FUN_00355210` placed the object at exactly those floats — so the collected treasure is named by the
+coordinates **the game itself used to put it there**. Implemented in
+`src/navigation/treasure_state.cpp`; the scan consults it for `Category::Treasure` only
+(`entity_scan.cpp`, after classification) and drops via `NoteFiltered`.
+
+**Lifetime: cleared on map change.** The spawn roll shows two populations — a def with a real
+one-time flag id is skipped for good once `istreasureflag(def+0x09)` is set, while a def with
+`+0x09 == 0xFF` records nothing at award time and re-rolls its spawn PERCENTAGE on every map load.
+How often the second kind is seen to return in play is not settled and does not need to be: clearing
+is the safe direction either way. If the treasure is gone for good the engine never places it again,
+so a retained record has nothing to match and clearing costs nothing; if it can return, a retained
+record would hide it. **Holding it is the only choice that can be wrong.**
+
+**Fail-safe:** the record is only ever written by a real award event, and a coordinate that matches
+nothing simply leaves the entry listed — the pre-fix behaviour.
+
+**PLAY-CONFIRMED 2026-08-11.** Collected treasure leaves the nav list. This also settles the one link
+the decompile could not reach: **the scene transform reads back the floats the placement wrote**, so
+the award record's `(s16)/10` coordinates identify the object exactly. `kMatchTol` (0.25 m) is slack
+for the float round-trip, **not** a search radius — do not widen it; a loose radius would drop the
+treasure *beside* the one collected.

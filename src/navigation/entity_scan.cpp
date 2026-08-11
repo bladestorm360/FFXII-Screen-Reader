@@ -10,6 +10,7 @@
 #include "navigation/map_script.h"
 #include "navigation/exit_scan.h"
 #include "navigation/item_scan.h"
+#include "navigation/treasure_state.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
@@ -46,6 +47,7 @@ int s_knownName  = 0;   // objects speaking the PERSONAL npcdic name because the
 int s_dropAbsent   = 0; // sceneObj+0x14 bit 0x40 clear -- the engine has stopped presenting it
 std::vector<std::string> s_absentLines;   // up to 8, so a WRONG prune names itself in the log
 int s_dropOwnParty = 0; // matched a live scene handle in the battle-work party table
+int s_dropTaken    = 0; // Category::Treasure whose coordinates the game already awarded (S150)
 int s_dropOddKind  = 0; // a named character whose scene KIND the engine's own candidate filter
                         // rejects -- the summoned Esper (kind 8) and whatever it leaves behind
 int s_lastOddKind  = -1;// the last such kind seen, so a NEW one is visible instead of silent
@@ -276,6 +278,7 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     s_dropOddKind  = 0;
     s_lastOddKind  = -1;
     s_dropAbsent   = 0;
+    s_dropTaken    = 0;
     s_absentLines.clear();
     s_facLines.clear();
     s_filtered.clear();
@@ -397,15 +400,23 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             // NOT a dead-enemy rule. `sceneObj+0x14` bit 0x40 is a PRESENCE flag and the categories
             // fall out of it cleanly, which is what makes it general:
             //
-            //   SET    live party, live enemies, AND treasure chests / field gimmicks (0x70, 0xF0)
+            //   SET    live party, live enemies, AND treasure / field gimmicks (0x70, 0xF0)
             //   CLEAR  a defeated enemy, and reserve slots that were never spawned (0xB0)
             //
             // Bit 0x20 beside it is already known to the mod as "model loaded"
             // (NavRva::READY_MODEL_BIT, from the engine's own interaction predicate FUN_002675c0);
-            // 0x40 is its neighbour. Because treasures keep it SET, this can never be a "combatants
-            // only" special case -- it prunes an NPC that walked off, a chest that was consumed, a
-            // trigger that was cleared and a corpse by the same test, which is the pruner that was
-            // actually wanted rather than a kill detector.
+            // 0x40 is its neighbour. It prunes an NPC that walked off, a trigger that was cleared
+            // and a corpse by the same test, which is the pruner that was actually wanted rather
+            // than a kill detector.
+            //
+            // STRUCK (Session 150): this block used to claim the same test also prunes "a chest that
+            // was consumed", and that the categories "fall out of it cleanly". They do not.
+            // TREASURE OBJECTS SET 0x40 UNCONDITIONALLY -- including slots the game never placed at
+            // all (world origin, no layer), measured in
+            // `x64\logs\FFXII-Screen-Reader-2026-08-10_12-08-35.log:1133-1145`. So this pruner runs
+            // on every treasure and can never fire on one, which is exactly the tester report of
+            // 2026-08-11 ("once you pick one up they are still there"). The treasure drop is a
+            // SEPARATE test below; do not try to fix it by widening this bit.
             //
             // MEASURED BEFORE IT WAS APPLIED, over two play sessions: a counter on exactly this
             // condition read 1 across 35 rescans while exactly one defeated Hyena stayed listed and
@@ -416,7 +427,31 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             // scan re-finds and re-drops it every pass -- without the explicit signal the caller's
             // grace window re-admits it every time and the drop reports success while changing
             // nothing.
-            {
+            //
+            // ---- SCOPED TO CHARACTERS (Session 150). IT DROPPED A SAVE CRYSTAL. -------------------
+            //
+            // The one and only time this filter has ever been observed to fire in the whole log
+            // archive, it deleted a SAVE CRYSTAL:
+            //     absent: [0:14] +0x14=0x30 kind=4 "Save Crystal" at (227.6,13.0,26.4)
+            // That is a landmark a blind player navigates to in order to SAVE THE GAME, and losing it
+            // is far worse than the corpse this filter exists to remove. Meanwhile the four archived
+            // logs that actually contain enemies all predate this code, so the drop has never once
+            // been seen to hit its target.
+            //
+            // WHY IT WAS ALWAYS WRONG TO ASK EVERY OBJECT. The bit was measured on COMBATANTS -- 0xF0
+            // live party and enemies, 0xB0 a defeated enemy and never-spawned reserve slots -- and
+            // then applied to the whole handle table on the assumption that it generalised. It does
+            // not: this session proved treasure sets it UNCONDITIONALLY (0x70 even on slots the game
+            // never placed), and the Save Crystal above reads 0x30 with it CLEAR while sitting on the
+            // map in plain sight. So on gimmicks the bit takes both values and means neither.
+            //
+            // `isCharacter` (scene category 5-7, computed above) is the population it was measured on
+            // and the only one it may speak for. A corpse is a character; a crystal, a gate, a door
+            // and a treasure are not, so none of them can ever reach this drop again.
+            //
+            // This does not weaken the corpse case at all -- a defeated enemy still reads 0xB0 and is
+            // still a character. It only stops the filter answering a question it was never asked.
+            if (isCharacter) {
                 uint8_t ready = 0;
                 if (SafeReadU8(obj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
                     (ready & NavRva::READY_PRESENT_BIT) == 0) {
@@ -504,6 +539,30 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             e.label = name;   // resolved ONCE above, for every object
             e.category = ClassifyByNameKey(flags, e.nameIdx, isCharacter, kind);
             e.available = IsInteractionAvailable(obj, kind, flags);
+
+            // ---- COLLECTED TREASURE ------------------------------------------------------------
+            //
+            // Has to be HERE and not in the stale-entity pruner above: the pruner runs before the
+            // npcdic classification, and this test is only meaningful once we know the entry is a
+            // treasure. It is deliberately scoped to that ONE category -- the same test widened to
+            // named gimmicks would reach gates and crystals, which are not consumable.
+            //
+            // The presence bit 0x40 cannot answer this (it is set unconditionally on treasure -- see
+            // NavRva::READY_PRESENT_BIT, struck this session), and neither can anything else ON the
+            // object: the engine never writes a treasure's identity there. TreasureState instead
+            // records the coordinates the game's own award function was handed, which are the exact
+            // floats the object was placed at. See navigation/treasure_state.h.
+            //
+            // NoteFiltered is MANDATORY here for the same reason it is above: the object stays in
+            // the handle table and the scan re-finds it every pass, so without the explicit signal
+            // the caller's 2 s grace window re-admits it and the drop reports success while changing
+            // nothing (entity_list.cpp:122).
+            if (e.category == Category::Treasure &&
+                TreasureState::WasCollectedAt(MapNames::CurrentMapId(), pos.x, pos.z)) {
+                ++s_dropTaken;
+                NoteFiltered(obj);
+                continue;
+            }
             // `gameNamed` records whether the words came from the GAME or from our category fallback.
             // The sign-twin drop keys on it, so two anonymous objects that both fell back to the word
             // "Interactables" can never be mistaken for a duplicate pair.
@@ -685,13 +744,19 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     //   ownParty -- should equal the non-leader party members on screen.
     //   oddKind  -- 1 exactly while an Esper exists, 0 otherwise. Any kind other than 8 here is a NEW
     //               population and wants looking at before it is trusted.
-    if (s_dropAbsent > 0 || s_dropOwnParty > 0 || s_dropOddKind > 0) {
-        char dm[224];
+    //   taken    -- collected treasure (S150). Should rise the moment an award fires and stay up for
+    //               the rest of the visit; `TreasureState` drops it on a map change. If a treasure is
+    //               still spoken while the `treasure: collected` line is in the log, this counter is
+    //               the one that says whether the scan side or the match tolerance is at fault.
+    if (s_dropAbsent > 0 || s_dropOwnParty > 0 || s_dropOddKind > 0 || s_dropTaken > 0) {
+        char dm[288];
         snprintf(dm, sizeof(dm),
                  "handle-walk drops: %d ABSENT (sceneObj+0x14 bit 0x40 clear) | "
                  "%d own-party (by scene handle, pool-independent) | "
-                 "%d named character(s) on a kind the engine's own filter rejects (last kind=%d)",
-                 s_dropAbsent, s_dropOwnParty, s_dropOddKind, s_lastOddKind);
+                 "%d named character(s) on a kind the engine's own filter rejects (last kind=%d) | "
+                 "%d collected treasure (%d award record(s) held)",
+                 s_dropAbsent, s_dropOwnParty, s_dropOddKind, s_lastOddKind,
+                 s_dropTaken, TreasureState::RecordedCount());
         Log::Write("NAV", dm);
     }
     // EVERY PRUNE NAMES ITSELF, capped at 8 per scan. This is the falsifier that matters: the risk of

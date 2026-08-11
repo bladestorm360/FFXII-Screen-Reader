@@ -450,14 +450,29 @@ constexpr uint32_t SCENEOBJ_TALK_ID     = 0xDC;     // u16 talk payload id   (0x
 constexpr uint16_t PAYLOAD_ID_INHERIT   = 0xFFFF;   // "take it from the map's own object record"
 constexpr uint32_t SCENEOBJ_READY_OFF   = 0x14;     // u8; & 0x20 = model loaded
 constexpr uint8_t  READY_MODEL_BIT      = 0x20;
-// Bit 0x40 on the SAME byte = "this object is PRESENT in the world" (Session 148, measured).
+// Bit 0x40 on the SAME byte = "this COMBATANT is PRESENT in the world" (Session 148, measured).
 // Observed values, one object dump plus a counter run across two play sessions:
 //   0xF0  live party members, a live enemy      -> present
-//   0x70  treasure chests, field gimmicks       -> present (so this is NOT a combatant-only bit)
+//   0x70  treasure, field gimmicks              -> ALWAYS set; says nothing (see the strike below)
 //   0xB0  a DEFEATED enemy, and reserve slots that were never spawned -> absent
 // The entity scan prunes on it, which is what finally removed corpses without a kill detector and
-// without an HP test. Treasures keeping it SET is the load-bearing observation: it means the rule is
-// about PRESENCE, not about being alive, so a despawned NPC or a consumed chest goes the same way.
+// without an HP test. That much is measured and stands.
+//
+// STRUCK (Session 150) -- this used to read: "Treasures keeping it SET is the load-bearing
+// observation: it means the rule is about PRESENCE, not about being alive, so a despawned NPC or a
+// consumed chest goes the same way." The treasure half is FALSE and was never measured; it was
+// reasoned from the fact that UNOPENED treasure reads 0x70.
+//
+// THE REFUTATION: log `x64\logs\FFXII-Screen-Reader-2026-08-10_12-08-35.log:1133-1145` dumps two
+// treasure slots the game NEVER PLACED -- world origin (0,0,0), no walkmap layer -- and both still
+// read `r14=0x70`, bit 0x40 SET. The equivalent never-spawned ENEMY reserve in the same dump reads
+// 0xB0, bit clear. On these objects the bit is set unconditionally and carries no placement or
+// presence information at all; bit 0x80 is what actually separates the two populations. Corroborated
+// by a flat `Treasure=5` across 30 rescans in that session, never once decrementing.
+//
+// So this pruner already runs on every treasure, in both walks, and PROVABLY CANNOT EVER FIRE ON
+// ONE. Do not widen the bit to try to fix that -- it is being asked a question these objects do not
+// answer. Collected-treasure state lives elsewhere; see the treasure notes in GameArchitecture.md.
 constexpr uint8_t  READY_PRESENT_BIT    = 0x40;
 constexpr uint8_t  SCENEOBJ_CLASS_MASK  = 0xE0;     // high 3 bits of the +0x03 type byte
 constexpr uint8_t  SCENEOBJ_CLASS_INTERACT = 0x60;  // class 3 == an interactable object

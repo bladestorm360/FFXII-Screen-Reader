@@ -550,6 +550,46 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
             OnFocus(o, idx, /*fromPaint=*/true);
         }
     } else if (newWin) {
+        // ---- ENTERING THE EQUIPMENT CANDIDATE LIST (Session 150) -----------------------------------
+        //
+        // This is the announce the census below asked for: *"the RVA gets measured first and the
+        // announce ships gated on it."* It is measured now -- **0x2DDFE0** (`FUN_003fdfe0`), the
+        // equipment candidate-item list, parked at menuCtx+0x150. Exactly one class is admitted, so
+        // every other unclaimed pane stays as silent as it was.
+        //
+        // WHY THIS PANE NEEDS A ROUTE OF ITS OWN. Entering a list normally speaks through the STASH
+        // replay above: the pane's first 0x8000 is gated out (DAT_0208ebc0 has not flipped yet), is
+        // stashed, and is replayed here. But that 0x8000 only exists when the game MOVES the cursor
+        // onto the currently-equipped item. **Confirm into a slot with NOTHING equipped and the
+        // cursor is already at row 0** -- no focus message is ever sent, nothing is stashed, and the
+        // list opens in silence. Measured, 2026-08-11 offhand report:
+        //     [INV] category: owner=…BCBADC0 "SHIELDS"      <- announced
+        //     [READER] unclaimed pane: obj0 RVA=0x2DDFE0    <- and then not one [INV] line, ever
+        // The WEAPON slot worked in the same log only because Murasame was equipped, which is what
+        // made this look category-specific for most of the session. It is not: it is
+        // equipped-vs-empty, and it would hit any slot the player has left bare.
+        //
+        // ROW 0 IS RIGHT BY CONSTRUCTION, not a guess. Reaching this branch means no focus event
+        // moved the cursor -- which is the same condition as the list sitting at its top row. When
+        // the game DOES move the cursor (something equipped), the stash replay above claims it and
+        // this never runs.
+        //
+        // TryFocus speaks nothing and returns false for any window it does not own, so the gate is
+        // belt-and-braces: a class match AND the reader's own shape test must both agree.
+        constexpr uint32_t RVA_EQUIP_CANDIDATES = 0x2DDFE0;   // FUN_003fdfe0
+        {
+            void* cls = MemRead::Obj0(newWin);
+            const uintptr_t base = reinterpret_cast<uintptr_t>(Hooks::ResolveRva(0));
+            const uintptr_t c    = reinterpret_cast<uintptr_t>(cls);
+            if (cls && base && c >= base &&
+                static_cast<uint32_t>(c - base) == RVA_EQUIP_CANDIDATES &&
+                InventoryReader::TryFocus(newWin, 0)) {
+                Log::Write("READER", "equipment candidate list entered with no focus event "
+                                     "(empty slot) -- announced its first row");
+                return;
+            }
+        }
+
         // ---- UNCLAIMED PANE CENSUS (Session 112, LOG-ONLY) -----------------------------------------
         // A pane took the cursor and nothing above spoke for it. That is exactly what the tester's
         // full-screen CONTROLS panel does: the log shows `menu-open pane-entry` firing over and over

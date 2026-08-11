@@ -4595,7 +4595,7 @@ sweep's own STOP point; concede to the frontier only when that portal is ALSO th
 Grep for `re-attributed by the sweep stop` to see it fire.
 
 Same session, related ship: `path_danger.{h,cpp}` (`1a6b9dc`) — soft penalty discs around scripted
-danger actors, per-map data, ARMED PER TARGET only (568 door_gunbit). See sessions_101_current.md
+danger actors, per-map data, ARMED PER TARGET only (568 door_gunbit). See sessions_101_150.md
 S106 for the full write-up and the deferred 0x0f-glyph / controls-overlay groundwork.
 
 **KEYWORDS: midpoint attribution start poly edge strand seed no-frontier false No path z=121 lane
@@ -6013,3 +6013,107 @@ failing to learn."* That settles the one thing left open — the not-enough-LP p
 spoke was unknown. It does, in the game's own wording, at the moment it matters. `Phrase::Id::CanLearn`
 became `Available`: "can learn" promises an outcome the player's LP might not support, and the mod
 deliberately does not read the LP.
+
+## Treasure never leaves the nav list — the presence bit answers a question these objects do not answer (Session 150, 2026-08-11) — SOLVED, PLAY-CONFIRMED
+
+> **RESOLUTION.** Fixed by hooking the game's own treasure AWARD (`FUN_002fafd0`, RVA `0x1DAFD0`) and
+> identifying the collected object by the coordinates the award record was handed — the same floats
+> the placement wrote. **Play-confirmed 2026-08-11**, which also settles the one link the decompile
+> could not: the scene transform reads those floats back exactly, so `kMatchTol` (0.25 m) is slack
+> for the round-trip and **not** a search radius. See `GameArchitecture.md` → *Treasure — spawn,
+> award, and how a COLLECTED one is detected*.
+>
+> **Related fix in the same session:** the `0x40` ABSENT pruner had been deleting a **Save Crystal**.
+> The bit was measured on COMBATANTS and applied to the whole handle table; it is now gated on
+> `isCharacter`. Play-confirmed at 98 drops, all `+0x14=0xB0 kind=1` named enemies, nothing
+> collateral. **A measurement's scope is part of the measurement.**
+
+**Symptom (tester, no log pointer):** *"once you pick one up they are still there and can make
+tracking them down a pain in the ass."* Collected treasure stays in the F5 entity list forever.
+
+**STRIKES a claim that was standing as fact in three places** — `Docs\GameArchitecture.md` (the
+`+0x14` bit table), `src\navigation\nav_rva.h` (`READY_PRESENT_BIT`), and
+`src\navigation\entity_scan.cpp` (the stale-entity pruner block). All three asserted that the
+Session 148 presence bit prunes *"a consumed chest"* by the same test that prunes a corpse.
+
+**It was never measured.** It was inferred from the fact that UNOPENED treasure reads `0x70` — i.e.
+from the bit being SET on a live one, which says nothing about what happens when it is taken. This
+is the same shape as the two diagnoses S147 and S148 each had struck: **a mechanism that fits the
+symptom, asserted without measuring.** Third session running.
+
+**The refutation was already sitting in our own log archive.**
+`x64\logs\FFXII-Screen-Reader-2026-08-10_12-08-35.log:1133-1145` dumps two treasure slots the game
+**never placed at all** — world origin `(0,0,0)`, `layers=0 raw=0` — and both read `r14=70`, bit
+`0x40` **SET**. The never-spawned *enemy* reserve slots in the same dump read `r14=B0`, bit clear.
+So on treasure/gimmick objects `0x40` is set unconditionally and carries no placement or presence
+information whatsoever; bit `0x80` is what actually separates combatants from gimmicks
+(`0xF0`/`0xB0` have it, `0x70` does not). Corroborating count: `Treasure=5` flat across 30 rescans
+in that session, `Treasure=4` across 20 in another, `Treasure=3` across 39 in a third — never once
+decrementing.
+
+**Consequence:** the S148 pruner already runs on every treasure, in BOTH walks
+(`entity_scan.cpp` `ScanCombatants` and `BuildLocked`), and **provably cannot ever fire on one.**
+Widening or re-testing that bit is wasted work.
+
+**Why a treasure survives the scan's own admission rule:** `entity_scan.cpp:366` drops an object
+only when `!named && !interactive`. Treasure is `named` (npcdic 434 "Treasure", 468 "Urn"), so a
+cleared interaction flag never drops it — `entity_classify.cpp:152-154` says that is deliberate, so
+a named gimmick stays listed "even if its interaction flag is momentarily clear".
+
+**Do not call these chests.** There is no opening animation; they are collectable world objects and
+the game's own script vocabulary is `setuptreasure` / `talktreasure` / `settreasureflag`. The mod
+has always called them `Category::Treasure` and the docs now match.
+
+## Equipment offhand list read nothing — SOLVED same session: it is EMPTY-vs-EQUIPPED (Session 150, 2026-08-11)
+
+> **RESOLUTION (read this first; the analysis below is the path, not the answer).** Not shields, not
+> a category, not a different window class. A pane's first `0x8000` is gated out, stashed, and
+> replayed by `HookedFocusSet` — and **that event only exists when the game moves the cursor onto the
+> currently-equipped item.** Confirm into a slot with **nothing equipped** and the cursor is already
+> at row 0: no movement, no focus message, nothing stashed, silence. The weapon slot worked in the
+> same log only because Murasame was equipped; **any bare slot is affected.** Fixed by the announce
+> the unclaimed-pane census had already specified — class `0x2DDFE0` (`FUN_003fdfe0`) announces row 0
+> on entry, which is right by construction because reaching that branch means the cursor never moved.
+>
+> **Three throttled diagnostics were mistaken for measurements first:** `unclaimed pane` is once per
+> DISTINCT CLASS (`s_seenCls[12]`), `[DESC]` is a paint dump capped at 10, and a category-shaped
+> hypothesis (`FUN_0057cf20` case `0x41`) fit every symptom and was wrong. **Read a log line's
+> emitter for a cap or a dedup before treating it as evidence.**
+
+**Symptom (tester, both keyboard AND controller, so not an input defect):** *"in the equipment menu
+with offhand Shields. When you're going to select one, it doesn't read them."*
+
+**NOT a slot-dispatch bug: the mod has no equipment-slot dispatch at all.** The candidate list is
+claimed by struct SHAPE via `InventoryReader::TryFocus` (`menu_reader.cpp:472`). Slot to category is
+entirely game-side — `FUN_003fd360` writes `category = slot + 0x40`, so **`0x41` is the offhand** —
+and `FUN_0057cf20` case `0x41` is the ONE category with a bespoke branch: it merges two item pools
+(shields *and* ammunition, `FUN_00252fa0(2)` + `FUN_00252fa0(4)`) and has two distinct paths that
+hand back a **NULL row array**.
+
+**NOT DIAGNOSED — and the reason it could not be is the finding.** `OnCategoryRefresh`
+(`inventory_reader.cpp`) had **six early exits that were bare `return`s with no log line**. A
+category that failed to announce left nothing behind at all, so "the claim misfired", "the game gave
+us a null list" and "the mod never reached this screen" were indistinguishable. Our own log corpus
+(21 archived logs + Latest) contains **zero equipment-screen play**, so nothing in it could
+discriminate either. Three candidate mechanisms, none better than 0.35 — well under the 0.98 bar, so
+nothing was fixed.
+
+**Shipped instead: the instrument.** Each of the six exits now names which gate closed and carries
+`owner / rows / scroll / table / raw180 / tab index / tab count / src / textId`, and the
+`empty category -- claimed and SILENT` line gained its owner and index. Log-only, and the
+`(owner, gate)` cache is a CACHE not a counter cap — a cap gets spent early and is then dead for the
+one rejection that matters hours in (the repair `dialogue_reader.cpp:116-119` already needed).
+
+**The discriminator for the next log**, opening the offhand slot with shields owned:
+1. `category: … "SHIELDS"` then `empty category -- claimed and SILENT` → the game handed back a NULL
+   `+0xE0` for `0x41`, or the claim is misfiring on a populated list. Note `FUN_005655f0` **nulls
+   `+0xE0` at the top of every refresh** before rebuilding it, so a focus delivered inside that
+   window reads null on a list that is about to have rows.
+2. `category: … "SHIELDS"` then `[READER] focus … index=N` with no `item:` → the row read failed.
+3. **No `category:` line, and the new line names the gate** → the mod never reached the surface.
+
+**Corrected while here:** `equip_compare.h` claimed the Equipment screen's stat preview "is announced
+automatically on each highlight". `FUN_003fe720` has exactly two call sites — `FUN_002c2320:240`
+(the 4-row action list) and `FUN_002c2cd0:20` via `FUN_003ff360:91` (the 5-slot list) — and
+**neither is the candidate-item list** (`FUN_003fdfe0`, `menuCtx+0x150`). The preview announces per
+SLOT, and is silent while the player cursors the actual candidates.

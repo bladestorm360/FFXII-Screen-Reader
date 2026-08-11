@@ -18,8 +18,15 @@
 // It DOES speak for one surface — the pause menu's Equipment screen, which has no other reader
 // (status_reader deliberately covers only Status). That screen uses a SECOND and different
 // mechanism: one character, `current > preview` absolute values rather than a per-character signed
-// delta, on the attribute panel at menuCtx+0x138. It is announced automatically on each highlight
-// and is also reachable as column 1, so `4` re-reads it.
+// delta, on the attribute panel at menuCtx+0x138. It is also reachable as column 1, so `4` re-reads it.
+//
+// CORRECTED (Session 150): this used to claim the preview "is announced automatically on each
+// highlight", which reads as covering the item you are choosing between. It does not.
+// FUN_003fe720 has exactly TWO call sites — FUN_002c2320:240 (the screen's 4-row action list) and
+// FUN_002c2cd0:20, reached from FUN_003ff360:91 (the 5-slot Weapon/Offhand/Helm/Armor/Accessory
+// list). NEITHER is the candidate-item list (FUN_003fdfe0, parked at menuCtx+0x150). So the preview
+// announces on each SLOT highlight, and says nothing while the player cursors the actual candidates.
+// Whether that gap should be closed is open; the claim is corrected here so it is not built on.
 //
 // PANEL: class FUN_002cbf80 (RVA 0x1ABF80) parked at menuCtx+0x2E0. Refreshed by FUN_002cc4f0
 // (0x1AC4F0), which the shop calls on EVERY highlight (FUN_0056e5d0:44-47), on confirm
