@@ -151,6 +151,101 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.6.2-Shotgun-Build — 2026-08-11
+
+**Built from:** `75af007`. Tree clean before and after. **The DLL's code traces to `f017e24`** — the
+one commit after it is the readme change below, so nothing in this binary post-dates S151. Covers
+**Sessions 147–151** (8 commits) since `V0.6.1-Shotgun-Build`'s `42014e0`, one of which (`140d868`)
+is V0.6.1's own release record.
+
+**Directory name normalised**, as V0.6 and V0.6.1 were: the user asked for "0.6.2-Shotgun Build" and
+the directory and zip are `V0.6.2-Shotgun-Build`, hyphenated to keep a space out of the zip name.
+
+**Zip:** `FFXII-Screen-ReaderV0.6.2-Shotgun-Build.zip`, 1,227,715 bytes, five files, root flat.
+- `dinput8.dll` 846,848 bytes (sha256 `986ed4d0…4740238b`) — up from V0.6.1's 821,760; five sessions
+  covering the stale-entity pruner, Esper vitals, the HP display clamp, the license board's own
+  availability bit, collected treasure, and the off-hand cursor host.
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` — **byte-identical to V0.6.1's and
+  V0.6's** (sha256 `056db4a9…fa3a1d19`), same source, unchanged build. Three releases running.
+- TTS pair carried over unchanged from `V0.6.1-Shotgun-Build` (`Tolk.dll` 122,368 sha256
+  `c4fb11d3…48197225`, `nvdaControllerClient64.dll` 153,600 sha256 `41c1f5df…cb23a0b09`).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: CHANGED** — 20,879 bytes / 228 lines (sha256 `1d9f2db7…c1ba4e4a`), against V0.6.1's 19,968
+/ 222. Two commits touched `README.md` in this range: `367b10f` (S147/S148 — the Libra sentence, `F7`,
+key `8` for the summoned Esper, and Auto detail replacing the removed Text glyphs row) and `75af007`,
+the readme commit made immediately before this release trigger.
+
+**Converter re-validated the documented way, and it passed.** Run against `git show 42014e0:README.md`
+it reproduced the shipped `Releases\V0.6.1-Shotgun-Build\ReadMe.txt` **byte-identically** — 19,968
+bytes both, sha256 `443e6ec9…a0e9680c`. The current file was then converted from `git show
+HEAD:README.md` with the same code. Rules unchanged from V0.6.1. Output audit: zero `#`, zero `*`,
+zero `](`, zero leftover escapes, no BOM, CRLF on all 228 lines, and **exactly one backtick** — the
+literal `` ` `` key name, the same single survivor as the last six releases.
+
+> **A trap worth recording, because it produced a false MISMATCH on the first attempt.** The
+> validation must be run through a **byte-exact** shell. PowerShell's `>` re-encodes redirected
+> output (it added a BOM and five bytes here), so `git show … > f` and `python md2txt.py … > f` both
+> produce a file that differs from the artifact for reasons that have nothing to do with the
+> converter. Use git-bash for the redirect and `cmp`; the same run then matched exactly.
+
+**Readme key coverage: TWO GAPS FOUND AND CLOSED IN THIS RELEASE'S README COMMIT.** Every key
+`input_tracker.cpp` registers was audited against `README.md`, not sampled. Two contexts had no
+entry at all, both of them keys that already worked:
+- **`Home` / `End` in the `F8` mod menu** — first and last setting (`mod_menu.cpp:261-268`). The
+  readme documented `Up`/`Down` and `Left`/`Right` there and stopped.
+- **`Up` / `Down` on an open Clan Primer entry** — step the page a line at a time
+  (`primer_reader.cpp:496-499`). `Home`/`End` on that surface *were* documented, but only inside the
+  combat log's exception paragraph; `Up`/`Down` appeared nowhere, and the Primer had no section of
+  its own for a reader to look them up in. It has a two-sentence one now.
+
+**One key changed meaning on a screen, and the readme still described the old behaviour.** `4` on
+the field menu's **Equipment** screen: S150 put that per-highlight stat preview behind **AutoDetail**
+(`equip_compare.cpp:405`), so the readme's "is the exception, and deliberately so" — i.e. it reads
+automatically — had been false since. Corrected. `4` still reads it in both modes; AutoDetail only
+decides whether it *also* speaks on its own.
+
+**Flagged, not fixed — one stale line and one doc gap:**
+- `README.md` still carries **"New in this build: item and equipment descriptions now read the
+  elements as words"**. That was new in **V0.6** (S125), two releases ago, and it is changelog
+  framing the README rule in `CLAUDE.md` forbids. Left alone because this release's readme commit
+  was deliberately scoped to the keys the user asked for; it belongs in the next readme commit.
+- **`Docs\Controls.md` does not list `Home`/`End` for the mod menu either** — the same gap the readme
+  had, in the canonical dev reference. The Primer `Up`/`Down` entry is present there.
+- The V0.6.1 record's mod-menu **row-ordering** flag (readme lists Text glyphs before Auto-walk while
+  `kSettings` walks Auto-walk first) is **closed by attrition** — Text glyphs was removed in S147, so
+  the readme's list and `kSettings` now agree.
+
+**Repo housekeeping done at this release, and it is worth recording because it was a first.** All
+three worktrees were verified clean and **every branch was pushed to `origin` for the first time** —
+`combat-system` (the trunk), `nav/surface-goal` and `nav/event-transfer` had existed only locally, so
+until now the sole branch on the remote was the long-stale `master`. One uncommitted change was found
+in the `nav/surface-goal` worktree and committed there rather than discarded (`8d29827`): it derives
+the SDL3 source path from `CMAKE_CURRENT_SOURCE_DIR` instead of a literal `D:/Games/Dev`. It resolves
+to the same directory on this checkout, so the build is unaffected, and it was **deliberately not
+merged to `combat-system`**, which was about to cut this build.
+
+**Purpose:** shotgun build of Sessions 147–151. What the tester is exercising: the stale-entity
+pruner and the Esper vitals on `8` (S147/S148), the HP display clamp, the license board's spoken
+availability (S149), collected-treasure pruning (S150), and the off-hand/shield candidate list, which
+was silent on every cursor move until S151 found its cursor lives on a host object at
+`container+0xC0`.
+
+**Play-confirmation status.** S149, S150's two pruners and S151 are all play-confirmed on the current
+build (2026-08-11). **The S148 low-HP threshold is the one thing in this range still unconfirmed** —
+the 20% latch now divides by the clamped `BC_MAXHP` rather than the raw field, and no session records
+a play check of it. Treat a wrong-sounding low-HP warning in this build as new, not inherited.
+
+**Known-unfinished items still shipping, unchanged and still open in `Docs\debug.md`:** the **Clan
+Primer wrap-around settle is SILENT** (S127, tester-accepted, with the do-not-fix-by-reverting
+warning recorded there — note this build gives that surface its own readme section for the first
+time, so a tester is now more likely to walk into it), and the `__MJ_CTRL` exit-builder widening
+means maps **318, 319, 321, 322 and 568** may list exits they previously dropped. **Also open and
+NOT a session's work yet: the three frame-counting offenders** in `Docs\PerFrameAudit.md` —
+`path_planner` and `nav_probe` (`kWaitFrames=90`) and `audio_beacon` (`kStrayFrames=45`). At 144 fps
+the route budget is 0.63 s rather than the 1.5 s its comment claims, so a high-refresh tester can see
+spurious "No path". This is the first release record to name them.
+
 ## V0.6.1-Shotgun-Build — 2026-08-05
 
 **Built from:** `42014e0`. Tree clean before and after. **The DLL's code traces to `c907b7a`** — the
