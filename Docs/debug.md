@@ -2460,6 +2460,12 @@ code path that set it.**
   controller `FUN_00560910` @ `menuCtx+0x158`.
 - **At char-select SHOW, `ctrl+0xd0` is stale.** `FUN_00560ee0` fills it later; the global
   `menuCtx+0xde0` is written first (`FUN_00285f20`), so read that for a reliable entry announce.
+- **STRUCK (S149): `FUN_00323600` does NOT answer "can this node be bought."** It has no adjacency
+  test of any kind, so its `0`/`9` means "you own the LP", not "you may spend it" — and the board
+  only lets you buy a node touching one you already own. Shipped as availability, it announced "can
+  learn" on nodes the game then rejected with the invalid-action sound. The purchasability bit is
+  `cell+0x18 & 0x1000`, set by `FUN_0055e090` and tested by the Confirm branch `FUN_0055cd40` case
+  `0xc` / `0x8001`. See the S149 Solved Problems entry.
 
 ## Inventory quantity / category — Tried & Failed (Session 70, 2026-07-24)
 
@@ -5919,3 +5925,83 @@ can never lie in wait across a press. Every consumption logs
 `[STATUS] ailment focus swallowed: owner=… index=… (ctrl=… ailmentGrid=…)` — one per switch and none
 per navigation is the proof, and the two pointers are printed side by side so a later session can
 tighten the one-shot into a plain structural test if they always match.
+
+## License board availability + a runaway tutorial repeat — SOLVED (Session 149, 2026-08-10)
+
+**KEYWORDS: license board prerequisites adjacency cell 0x18 flags 0x1000 reachable FUN_0055e090
+FUN_0055cd40 0x8001 confirm invalid action sound buzzer FUN_00249c60 FUN_00323600 no adjacency test
+can learn wrong tutorial box button prompt never ending repeat press AAAA widget 0xC0 level not event
+oscillates FUN_002a8c50 534-536 FUN_002e16b0 0x1C16B0 re-arm end latch idled**
+
+### 1. "Can learn" on a node the game refused
+
+**Symptom (user, Nomad Village save):** navigated to a node the mod called learnable, pressed
+Confirm, the game played the invalid-action sound.
+
+**Cause:** `license_reader.cpp` derived the spoken status from `FUN_00323600`. That function's body
+`FUN_00323d10` checks the learned bitmask, the node-type specials and `LP < cost` — and **nothing
+about reachability**. FFXII only lets you buy a node adjacent to one you already own, so every
+unreached node with enough LP was announced "can learn".
+
+**Fix:** read `cell+0x18`, the one word `FUN_0055cd40`'s Confirm branch (case `0xc` / sub-message
+`0x8001`) tests: `0x2000` learned · `0x1000` prerequisites met · `0x4000` affordable. `FUN_0055e090`
+is the adjacency flood that sets `0x1000` from every learned cell's four orthogonal neighbours. Full
+bit table in `GameArchitecture.md`.
+
+**The lesson: DON'T MODEL THE VERDICT — READ THE WORD THE VERDICT IS READ FROM.** A second model of
+"can this be bought" can drift out of step with the game's; a read of the same flag word agrees by
+construction. A negative result about `FUN_00323600` ("it doesn't say") was available in its own
+68-line body the whole time.
+
+**The status answers ONE question, by user decision: "will Confirm do anything here?"** Three states
+— learned / can learn / **silence** when the prerequisites are not met. Two words were cut:
+
+- **No "prerequisites not met" phrase.** There is no game wording to borrow (node state is icon
+  colour; a cell's only codec is its category word), so inventing one would be a fabricated label.
+  Silence also makes "can learn" a claim the mod only ever makes when Confirm really responds.
+- **No "not enough LP".** *"that's up to the player to decide… we already have LP displayed per
+  license and a key to check total LP."* Affordability is arithmetic the player already has (the cost
+  is in the line, `U` reads the total) — and it is **not** the no-op case: `FUN_0055cd40` answers a
+  reachable-but-unaffordable Confirm with the game's own `FUN_002ce2f0(board, 10)` message, so the
+  game gives that information itself at the moment it matters. `CELL_AFFORDABLE` is still named and
+  still visible in the logged `flags=` word; it is never spoken.
+
+**THE SECOND LESSON: DON'T MIX WHAT THE PLAYER CANNOT WORK OUT WITH ARITHMETIC THEY ALREADY HAVE.**
+A status line earns its place by answering the question the screen cannot.
+
+`LockedUpper` ("Locked") still owns the blank `id == 0xFFFF` tile. `LockedLower` and `NotEnoughLP`
+were deleted with the switch they served.
+
+`FUN_00323600` survives as a **log-only** cross-check: `node[flags=0x%04X status=%d]:` prints both
+answers per node, so one board sweep shows where the old model and the game disagree.
+
+### 2. A tutorial box repeated its line forever at a button prompt
+
+**Symptom (tester, no log):** *"the box starts and is read correctly until a button prompt should
+play… a never ending 'clone' of that key input… sounds like 'press AAAAAAAAAAA'… even hitting NVDA
+key doesn't stop it, it only stops if the line is skipped/over."*
+
+**NOT the button icon.** `0x0F 0x40-0x6B` takes one parameter and emits nothing, which is correct
+for speech and is what the readme promises. The 462-escape naming gap is untouched and still open.
+
+**Cause: `widget+0xC0` is a LEVEL, not an event.** `FUN_002a8c50` sets it to 1 at the codec
+terminator (`:136-146`); the next call takes the skipped path and sets it back to 0 with `mode = 1`
+(`:534-536`); mode 1 passes the `:139` guard, so the call after that latches again. A **finished box
+that stays on screen** therefore reads `1, 0, 1, 0` at frame rate — and `dialogue_reader` wiped the
+page key on every `1`. The next frame read `0`, found no key, and re-emitted: speech every two
+frames with `interrupt=true`, each utterance cut off after ~33 ms, and stopping the reader only
+clearing the way for the next. It also killed `t` on such a box (`ForgetLastLine` ran on every wipe).
+
+Ordinary dialogue never showed it: those pages park at a `0x03` break *before* the terminator and
+the box is torn down when the script advances. A tutorial banner runs to the terminator and then
+waits for a dismissal press — which is exactly "when a button prompt should play".
+
+**Fix:** `PageKey` gained `ended`; the latch is handled **once per key** and `base`/`off` are
+**kept**, so the emit path's own equality check holds on every `ended == 0` frame. The re-arm the
+wipe used to provide moved to the game's own event — `FUN_002e16b0` (RVA `0x1C16B0`), the writer of
+the `DAT_0215f200` slot. That hook **speaks nothing and must never be made to**: it fires ~18 times
+in 140 ms at area load. It is NOT a restoration of the S52 content-setter reader.
+
+**Instrument:** the inert repeats are counted per slot and logged once at 64 —
+`end latch idled 64x on wnd=…`. Presence proves the loop was real; **absence on the reported
+tutorial box means this diagnosis is wrong** and needs re-testing on the tester's build.

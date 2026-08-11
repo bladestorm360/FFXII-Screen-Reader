@@ -22,6 +22,7 @@ namespace {
 
 // ---- offline-derived RVAs / offsets (abs = RVA + 0x120000) -------------------
 constexpr uint32_t RVA_TEXT_WALK  = 0x188C50;   // FUN_002a8c50(widget, stopByte) -- the text walk
+constexpr uint32_t RVA_MSG_SET    = 0x1C16B0;   // FUN_002e16b0(ctx, slot, textPtr, _) content setter
 constexpr uint32_t RVA_MSGWIN_REG = 0x203F200;  // DAT_0215f200 -- 8 message-window slots
 
 constexpr uint32_t OFF_W_TEXT  = 0x28;   // widget+0x28  message text base
@@ -37,11 +38,20 @@ constexpr uint32_t MSGWIN_STRIDE  = 0x68;
 
 constexpr size_t TEXT_SCAN_MAX = 4096;      // the cap GameText uses for a whole message
 
-// ---- hook trampoline ---------------------------------------------------------
+// ---- hook trampolines --------------------------------------------------------
 typedef void (*Pfn_TextWalk)(void* widget, uint8_t stopByte);
+// FOUR PARAMETERS, and the arity is not negotiable (CLAUDE.md: a detour's arity must match the
+// callee's -- under-declaring is what crashed the shop in S129). All four are read in the body of
+// FUN_002e16b0, and the archive already carries the signature from when the mod hooked this same
+// function in Session 19 (Docs\sessions_001_050.md, Docs\GameArchitecture.md).
+typedef int  (*Pfn_MsgSet)(void* ctx, int slot, void* textPtr, void* unused);
 Pfn_TextWalk s_origTextWalk = nullptr;
+Pfn_MsgSet   s_origMsgSet   = nullptr;
 
 bool g_initialized = false;
+
+// How many inert repeats of the end latch to see before the log says so. One line, once per box.
+constexpr uint32_t kIdleReportAt = 64;
 
 // The page last handed to speech, PER MESSAGE-WINDOW SLOT.
 //
@@ -56,6 +66,11 @@ struct PageKey {
     const void*    widget = nullptr;     // the text widget this key was taken from
     const uint8_t* base = nullptr;
     uint32_t       off  = 0xFFFFFFFFu;   // sentinel: nothing emitted for this slot yet
+    // The game's end-of-message field is a LEVEL that oscillates, not an event -- see HookedTextWalk.
+    // `ended` records that it has already been handled for THIS key, so every later observation of it
+    // is inert; `idled` counts those so the log can say how many re-speaks the old code produced.
+    bool           ended = false;
+    uint32_t       idled = 0;
 };
 std::mutex g_mutex;
 PageKey    g_lastPage[MSGWIN_SLOTS];
@@ -151,22 +166,22 @@ void EmitPage(void* widget, const uint8_t* base, uint16_t off) {
 // FUN_002a9980.
 //
 // This is a TRANSITION DETECTOR on the game's own cursor, not a speech dedup. It is scoped to the box
-// currently on screen, and there are now THREE ways it is dropped, because the first one alone was not
-// enough and the gap read as a dedup to the player:
-//   1. `+0xC0` latches end-of-message  -> ForgetSlot (below);
+// currently on screen, and there are THREE ways it is dropped, because no one of them is enough and a
+// gap reads as a dedup to the player:
+//   1. the game installs a new message in the slot -> HookedMsgSet (FUN_002e16b0), the WRITER of the
+//      registry entry;
 //   2. a different widget appears in the same registry slot -> the key is stale, dropped in the
 //      change-check itself;
 //   3. a list screen opens over the box -> DialogueReader::ForgetLivePages, from InventoryReader's
 //      FUN_005655f0 hook.
 //
-// WHAT ONLY (1) MISSED (Session 126): exiting a shop and re-entering did not re-speak the clerk. `+0xC0`
-// is read PRE-call, so it is visible only on the call AFTER the message ended -- and when the shop tears
-// the box down, that extra walk never happens, so the latch is never observed and the key never drops.
-// It then collides by construction on the way back: same recycled slot, same `base` (the map's message
-// data is still loaded, so the clerk's text is at the same address), and `off` is 0 for page 1 both
-// times. Equal key -> return -> silence. The old comment here asserted "the key is dropped the moment
-// the message ends" as though (1) were sufficient; it is not, and silence is the failure mode this
-// project cares about most.
+// `+0xC0` USED TO BE (1), AND IT WAS THE WRONG SIGNAL TWICE OVER. It is read PRE-call, so it is visible
+// only on the call AFTER the message ended -- and when a shop tears the box down that extra walk never
+// happens, so the latch is never observed and the key never drops (Session 126: exiting a shop and
+// re-entering did not re-speak the clerk -- same recycled slot, same `base`, `off` 0 both times, equal
+// key, silence). Worse, when the box DOES stay on screen the field oscillates every frame, so wiping on
+// it made a finished box re-speak forever -- see the end-latch arm below. It is now a once-per-message
+// notification to the other two readers and nothing else; the re-arm belongs to (1).
 void HookedTextWalk(void* widget, uint8_t stopByte) {
     // Read the end-of-message latch BEFORE the original. `+0xC0` is set to 1 by the codec-0x00 branch
     // and the NEXT call consumes it -- it skips the walk and clears the field back to 0 (`:535-536`)
@@ -187,15 +202,53 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
     const int slot = LiveMessageSlot(widget);
     if (slot < 0) { LogReject(widget); return; }
 
-    if (ended == 1) {          // the box finished -- re-arm so a repeat of it speaks again
-        ForgetSlot(slot);
-        // The mid-dialogue choice widget IS this box's embedded list block (both readers reach it as
-        // window+0xD0), so a finished message also retires any option cursor that was on it. Its own
-        // guard has no way to see this -- FUN_002a9980 simply stops being called.
-        ChoiceReader::ForgetLastCursor();
-        // Same event, third consumer: the `t` re-read line belonged to THIS message. Without this it
-        // outlived the box and `t` went on speaking a finished conversation anywhere in the game.
-        MessageReader::ForgetLastLine();
+    // THE END LATCH IS A LEVEL, NOT AN EVENT -- and treating it as one made a finished box repeat
+    // its page forever. FUN_002a8c50 sets `+0xC0 = 1` when the walk reaches the codec terminator
+    // (:136-146) and the NEXT call takes the skipped path, sets `+0xC0 = 0` and `mode = 1`
+    // (:534-536) -- and mode 1 passes the guard at :139, so the call after THAT latches again. While
+    // a finished box sits on screen the field therefore reads 1, 0, 1, 0 at frame rate.
+    //
+    // This arm used to ForgetSlot on every 1 it saw, which wiped the page key; the very next frame
+    // read 0, found no key, and re-emitted. Speech every two frames with interrupt=true, so each
+    // utterance was cut off after ~33 ms and the player heard one fragment repeating with no way to
+    // stop it -- reported from the first-area tutorial box, where the walk runs to the terminator and
+    // the box then waits for a dismissal press instead of being torn down. Ordinary dialogue parks at
+    // a 0x03 page break BEFORE the terminator, which is why it never showed there.
+    //
+    // So: act ONCE per key, and KEEP base/off. The emit path's own equality check then holds on every
+    // `ended == 0` frame and the loop cannot start. The re-arm the wipe used to provide comes from
+    // HookedMsgSet below -- the game's own "this slot got a new message" event.
+    if (ended == 1) {
+        bool     first = false;
+        uint32_t idled = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            PageKey& last = g_lastPage[slot];
+            if (last.widget != widget) { last = PageKey(); last.widget = widget; }
+            first = !last.ended;
+            last.ended = true;
+            if (!first) idled = ++last.idled;
+        }
+        if (first) {
+            // The mid-dialogue choice widget IS this box's embedded list block (both readers reach it
+            // as window+0xD0), so a finished message also retires any option cursor that was on it.
+            // Its own guard has no way to see this -- FUN_002a9980 simply stops being called.
+            ChoiceReader::ForgetLastCursor();
+            // Same event, third consumer: the `t` re-read line belonged to THIS message. Without this
+            // it outlived the box and `t` went on speaking a finished conversation anywhere in the
+            // game. Firing it ONCE also fixes a second casualty of the loop -- it used to run every
+            // two frames, so `t` was dead for as long as such a box was up.
+            MessageReader::ForgetLastLine();
+        } else if (idled == kIdleReportAt) {
+            // The measurement, not a guess: this many inert repeats is this many re-speaks the old
+            // code produced on this box. Its ABSENCE from a log of the reported tutorial box would
+            // mean the oscillation is not what happened there.
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "end latch idled %ux on wnd=%p -- a finished box is sitting on screen; before "
+                     "this fix each one re-spoke the page", idled, widget);
+            Log::Write("DIALOGUE", m);
+        }
         return;
     }
 
@@ -212,10 +265,31 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
         last.widget = widget;
         last.base   = base;
         last.off    = off;
+        last.ended  = false;      // a genuinely new page: the latch state belonged to the old one
+        last.idled  = 0;
     }
 
     STALL_SCOPE("DialogueReader::TextWalk");
     EmitPage(widget, base, off);
+}
+
+// FUN_002e16b0(ctx, slot, textPtr, _): the whole-message content setter, and THE WRITER of the
+// registry slot -- it tears the old window out of DAT_0215f200 and installs a freshly built one
+// (:159-169). That makes it the one honest "this slot got a new message" signal, which is exactly
+// the re-arm the end-latch wipe used to provide: without it, a message re-shown on a RECYCLED widget
+// at the same offset would collide with the retained key and go silent, which is the S126 shop-clerk
+// failure and the failure mode this project cares about most.
+//
+// IT SPEAKS NOTHING, AND IT MUST NEVER BE MADE TO. This is NOT a restoration of the Session 52
+// content-setter reader that was deleted for making pagination keyboard-only (see message_reader.cpp's
+// MOVED OUT note) -- it forgets a page key and returns. It also fires ~18 times in 140 ms at area
+// load, all slot 0 (debug.md, the ambient-chatter table); harmless for a re-arm, fatal for a speaker.
+int HookedMsgSet(void* ctx, int slot, void* textPtr, void* unused) {
+    const int ret = s_origMsgSet ? s_origMsgSet(ctx, slot, textPtr, unused) : 0;
+    // The game's own clamp (FUN_002e16b0:40-54): negative -> 0, and 7 is the ceiling.
+    const int s = (slot < 0) ? 0 : (slot > MSGWIN_SLOTS - 1 ? MSGWIN_SLOTS - 1 : slot);
+    ForgetSlot(s);
+    return ret;
 }
 
 } // namespace
@@ -225,11 +299,18 @@ bool Init() {
         Log::Write("DIALOGUE", "DialogueReader::Init called twice — ignoring");
         return true;
     }
-    const bool ok = Hooks::InstallTyped(RVA_TEXT_WALK, &HookedTextWalk, &s_origTextWalk);
+    bool ok = Hooks::InstallTyped(RVA_TEXT_WALK, &HookedTextWalk, &s_origTextWalk);
+    // The re-arm. If THIS one fails the pages still speak, but a message re-shown on a recycled
+    // widget can go silent -- so the failure has to be visible rather than implied by the ok flag.
+    if (!Hooks::InstallTyped(RVA_MSG_SET, &HookedMsgSet, &s_origMsgSet)) {
+        ok = false;
+        Log::Write("DIALOGUE", "FUN_002e16b0 re-arm hook FAILED — a re-shown message may not repeat");
+    }
     g_initialized = true;
     Log::Write("DIALOGUE", ok
-        ? "DialogueReader initialized (page cursor widget+0x8A via FUN_002a8c50 — every input device)"
-        : "DialogueReader: FUN_002a8c50 hook FAILED — dialogue pages will not speak");
+        ? "DialogueReader initialized (page cursor widget+0x8A via FUN_002a8c50 — every input "
+          "device; page keys re-armed by the content setter FUN_002e16b0)"
+        : "DialogueReader: a hook FAILED — see the line above and the Hooks log");
     return ok;
 }
 
@@ -254,6 +335,7 @@ void ForgetLivePages() {
 
 void Shutdown() {
     if (!g_initialized) return;
+    Hooks::Uninstall(RVA_MSG_SET);
     Hooks::Uninstall(RVA_TEXT_WALK);
     g_initialized = false;
     ForgetAll();

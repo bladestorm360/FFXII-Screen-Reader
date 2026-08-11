@@ -241,3 +241,11 @@ corrections only and did not change length materially.
 **Nothing was split this session, deliberately.** All three changes are single-choke-point edits in
 files that already own the behaviour, and none of the new code is a candidate to move on its own. The
 one to watch is `battle_state.cpp`, which crossed 500 with the Esper accessors.
+
+## Per-frame work — see `Docs\PerFrameAudit.md` (Session 149)
+
+This file tracks file size and centralization debt. **Frame-rate coupling has its own ledger**:
+`Docs\PerFrameAudit.md` inventories every per-frame/per-draw hook, sorts them into notification
+(safe), wall-clock (safe) and **frame-counted (broken at any rate but 60 fps)**, and names the three
+live offenders — `path_planner.cpp` and `nav_probe.cpp` `kWaitFrames = 90`, and `audio_beacon.cpp`
+`kStrayFrames = 45`. Written after testers reported problems at higher game speeds and frame rates.

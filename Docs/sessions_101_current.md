@@ -4302,3 +4302,176 @@ session had already struck twice elsewhere. The comparison now lives inside the 
 its bounds are self-evident (max <= 9999 by the game's own clamp), and the comment says so. The
 one-shot status-name dump was **removed** — the decision made its question moot, and an instrument
 with no question left is dead weight.
+
+## Session 149 — 2026-08-10 — [menus] The board's own reachability bit, and an end latch that was a level
+
+**KEYWORDS: license board prerequisites adjacency cell+0x18 0x1000 0x2000 0x4000 0x8000 FUN_0055e090
+FUN_0055cd40 0x8001 confirm buzzer FUN_00249c60 FUN_00323600 struck StatusWordFromFlags LockedLower
+deleted tutorial box button prompt repeat runaway widget+0xC0 level not event FUN_002a8c50 534-536
+FUN_002e16b0 0x1C16B0 page key re-arm end latch idled**
+
+Two unrelated defects, both root-caused offline in the decompile and both shipped with the
+instrument that will confirm or falsify them on the next log.
+
+### 1. "Can learn" on a node the game refuses
+
+The user played a node the mod called learnable in the Nomad Village save, pressed Confirm, and got
+the invalid-action sound. Their reading of it was the whole diagnosis: *"the way the license board
+works is that you have to unlock nodes leading up to the node you want… there must be a bit that
+tells the game that a player can or can not spend license points on that node. that's what we need
+to find."*
+
+**`FUN_00323600` has no adjacency test.** Its body `FUN_00323d10` is 68 lines and every branch is
+visible: null char, invalid panel, the learned bitmask at `save+0x194`, the type specials, and
+`save+0x190 < cost`. It answers *do you own it / can you afford it* and nothing else, so every
+unreached node with enough LP came out as "can learn".
+
+**The bit is `cell+0x18` bit `0x1000`, and the way to be sure is to read the word the ACCEPT/REJECT
+BRANCH READS.** `FUN_0055cd40` case `0xc` / sub-message `0x8001` is the Confirm handler, and it
+decides from one word:
+
+```c
+uVar9 = *(uint *)(cell + 0x18);
+if (((uVar9 & 0x2000) == 0) && ((uVar9 >> 0xc & 1) != 0)) {   // not learned AND reachable
+    if ((uVar9 & 0x6000) != 0) { ...purchase confirm...; FUN_00249c60(0x25); return; }
+    FUN_002ce2f0(board, 10);                                  // the not-enough-LP popup
+}
+FUN_00249c60(5);                                              // the invalid-action sound
+```
+
+`FUN_0055e090` is what sets `0x1000`: it walks every LEARNED cell and promotes its four orthogonal
+neighbours (`0x8000` clear, `0x1000` set). That flood **is** the board's prerequisite rule, and it
+runs inside the grid builder before the builder's own closing `FUN_00247510(board, 0x8000, cell)`,
+so the bits are correct at the first focus and every focus after it.
+
+| `cell+0x18` | meaning | set by |
+|---|---|---|
+| `0x1000` | prerequisites met (touches a learned node) | `FUN_0055e090` |
+| `0x2000` | learned | `FUN_0055bff0` status-1 arm |
+| `0x4000` | affordable (LP >= cost) | `FUN_0055bff0` status-0 arm |
+| `0x8000` | not learned, not yet reachable | `FUN_0055bff0` status-0/2 arms |
+
+**THE LESSON: DON'T MODEL THE VERDICT, READ THE WORD THE VERDICT IS READ FROM.** A second model of
+"can this be bought" can drift out of step with the game's; a read of the same flag word cannot,
+because it agrees by construction. This is the same shape as S148's *the writer of the state names
+the state* — one level further on: the **tester** of the state defines the state.
+
+**The user cut TWO words out of the status, and both cuts made it sharper.**
+
+First the new phrase. The plan proposed "Prerequisites not met."; they struck it: *"if a license
+can't be learned, we just won't insert a phrase there. so 'can learn' will only read if the license
+can actually be learned."* Correct, and it matches the standing rule — the board draws node state as
+icon colour and a cell carries no codec but its category word, so there is no game wording to borrow
+and inventing one would be a fabricated label. `StatusWordFromFlags` returns `nullptr` for the
+unreachable case and the line is just "<name>, <cost> LP".
+
+Then "not enough LP", which the first build kept: *"that's up to the player to decide. we already
+have LP displayed per license and a key to check total LP… what they do need to know is 'If I click
+on this license, will it actually bring up the learn prompt or is this a no-op?'"* That is the whole
+specification, and it exposes what the status had been quietly doing wrong in a second way — mixing
+**what the player cannot work out** (is this on my frontier) with **arithmetic they already have**
+(cost is in the line, `U` reads the total). It is also not the no-op case: `FUN_0055cd40` answers a
+reachable-but-unaffordable Confirm with the game's own `FUN_002ce2f0(board, 10)` message. The game
+gives that information itself, at the moment it matters.
+
+So the status collapsed to three states and one question — *will Confirm do anything?* — learned /
+can learn / silence. `CELL_AFFORDABLE` is still named (it is the bit table) and still visible in the
+logged `flags=` word; it is simply never spoken.
+
+**`LockedUpper` ("Locked") is untouched** and still owns the blank `id == 0xFFFF` tile, as asked.
+Two phrasebook entries were **deleted** with the switch they served: `LockedLower`, whose only arm
+covered statuses 3/4/5/8 that the builder has already zeroed to `id 0xFFFF`, and `NotEnoughLP`.
+
+`FUN_00323600` is still called, **for the log only**: `node[flags=0x%04X status=%d]:` puts both
+answers on every line, so one board sweep shows where the old model and the game disagree.
+
+### 2. A tutorial box that repeated forever — `widget+0xC0` is a LEVEL, not an event
+
+Tester report, no log: *"the box starts and is read correctly until a button prompt should play…
+a never ending 'clone' of that key input… sounds like 'press AAAAAAAAAAA'… even hitting NVDA key
+doesn't stop it, it only stops if the line is skipped/over."*
+
+**The button icon was never the problem.** `0x0F 0x40-0x6B` takes one parameter and emits nothing,
+which is correct for speech and is what the readme already promises. The 462-escape naming gap is
+untouched and still open.
+
+**The end-of-message field oscillates.** `FUN_002a8c50` sets `+0xC0 = 1` at the codec terminator
+(`:136-146`); the next call takes the skipped path and sets `+0xC0 = 0`, `mode = 1` (`:534-536`);
+mode 1 passes the guard at `:139`, so the call after that latches again. While a finished box sits
+on screen the field reads **1, 0, 1, 0 at frame rate** — and `dialogue_reader` wiped the page key on
+every `1` it saw. The next frame read `0`, found no key, and re-emitted: **speech every two frames
+with `interrupt=true`**, each utterance cut off after ~33 ms, and stopping the reader only clearing
+the way for the next one.
+
+Why a tutorial box and not ordinary dialogue: normal pages park at a `0x03` break *before* the
+terminator and the box is torn down when the script advances. A tutorial banner runs to the
+terminator and then **stays up waiting for a dismissal press** — which is exactly "when a button
+prompt should play". It also silently killed `t` on such a box, because `ForgetLastLine` ran on
+every wipe.
+
+**Fix: act once per key, keep `base`/`off`.** `PageKey` gained `ended`; the emit path's own equality
+check then holds on every `ended == 0` frame and the loop cannot start.
+
+**The re-arm moved to the game's own event.** The wipe was also drop (1) — without it a message
+re-shown on a *recycled* widget at the same offset would collide with the retained key and go silent
+(the S126 shop-clerk failure). `FUN_002e16b0` (RVA `0x1C16B0`) is the WRITER of the registry slot:
+it tears the old window out of `DAT_0215f200` and installs a freshly built one. Hooking it — **four
+parameters, arity confirmed from the callee body and from the mod's own S19 hook** — gives an exact
+"this slot got a new message" signal. It **speaks nothing and must never be made to**: it fires ~18
+times in 140 ms at area load (the ambient-chatter table), harmless for a re-arm and fatal for a
+speaker. This is NOT a restoration of the S52 content-setter reader that made pagination
+keyboard-only.
+
+**The instrument:** the inert repeats are counted per slot and logged once at 64 —
+`end latch idled 64x on wnd=…`. Its presence in the next log is the measurement that the loop was
+real; its **absence** on the reported tutorial box means the diagnosis is wrong and needs re-testing
+on the tester's build. `msg set: slot=` is not logged — the re-arm is silent by design, and its
+effect is observable as the re-shown line speaking again.
+
+### 3. The tester's real question — a per-frame audit
+
+Part 2 was **play-confirmed by the user the same session** ("tested the fix myself for the button
+detection, confirmed not an issue anymore"), and the collaborator who reported it asked the better
+question behind it: *"please tell me we are not reading dialogue per-frame and reconstructing the
+dialogue… that could cause problems if FPS in the display settings is changed, or at game speed."*
+
+**We are not.** The complete codec text sits at `widget+0x28` from the moment the message is
+installed; `widget+0x8A` says which page is showing; a cursor change decodes that page in one pass.
+Nothing accumulates across frames, and the typewriter counter `widget+0x8C` is **never read** — the
+full page is spoken the instant the cursor lands on it, so reveal speed, frame rate and game speed
+cannot change what is said or how often.
+
+But the question deserved an inventory rather than an assurance, so `Docs\PerFrameAudit.md` is new.
+**The organising distinction: hooking a per-frame function is fine; deriving behaviour from the frame
+COUNT is not.** Three tiers — notification (safe, ~12 hooks), wall-clock (safe for FPS; game speed
+only makes those windows more forgiving), and **frame-counted (wrong at any rate but 60 fps)**.
+
+**Three live offenders, all silently meaning "N/60 seconds":**
+
+| site | constant | at 144 fps |
+|---|---|---|
+| `path_planner.cpp:83` | `kWaitFrames = 90` | **0.63 s**, not 1.5 |
+| `nav_probe.cpp:36` | `kWaitFrames = 90` | 0.63 s |
+| `audio_beacon.cpp:46` | `kStrayFrames = 45` | 0.31 s |
+
+`path_planner`'s is the one that can produce a **wrong answer** rather than a mistimed one: it is the
+budget a pending route request gets to wait for `IsFieldNavSafe()` after a map change, so at high
+frame rate a route asked for during a fade-in can expire and come back as a refusal — intermittent
+"No path" that a 60 fps player never sees. `audio_beacon`'s **inverts its own design decision**: the
+comment says the stray test is deliberately slack so the beacon does not re-aim "every time the
+player rounds a pillar", and at 144 fps a third of a second is exactly that.
+
+Not fixed this session, deliberately. **The game-speed mechanism is unmeasured** — whether 4x runs the
+field tick more often or gives each tick a bigger delta decides whether tier C is worse at speed or
+unaffected, and `StallProbe::FrameTick` already records the inter-frame gap, so one play log at 1x and
+4x settles it with no code. Tuning constants before that measurement would be the guess-dressed-as-a-
+measurement this project keeps paying for. The doc lists the order: measure, convert the three to
+`GetTickCount64()` deadlines, re-measure with a tester at high FPS.
+
+Also flagged and deliberately NOT churned: `kMotionTeleportM` / `kWalkDeltaCapM` compare a *per-frame*
+delta against an absolute 5 m. Wrong shape (the principled form divides by the frame's elapsed time
+and compares a speed), safe numbers (FFXII walking is ~5-6 m/s, so even 4x at 10 fps is ~2.4 m).
+
+`CLAUDE.md` gained **NEVER COUNT FRAMES** under the no-polling rule, with the edge-vs-level lesson
+beside it, since both defects this session were the same mistake in different clothes: **treating a
+frame-rate-dependent quantity as if it were time.**

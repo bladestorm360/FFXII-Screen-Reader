@@ -196,6 +196,22 @@ Membership there is what separates a paginated message from every other text blo
 slot lays out (the field menu shares the `FUN_002a6190` window class, so class identity alone is not
 enough). Shipped in `src/ui/dialogue_reader.cpp`.
 
+**⚠ `widget+0xC0` (end of message) IS A LEVEL, NOT AN EVENT** (S149). `FUN_002a8c50` sets it to 1 at
+the codec `0x00` terminator (`:136-146`); the **next** call takes the skipped path at `:100` and sets
+`+0xC0 = 0`, `mode = 1` (`:534-536`) — and mode 1 passes the `:139` guard, so the call after that
+latches again. While a **finished box stays on screen** (a tutorial banner waiting for its dismissal
+press) the field therefore reads `1, 0, 1, 0` at frame rate. Anything that re-arms on each `1` will
+fire every two frames forever. Ordinary dialogue never shows it: those pages park at a `0x03` break
+*before* the terminator (`:155-168`, mode 5) and the box is torn down when the script advances.
+
+**`FUN_002e16b0(ctx, slot, textPtr, _)` (RVA `0x1C16B0`) is the page-key RE-ARM** — it is the WRITER
+of the registry entry, tearing the old window out of `DAT_0215f200` and installing a freshly built
+one (`:159-169`), so it is the exact "this slot got a new message" event. `param_2` is the slot,
+clamped negative→0 and 7 as the ceiling. **Four parameters — do not shorten the detour.** In
+`dialogue_reader.cpp` it forgets one page key and returns; it **speaks nothing**, and it fires ~18
+times in 140 ms at area load (the ambient-chatter table), which is harmless for a re-arm and would
+be a flood for a speaker.
+
 **Battle text:** `battle_message.bin` is an st2e section (via `FUN_002f9860`); names via
 `FUN_002b58b0` (`0x1958B0`). **Flying damage numbers are a per-digit sprite HUD, NOT codec
 text** (blitter `FUN_0028aaa0` `0x16AAA0`) — the text hook will not catch them (combat-log
@@ -2518,9 +2534,38 @@ Entry: Party Menu **Licenses** = command `0x4b5` → `FUN_00281ed0` → `FUN_005
   locked/not-reachable) · `+0x0b` type · `+0x0c` LP cost · `+0x10` **CATEGORY codec** ("Weapon"/
   "Magick" — *not* a description) · `+0x18` flags · `+0x20/0x21` col/row · `+0x30` category id.
   `FUN_0055bff0` (0x43BFF0) builds it and **zeroes locked cells** (status 3/4/5/8) to `id=0xFFFF`.
+- **⭐ `cell+0x18` IS THE PURCHASABILITY WORD — it is what the Confirm handler branches on** (S149).
+  `FUN_0055cd40` case `0xc` / sub-message **`0x8001`** is Confirm; `param_2[4]` is the focused cell,
+  the same pointer the `0x8000` focus hands the reader. It tests only:
+
+  | bit | meaning | set by |
+  |---|---|---|
+  | `0x1000` | **prerequisites met** — the cell touches a learned node | `FUN_0055e090` (0x43E090) |
+  | `0x2000` | learned | `FUN_0055bff0` status-1 arm (`&0xfffff55f \| 0x3550`) |
+  | `0x4000` | affordable (`memberBlock+0xB0` >= cost) | `FUN_0055bff0` status-0 arm |
+  | `0x8000` | not learned AND not yet reachable | `FUN_0055bff0` status-0/2 arms |
+
+  ```c
+  if (((f & 0x2000) == 0) && ((f >> 0xc & 1) != 0)) {          // not learned AND reachable
+      if ((f & 0x6000) != 0) { ...purchase confirm...; FUN_00249c60(0x25); return; }
+      FUN_002ce2f0(board, 10);                                 // the not-enough-LP popup
+  }
+  FUN_00249c60(5);                                             // the invalid-action sound
+  ```
+
+  **`FUN_0055e090` is the adjacency flood**: for every cell with `0x2000` it visits the four
+  orthogonal neighbours and, where `0x8000` is set and `0x1000` clear, clears `0x8000` and sets
+  `0x1000`. It runs inside `FUN_0055bff0` **before** that builder's closing
+  `FUN_00247510(board,0x8000,firstCell)`, so the bits are already correct at the first focus.
+  Bits 4-7 / 8-11 are the icon's target-vs-displayed animation nibbles (the builder's second pass
+  diffs them); bits 12-15 are cleared by `&0xffff0fff` before the status switch sets them.
 - **Node status** `FUN_00323600(charId,node,0)` (0x203600) → `FUN_00323d10` (0x203D10):
   `1` learned · `2` not enough LP (`charBlock+0x190` < cost) · `0`/`9` can learn · `3/4/5/8` locked ·
-  `6` null char · `7` invalid panel.
+  `6` null char · `7` invalid panel. **⚠ IT HAS NO ADJACENCY TEST** — every branch of its 68-line
+  body is visible and none of them asks whether the node can be reached, so `0`/`9` means "you own
+  the LP", NOT "you may buy this". Reading it as availability is what made the mod announce "can
+  learn" on nodes the game then buzzed (S149). Kept in `license_reader.cpp` as a **log-only**
+  cross-check beside the flags; nothing spoken depends on it.
 - **Granted-entry list** (`o` detail) — `FUN_0035d330(0x19,node)` → kind `rec+0x23`, 8 ids
   `rec+0x26..0x34`; copy them BEFORE resolving again (shared scratch `DAT_022ca520`). Resolve by
   kind: `0`→`FUN_0035d330(1, id<<16)` gear · `1`→`0x14` magick · `2/3`→`0x1d` technick. The entry

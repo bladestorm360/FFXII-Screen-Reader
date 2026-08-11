@@ -12,12 +12,18 @@
 //   * License board grid (FUN_0055cd40, menuCtx+0x320) -- node moves via the shared
 //     FUN_00247510 msg-0x8000 focus (its `val` is a POINTER to the focused cell). Announces
 //     node name + status + LP cost; `o` reads the effect description. Board SHOW announces the
-//     job + current LP via a dedicated proc hook.
+//     job + current LP via a dedicated proc hook. The STATUS is read off the focused cell's own
+//     flag word (cell+0x18) -- the one word FUN_0055cd40's Confirm branch tests -- so the spoken
+//     word and the game's accept/buzz decision cannot disagree. It answers ONE question, "will
+//     Confirm do anything here": learned / can learn / (silence, when the prerequisites are not met
+//     and Confirm is a no-op). Affordability is NOT spoken -- the cost is in the line, `U` gives the
+//     total, and the game shows its own message on a node you cannot pay for.
 //   * `U` key -> current LP (only while the license board is open; silent otherwise).
 //
 // CONTRACT (same as the other readers): read-only, SEH-guarded memory reads. The only game
 // calls are pure getters -- FUN_0035d330 (name resolver), FUN_002f9860 (menu message books),
-// FUN_00323600 (node status) -- made on the game thread, exactly like ingame_menu_reader's
+// FUN_00323600 (node status, kept as a LOG-ONLY cross-check against the cell flags -- nothing
+// spoken depends on it any more) -- made on the game thread, exactly like ingame_menu_reader's
 // ResolveDefName. Text is the game's own, decoded via GameText. No dedup; empty/invalid ->
 // silent (never fabricate a label).
 namespace LicenseReader {

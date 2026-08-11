@@ -184,6 +184,14 @@ things. Rules 1 and 2 are absolute; only rule 3 changed.
 - **NO** polling, timers, or per-frame checks — event-driven hooks only. **No
   exceptions** outside narrow polled-monitor cases that have been documented and
   explicitly approved.
+- **NEVER COUNT FRAMES.** A counter incremented once per call and compared against a
+  constant silently means "N/60 seconds", and it is wrong at every other frame rate —
+  at 144 fps a 90-frame budget is 0.63 s, not the 1.5 s its comment claims. Use a
+  `GetTickCount64()` deadline, which is what such comments always meant. Hooking a
+  per-frame function is fine; deriving behaviour from the frame COUNT is not. Related:
+  before re-arming on a game flag, establish whether it is an **edge or a level** — a
+  field the game clears itself will fire forever (S149's dialogue repeat).
+  **Full inventory + the three live offenders: `Docs\PerFrameAudit.md`.**
 - **CONSOLE OUTPUT BUDGET**: the user is blind and uses a screen reader. Dumping
   hundreds of lines at once **crashes the screen reader**. ALL scripts (Frida, batch,
   etc.) split output into **console** (brief summaries, key findings, ~500 lines max)

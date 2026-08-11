@@ -11,6 +11,7 @@
 
 #include <Windows.h>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -64,6 +65,30 @@ constexpr uint32_t OFF_CELL_ID       = 0x08;    // node/panel id (u16; 0xFFFF = 
 constexpr uint32_t OFF_CELL_COST     = 0x0C;    // LP cost (u16)
 constexpr uint32_t OFF_CELL_CATEGORY = 0x10;    // CATEGORY word codec ("Weapon"/"Magick"), NOT a
                                                 // description — it is the ball icon's text equivalent
+
+// cell+0x18 — THE WORD THE GAME'S OWN CONFIRM BRANCH TESTS. `FUN_0055cd40` case 0xc / sub-message
+// 0x8001 is the Confirm handler, and it decides accept-vs-buzz from this one word and nothing else:
+//
+//     uVar9 = *(uint *)(cell + 0x18);
+//     if (((uVar9 & 0x2000) == 0) && ((uVar9 >> 0xc & 1) != 0)) {   // not learned AND reachable
+//         if ((uVar9 & 0x6000) != 0) { ...purchase confirm...; FUN_00249c60(0x25); return; }
+//         FUN_002ce2f0(board, 10);                                  // the not-enough-LP popup
+//     }
+//     FUN_00249c60(5);                                              // the invalid-action sound
+//
+// Bit 0x1000 is set by `FUN_0055e090`, which walks every LEARNED cell and promotes its four
+// orthogonal neighbours — that is the board's adjacency rule, and it is the ONLY place reachability
+// exists. `FUN_00323600` (below) has no adjacency test of any kind, which is why a node three tiles
+// past the frontier was announced "can learn" and then buzzed when confirmed.
+//
+// Reading the same word the game branches on is what makes the spoken status agree with the sound by
+// construction, rather than by a second model that can drift out of step with it.
+constexpr uint32_t OFF_CELL_FLAGS   = 0x18;
+constexpr uint32_t CELL_REACHABLE   = 0x1000;   // prerequisites met (touches a learned node)
+constexpr uint32_t CELL_LEARNED     = 0x2000;
+// LP >= cost. NEVER SPOKEN -- see StatusWordFromFlags. Named here because this is the bit table for
+// the word, and because the whole word goes to the log (`flags=0x%04X`), where this bit is readable.
+constexpr uint32_t CELL_AFFORDABLE  = 0x4000;
 
 // ---- FUN_0035d330 resolved record (shared scratch at DAT_022ca520) ------------------------------
 constexpr uint32_t OFF_REC_DESC = 0x08;         // secondary codec — the entry's description, when it has one
@@ -215,18 +240,36 @@ std::wstring JobDesc(int job) {
     return DecodeCodec(ResolveMsgCodec(JOB_DESC_BASE + job), /*skip=*/true);
 }
 
-// Node status word from FUN_00323600's return (fully decoded from FUN_00323d10):
-// 1=learned, 0/9=affordable, 2=too little LP, 3/4/5/8=locked. Named cells only ever carry
-// {0,1,2,9} (the builder zeroes locked cells), but 3/4/5/8 map to "locked" for completeness.
-// Unknown/-1 -> nullptr (append nothing, never guess).
-const wchar_t* StatusWord(int status) {
-    switch (status) {
-        case 1:                          return Phrase::Get(Phrase::Id::Learned);
-        case 0: case 9:                  return Phrase::Get(Phrase::Id::CanLearn);
-        case 2:                          return Phrase::Get(Phrase::Id::NotEnoughLP);
-        case 3: case 4: case 5: case 8:  return Phrase::Get(Phrase::Id::LockedLower);
-        default:                         return nullptr;
-    }
+// The spoken status. It answers exactly ONE question -- "if I press Confirm here, does anything
+// happen?" -- because that is the only part of the node's state the player cannot already work out.
+//
+//   learned              -> "learned"
+//   reachable            -> "can learn"   (Confirm responds: the purchase prompt, or the game's own
+//                                          not-enough-LP message)
+//   prerequisites unmet  -> NOTHING       (Confirm is a no-op with a buzzer)
+//
+// AFFORDABILITY IS DELIBERATELY NOT SPOKEN, and CELL_AFFORDABLE is read only into the log. The line
+// already carries the node's LP cost, `U` reads the character's total, and the game itself puts up a
+// message when you confirm a node you cannot pay for -- so the mod announcing it would be telling the
+// player something they have two other ways to know and pre-empting a decision that is theirs. It is
+// also not the no-op case: a reachable node responds either way.
+//
+// nullptr = SAY NOTHING, and that is the answer when the prerequisites are not met. The game has no
+// wording for that state -- the board draws it as a dim icon, and a cell carries no codec but its
+// category word -- so inventing one would be a fabricated label. Silence also makes "can learn" a
+// claim the mod only ever makes when FUN_0055cd40 would really respond to Confirm.
+//
+// A faulted read leaves `flags` at 0, which lands on the reachable test and appends nothing: a bad
+// read degrades to silence rather than to a guess.
+//
+// STRIKES the old FUN_00323600-return switch (1=learned, 0/9=can learn, 2=not enough LP,
+// 3/4/5/8=locked). Its 3/4/5/8 arm was already dead — FUN_0055bff0 zeroes those cells to id 0xFFFF
+// before the reader ever sees one — and its 0/9 arm was the bug: that function never asks whether
+// the node can be reached.
+const wchar_t* StatusWordFromFlags(uint32_t flags) {
+    if (flags & CELL_LEARNED)      return Phrase::Get(Phrase::Id::Learned);
+    if (!(flags & CELL_REACHABLE)) return nullptr;                            // Confirm buzzes
+    return Phrase::Get(Phrase::Id::CanLearn);                                 // Confirm responds
 }
 
 // ---- announcements ------------------------------------------------------------------------------
@@ -322,7 +365,10 @@ std::wstring BuildNodeDetail(void* cell, uint16_t nodeId) {
 }
 
 // Board node move. A revealed node speaks "<name>, <status>, <cost> LP"; a blank tile speaks
-// "Locked". The `o` detail comes from BuildNodeDetail.
+// "Locked". The status comes from the cell's own flag word (see OFF_CELL_FLAGS) and is OMITTED
+// entirely for a node whose prerequisites are not met, so the line is just "<name>, <cost> LP" —
+// the game has no wording for that state and the mod does not invent one. The `o` detail comes
+// from BuildNodeDetail.
 void OnBoardNode(void* board, void* cell) {
     if (!cell) return;
     uint16_t id;
@@ -345,6 +391,14 @@ void OnBoardNode(void* board, void* cell) {
     uint16_t cost = 0;
     SafeReadU16(cell, OFF_CELL_COST, &cost);
 
+    uint32_t flags = 0;
+    SafeReadU32(cell, OFF_CELL_FLAGS, &flags);
+
+    // THE INSTRUMENT, not the source of truth. FUN_00323600 is still called so the log carries both
+    // answers side by side: the flags word (which is what the game's Confirm branch reads) and the
+    // status byte the reader used to speak. One board sweep then shows, per node, where the two
+    // disagree — and a node whose spoken word did not match the sound becomes a lookup rather than a
+    // re-derivation. Log-only: nothing downstream reads `status`.
     int status = -1;
     void* ctx = PauseCtx();
     if (ctx) {
@@ -356,7 +410,7 @@ void OnBoardNode(void* board, void* cell) {
     }
 
     std::wstring line = name;
-    if (const wchar_t* sw = StatusWord(status)) { line += L", "; line += sw; }
+    if (const wchar_t* sw = StatusWordFromFlags(flags)) { line += L", "; line += sw; }
     line += L", " + std::to_wstring(cost) + Phrase::Get(Phrase::Id::LpSuffix);
 
     // The board CLEARS the game's description bar (FUN_00291d80(0,0) in FUN_00561390), so the
@@ -364,7 +418,9 @@ void OnBoardNode(void* board, void* cell) {
     std::wstring detail = BuildNodeDetail(cell, id);
     if (!detail.empty()) TextCapture::ProvideHelpText(detail);
 
-    Log::WriteW("LICENSE", "node:", board, line);
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "node[flags=0x%04X status=%d]: ", flags, status);
+    Log::WriteW("LICENSE", hdr, board, line);
     if (!detail.empty()) Log::WriteW("LICENSE", "  detail: ", detail);
     Speech::Output(line, /*interrupt=*/true);
 }

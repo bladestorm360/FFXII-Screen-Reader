@@ -48,7 +48,7 @@ const Row kTable[] = {
     EN(L"%s. %d objects"), EN(L"%d objects"),
 
     // -- License board ------------------------------------------------------------------------
-    EN(L"learned"), EN(L"can learn"), EN(L"not enough LP"), EN(L"locked"), EN(L"Locked"),
+    EN(L"learned"), EN(L"can learn"), EN(L"Locked"),
     EN(L"License board"), EN(L" license board"), EN(L" License Points"),
 
     // -- Gauges / status labels. Trailing space separates label from number.

@@ -66,7 +66,13 @@ enum class Id {
     FmtAreaObjects, FmtObjects,          // format templates: word order is locale-dependent
 
     // -- License board (license_reader.cpp) ---------------------------------------------------
-    Learned, CanLearn, NotEnoughLP, LockedLower, LockedUpper,
+    // Two entries were deleted with the FUN_00323600 status switch they served (S149).
+    // `LockedLower` ("locked") covered statuses 3/4/5/8, which the grid builder has already zeroed
+    // to id 0xFFFF before the reader sees them. `NotEnoughLP` was dropped by user decision: the line
+    // already carries the node's cost, `U` reads the total, and the GAME puts up its own message when
+    // you confirm a node you cannot pay for — so the mod would be pre-empting the player's own
+    // arithmetic. The board status answers one question only: will Confirm do anything?
+    Learned, CanLearn, LockedUpper,
     LicenseBoard, LicenseBoardSuffix, LicensePointsSuffix,
 
     // -- Gauges / status labels (status_reader.cpp, party_status.cpp, battle_target_reader.cpp)
