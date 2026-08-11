@@ -460,10 +460,62 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
             Log::Write("READER", d);
         }
 
+        // ---- THE OFF-HAND LIST'S CURSOR IS HOSTED BY ANOTHER OBJECT (S151) -------------------------
+        //
+        // The measurement the S150 diagnostic below was shipped to take, and the answer it gave:
+        // `owner=…CB5BBA0 val=1 -> cursor pane=…BE9CDC0 class RVA=0x2DDFE0`, val following the
+        // player up and down the shield list. `val` IS the row index of the pane holding the cursor
+        // -- the off-hand slot is simply the one list in the family whose cursor widget hangs off an
+        // intermediate host object, so the 0x8000 is addressed to that host and the `IsFocusedPane`
+        // gate below dropped it. InventoryReader::IsCursorHost proves the pairing from the
+        // container's own +0xC0 link before a word is spoken; the decompile chain is on its
+        // definition. The gate itself is untouched -- it is still what stops the inventory reading
+        // items/magicks/equipment from several panes at once -- and nothing else can satisfy this
+        // test, because +0xC0 is written only by the off-hand's build path.
+        const bool hostedCursor = InventoryReader::IsCursorHost(focusWin, owner);
+
+        // ---- LOG-ONLY: a focus message whose owner is NOT the pane holding the cursor (S150) -------
+        //
+        // Kept for the panes still unaccounted for (the on-screen CONTROLS panel is the known one).
+        // Capped at 12 lines and keyed on the VAL as well as the pair: the whole point is to watch
+        // `val` move as the player walks a list, so a pair-only cache would print one line and hide
+        // the only thing being measured. (That was S150's own mistake -- three throttled diagnostics
+        // read as measurements -- so this one is throttled to preserve the signal.)
+        if (!rowOff && focusWin && owner != focusWin && !hostedCursor &&
+            !IngameMenuReader::IsBattleCommandOwner(owner)) {
+            static void* s_lastPair[2] = {};
+            static int   s_lastVal = -0x7FFFFFFF;
+            static int   s_lines   = 0;
+            if (s_lines < 12 &&
+                (s_lastPair[0] != owner || s_lastPair[1] != focusWin || s_lastVal != index)) {
+                s_lastPair[0] = owner; s_lastPair[1] = focusWin; s_lastVal = index;
+                ++s_lines;
+                const uintptr_t base = reinterpret_cast<uintptr_t>(Hooks::ResolveRva(0));
+                void* fcls = MemRead::Obj0(focusWin);
+                const uintptr_t fc = reinterpret_cast<uintptr_t>(fcls);
+                char d[224];
+                snprintf(d, sizeof(d),
+                         "focus msg on a NON-cursor pane: owner=%p val=%d -> cursor pane=%p "
+                         "class RVA=0x%llX (gated out; TryFocus not called)",
+                         owner, index, focusWin,
+                         static_cast<unsigned long long>(fcls && fc >= base ? fc - base : fc));
+                Log::Write("READER", d);
+            }
+        }
+
         if (IngameMenuReader::IsBattleCommandOwner(owner)) {
             // Battle command menu (Attack / Magicks & Technicks / Items / ...). A SEPARATE system —
             // NOT gated by the field-menu IsFocusedPane pane isolation. `index` = highlighted command.
             IngameMenuReader::OnBattleCommandFocus(owner, index);
+        } else if (hostedCursor) {
+            // A cursor move inside the off-hand candidate list, addressed to its host. Speak it
+            // against the pane that actually holds the cursor and the rows.
+            //
+            // CLAIMED whether or not the reader speaks: this pane is ours, and TryFocus stays
+            // deliberately silent on an empty category (it would otherwise hand the cell to the
+            // generic painted-cell path, which reads the PREVIOUS category's stale paint -- S89).
+            // Every other way it can decline names itself in the log.
+            InventoryReader::TryFocus(focusWin, index);
         } else if (rowOff) {
             // Row-chain in-game menu (field pause menu + submenus): `val` is the focused row index.
             // Speak only if this pane holds the cursor.
@@ -559,35 +611,32 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
         //
         // WHY THIS PANE NEEDS A ROUTE OF ITS OWN. Entering a list normally speaks through the STASH
         // replay above: the pane's first 0x8000 is gated out (DAT_0208ebc0 has not flipped yet), is
-        // stashed, and is replayed here. But that 0x8000 only exists when the game MOVES the cursor
-        // onto the currently-equipped item. **Confirm into a slot with NOTHING equipped and the
-        // cursor is already at row 0** -- no focus message is ever sent, nothing is stashed, and the
-        // list opens in silence. Measured, 2026-08-11 offhand report:
+        // stashed, and is replayed here. For the OFF-HAND slot's candidate list nothing is ever
+        // stashed, so the list opened in silence. Measured, 2026-08-11 offhand report:
         //     [INV] category: owner=…BCBADC0 "SHIELDS"      <- announced
         //     [READER] unclaimed pane: obj0 RVA=0x2DDFE0    <- and then not one [INV] line, ever
-        // The WEAPON slot worked in the same log only because Murasame was equipped, which is what
-        // made this look category-specific for most of the session. It is not: it is
-        // equipped-vs-empty, and it would hit any slot the player has left bare.
+        // This announce fixes that and is PLAY-CONFIRMED: the off-hand list now speaks on entry.
         //
-        // ROW 0 IS RIGHT BY CONSTRUCTION, not a guess. Reaching this branch means no focus event
-        // moved the cursor -- which is the same condition as the list sitting at its top row. When
-        // the game DOES move the cursor (something equipped), the stash replay above claims it and
-        // this never runs.
+        // WHY THE OFF-HAND ALONE FAILS TO STASH -- ESTABLISHED S151, and it is the SAME root cause as
+        // the navigation half. Its cursor widget hangs off an intermediate HOST object rather than
+        // off the list, so the entry 0x8000 is addressed to that host: the stash arms on the host,
+        // `newWin` is the list, the two never match, and the replay above cannot fire. See
+        // InventoryReader::IsCursorHost for the decompile chain (`FUN_003fd860` vs `FUN_003fd6b0`).
+        // Both hypotheses refuted in play stay refuted -- it is neither empty-vs-equipped nor a
+        // different window class -- and `FUN_0057cf20`'s category-0x41 two-pool merge, the live
+        // hypothesis at the time, is innocent: it chooses the list's ROWS, not its cursor owner.
+        //
+        // This announce is kept exactly as it shipped. It is play-confirmed, it is what makes the
+        // pane speak on entry, and ROW 0 is right by construction: reaching this branch means no
+        // focus event moved the cursor, which is the same condition as the list sitting at its top
+        // row. When the game DOES stash a focus, the replay above claims it and this never runs.
         //
         // TryFocus speaks nothing and returns false for any window it does not own, so the gate is
         // belt-and-braces: a class match AND the reader's own shape test must both agree.
-        constexpr uint32_t RVA_EQUIP_CANDIDATES = 0x2DDFE0;   // FUN_003fdfe0
-        {
-            void* cls = MemRead::Obj0(newWin);
-            const uintptr_t base = reinterpret_cast<uintptr_t>(Hooks::ResolveRva(0));
-            const uintptr_t c    = reinterpret_cast<uintptr_t>(cls);
-            if (cls && base && c >= base &&
-                static_cast<uint32_t>(c - base) == RVA_EQUIP_CANDIDATES &&
-                InventoryReader::TryFocus(newWin, 0)) {
-                Log::Write("READER", "equipment candidate list entered with no focus event "
-                                     "(empty slot) -- announced its first row");
-                return;
-            }
+        if (InventoryReader::IsCandidateList(newWin) && InventoryReader::TryFocus(newWin, 0)) {
+            Log::Write("READER", "equipment candidate list entered with no focus event "
+                                 "(empty slot) -- announced its first row");
+            return;
         }
 
         // ---- UNCLAIMED PANE CENSUS (Session 112, LOG-ONLY) -----------------------------------------

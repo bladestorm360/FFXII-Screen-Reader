@@ -7,6 +7,40 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### SOLVED (S151) — the OFF-HAND list was silent because its cursor is owned by ANOTHER OBJECT
+
+KEYWORDS: offhand off-hand shield shields ammunition equipment candidate list silent navigation
+FUN_003fdfe0 FUN_003fd860 FUN_003fd6b0 FUN_003fd1d0 FUN_002d47c0 cursor host container+0xC0
+widget+0xC8 0x8000 IsFocusedPane IsCursorHost 0x2DDFE0 category 0x41 FUN_0057cf20
+
+**Symptom:** entering the off-hand slot announced `SHIELDS` and the first candidate, then said
+nothing for any cursor move. Every other slot read correctly **on the same window instance**.
+
+**Cause:** the off-hand (slot 1) is the only slot whose candidate list is built by `FUN_003fd860`
+rather than `FUN_003fd6b0` (`FUN_003fdfe0:31-36`). That path puts the cursor widget under an
+intermediate HOST object at `container+0xC0`, and the widget notifies **its host**
+(`FUN_002d47c0:15-16` → `FUN_00247510(widget+0xC8, 0x8000, cell)`). So the focus message was never
+addressed to the pane holding the cursor, the active-pane gate dropped it, and the menu-entry stash
+could never be replayed against the entered pane. Full table in `GameArchitecture.md`.
+
+**Fix:** `InventoryReader::IsCursorHost` — class `0x2DDFE0` **and** `cursorPane[+0xC0] == owner` —
+then speak `TryFocus(focusWin, index)`. The `IsFocusedPane` gate is untouched.
+**PLAY-CONFIRMED 2026-08-11.**
+
+**THREE HYPOTHESES STRUCK — do not revive any of them:**
+- **"empty vs equipped, not shields"** — an unequipped HELM reads fine on entry AND while
+  navigating; the off-hand fails WITH a shield equipped. Refuted in play 2026-08-11.
+- **"the off-hand uses a different window class"** — one instance serves `SHIELDS` and `WEAPONS`.
+- **"`FUN_0057cf20` case `0x41`'s two-pool shields+ammunition merge"** — the live hypothesis for two
+  sessions, and the most seductive because it was the only bespoke branch anyone had found. It is
+  real but innocent: it chooses the list's ROWS, never who is told about the cursor.
+
+**The lesson that would have found it sooner:** "this list will not speak" has two candidate faults —
+*the message is wrong* and *the ADDRESSEE is wrong* — and three sessions only searched the first.
+When one member of a family misbehaves, **diff its CONSTRUCTOR, not its contents**; the split was a
+single branch on the slot index in the init handler. The line that finally answered it was the S150
+diagnostic naming which branch declined, on its first pass over the surface.
+
 ### SOLVED (S129) — a DETOUR THAT DECLARES FEWER ARGUMENTS THAN THE GAME FUNCTION CORRUPTS MEMORY
 
 KEYWORDS: crash shop sell menu equip_compare HookedDelta FUN_002cc780 arity stack arguments
@@ -6066,14 +6100,27 @@ has always called them `Category::Treasure` and the docs now match.
 
 ## Equipment offhand list read nothing — SOLVED same session: it is EMPTY-vs-EQUIPPED (Session 150, 2026-08-11)
 
-> **RESOLUTION (read this first; the analysis below is the path, not the answer).** Not shields, not
-> a category, not a different window class. A pane's first `0x8000` is gated out, stashed, and
-> replayed by `HookedFocusSet` — and **that event only exists when the game moves the cursor onto the
-> currently-equipped item.** Confirm into a slot with **nothing equipped** and the cursor is already
-> at row 0: no movement, no focus message, nothing stashed, silence. The weapon slot worked in the
-> same log only because Murasame was equipped; **any bare slot is affected.** Fixed by the announce
-> the unclaimed-pane census had already specified — class `0x2DDFE0` (`FUN_003fdfe0`) announces row 0
-> on entry, which is right by construction because reaching that branch means the cursor never moved.
+> **STATUS: HALF FIXED, ROOT CAUSE STILL OPEN.** The off-hand candidate list now **speaks on entry**
+> (play-confirmed) via an announce gated on class `0x2DDFE0` — the one the unclaimed-pane census had
+> already specified. **Navigating within that list is still silent** and is not diagnosed.
+>
+> **TWO ROOT-CAUSE CLAIMS WERE MADE AND BOTH WERE REFUTED IN PLAY (2026-08-11) — do not revive them:**
+> 1. *"It is empty-vs-equipped, not shields."* **REFUTED.** An unequipped **helm** slot reads
+>    correctly on entry AND while navigating, and the off-hand still fails **with a shield
+>    equipped.** Equipped state is not the variable.
+> 2. *"The off-hand uses a different window class."* **REFUTED.** One object address (`…BF63DC0`)
+>    serves both `"SHIELDS"` and `"WEAPONS"` in the same session — same instance, not merely the same
+>    class.
+>
+> **The live hypothesis is the category, `0x41`** — the only one whose rows `FUN_0057cf20` builds on
+> a bespoke path (stub first switch, then a two-pool merge of shields + ammunition, with two exits
+> that free and NULL the array). Same window, different BUILD. This hypothesis was raised early,
+> wrongly struck in favour of (1), and is restored.
+>
+> **Instrument in place for the next pass:** `focus msg on a NON-cursor pane: owner=… val=N -> cursor
+> pane=… class RVA=…`, capped at 12 and keyed on the value so it cannot collapse. `FUN_003fdfe0`'s
+> own handler opens with `val * 0x20 + container[+0xE0]`, so a focus message for this list carries a
+> usable row index; the open question is which window it arrives on.
 >
 > **Three throttled diagnostics were mistaken for measurements first:** `unclaimed pane` is once per
 > DISTINCT CLASS (`s_seenCls[12]`), `[DESC]` is a paint dump capped at 10, and a category-shaped

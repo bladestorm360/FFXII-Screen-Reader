@@ -2702,6 +2702,41 @@ claims that focus and stays silent so the generic painted-cell path cannot speak
 **Entering a one-item list moves no cursor**, so a 0x8000-only reader is silent there — the
 `FUN_005655f0` hook is what covers it.
 
+### The equipment CANDIDATE list, and the OFF-HAND's cursor HOST (Session 151, 2026-08-11) — PLAY-CONFIRMED
+
+**The candidate-item list** ("which weapon / shield / helm?") is class **`0x2DDFE0`
+(`FUN_003fdfe0`)**, parked at `menuCtx+0x150`, one instance serving every slot. It is a normal member
+of the tabbed family above (`+0xE0` rows, `+0xD8` scroll, `+0xE8` tab table). Its `0x8000` branch
+indexes **`val * 0x20 + container[+0xE0]`** and reads the item id at **`+0x08`** — the same record
+the readers walk. Slot index is `container+0x17E`; `FUN_003fd360` sets `category = slot + 0x40`, so
+the off-hand is **`0x41`**. The 5 equipped ids live at `DAT_0209ac30 + 0xD48 + slot*0x20`.
+
+**⚠ SLOT 1 (OFF-HAND) IS BUILT DOWN A DIFFERENT BRANCH, AND ITS CURSOR IS NOT ITS OWN.**
+`FUN_003fdfe0:31-36` dispatches `slot == 1` → `FUN_003fd860`, everything else → `FUN_003fd6b0`:
+
+| | cursor widget comes from | notify target (`widget+0xC8`) |
+|---|---|---|
+| every other slot (`FUN_003fd6b0:38-40`) | the container's own scene subtree | **the container** — the pane holding the cursor |
+| **off-hand** (`FUN_003fd860:33-38`) | an intermediate HOST created by `FUN_00244f50(200, FUN_003fd1d0, 0)` and parked at **`container+0xC0`** | **that host** |
+
+`FUN_002d47c0:15-16` (and its siblings `FUN_002d4650`/`46f0`/`4840`) send `FUN_00247510(widget+0xC8,
+0x8000, cell)`, so **the off-hand's focus messages are addressed to the host, never to the list**.
+`FUN_003fd1d0:41-47` forwards every category-`0xC` message to its parent's handler **as a direct
+call, not another `FUN_00247510`** — hence exactly ONE observable focus message per move, carrying
+the host, with `val` unchanged.
+
+Reader consequence: an active-pane gate keyed on the message owner drops every off-hand cursor move,
+and a menu-entry stash keyed on the owner can never be replayed against the entered pane. Both were
+live defects. `inventory_reader.cpp` `IsCursorHost(cursorPane, host)` pairs them: class `0x2DDFE0`
+**and** `cursorPane[+0xC0] == host`. **`+0xC0` is written only by the off-hand path**, so nothing
+else in the family matches.
+
+**STRUCK as the cause of the off-hand's silence: `FUN_0057cf20` case `0x41`'s two-pool
+shields+ammunition merge.** The merge is real — it is why one list holds both pools — but it decides
+which ROWS the list holds, never who is told about the cursor. Also **STRUCK: "empty vs equipped"**
+(an unequipped helm reads correctly; the off-hand fails with a shield equipped) and **"a different
+window class"** (one instance serves `SHIELDS` and `WEAPONS`).
+
 ### The SHOP's route into that refresh (Session 88, 2026-07-29) — LOG-CONFIRMED
 
 `:2178` says "all three families (6 sites)" but never named the shop's route, which made the shop

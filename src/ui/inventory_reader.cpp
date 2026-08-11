@@ -26,7 +26,13 @@ using MemRead::SafeReadU32;
 constexpr uint32_t RVA_REFRESH     = 0x4455F0;  // FUN_005655f0(container, tabState, filter)
 constexpr uint32_t RVA_RESOLVE_MSG = 0x1D9860;  // FUN_002f9860(id) -> codec ptr (menu message books)
 
+// The equipment CANDIDATE-ITEM list (the "which weapon / shield / helm?" pane), obj[0] handler
+// FUN_003fdfe0. The ONE class this file names, and it names it only to recognise the off-hand's
+// cursor host below -- rows are still claimed by SHAPE everywhere else (see the header).
+constexpr uint32_t RVA_CANDIDATES  = 0x2DDFE0;  // FUN_003fdfe0(container, msg)
+
 // ---- container offsets (one tabbed family: items lists, equipment list, shop) --------------------
+constexpr uint32_t OFF_C_HOST   = 0xC0;   // OFF-HAND candidate list only -> cursor host; IsCursorHost
 constexpr uint32_t OFF_C_SCROLL = 0xD8;   // -> scroll/cursor grid widget
 constexpr uint32_t OFF_C_ROWS   = 0xE0;   // -> row array (null when the list is empty)
 constexpr uint32_t OFF_C_TABLE  = 0xE8;   // -> tab table
@@ -252,6 +258,53 @@ void HookedRefresh(void* container, void* tabState, int filter) {
 } // namespace
 
 namespace InventoryReader {
+
+bool IsCandidateList(void* w) {
+    return w && MemRead::Obj0(w) == Hooks::ResolveRva(RVA_CANDIDATES);
+}
+
+// THE OFF-HAND SLOT'S CURSOR IS HOSTED BY A SEPARATE OBJECT, WHICH IS WHY ITS FOCUS MESSAGES NEVER
+// ARRIVED ON THE PANE HOLDING THE CURSOR (Session 151). This returns true when `host` is provably
+// `cursorPane`'s own cursor host, so the caller can speak `cursorPane`'s row for a message addressed
+// to `host`.
+//
+// The candidate list is built per slot by FUN_003fdfe0's init, and slot 1 -- the OFF-HAND -- is the
+// only one that does not take the common path (`FUN_003fdfe0:31-36`: `== 1` -> FUN_003fd860, else
+// FUN_003fd6b0). The two differ in WHERE THE CURSOR WIDGET LIVES:
+//
+//   FUN_003fd6b0:38-40 (every other slot) takes the widget straight out of the container's own
+//     scene subtree, so the widget's notify target is the container -- the pane that holds the
+//     cursor -- and `FUN_00247510(container, 0x8000, row)` is what the mod's hook sees.
+//   FUN_003fd860:33-38 (off-hand) first creates an intermediate object -- FUN_00244f50(200,
+//     FUN_003fd1d0, 0) -- parks it at container+0xC0, attaches it as a CHILD, and takes the cursor
+//     widget from THAT object's subtree instead. The widget notifies its own host
+//     (`FUN_002d47c0:15-16` sends 0x8000 to widget+0xC8), so the message arrives on the HOST.
+//
+// The row index is unaffected: FUN_003fd1d0:41-47 forwards every category-0xC message to its
+// parent's handler, so FUN_003fdfe0 runs its 0x8000 branch with the SAME val and indexes
+// `val * 0x20 + container[+0xE0]` -- the row array this reader already walks, at the same stride,
+// reading the item id at +0x08 exactly as OFF_R_ID does. That forward is a direct call, not another
+// FUN_00247510, which is why only ONE focus message is ever observed and why it carries the host.
+//
+// Measured, 2026-08-11 (`FFXII-Screen-Reader-2026-08-11_15-41-40.log`): with the cursor on the
+// shield list, `owner=…CB5BBA0 val=1 -> cursor pane=…BE9CDC0 class RVA=0x2DDFE0` -- val tracking the
+// player's up/down through the list, on a pane the WEAPONS and HELMS lists (same instance
+// …BE9CDC0) address directly. Same window, same rows, different cursor OWNER.
+//
+// This also retires the two hypotheses REFUTED IN PLAY -- it is not "empty vs equipped" and not "a
+// different window class"; it is the same class and the same instance, built down a slot-1-only
+// branch -- and the live-but-unconfirmed third one, `FUN_0057cf20`'s category 0x41 two-pool merge.
+// That merge is real but innocent: it decides WHICH ROWS the list holds, never who is told about
+// the cursor.
+//
+// Both gates are required. The class says "this is the candidate list"; the +0xC0 identity says
+// "and this message came from THAT list's own host", which no shape test could establish. Note
+// +0xC0 is written ONLY by the off-hand path, so nothing else in the family can match here.
+bool IsCursorHost(void* cursorPane, void* host) {
+    if (!cursorPane || !host || cursorPane == host) return false;
+    if (!IsCandidateList(cursorPane)) return false;
+    return PtrAt(cursorPane, OFF_C_HOST) == host;
+}
 
 bool ConsumeCategoryAnnounce(void* owner) {
     if (!owner || owner != g_categoryOwner) return false;

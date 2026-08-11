@@ -66,4 +66,19 @@ bool TryFocus(void* owner, int index);
 // what keeps one surface from consuming another's announcement.
 bool ConsumeCategoryAnnounce(void* owner);
 
+// The equipment CANDIDATE-ITEM list ("which weapon / shield / helm?"), by obj[0] class. Used to
+// recognise the one pane whose cursor is hosted by another object (below) and, in MenuReader, to
+// announce its first row when it opens without a focus event.
+bool IsCandidateList(void* w);
+
+// True when `host` is `cursorPane`'s own cursor host -- i.e. a 0x8000 addressed to `host` is really
+// a cursor move within `cursorPane`, and TryFocus(cursorPane, index) is the row to speak.
+//
+// The OFF-HAND slot is the only list in the family whose cursor widget lives under an intermediate
+// object rather than under the list itself, so its focus messages arrive on that object and the
+// caller's active-pane gate drops them -- the list announced its first row on entry and then went
+// silent for every move. The full decompile chain (and the two hypotheses it retires) is on the
+// definition in inventory_reader.cpp.
+bool IsCursorHost(void* cursorPane, void* host);
+
 } // namespace InventoryReader
