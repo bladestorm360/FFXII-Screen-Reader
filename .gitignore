@@ -13,9 +13,18 @@ build_and_deploy.bat
 # Release packages
 /Releases/
 
-# RE artifacts (NOT in this repo — see ../FFXII-Decompile/)
-# (kept here in case scripts are ever co-located accidentally)
+# RE artifacts — NEVER in this repo. See "WHAT NEVER ENTERS THE REPO" in CLAUDE.md.
+# The repo is meant to be publishable so others can help, so everything in it must be OURS:
+# no decompiler output, no disassembly, and no Ghidra/Frida probes -- a probe quotes the code
+# it attaches to in its patterns and comments. All of it lives in ../FFXII-Decompile/.
+# These patterns are a backstop for accidental co-location, not the policy itself; the policy
+# also covers pasted game-code snippets inside Docs/, which no ignore rule can catch.
 /Docs/Scripts/
+*.java
+frida/
+ghidra/
+probes/
+/Docs/**/*.js
 
 # ff12-module-loader: reference-only clone (BSD-2, NOT used in build) with its own
 # .git — exclude the whole tree so it isn't committed as a broken embedded gitlink.

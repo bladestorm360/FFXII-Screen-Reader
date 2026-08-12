@@ -34,6 +34,42 @@ Every rule below is **non-negotiable**. Violating any of them is a blocking fail
   signature for that RVA is wrong — fix the signature, rebuild, deploy, and let the mod
   write the correct RVA back.
 
+### WHAT NEVER ENTERS THE REPO — game code, and anything that carries it (CRITICAL)
+
+**This repo is meant to be publishable so other people can help with the mod.** That is the whole
+reason the rule exists: everything in it must be OURS. Three categories never go in, in any file,
+including documentation:
+
+1. **RE source files** — decompiler output, disassembly listings, extracted game source. These live
+   in the sibling `..\FFXII-Decompile\`, which is **not** this repo and never becomes part of it.
+2. **Ghidra and Frida probes** — `.java`, `.js`, any script that attaches to or walks the game.
+   Not because the script is secret, but because a probe **quotes the code it attaches to** in its
+   patterns, offsets and comments. They live in `..\FFXII-Decompile\ghidra\` and `\frida\`.
+3. **Snippets of actual game code, anywhere — including inside `Docs\`.** A pasted block of
+   decompiler pseudocode is game code no matter which file it is pasted into. `Docs\` is committed,
+   so a paste there is a publish.
+
+**What IS ours and belongs here:** the RVAs, offsets, struct layouts, field meanings, function
+identities and behavioural descriptions in `GameArchitecture.md`. Those are *findings about* the
+binary that we derived and wrote — they are the point of the project, and they are not code.
+
+**The line, in practice.** When you need to record what a function does, write what it DOES and cite
+where, instead of pasting what it says:
+
+```
+NO   DAT_02064ac0 = DAT_02064ac0 + DAT_02064ac8 * _DAT_02064ac4;
+YES  FUN_0022a770 (RVA 0x10A770) adds ac8*ac4 to the sim accumulator once per call, then drains
+     it one whole tick at a time -- so game speed runs the loop body N times per rendered frame.
+     Accumulator RVA 0x1F44AC0, multiplier 0x1F44AC4, base delta 0x1F44AC8.
+```
+
+Both carry the same fact. Only one of them is a transcript. **If a decompiler variable name
+(`uVar7`, `iVar4`, `lVar6`, `undefined8`, `longlong` casts, `param_1`) survives into a `Docs\` file,
+it is a paste and it should be rewritten.**
+
+This complements CLEAN-ROOM RE below: that rule keeps encumbered *source* out of our reasoning; this
+one keeps the *game's* code out of our published artifact.
+
 ### Engine model & RE rules
 
 - **CLEAN-ROOM RE.** Do **not** open, read, or reference the leaked PhyreEngine 8 source
@@ -498,7 +534,7 @@ D:\Games\Dev\Custom\FFXII\
 ├── FFXII-Screen-Reader\              Mod root (git repo — initialized 2026-07-01)
 │   ├── CMakeLists.txt
 │   ├── build_and_deploy.bat          (gitignored — machine-specific)
-│   ├── CLAUDE.md                     (gitignored — house rules)
+│   ├── CLAUDE.md                     (TRACKED — house rules; see WHAT NEVER ENTERS THE REPO)
 │   ├── README.md
 │   ├── src\
 │   │   ├── proxy\                    dinput8.dll proxy + DllMain deferred init

@@ -4547,11 +4547,9 @@ All probe-confirmed (`probe_primer_screens.js`), `abs = RVA + 0x120000`.
 
 `FUN_00573be0(viewer, pageIdx)` does **not** index the record by the displayed page:
 
-```c
-bVar9 = param_2 + 1;
-if ((*(uint *)(param_1 + 200) & 1) == 0) { bVar9 = param_2; }   // viewer+0xC8 bit 0
-uVar7 = *(undefined8 *)(*(longlong *)(param_1 + 0xd0) + 8 + bVar9 * 8);
-```
+It biases the index first: the page it looks up is `pageIdx + 1` when `viewer+0xC8` bit 0 is set,
+and plain `pageIdx` when it is clear. That biased index then selects an 8-byte entry from the record
+array at `viewer+0xD0`, starting 8 bytes in — i.e. `*(u64*)(*(viewer+0xD0) + 8 + page*8)`.
 
 **Record page = displayed page + 1 when `viewer+0xC8` bit 0 is set.** The Bestiary sets it, so its
 record page 0 is the `CLASSIFICATION / GENUS` box — not a page you can turn to. Traveller's Tips has
