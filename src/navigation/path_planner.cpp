@@ -17,6 +17,8 @@
 #include "speech/phrasebook.h"
 #include "core/logger.h"
 
+#include <windows.h>          // GetTickCount64 -- the wait below is a wall-clock deadline
+
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -49,7 +51,7 @@ float                 g_bandLo = 1.0f, g_bandHi = -1.0f;
 float                 g_reach = 0.0f;
 uint32_t              g_reqEpoch = 0;       // g_epoch captured at Request()
 uint64_t              g_reqSeq   = 0;       // distinguishes successive requests
-int                   g_framesLeft = 0;     // retry countdown while not yet safe
+uint64_t              g_waitDeadlineMs = 0; // wall-clock expiry of the wait-for-nav-safe window
 uint64_t              g_notSafeLoggedSeq = 0; // game-thread only: dedupe the per-frame not-safe log to once/request
 // Arm the audio beacon when this route lands. Set by `\`, clear for `p` -- see the header.
 bool                  g_seedBeacon = false;
@@ -79,8 +81,16 @@ float                 g_objReach = 0.0f;
 int                   g_objSeamGroup = 0;
 bool                  g_haveObjective = false;
 
-// ~1.5 s: keep retrying a request while the map is still fading in, then give up out loud.
-constexpr int kWaitFrames = 90;
+// Keep retrying a request while the map is still fading in, then give up out loud.
+//
+// THIS IS WALL-CLOCK, NOT A FRAME COUNT, AND THAT IS THE WHOLE POINT. It used to be `kWaitFrames =
+// 90` with a comment claiming ~1.5 s, which is only true at exactly 60 fps: the field tick runs
+// once per call to FUN_0022a770, so at any other rate the same 90 frames is a different amount of
+// real time and a route asked for during a fade could expire before the map was ready. Expiry here
+// SPEAKS a refusal, so the frame rate could change the answer, not merely its timing. Game speed is
+// NOT a factor -- 2x/4x runs the sim loop INSIDE that one call more times, so the hook fires once
+// per rendered frame at every speed. See Docs\PerFrameAudit.md.
+constexpr uint64_t kWaitMs = 1500;
 
 // How near an exit counts as BEING AT IT, in X/Z metres. Measured need: on Muthru Bazaar the tester
 // stood 0.78 m from the Rabanastre East End arrival and was still fed "East 3. 3 steps" on ten
@@ -145,7 +155,7 @@ bool RequestReplan() {
     g_silent       = true;
     g_seedBeacon   = true;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
-    g_framesLeft = kWaitFrames;
+    g_waitDeadlineMs = GetTickCount64() + kWaitMs;
     ++g_reqSeq;
     g_hasRequest.store(true, std::memory_order_release);
     char lm[96]; LabelForLog(g_objLabel, lm, sizeof(lm));
@@ -183,7 +193,7 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
         g_haveObjective   = true;
     }
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
-    g_framesLeft = kWaitFrames;
+    g_waitDeadlineMs = GetTickCount64() + kWaitMs;
     ++g_reqSeq;
     g_hasRequest.store(true, std::memory_order_release);
     char m[128];
@@ -307,12 +317,12 @@ void OnGameFrame() {
         bool giveUp = false;
         {
             std::lock_guard<std::mutex> lk(g_mutex);
-            if (g_reqSeq == seq && --g_framesLeft <= 0) {
+            if (g_reqSeq == seq && GetTickCount64() >= g_waitDeadlineMs) {
                 g_hasRequest.store(false, std::memory_order_release);
                 giveUp = true;
             }
         }
-        // This branch can run up to kWaitFrames times; log the not-safe reason ONCE
+        // This branch runs every frame for up to kWaitMs; log the not-safe reason ONCE
         // per request (dedupe on seq) so the file isn't spammed per frame.
         if (seq != g_notSafeLoggedSeq) {
             g_notSafeLoggedSeq = seq;
@@ -323,8 +333,9 @@ void OnGameFrame() {
             PlayerState::FormatNavSafeMask(fm, names, sizeof(names));
             char m[192];
             snprintf(m, sizeof(m),
-                     "drain seq=%llu: not nav-safe (fieldSafe=%d posOk=%d failMask=0x%02X[%s]) -> retry up to %d frames",
-                     (unsigned long long)seq, navSafe ? 1 : 0, posOk ? 1 : 0, fm, names, kWaitFrames);
+                     "drain seq=%llu: not nav-safe (fieldSafe=%d posOk=%d failMask=0x%02X[%s]) -> retry up to %llu ms",
+                     (unsigned long long)seq, navSafe ? 1 : 0, posOk ? 1 : 0, fm, names,
+                     (unsigned long long)kWaitMs);
             Log::Write("NAV-ROUTE", m);
         }
         if (giveUp) {

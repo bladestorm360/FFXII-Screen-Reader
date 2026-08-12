@@ -32,8 +32,14 @@ namespace {
 constexpr const char* kTag = "NAV-PROBE";
 
 std::atomic<bool> g_pending{false};
-int               g_framesLeft = 0;      // game thread only
-constexpr int     kWaitFrames  = 90;     // ~1.5 s while a map fades in
+// Wall-clock expiry of the wait-for-nav-safe window; 0 == not armed. Game thread only.
+//
+// WALL-CLOCK, NOT A FRAME COUNT. This was `kWaitFrames = 90` claiming ~1.5 s, which holds only at
+// 60 fps -- the field tick fires once per FUN_0022a770 call, so the same 90 frames is a different
+// span at any other rate, and expiry here SPEAKS (DiagnosticUnavailable below). Game speed cannot
+// move it either way: 2x/4x runs the sim loop inside that one call more times. Docs\PerFrameAudit.md.
+uint64_t          g_deadlineMs = 0;
+constexpr uint64_t kWaitMs     = 1500;   // while a map fades in
 
 // Polys listed individually around the player. The whole component is flooded regardless; this only
 // bounds how much of it is printed.
@@ -398,10 +404,15 @@ void Request() { g_pending.store(true, std::memory_order_release); }
 void OnGameFrame() {
     if (!g_pending.load(std::memory_order_acquire)) return;
 
-    if (g_framesLeft <= 0) g_framesLeft = kWaitFrames;
+    // ARM LAZILY, HERE, NOT IN Request(). The budget has always started on the first field frame
+    // that actually services the probe, so pressing ' while the field tick is not running does not
+    // burn it. Stamping at the keypress (input thread) would silently change that.
+    const uint64_t now = GetTickCount64();
+    if (g_deadlineMs == 0) g_deadlineMs = now + kWaitMs;
 
     if (!PlayerState::IsFieldNavSafe()) {
-        if (--g_framesLeft > 0) return;
+        if (now < g_deadlineMs) return;
+        g_deadlineMs = 0;
         g_pending.store(false, std::memory_order_release);
         uint8_t fm = PlayerState::NavSafeFailMask();
         char names[96];
@@ -415,7 +426,7 @@ void OnGameFrame() {
     }
 
     g_pending.store(false, std::memory_order_release);
-    g_framesLeft = 0;
+    g_deadlineMs = 0;
     RunProbe();
     Speech::Output(Phrase::Get(Phrase::Id::DiagnosticLogged), true);
 }

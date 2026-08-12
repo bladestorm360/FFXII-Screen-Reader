@@ -5,6 +5,7 @@
 #include "core/logger.h"
 #include "core/mem_read.h"
 #include "core/stall_probe.h"
+#include "core/frame_probe.h"
 #include "speech/speech.h"
 #include "ui/choice_reader.h"
 #include "ui/message_reader.h"
@@ -190,6 +191,10 @@ void HookedTextWalk(void* widget, uint8_t stopByte) {
     if (widget) MemRead::SafeReadU32(widget, OFF_W_ENDED, &ended);
 
     if (s_origTextWalk) s_origTextWalk(widget, stopByte);
+    // One relaxed increment, BEFORE the widget filter, because the question is how often the GAME
+    // calls this -- not how often we accept the call. A tester sees this surface misbehave only at
+    // raised game speed; this counter is what shows whether the walk runs inside the sim loop.
+    FrameProbe::OnTextWalk();
     if (!widget) return;
 
     static bool s_firstFire = true;

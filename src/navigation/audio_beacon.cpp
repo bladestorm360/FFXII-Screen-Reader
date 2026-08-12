@@ -42,8 +42,14 @@ constexpr float  kArrivalPitch = 1.5f;
 //
 // Off-route detection. Deliberately slack -- this fires a whole re-plan, and a beacon that re-aims
 // every time the player rounds a pillar would be worse than one that is briefly stale.
+//
+// WALL-CLOCK, AND THAT SLACK IS THE WHOLE DESIGN. This was `kStrayFrames = 45` -- "~0.75 s at
+// 60 fps" -- which INVERTED the sentence above at any other rate: the field tick fires once per
+// FUN_0022a770 call, so at 144 fps the deliberate slack becomes a third of a second, which is
+// roughly "every time the player rounds a pillar". The intent survived only at exactly 60 fps.
+// Game speed is not a factor -- 2x/4x runs the sim loop inside that one call more times.
 constexpr float  kStrayDist    = 6.0f;
-constexpr int    kStrayFrames  = 45;      // ~0.75 s at 60 fps
+constexpr uint64_t kStrayMs    = 750;
 constexpr uint64_t kReplanCooldownMs = 2000;
 
 // ---- STUCK: trying to move and going nowhere -----------------------------------------------------
@@ -76,7 +82,7 @@ size_t             g_current   = 0;
 uint32_t           g_epoch     = 0;
 FVec3              g_legStart  {};        // where the current leg began, for the stray test
 uint64_t           g_nextPingMs = 0;
-int                g_strayCount = 0;
+uint64_t           g_straySinceMs = 0;   // first frame of the CURRENT stray run; 0 == on route
 uint64_t           g_lastReplanMs = 0;
 bool               g_wasEngaged = false;  // edge-detect combat so the log says when it flipped
 float              g_stuckBestDist = -1.0f;   // closest we have come to the current leg point
@@ -156,7 +162,7 @@ bool TargetPos(void* actor, FVec3& out) {
 
 void ResetPhase() {
     g_nextPingMs = 0;          // 0 == ping on the very next frame
-    g_strayCount = 0;
+    g_straySinceMs  = 0;
     g_stuckBestDist = -1.0f;   // a new leg: nothing has been approached yet
     g_stuckSinceMs  = 0;
     g_motionAccum   = 0.0f;
@@ -171,9 +177,8 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
     g_legs    = legPoints;
     g_current = 0;
     g_epoch   = epoch;
-    g_strayCount = 0;
     g_lastReplanMs = GetTickCount64();
-    ResetPhase();
+    ResetPhase();               // owns g_straySinceMs, along with the leg and stuck state
     FVec3 p;
     g_legStart = PlayerState::ReadPlayerPos(p) ? p : legPoints.front();
     g_active.store(true, std::memory_order_release);
@@ -410,8 +415,9 @@ void OnGameFrame() {
     // for the whole first half of a dog-leg.
     const float perp = PerpDist(me, g_legStart, goal);
     if (perp > kStrayDist) {
-        if (++g_strayCount >= kStrayFrames && (now - g_lastReplanMs) >= kReplanCooldownMs) {
-            g_strayCount   = 0;
+        if (g_straySinceMs == 0) g_straySinceMs = now;
+        if ((now - g_straySinceMs) >= kStrayMs && (now - g_lastReplanMs) >= kReplanCooldownMs) {
+            g_straySinceMs = 0;
             g_lastReplanMs = now;
             if (PathPlanner::RequestReplan()) {
                 // Print the MEASUREMENT, not just the event. A re-plan storm and a genuine detour look
@@ -427,7 +433,12 @@ void OnGameFrame() {
             }
         }
     } else {
-        g_strayCount = 0;
+        // BACK ON ROUTE -- DISARM. This clear is load-bearing and is the half the audit's sketch
+        // left out: the test measures ONE CONTINUOUS stray run, exactly as the frame counter did.
+        // Without it the deadline would mean "has been stray at some point in the last 750 ms",
+        // which is looser than the code it replaced and would fire on a player oscillating across
+        // the 6 m boundary.
+        g_straySinceMs = 0;
     }
 
     // TRACKING IS DONE; the rest of this function is sound. With the route beacon switched off the

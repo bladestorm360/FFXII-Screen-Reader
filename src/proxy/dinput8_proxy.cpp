@@ -1,6 +1,7 @@
 #include "proxy/dinput8_proxy.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
+#include "core/frame_probe.h"
 #include "input/input_tracker.h"
 #include "navigation/auto_walk.h"
 #include <Windows.h>
@@ -139,6 +140,11 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
         // kept running" look identical. That ambiguity is why the field-menu freeze went unexplained.
         StallProbe::NoteThread("DInput::GetDeviceState");
         StallProbe::FrameTick(/*gapWarnMs=*/100.0);
+        // Cadence report, one line per 10 s. This anchor keeps running in menus and loads where the
+        // field tick does not, which is what makes "the field tick stopped" and "the game stalled"
+        // tell apart. StallProbe above only speaks above 100 ms and so can never report the normal
+        // rate — the gap that left every tier-C constant unmeasurable. See core/frame_probe.h.
+        FrameProbe::OnInputPoll();
     }
     if (cbData >= 256 && IsKeyboardDev(self)) {
         // Diagnostic (rate-limited to transitions): a sustained keyboard GetDeviceState

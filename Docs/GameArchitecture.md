@@ -5398,3 +5398,55 @@ the decompile could not reach: **the scene transform reads back the floats the p
 the award record's `(s16)/10` coordinates identify the object exactly. `kMatchTol` (0.25 m) is slack
 for the float round-trip, **not** a search radius — do not widen it; a loose radius would drop the
 treasure *beside* the one collected.
+
+---
+
+## Frame pacing and the game-speed multiplier (Session 152, 2026-08-12)
+
+**The canonical entry for this cluster is `Docs\combat_system.md` §7.5** — that is where the RVAs
+and confidences live, and it carries a standing **read-only** prohibition on all of them. This is
+the nav/per-frame-side pointer to it, recorded because the whole tier-C frame-counter class in
+`Docs\PerFrameAudit.md` turns on one fact stated nowhere else:
+
+**`FUN_0022a770` (RVA `0x10A770` — what the mod hooks as `FIELD_FRAME`) CONTAINS the sim loop.**
+
+```
+0022a770:105-109   ac4 = (gate == 0) ? 1.0 : speedTable[speedIndex]
+0022a770:250       acc += ac8 * ac4        // once per call
+0022a770:139       while (1.0 <= acc) {    // the sim loop
+0022a770:185           acc -= 1.0
+```
+
+Because the mod detours the OUTER function, `HookedFieldFrame` and every callee it dispatches fire
+**once per call at 1x, 2x and 4x alike** — game speed runs the *inner* loop more times. Conf 0.99
+on the reading; runtime confirmation is what `core/frame_probe.cpp` exists to print.
+
+**Consequence, and the reason this is here rather than only in the combat notes:** no mod behaviour
+keyed to how often the field tick fires can be affected by the game-speed setting. Only frame RATE
+can move it. Do not re-derive this.
+
+`ac8` (`DAT_02064AC8`, RVA `0x1F44AC8`) is the per-frame delta **in sim ticks, not seconds**, and is
+a hard `1.0f` at every reachable writer (`0022a0b0:44`, `002628b0:165`, `003601d0:13`). Its only
+variable writer `FUN_00343ee0` has **zero callers**. Whether `FUN_0022a770` is itself called at
+display refresh or at a paced rate is **NOT ESTABLISHED** and is runtime-only — see
+`Docs\PerFrameAudit.md` §2 of the Session 152 block.
+
+### Walkmap context writer — CANDIDATE, below the 0.98 bar, do not build on it
+
+**`FUN_0026e960` (abs `0x26e960`, RVA `0x14E960`)** is the sole non-zero writer of `DAT_0209a670`
+(the gate) and `DAT_0209a678` / `DAT_0209a680` (walk ctx0 and camera ctx1) — the globals
+`MapQuery::HasWorld()` / `MapQuery::Ctx0()` read. Install sequence is its caller `FUN_0026e760`
+(reset `FUN_0026e640`, allocate, then `FUN_0026e960`); unload is `FUN_0026e640` / `FUN_0026e1d0`.
+
+**Confidence is on WHAT it writes, not on WHEN.** Its call-site timing relative to the leader-actor
+install (`FUN_00269c70`) and the fade is unmeasured, so this is **not** usable as a "walkmap is
+ready" event without a Frida confirmation probe. It was traced while looking for an event-driven
+replacement for the planner's wait and rejected for that purpose — readiness is a conjunction
+across four subsystems, so hooking one writer still leaves `IsFieldNavSafe()` to evaluate. It is
+recorded because it is the right lead for the separate walkmap-IDENTITY question
+`map_seams.h:46-51` raises (the map id flips before the engine swaps the walkmap).
+
+**Also corrected here:** `NavHooks::HookedWorldStep` caches the **Bullet** context, which is a
+DIFFERENT world from the SQEX one `CondWorld` tests (`BulletQuery::HasWorld()` reads `*(ctx+0x60)`;
+`MapQuery::HasWorld()` reads the globals above). The existing world-pointer cache says nothing about
+nav readiness — do not reach for it as one.

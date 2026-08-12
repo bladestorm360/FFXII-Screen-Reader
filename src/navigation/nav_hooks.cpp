@@ -13,6 +13,7 @@
 #include "core/logger.h"
 #include "core/stall_probe.h"
 #include "core/mem_read.h"
+#include "core/frame_probe.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -144,6 +145,10 @@ Pfn_FieldFrame s_origFieldFrame = nullptr;
 
 uint64_t __fastcall HookedFieldFrame() {
     StallProbe::GapTick("anchor:fieldframe", /*gapWarnMs=*/80.0);
+    // One relaxed increment. Counts how often the field tick fires so it can be compared against
+    // the game's OWN render-frame counter — the measurement the tier-C constants were guessed at
+    // without. See core/frame_probe.h.
+    FrameProbe::OnFieldFrame();
     {
         // OURS ONLY. This scope used to span s_origFieldFrame() below, so it reported the GAME's
         // entire per-frame field tick as mod cost -- the source of the bogus "223ms / 245ms single

@@ -99,9 +99,22 @@ int   g_pendingIndex = -1;
 // possible at all. Reset when a different surface appears, or when text finally arrives.
 void* g_retryOwner = nullptr;
 int   g_retryCount = 0;
+uint64_t g_retryFirstMs = 0;   // when this owner's first retry was stashed
+// The give-up notice is one line per surface. This used to be inferred from `g_retryCount ==
+// kMaxPaintRetries` exactly, which stops working once the count can keep rising while the wall-clock
+// floor below is still open -- an equality test on a counter that overshoots logs nothing at all.
+bool  g_retryGaveUp = false;
 // One paint is often not enough: the paint that fires the callback need not be the paint that fills
 // THIS owner's item map. Small, because the honest cases settle in one or two.
 constexpr int kMaxPaintRetries = 8;
+// ...AND A WALL-CLOCK FLOOR, because 8 paints is not a fixed amount of time. The paint callback is
+// frame-paced -- consecutive retries sit 15-16 ms apart in the log corpus -- so the count alone
+// silently means "133 ms at 60 fps" and less than half of that at twice the rate, on a surface
+// whose text arrives when the painter gets to it rather than after some number of repaints. The
+// two are ORed, never ANDed: the budget must never be SMALLER than the count it replaced, so a low
+// frame rate keeps its 8 paints and a high one keeps its 150 ms. Giving up here costs a blind
+// player the announcement outright (the "TEXT NEVER PAINTED" line below), so err long.
+constexpr uint64_t kPaintWaitMs = 150;
 void* g_valueChangeOwner = nullptr;   // Graphics value change awaiting a settled paint to announce
 int   g_valueChangeIndex = -1;
 // Last 0x8000 focus, stashed so the FUN_00244830 focus-change hook can replay the entry item
@@ -303,14 +316,20 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         bool budgetLeft, firstGiveUp = false;
         {
             std::lock_guard<std::mutex> lk(g_mutex);
-            if (owner != g_retryOwner) { g_retryOwner = owner; g_retryCount = 0; }
-            budgetLeft = (g_retryCount < kMaxPaintRetries);
+            const uint64_t now = GetTickCount64();
+            if (owner != g_retryOwner) {
+                g_retryOwner = owner; g_retryCount = 0;
+                g_retryFirstMs = now; g_retryGaveUp = false;
+            }
+            // Whichever budget is more generous at this frame rate -- see kPaintWaitMs.
+            budgetLeft = (g_retryCount < kMaxPaintRetries) ||
+                         (now - g_retryFirstMs < kPaintWaitMs);
             if (budgetLeft) {
                 ++g_retryCount;
                 g_pendingOwner = owner;
                 g_pendingIndex = index;
-            } else if (g_retryCount == kMaxPaintRetries) {
-                ++g_retryCount;              // step past the cap so the notice below logs ONCE
+            } else if (!g_retryGaveUp) {
+                g_retryGaveUp = true;        // latch so the notice below logs ONCE
                 firstGiveUp = true;
             }
         }
@@ -340,7 +359,10 @@ void OnFocus(void* owner, int index, bool fromPaint) {
     // start from a full budget rather than inherit a spent one.
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        if (owner == g_retryOwner) { g_retryOwner = nullptr; g_retryCount = 0; }
+        if (owner == g_retryOwner) {
+            g_retryOwner = nullptr; g_retryCount = 0;
+            g_retryFirstMs = 0; g_retryGaveUp = false;
+        }
     }
 
     Log::WriteW("READER", "  item: ", text);

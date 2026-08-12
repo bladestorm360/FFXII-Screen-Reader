@@ -1,6 +1,7 @@
 #include "proxy/dinput8_proxy.h"
 #include "core/logger.h"
 #include "core/hooks.h"
+#include "core/frame_probe.h"
 #include "core/game_text.h"
 #include "battle/battle_state.h"
 #include "speech/speech.h"
@@ -86,6 +87,9 @@ static void DeferredInitImpl() {
     // wrapper hooks) -> reader (subscribes to focus events; queries
     // input_tracker on each event).
     if (Hooks::Init()) {
+        // Frame-pacing report. Installs no hook — it is ticked from the field-frame and input-poll
+        // hooks that already exist. Must follow Hooks::Init so RVAs resolve. See frame_probe.h.
+        FrameProbe::Init();
         // The codec decoder turns the eight inline ELEMENT sprites into words, but core/ must not
         // depend on battle/, so it asks a resolver for the name. Register it before anything can
         // decode: without it every element icon is silently dropped, which is what made an

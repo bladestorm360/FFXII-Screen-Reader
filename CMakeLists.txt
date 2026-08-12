@@ -55,6 +55,7 @@ add_library(${PROJECT_NAME} SHARED
     src/proxy/dinput8_proxy.cpp
     src/core/logger.cpp
     src/core/stall_probe.cpp
+    src/core/frame_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
     src/core/message_macro.cpp

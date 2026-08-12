@@ -7,6 +7,86 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### OPEN (S152) — dialogue misread + "aaaaaaaaa" runaway, AT RAISED GAME SPEED ONLY, ONE TESTER
+
+KEYWORDS: aaaaaaaa runaway loop dialogue reading incorrectly repeating game speed 2x 4x speed mode
+only at higher speeds one tester not reproduced sim loop FUN_0022a770 while 1.0 acc FUN_00314020
+text walk FUN_002a8c50 dispatch table PTR_FUN_009164c8 zero static callers widget+0xC0 level
+oscillates tier A not safe frame_probe textWalk per frame ratio S152 NOT DIAGNOSED
+
+**Reported:** the tester who prompted the per-frame audit says the problems happen **specifically at
+raised game speed**, not at raised frame rate — dialogue read incorrectly, and an **"aaaaaaaaa"
+runaway loop**. **No other tester reports it. Not reproduced on the dev machine. NOT DIAGNOSED.**
+
+**Why this is interesting rather than a shrug.** S152 established that the field tick fires once per
+rendered frame at 1x, 2x and 4x alike (`FUN_0022a770` CONTAINS the sim loop; the mod hooks the outer
+function). So **nothing hanging off the field tick can produce a speed-only symptom** — and yet the
+symptom is reported as speed-only. Both can be true only one way:
+
+> **The defect is on a hook reached from INSIDE the sim loop**, where `while (1.0 <= acc)` iterates
+> `ac4` times per rendered frame. `FUN_0022a770:139-184` runs a dozen subsystem updates in there,
+> including `FUN_00314020` — the mod's OWN former drain point, still named at `nav_hooks.cpp:137`.
+
+**Prime suspect, and it fits the sound of the symptom.** S149's defect was the end latch
+`widget+0xC0`, a LEVEL that oscillates `1, 0, 1, 0` and produced speech at FPS/2. If the text walk
+runs inside the sim loop, **4x speed is 4x that rate** — which is what an "aaaaaaaaa" runaway is.
+
+**Why it could not be settled offline:** `FUN_002a8c50` (text walk) and `FUN_002a9980` (choice tick)
+have **zero static callers in the 33,105-function decompile**. They are dispatch-table slots
+(`PTR_FUN_009164c8`, slots 0 and 2), reached indirectly — **who drives them is a runtime fact.**
+
+**The measurement is shipped and takes one minute.** `core/frame_probe.cpp` prints
+`textWalk N/s (M, X/frame)` beside the render rate. Open a dialogue box, let it sit, change Speed
+Mode: `X/frame` staying ~1.00 **refutes** this hypothesis; rising toward ~4.00 **confirms** it, and
+then every tier-A hook needs re-checking.
+
+**What NOT to do:** do not silence the runaway with a dedup or a rate limit. That is the standing
+NO-DEDUP rule, and here it would destroy the only signal that identifies the call path.
+
+**The general lesson, already earned twice in this file:** *a tester-only, condition-specific defect
+is evidence about a CALL PATH, not about their machine.* "Cannot reproduce" was never the finding —
+the reproduction condition was stated in the report.
+
+### FAILED BY CONSTRUCTION (S152) — "measure the frame rate with `StallProbe::FrameTick`"
+
+KEYWORDS: frame rate fps game speed multiplier StallProbe FrameTick gapWarnMs 100ms threshold
+inter-frame gap cannot measure kWaitFrames kStrayFrames tier C PerFrameAudit sim accumulator
+FUN_0022a770 ac4 ac8 DAT_02064AC0 speed index 0x1EB4A98 frame_probe S152
+
+**`Docs\PerFrameAudit.md` (S149) prescribed: "measurable today without new code — `StallProbe`'s
+`FrameTick` already records the inter-frame gap on the input poll, so a short log at 1x and at 4x
+answers it." That experiment cannot work, and it blocked the tier-C fixes for three sessions.**
+
+`FrameTick` (`stall_probe.cpp:190-201`) computes the gap and then **throws it away below the warn
+threshold**, which its only caller passes as `100.0` (`dinput8_proxy.cpp:141`). At any playable
+frame rate the gap is ~7–33 ms, so a normal session emits **nothing at all**. Confirmed against the
+corpus before writing any code: **five `input-poll` GAP lines across twenty logs, every one a boot
+stall with `entered=(none)`.** No archived log reveals the normal frame cadence, and none was
+recorded at a confirmed non-60 fps rate or above 1x speed.
+
+**Two lessons, both general:**
+
+1. **A threshold-gated diagnostic cannot answer a question about the normal case.** `FrameTick` is a
+   *stall detector*; it was read as a *frame timer* because it happens to compute the right
+   quantity. Check what an instrument EMITS, not what it measures — the discard is invisible in the
+   function's name and in its header comment.
+2. **The blocking measurement was not needed at all.** The question it was meant to settle — does
+   game speed run the field tick more often, or give each tick a bigger delta? — is answered
+   outright in the decompile: **neither.** `FUN_0022a770` CONTAINS the sim loop (`:250` `acc +=
+   ac8*ac4`, `:139` `while (1.0 <= acc)`), and the mod hooks the outer function, so 2x/4x runs the
+   loop *inside one hooked call* more times. Speed cannot move a frame counter. A session spent
+   three months treating a decompile-answerable question as a play-session-blocked one.
+
+`core/frame_probe.{h,cpp}` is the instrument that does work: one `[PERF]` line per 10 s carrying
+the render-frame delta (`u32 @ RVA 0x1EB4A80`), the field-tick count, `ac4`/`ac8`/accumulator and
+the speed index. It installs no hook.
+
+**Still open, and now honestly labelled:** whether `FUN_0022a770` is called at display refresh or at
+a paced rate. `ac8` is a hard `1.0f` everywhere reachable, so one call is one sim tick — if that
+followed a 144 Hz display the whole game would run 2.4x fast, which nobody reports. **So the
+audit's "0.63 s at 144 fps" severity figure is unverified and probably wrong. Do not re-tune a
+constant against it.** The probe settles it in one play session.
+
 ### SOLVED (S151) — the OFF-HAND list was silent because its cursor is owned by ANOTHER OBJECT
 
 KEYWORDS: offhand off-hand shield shields ammunition equipment candidate list silent navigation
