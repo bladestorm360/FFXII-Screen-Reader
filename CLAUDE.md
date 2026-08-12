@@ -76,6 +76,31 @@ Every rule below is **non-negotiable**. Violating any of them is a blocking fail
   prototype/confirmation works correctly and (b) the user gives **explicit permission** to
   port. This prevents compile-test-crash cycles. **Pick one: Frida OR C++, never both.**
 
+### THE PRE-FLIGHT — three files, every task, before you plan or dig (CRITICAL)
+
+**In this order, every time:**
+
+1. **`MEMORY.md`** — loaded automatically. It is the index of *state*: what is open, what is
+   play-confirmed, branch and session bookkeeping. Skim it; open the topic file it points at.
+2. **`Docs/Lessons.md`** — the reasoning failures this project has already paid for. **GREP IT, do
+   not read it end to end.** Read its ROUTING TABLE, pick the one or two `TAG:` values that match
+   the task, and grep those. Lessons marked `⟲` have recurred and are checked first.
+3. **`Docs/GameArchitecture.md`** and **`Docs/debug.md`** — the *facts*: RVAs, offsets, layouts, and
+   what has been STRUCK. Grep for the function/global/offset/feature before deriving it.
+
+**Why the split exists (2026-08-12):** `MEMORY.md` is loaded into every session, so anything living
+there is paid for on every task whether or not it is relevant, and it had grown past 20 KB. Lessons
+are *retrieved on demand*; state is *carried*. Keeping lessons in the index crowds out the state and
+eventually truncates both. **So: when you learn something transferable, it goes in `Docs/Lessons.md`
+with a new `L-NN` id — NOT as a new paragraph in `MEMORY.md`.** `MEMORY.md` gets at most a pointer.
+
+Routing for new knowledge, so it lands once and is findable:
+- transferable reasoning ("never trust X as evidence") → **`Docs/Lessons.md`**
+- an FFXII fact (RVA, offset, struct, identity) → **`Docs/GameArchitecture.md`**
+- a specific defect and its diagnosis → **`Docs/debug.md`**
+- what happened this session → **`Docs/sessions_*_current.md`**
+- durable *state* (open items, what is unconfirmed) → memory topic file + one index line
+
 ### CHECK `GameArchitecture.md` FIRST — before any decompile research (CRITICAL)
 
 **Before starting ANY decompile / RE investigation, read `Docs/GameArchitecture.md`.** It is the
