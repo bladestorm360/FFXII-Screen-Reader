@@ -71,8 +71,8 @@ FFXII registers active menu instances in a small static table.
 | Type byte | Selector | Notes |
 |---|---|---|
 | 1 (default) | "any widget not matching type 2 or 4" | Catch-all generic menu. Queried by `FUN_00241a50(1)` at lines 277404, 279062. |
-| 2 | `puVar4[2] == DAT_0228ea38` | Specific menu (widget identity TBD). Queried at lines 207000, 207125. |
-| 4 | `puVar4[2] == DAT_0228ea50` | Specific menu (widget identity TBD). Not directly queried in decompile. |
+| 2 | third qword of the query record equals `DAT_0228ea38` | Specific menu (widget identity TBD). Queried at lines 207000, 207125. |
+| 4 | third qword of the query record equals `DAT_0228ea50` | Specific menu (widget identity TBD). Not directly queried in decompile. |
 
 **Type 1 is queried in two places, type 2 in two places, type 4 never queried.**
 Only three concrete types observed.
@@ -81,7 +81,7 @@ Only three concrete types observed.
 in this session I claimed it does not, based on (a) not finding a title-specific
 code path that sets `param_1 + 0x3c8`, and (b) `probe_menu_writers` seeing no
 candidate writer fire on title arrow presses. **Both are weak evidence.** I never
-traced what calls `FUN_00241d40` and with what `puVar4` value — title might use
+traced what calls `FUN_00241d40` and with what query-record value — title might use
 the default path (→ type 1 catch-all). The probe_menu_writers candidates were
 the wrong set of functions (none of them was `FUN_00241d40`).
 
@@ -121,16 +121,13 @@ A frame-tick poll of these 3 slots tells us the menu context.
 The cursor draw call is **inside `FUN_00241d40`**, at line 226935 of
 `decompile_all.txt`:
 
-```c
-FUN_00243f70(lVar8,
-             (uint)*(ushort *)(param_1 + 0x3b8) +         // item-X
-               (uint)*(ushort *)(param_1 + 0x3ba) +       // X offset adjustment
-               _DAT_01e0c148,                              // global config X
-             (int)*(short *)(param_1 + 0x9e) +            // item-Y
-               *(char *)(param_1 + 0x3c2) +               // anim Y bob
-               _DAT_01e0c14c,                              // global config Y
-             1);                                           // cursor variant
-```
+It calls `FUN_00243f70(target, x, y, 1)` — variant `1` is the cursor — with each coordinate summed
+from three sources:
+
+| axis | window fields | global |
+|---|---|---|
+| X | `+0x3B8` (`u16`, item X) + `+0x3BA` (`u16`, X offset adjustment) | `DAT_01E0C148` |
+| Y | `+0x9E` (`i16`, item Y) + `+0x3C2` (`i8`, animation Y bob) | `DAT_01E0C14C` |
 
 ### Cursor sprite is the arrow icon
 

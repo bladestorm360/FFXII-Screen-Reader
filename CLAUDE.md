@@ -67,6 +67,17 @@ Both carry the same fact. Only one of them is a transcript. **If a decompiler va
 (`uVar7`, `iVar4`, `lVar6`, `undefined8`, `longlong` casts, `param_1`) survives into a `Docs\` file,
 it is a paste and it should be rewritten.**
 
+**One narrow carve-out, and only this one:** a lesson *about how Ghidra renders things* may name the
+artifact, because the generated name IS the subject. "Ghidra shows outgoing stack arguments as
+write-once caller locals, so a call site with four visible arguments may be passing six" is a lesson
+about the tool — and it is the lesson that stopped a repeat of the S129 arity crash. Naming
+`local_f8` there is not reproducing game logic. **Describe the artifact; do not paste the statement.**
+`param_N` used in prose to mean "the Nth argument" is likewise a description, not a paste.
+
+Where the line fell in the 2026-08-12 sweep: 15 pasted blocks and ~20 inline fragments were rewritten
+into prose, tables and offset lists; 9 references survived, every one of them a tool-behaviour lesson
+of the kind above.
+
 This complements CLEAN-ROOM RE below: that rule keeps encumbered *source* out of our reasoning; this
 one keeps the *game's* code out of our published artifact.
 

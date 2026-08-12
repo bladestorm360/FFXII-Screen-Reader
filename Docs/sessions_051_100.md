@@ -2036,13 +2036,12 @@ index of its neighbour across each of its three edges at `+0x16/+0x18/+0x1A` (`<
 character mover `FUN_002327d0` keeps a CURRENT POLY INDEX across frames, stepping onto the neighbour
 when the position leaves the triangle:
 
-```c
-iVar8 = FUN_002324f0(param_1,param_5,&local_238);                 // edge crossed, -1 = still inside
-sVar9 = *(short *)(param_1[2] + 0x16 + ((longlong)param_5 * 0x10 + (longlong)iVar8) * 2);
-if (iVar8 < 0 || sVar9 < 0 || FUN_00230a40(param_1,sVar9,*(undefined2 *)(param_2 + 0x50)) == 0) { blocked }
-```
+it asks `FUN_002324f0` which edge was crossed (`-1` = still inside), reads the neighbour poly as an
+`i16` from the poly array, and treats the step as blocked if the edge index is negative, the
+neighbour is negative, or the passability check `FUN_00230a40` (given the neighbour and the `u16` at
+`mover+0x50`) returns 0.
 
-`param_1[2]` is `ctx+0x10` (the poly array) and `param_5*0x10*2 == param_5*0x20`, so the address is
+The poly array is `ctx+0x10` and the stride works out at `poly*0x20`, so the neighbour address is
 `polyArr + poly*0x20 + 0x16 + edge*2`. **Verified by reading the function directly**, corroborated at
 `FUN_0022f9b0:86`. Confidence 0.99.
 
@@ -2071,10 +2070,8 @@ sampled with `MapQuery::GroundAt`, with invented `kMaxStep = 1.5` and `kStepDisc
 
 The map-jump group field is **four** bits, not five. Verified personally in two functions:
 
-```c
-FUN_00232020:  uVar2 = (ulonglong)((param_1 >> 3 & 0xf) + 0x40);
-FUN_00230a40:  uVar3 = (ulonglong)((uVar5  >> 3 & 0xf) + 0x40);
-```
+both `FUN_00232020` and `FUN_00230a40` extract it the same way — shift the flag word right by 3 and
+mask with **`0xF`** (four bits), then add `0x40`.
 
 Any seam poly with bit 7 set computed as `group + 16`, matched no `setmapjumpgroup(K)`, and was
 **silently dropped**. The Highhall seam therefore read as 2 polys spanning a 0.3 m depth with a 1.9 m
@@ -2092,7 +2089,7 @@ three. Now records all three, plus the poly ids themselves.
 when already inside a volume or jammed within 0.27 units of a wall.
 
 Class 4 matches **none** of `FUN_00230a40`'s 0/1/2/3/5 branches, so it falls through to
-`uVar5 = uVar4 ^ 1 = 1`. **For the party, floor walkability is exactly `(effectiveFlags & 7) == 0`** —
+the flag is XORed with 1, giving 1. **For the party, floor walkability is exactly `(effectiveFlags & 7) == 0`** —
 no per-class opt-out bit. That 4 is the same value the mod has passed as `MAP_MASK_WALK` since S33.
 
 `effectiveFlags` is `FUN_00232020`: two banks of `{u32 mask, u32 value}` at `DAT_0209a3e0`
@@ -2212,10 +2209,9 @@ Session 74 recorded `reach = 2*dist2D - score` as a self-checking identity, and
 `InteractTarget::ReadReachFor` applied it unconditionally. **`DAT_0209a2b0` mixes units between the
 two scorers** — verified by reading `FUN_0025be50` directly:
 
-```c
-fVar5 = (float)FUN_003a1960(param_3,lVar1);
-if (fVar5 < DAT_0209a2b0) { ... DAT_0209a2b0 = fVar5; }
-```
+it scores each candidate with `FUN_003a1960` and, whenever that score beats the running best, stores
+it into `DAT_0209a2b0` — so the global holds whatever the LAST winning scorer measured, in that
+scorer's units.
 
 For a class-1 winner the identity yields a confident, meaningless number — printed next to the word
 CONFIRMED, which is how a wrong value gets promoted to fact. `haveMeasured` is now gated on class 3.
@@ -2228,13 +2224,10 @@ A subagent reported class 1's interaction point as `node[+0x10/+0x14/+0x18]` (an
 position). **Reading `FUN_002646c0` — the engine's own interaction-point getter — directly refutes
 that:**
 
-```c
-bVar2 = *(byte *)(param_1 + 3) >> 5;
-if (bVar2 == 1) { pfVar1 = *(float **)(param_1 + 0xb8);
-                  *param_2 = *pfVar1; *param_3 = pfVar1[1]; *param_4 = pfVar1[2]; }   // PLAIN POS
-```
+for class 1 (the top 3 bits of the byte at `obj+3`) it takes the float block at `*(obj+0xB8)` and
+copies elements `[0][1][2]` straight out as the position — **the plain position, no offset applied**.
 
-`pfVar1` is `float*`, so those are bytes `0x00/0x04/0x08`. `+0x10`/`+0x18` is where `FUN_0025be50`
+Those elements are a `float*` index, i.e. bytes `0x00/0x04/0x08`. `+0x10`/`+0x18` is where `FUN_0025be50`
 aims the **facing cone**, not where the interaction point lives. `FUN_0026bb00`'s class-1 setter does
 write bytes `0x10/0x14/0x18`, so there is a real field there — but it is not what the getter returns,
 and the two are not reconciled. Treat class-1 interaction point as **the plain position** (0.98, read
@@ -2610,7 +2603,7 @@ The shop's own NAME is readable, and the chain is now decompiled: `shopId = *(u8
 FRIDA-FIRST applies to a new behavioral feature. `probe_shop_name.js` authored instead.
 
 **Also corrected while writing it:** the plan claimed `FUN_0057c010` was the shop-OPEN event. It is a
-**dialog callback** (`local_18 = FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`), so
+**dialog callback** (`FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`), so
 the open hook point is still unestablished. The probe reads from the already-confirmed
 `FUN_0056e5d0` instead.
 

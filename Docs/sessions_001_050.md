@@ -1466,7 +1466,7 @@ came out ~90° off in the field reopened it. Read the actual code (not just agen
 - **`faceNode` (node+0xA4) was the wrong reference.** It = "where UP takes you" ONLY while actively
   walking; when stationary (exactly when you query) it's stale, and in combat the battle action /
   target-steering subsystems (`FUN_00307300` 0x1c7 / `FUN_0037b4d0` / `FUN_0031adb0`) turn it to face the
-  TARGET — that's the boss "NE" bug. (`bVar5 & 4`, the skip-move-facing flag, is script-only, NOT a lock.)
+  TARGET — that's the boss "NE" bug. (bit 2 of the flag byte, the skip-move-facing flag, is script-only, NOT a lock.)
 - **`DAT_02aedf94` scalar is NOT the movement forward** — `FUN_003820c0` builds it from the view/sibling
   matrix `DAT_02aede70` with sign-flips; its delta to the move heading wanders. Diagnostic-only.
 
@@ -2180,8 +2180,8 @@ frames), bit `0x20` = bypass the 24-unit distance cull.
 Selector `0x29` returns -1 → the ">= 0x80 run" fallback swallows the next literal character
 (`{0}'s HP...` → `{0}s HP...`; raw `0f 29 80 80 | ac | 4c`, `0xac` = apostrophe). Real rule from
 `FUN_002ac5f0` case 0x29 → **`FUN_003ffbc0`** (RVA `0x2DFBC0`): `n = (byte after selector) & 7`;
-`n==0` → 2 param bytes (a colour), `n>0` → `1+n`. Call convention confirmed (`bVar3 = *local_1a0;
-switch(bVar3)` + `*param_2 += ret` ⇒ the pointer is the SELECTOR, so return 3 = selector + 2 params),
+`n==0` → 2 param bytes (a colour), `n>0` → `1+n`. Call convention confirmed (it loads a byte through the pointer, switches on it, and advances the
+caller's cursor by the return value ⇒ the pointer is the SELECTOR, so return 3 = selector + 2 params),
 which also resolves 13 more selectors as 2-param. Applying it cut unmapped bytes across all 102 strings
 to **two**. Partially closes the S45 "icon family still broken" item. **Added to Phase 1.**
 
@@ -2217,7 +2217,7 @@ Read firsthand from **`FUN_00469af0`** (abs `0x469AF0` / RVA `0x349AF0`):
    forms in all 102 are `0x0D` "{0} begins casting {1}.", `0x0E` "{0} readies {1}.", `0x0F` "{0} uses
    {1}." — arg lists `[attacker, action]`, no target slot. Conf 0.99.
 2. **The announce fires only for GUESTS and FOES, never for your own party.** First statement is
-   `uVar3 = FUN_002f8e90(); if ((uVar3 & 10) == 0) return;` — `10` decimal = `0x0A` = guest `0x02` |
+   it takes the faction mask from `FUN_002f8e90()` and returns unless `0x0A` is set — `10` decimal = `0x0A` = guest `0x02` |
    foe `0x08`. A normal party character is bucket `0x01`, so it returns. Category map (conf 0.98):
    `actionRec+0x1e` 1 -> 0x0D, 2/7/9 -> 0x0E, 3 -> 0x0F, **anything else -> no message at all**.
    ⚠️ That the gate tests the ATTACKER's faction is **0.90** — Ghidra dropped the register arg

@@ -188,8 +188,8 @@ n == 0  ->  2 param bytes   (a colour: FUN_0039ba00(p2 & 0x7f) -> RGBA, byte-swa
 n >  0  ->  1 + n param bytes  (packed 7-bit run: ((b >> 3) >> i) << 7 | (byte & 0x7f))
 ```
 
-Call convention confirmed at the call site — `bVar3 = *local_1a0; switch (bVar3)` then
-`*param_2 += ret`, so `local_1a0` points at the **selector** and a decoder returning 3 means
+Call convention confirmed at the call site — it loads a byte through the pointer and switches on it, then
+advances the caller's cursor by the return value, so the pointer is at the **selector** and a decoder returning 3 means
 selector + 2 params. That also resolves 13 further selectors as 2-param, all returning 3:
 
 | decoder | returns | params | selectors |
@@ -869,7 +869,7 @@ The target-select list builder `FUN_0031eb20` (RVA `0x1FEB20`) delegates to:
 
 > ⛔ **STRUCK (S49, 0.96) — THE OPPOSITE IS TRUE, and this was the whole justification for the
 > feature.** Both builders are byte-identical up to the emit branch, and the gate
-> (`FUN_0046b870:64`) is `if ((uVar4 & 0xfffffffd) == 0) bVar2 = true;` — i.e. `group ∈ {0, 2}`.
+> (`FUN_0046b870:64`) masks the group with `0xFFFFFFFD` and accepts only a zero result — i.e. `group ∈ {0, 2}`.
 > The foes builder emits **group 0 only**; the allies builder group 2 only; and **group 1
 > (NEUTRAL) never reaches either emit branch and gets no flag at all.** The engine *excludes*
 > Neutrals from target selection rather than filing them under foes.
@@ -1276,15 +1276,16 @@ table).
 
 The announce emitter's gate and category map:
 
-```c
-uVar3 = FUN_002f8e90();          // 5-bucket faction mask (section 6.1)
-if ((uVar3 & 10) == 0) return;   // 10 decimal = 0x0A = 0x02 guest | 0x08 foe
-category = *(char*)(actionRec + 0x1e);
-     category == 1        -> msg 0x0D   "begins casting"
-     category == 2, 7, 9  -> msg 0x0E   "readies"
-     category == 3        -> msg 0x0F   "uses"
-     otherwise            -> return     // NO MESSAGE AT ALL
-```
+It calls `FUN_002f8e90()` for the 5-bucket faction mask (section 6.1) and **returns immediately
+unless the mask has `0x0A` set** — `0x02` guest or `0x08` foe. Past that gate it switches on the
+action-record category byte at `+0x1E`:
+
+| category | message |
+|---|---|
+| 1 | `0x0D` "begins casting" |
+| 2, 7, 9 | `0x0E` "readies" |
+| 3 | `0x0F` "uses" |
+| anything else | returns — NO MESSAGE AT ALL |
 A regular party character is bucket `0x01`, and `0x01 & 0x0A == 0` ⇒ **return**. So the game says
 nothing when Vaan acts.
 
@@ -1450,7 +1451,7 @@ otherwise `"on 2 allies"`.
 1. ⚠️ **The attacker can be NULL** — but ⛔ **filter on `actionId == 0xFFFF`, NOT on `attacker == 0`**
    (S49, 0.99). All 7 call sites located: `FUN_0030e130:94`, `FUN_0030e360:156` and
    `FUN_00310db0:65` are ticks (`attacker == 0`, `actionId == 0xFFFF`), but **`FUN_00310db0` calls it
-   twice more with `attacker == 0` and a REAL action id** (`uVar4` at `:85`, `0xF5` at `:133`) for
+   twice more with `attacker == 0` and a REAL action id** (a live value at `:85`, the constant `0xF5` at `:133`) for
    genuine party-wide effects. Filtering on the attacker alone silently drops both. This is also exactly the clean
    discriminator that keeps ticks out of the log per §9.1.3e.
 2. No batching within a call (0.99).
@@ -1863,12 +1864,14 @@ the binary. Both problems dissolve once the mechanic is backtraced through the p
 
 **The chain, read firsthand:**
 
-`FUN_00384e50(bc)` returns an equipment mask:
-```c
-bVar4  = (*(short *)(bc + 0x50) != 0x1000);        // bit0 = MAIN-HAND occupied
-if (*(short *)(bc + 0x52) != 0x1000) bVar4 |= 2;   // bit1 = OFF-HAND occupied
-                                                    // bit2 = animation-set hash 0x2902032b
-```
+`FUN_00384e50(bc)` returns an equipment mask, built from three tests — `0x1000` is the
+nothing-equipped sentinel:
+
+| bit | set when |
+|---|---|
+| 0 | MAIN-HAND occupied — the `i16` at `bc+0x50` is not `0x1000` |
+| 1 | OFF-HAND occupied — the `i16` at `bc+0x52` is not `0x1000` |
+| 2 | animation-set hash is `0x2902032B` |
 `FUN_00389370:73-81` zeroes each defensive rate unless its gate bit is set:
 `DAT_02aedff0` needs **bit1 (off-hand)** · `DAT_02aedff4` needs **bit0 (main-hand)** ·
 `DAT_02aedfec` needs **bit2 (animation)**.

@@ -3083,7 +3083,7 @@ rsp+0x540  dinput8.dll+0x137BA       <- OUR HookedDispatch
 `FUN_0056dd50` is the shop container's constructor: it builds the rows (`FUN_0056e410`) and then
 calls `FUN_0056e5d0(container, 1)` for the initial highlight — which is why this fires on the
 container BUILD, and why "the sell menu" is the visible trigger rather than the cause. `FUN_0056e5d0`
-ends in `FUN_002cc4f0(uVar6)`, `uVar6` being the row's item id or `0xFFFF` when the row is empty
+ends in a call to `FUN_002cc4f0` passing the row's item id or `0xFFFF` when the row is empty
 (`r13 = 0xffff` — the empty-row path, taken because the panel is mid-construction). `FUN_002cc4f0`
 loops the nine compare columns through `FUN_002ca7c0`, which calls `FUN_002cc780`.
 
@@ -3091,11 +3091,9 @@ loops the nine compare columns through `FUN_002ca7c0`, which calls `FUN_002cc780
 callee says six outright, but the CALL SITE hides it — outgoing stack arguments are rendered as
 caller locals:
 
-```c
-local_f8 = param_2 + 0xf8;
-local_f0 = 8;
-FUN_002cc780(&local_e0, delta, param_2 + 0xd8, 0x10);   // four visible arguments
-```
+it shows the two stack arguments as assignments into caller locals immediately above the call —
+`local_f8` taking the buffer pointer and `local_f0` taking `8` — and then renders the call itself
+with only **four** visible arguments. The two locals are never read again, which is the tell.
 
 Disassembled, those "locals" are the argument slots:
 
@@ -4336,14 +4334,10 @@ unreached node with enough LP came out as "can learn".
 BRANCH READS.** `FUN_0055cd40` case `0xc` / sub-message `0x8001` is the Confirm handler, and it
 decides from one word:
 
-```c
-uVar9 = *(uint *)(cell + 0x18);
-if (((uVar9 & 0x2000) == 0) && ((uVar9 >> 0xc & 1) != 0)) {   // not learned AND reachable
-    if ((uVar9 & 0x6000) != 0) { ...purchase confirm...; FUN_00249c60(0x25); return; }
-    FUN_002ce2f0(board, 10);                                  // the not-enough-LP popup
-}
-FUN_00249c60(5);                                              // the invalid-action sound
-```
+the `u32` at `cell+0x18`. It proceeds only when `0x2000` is CLEAR (not already learned) **and**
+`0x1000` is SET (reachable). Inside that, `0x6000` non-zero routes to the purchase confirm with sound
+`0x25`; otherwise it raises the game's own not-enough-LP popup, `FUN_002ce2f0(board, 10)`. Every
+other path falls through to the invalid-action sound, `FUN_00249c60(5)`.
 
 `FUN_0055e090` is what sets `0x1000`: it walks every LEARNED cell and promotes its four orthogonal
 neighbours (`0x8000` clear, `0x1000` set). That flood **is** the board's prerequisite rule, and it
@@ -4719,7 +4713,7 @@ So the honest comparison is:
 
 **Same class, same owner, same code path.** The difference is that the row array yields no row at the
 instant the re-fired focus arrives. That fits `FUN_0057cf20` case `0x41` and nothing else: it is the
-only category that takes a **stub path in the first switch** (`_Dst = 0; iVar2 = 0;`) and then builds
+only category that takes a **stub path in the first switch** (it zeroes the destination and the count outright) and then builds
 its array in a second pass merging TWO pools (`FUN_00252fa0(2)` shields + `(4)` ammunition), with two
 distinct exits that free and NULL the array. A different BUILD ORDER, not a different window.
 

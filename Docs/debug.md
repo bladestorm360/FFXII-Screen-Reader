@@ -151,8 +151,9 @@ because the guard would leave the silent-corruption case intact.
 only forces the detour and the trampoline pointer to have the *same* type as each other. Both were
 wrong together, so it compiled. **Every detour's arity must equal the game function's, and the count
 comes from the CALLEE's decompile.** It cannot be read off the call site: Ghidra renders outgoing
-stack arguments as caller locals (here `local_f8 = param_2 + 0xf8; local_f0 = 8;` immediately above
-`FUN_002cc780(...)` with four visible arguments), so a call site with N visible arguments may be
+stack arguments as caller locals (here two write-once locals, `local_f8` and `local_f0`, appear
+immediately above a `FUN_002cc780` call showing only four arguments), so a call site with N visible
+arguments may be
 passing more. All 66 installed hooks were audited this way in S129; this was the only one.
 
 ### REFUTED TWICE — "an object's event table names the transition routine it fires" (S119 doors, S122/S123 rects)
@@ -1836,7 +1837,7 @@ TARGET → boss called "NE" while audibly to the left, and ~90°-off field direc
 scalar camera-yaw `DAT_02aedf94` (RVA 0x29CDF94) — `FUN_003820c0` builds it from the view/sibling matrix
 `DAT_02aede70` with sign-flipped rows, so its delta to the move heading wanders (the diagnostic's
 `camLookDeg` never held a constant offset). FIX under Solved: read camera-forward from the MOVEMENT
-matrix `DAT_02aedf30` row 2. (`bVar5 & 4`, the skip-move-facing flag, is script-only — NOT a combat lock,
+matrix `DAT_02aedf30` row 2. (bit 2 of the flag byte, the skip-move-facing flag, is script-only — NOT a combat lock,
 so don't look for a lock flag.)
 
 ## Solved Problems
@@ -2501,11 +2502,9 @@ Chain, confirmed: the frame loop (`FUN_0026ce60` → `FUN_00265a20`) registers *
 per-object update callback** (`*(code **)(obj + 0x38) = FUN_00233f70`). That callback runs a
 battery of per-actor updates including **`FUN_00310db0`**, which does:
 
-```c
-memset(local_1a8, 0, 0x148);
-FUN_00385df0(bc, local_1a8);
-FUN_003112f0(local_1a8, 0, bc, 0xffff);      // attacker = 0, actionId = 0xFFFF
-```
+zeroes a 0x148-byte stack record, fills it via `FUN_00385df0(bc, rec)`, and then calls the applier
+`FUN_003112f0(rec, 0, bc, 0xFFFF)` — **attacker 0 and action id `0xFFFF`**, i.e. a synthetic
+no-attacker call, once per actor per frame.
 
 Live evidence: a session with only ~10-20 real hits logged **1275+** applier calls, essentially all
 with a **null attacker**, climbing steadily with playtime (~20/sec). Confidence 0.97.
@@ -3079,7 +3078,7 @@ rebuild — Strikes + Solved (Session 74)" at the end of this file.*
    weight either; cap the goal SET instead (see 2).
 
 2. ~~**OPEN — the real fix.**~~ **SOLVED (Session 74).** `kApproachRadius = 4.0f` is indeed made up,
-   and the note below that `fVar5`/`fVar6` are "direction-dependent shape queries, not yet
+   and the note below that the two computed extents are "direction-dependent shape queries, not yet
    replicated" is **out of date — they are replicable**. `FUN_003da730` is an ellipse radius along a
    direction and `FUN_003a1d30` is `sqrtf(fabs(x))`, so all four extents are plain memory reads; the
    shapes are 4-float records `{A, B, yaw, extra}` at `playerNode+0x50` / `targetNode+0x70`. Better,
@@ -3089,12 +3088,11 @@ rebuild — Strikes + Solved (Session 74)" at the end of this file.*
    are in the Session 74 block at the end of this file. The measured bracket below still stands as
    the acceptance test.
 
-   The original text, kept because the bracket is still the acceptance test:
-   ```
-   gap = sqrt(dx^2 + dz^2) - ( fVar6 + *(float*)(param_4+0x0C) + fVar5 + *(float*)(param_2+0x0C) )
-   ```
-   with `param_2 = playerNode+0x50` and `param_4 = targetNode+0x70`, so two of the four extents are
-   plain constants at **`playerNode+0x5C`** and **`targetNode+0x7C`**.
+   The relation, kept because the bracket is still the acceptance test: the gap is the horizontal
+   distance `sqrt(dx^2 + dz^2)` **minus the sum of four extents** — two computed, and two read as
+   floats from `+0x0C` of the two extent blocks. Those blocks are `playerNode+0x50` and
+   `targetNode+0x70`, so two of the four are plain constants at **`playerNode+0x5C`** and
+   **`targetNode+0x7C`**.
    **Bracket already measured:** `dist2D=0.51` PASSED the distance gate; `dist2D=1.70` had band and
    cone PASS yet the engine chose nothing, so the true reach lies **between 0.51 and 1.70**.
 
@@ -3446,7 +3444,7 @@ interactable classes" for the table. Every interaction read now branches on `Obj
 ### Refuted subagent claim, recorded so it is not re-derived
 
 A subagent reported class-1's interaction point at `node[+0x10/+0x14/+0x18]` (absolute world pos).
-`FUN_002646c0`, the engine's own getter, returns `pfVar1[0..2]` = bytes `0x00/0x04/0x08` — **the plain
+`FUN_002646c0`, the engine's own getter, returns elements `[0..2]` of that float block = bytes `0x00/0x04/0x08` — **the plain
 position** — for class 1. `+0x10/+0x18` is where `FUN_0025be50` aims the facing cone.
 `FUN_0026bb00`'s class-1 setter does write `+0x10/+0x14/+0x18`, so a field exists there, but the
 getter does not read it and the two are unreconciled. **Class-1 interaction point = the plain
@@ -3725,7 +3723,7 @@ The shop's own NAME is readable: `shopId = *(u8*)(DAT_02ca9790+0xC0)` -> master 
 `probe_shop_name.js` confirms it first.
 
 **STRUCK before it shipped: "`FUN_0057c010` is the shop-open event."** It is a **dialog callback**
-(`local_18 = FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`). The probe reads from
+(`FUN_0057c010`, registered by `FUN_0057a4e0` into `FUN_003f47e0`). The probe reads from
 the confirmed `FUN_0056e5d0` instead.
 
 **RESOLVED (S126) — "the shop-open hook point is still unestablished" no longer blocks anything.**

@@ -1943,7 +1943,7 @@ movement (**not** Bullet — absent in the field):
 - ⇒ **the player can walk any CONTINUOUS slope** (that is why stairs and hills work). The only geometric
   movement blockers are (1) **walls** (`SegmentClear` mask=4, already used) and (2) a **step-height
   DISCONTINUITY**: **`FUN_0033bc80`** (RVA 0x21BC80) samples `GroundAt` a point ahead and reacts when
-  `ABS(groundY − currentY) >= 0.3` world-units (`if (0.3 <= ABS(fVar1))`, sets ±π/2 pitch). The `0.3`'s
+  `ABS(groundY − currentY) >= 0.3` world-units (the test is on the absolute difference, and it sets ±π/2 pitch). The `0.3`'s
   exact effect (block vs animate) is ~0.5 conf, but it is the engine's step-significance threshold.
 
 **STRUCK:** a poly-normal SLOPE GATE for routing — it would wrongly reject walkable continuous slopes.
@@ -3045,13 +3045,14 @@ funnel still runs as an instrument; a mirrored-shorter measurement on a real cor
 Carries a CURRENT POLY INDEX across frames. When `FUN_002324f0` reports the position left the triangle
 across edge *e* (it returns the rejecting edge index, or `-1` while inside):
 
-```c
-sVar9 = *(short *)(param_1[2] + 0x16 + ((longlong)param_5 * 0x10 + (longlong)iVar8) * 2);
-if (iVar8 < 0 || sVar9 < 0 || FUN_00230a40(param_1,sVar9,*(undefined2 *)(param_2 + 0x50)) == 0)
-    { blocked }   else   { param_5 = sVar9; }
-```
-`param_1[2]` = `ctx+0x10` (poly array); `param_5*0x10*2 == param_5*0x20`. Visited set at
-`DAT_02088fe0` (count `DAT_020891e0`), capped at 127 per move step.
+it reads the NEIGHBOUR poly across that edge as an `i16` from the poly array, at
+`polyArray + 0x16 + (curPoly*0x20 + edge*2)`, and steps onto it — unless the edge index is negative,
+the neighbour is negative (no poly there), or a passability check (`FUN_00230a40`, passed the
+neighbour and the `u16` at `mover+0x50`) returns 0. Any of those three = blocked.
+
+Poly array is `ctx+0x10` (the getter's second argument). Note the stride: `curPoly*0x10` entries of
+2 bytes each is `curPoly*0x20`. Visited set at `DAT_02088fe0` (count `DAT_020891e0`), capped at 127
+per move step.
 
 **There is NO step-height or slope test anywhere in this path.** The engine's only geometric blockers
 are walls/volumes and the flag test below.
@@ -3162,13 +3163,13 @@ Conf 0.98 — read from `FUN_0025be50` and `FUN_002646c0` directly.
 
 ### `FUN_002646c0` (RVA `0x1446C0`) — the engine's own interaction-point getter
 
-```c
-bVar2 = *(byte *)(param_1 + 3) >> 5;
-if (bVar2 == 1) { pfVar1 = *(float **)(param_1 + 0xb8);
-                  *param_2 = *pfVar1; *param_3 = pfVar1[1]; *param_4 = pfVar1[2]; }
-else if (bVar2 == 3) { /* same, then + pfVar1[0x10..0x12] when (pfVar1+0x107)&1 */ }
-else { *param_2 = *param_3 = *param_4 = 0.0; }
-```
+Signature is `(obj, outX, outY, outZ)`. It switches on the top 3 bits of the byte at `obj+3`:
+
+| `obj+3 >> 5` | result |
+|---|---|
+| 1 | read the float triple at `*(obj+0xB8)`, offsets `[0][1][2]`, straight into the outs |
+| 3 | the same triple, **plus** the one at `[0x10..0x12]` when bit 0 of `(that block + 0x107)` is set |
+| anything else | all three outs are written `0.0` |
 
 `InteractTarget::ReadGatePos` replicates this, and `PlayerState::ReadSceneObjectPos` applies it so
 every entity position the mod reports is the point the engine measures interaction from.
@@ -3724,7 +3725,7 @@ class-aware cast `FUN_0022d4b0`) reads `merged_flags & 7` against the mover's qu
 |---|---|---|
 | 0 | always solid | 0.99 |
 | 1 | bit 31 set ⇒ ignored; bit 31 clear & bit 30 clear ⇒ solid for all; bit 31 clear & bit 30 set ⇒ solid only for `queryClass != 4` (party passes) | 0.98 |
-| 4 | ~~solid only when `queryClass != 4`~~ **STRUCK S100 — INVERTED. Solid ONLY for `queryClass == 4`: the party-only invisible walls** (zone gates, story barriers). Verified 0.99 by direct read of BOTH callbacks: `FUN_0022cc50:92-95` and `FUN_0022d4b0:73-76` — `bVar9 = (class != 4)`, intersect only when `!bVar9`. No behaviour change for the mod (sweep passes class 4, so sweep and mover always agreed) | 0.99 |
+| 4 | ~~solid only when `queryClass != 4`~~ **STRUCK S100 — INVERTED. Solid ONLY for `queryClass == 4`: the party-only invisible walls** (zone gates, story barriers). Verified 0.99 by direct read of BOTH callbacks: `FUN_0022cc50:92-95` and `FUN_0022d4b0:73-76` — each callback computes a skip flag as `class != 4` and intersects only when that flag is false. No behaviour change for the mod (sweep passes class 4, so sweep and mover always agreed) | 0.99 |
 | 2, 3, 5, 6, 7 | fall through every arm — **never collide** (exact for FLOOR prims in both callbacks, and for volume prims in `FUN_0022d4b0`; **`FUN_0022cc50`'s volume-prim branch guards only type 1** — other volume types intersect unconditionally there, S100 read) | 0.99 |
 
 plus **bit 23** = a "soft" hit, recorded as result code 1 instead of 2 with no hit point written, i.e.
@@ -4127,11 +4128,9 @@ status-bit table via `BattleState::StatusName`. So the element fix has no status
 
 **THE ONE REAL GAP — the game itself hides them past a threshold.** `FUN_00293310:139-212`:
 
-```c
-... popcount the mask ...
-uVar10 = 0x2333; if (3 < iVar35) uVar10 = 0x2335;   // immune: <4 -> label, >=4 -> "Various"
-if (iVar35 < 4) { ...list each name via FUN_0035d330(0x1a, bit)... }
-```
+it popcounts the status mask, then picks the header id on that count — `0x2333` for fewer than 4,
+`0x2335` for 4 or more — and only walks the bits to list individual names (`FUN_0035d330(0x1a, bit)`)
+in the fewer-than-4 case.
 
 With **4 or more** statuses set the panel prints `"Immune: Various status effects"` (id `0x2335`) or
 `"Equip: Various status effects"` (`0x2336`) and **lists no names at all** — sighted players lose
@@ -4208,12 +4207,8 @@ carries zero `0F 3F` escapes, so the action record is the ONLY source. `DamageLi
 
 `FUN_00241d40` builds two shapes, and the game's own branch at `:88` decides which:
 
-```c
-*(uint *)(param_1 + 0x3c4) = uVar3;              // from the creation packet's +0x2C
-if ((*(byte *)(param_1 + 0x3c4) & 1) == 0) {     // bit 0 CLEAR -> build the button list
-    *(longlong *)(param_1 + 200) = FUN_002d14e0(...);   // win+0xC8
-}
-```
+it copies the creation packet's `+0x2C` into `win+0x3C4`, then tests bit 0 of that byte: only when
+the bit is CLEAR does it build the button list (`FUN_002d14e0`) and store it at `win+0xC8`.
 
 - **bit 0 CLEAR** — list at `win+0xC8`, cursor lands on it, `FUN_00247510` emits focus `0x8000`.
   This is the path `menu_reader` already covers.
@@ -4304,7 +4299,7 @@ Shipped as `src/ui/equip_compare.{h,cpp}` + `src/ui/equip_target_reader.{h,cpp}`
 | Flags | `colB+0xE0` = 1 already wearing this exact item · `colB+0xE4` = 0 CANNOT equip (`FUN_002cb360` clears it on `!canEquip`) |
 | Labels | `header = *(panel+0xC8)`, `arr = *(header+0x60)`, label k codec at `arr[k]+0x18`, live iff `*(u32*)(arr[k]+8) & 1`. **A pure read — `FUN_002cb1f0` already resolved them, so no game call and no label ids are needed.** |
 | Deltas | **`FUN_002cc780(pair, delta, target, style, outBuf, outSize)` (`0x1AC780`) — SIX arguments, not four.** `target` is `colA+0xD8` (stat slot 0) or `colA+0xE8` (slot 1); draws `abs(delta)` plus an arrow glyph chosen by `delta >> 0x1f & 1` |
-| **`FUN_002cc780` args 5-6 are on the STACK** | Corrected S129 after this entry's four-argument form **crashed the game** (dump 2026-08-03 17:48). x64 passes only args 1-4 in registers; 5 and 6 live in the caller's outgoing area. `FUN_002ca7c0`'s call site, disassembled: `mov dword [rsp+0x28],8` (arg6 = buffer SIZE) · `mov [rsp+0x20],rcx` (arg5 = buffer PTR) · `mov r9d,0x10` (arg4) · `call FUN_002cc780`. The callee reads arg5 back as `[rsp+0x70]` after its prologue (spills rbx/rbp/rsi/rdi into the home area, pushes r12/r14/r15, `sub rsp,0x30`) and passes it to the writer at `0x365660`: `if (size >= 8) { *(u32*)buf = 'ex00'; buf[4] = '+'\|'-'; return 8; }`. **Ghidra hides these as `local_f8`/`local_f0` in `FUN_002ca7c0` because it did not attach the callee's signature — outgoing stack args always look like caller locals. Count parameters from the CALLEE's decompile, never from the call site.** |
+| **`FUN_002cc780` args 5-6 are on the STACK** | Corrected S129 after this entry's four-argument form **crashed the game** (dump 2026-08-03 17:48). x64 passes only args 1-4 in registers; 5 and 6 live in the caller's outgoing area. `FUN_002ca7c0`'s call site, disassembled: `mov dword [rsp+0x28],8` (arg6 = buffer SIZE) · `mov [rsp+0x20],rcx` (arg5 = buffer PTR) · `mov r9d,0x10` (arg4) · `call FUN_002cc780`. The callee reads arg5 back as `[rsp+0x70]` after its prologue (spills rbx/rbp/rsi/rdi into the home area, pushes r12/r14/r15, `sub rsp,0x30`) and passes it to the writer at `0x365660`, which requires a buffer of at least 8 bytes, fills the first four with the `ex00` tag and byte 4 with the sign character, and returns 8. **Ghidra hides these as `local_f8`/`local_f0` in `FUN_002ca7c0` because it did not attach the callee's signature — outgoing stack args always look like caller locals. Count parameters from the CALLEE's decompile, never from the call site.** |
 | **POLARITY** | `FUN_002ca7c0:115-116` computes `FUN_0030a4e0(member, 0, cur)` then `(member, slotsWithNewItem, new)`, and every delta is **`cur - new`** — so a **NEGATIVE delta means the new item is BETTER**. Same polarity as the Equipment screen's twin renderer `FUN_003fe490:31-51`. **This is the make-or-break fact; do not ship a delta announce before it is confirmed live.** |
 | Stat bytes | kind 1 -> `+0x0A` Attack Power · kind 2 -> `+0x11` Evade, `+0x12` Magick Evade · kind 3 -> `+0x0B` Defense, `+0x0C` Magick Resist (kind = item record `+0x50`; slot = `+0x4C`). Labels `FUN_002f9860(0x4A90..0x4A94)` |
 | Equip-target screen | class `FUN_0057ac10` (`0x45AC10`), live at `DAT_02ca97a0` (RVA `0x2B897A0`); refresh **`FUN_0057b1a0` (`0x45B1A0`)** fires on entry (case `0xE`), every Left/Right, and every equip. Selected member = `*(i16*)(menuCtx + 0xDE0)`; L/R writers `FUN_0027f360` (`0x15F360`) / `FUN_0027ed10` (`0x15ED10`); footer help `FUN_002f9860(0xC70)` already goes through `FUN_00291d80`, which `TextCapture` hooks |
@@ -5043,7 +5038,7 @@ So the row is Libra-gated by the same predicate as the HP digits, and **only wea
 (`0x232F` / `0x2330` / `0x232E`) appear only in the three equipment detail panels.
 
 **THE LIBRA-PROOF FLAG (the `????` marks and bosses) — extended status bit 41.** Same function:
-`if ((*(u8*)(panel + 0x111) & 2) != 0) { iVar19 = 1; iVar18 = 0; }` zeroes the weakness row's alpha
+bit 1 of the byte at `panel+0x111`, when set, selects the alpha pair (1, 0) — zeroing the weakness row's alpha
 **and** blanks the HP digits. `panel+0x111` is snapshot `+0x51`, and snapshot `+0x4C + i` is
 `bc[0x68+i] | bc[0x78+i]` (`FUN_00329220`'s 4×4 copy loop) — so the bit lives in the extended status
 mask, byte 5, bit 1. The mod honours it: `BattleTargetReader::LibraSuppressed`.
@@ -5112,7 +5107,7 @@ and no quantity column."* **Wrong on both counts.** The function has a row loop;
 body. Descriptor at `msg+8`:
 
 ```
-+0x00  i16  mode / title flag        (FUN_0035e070:53 -> local_6e8[0] = (mode == 0))
++0x00  i16  mode / title flag        (`FUN_0035e070:53` writes `mode == 0` into the first slot of its outgoing record)
 +0x04  i16  ROW COUNT                (the loop bound at :101)
 +0x08  u8   layout flags             (bit 0 = the bordered multi-row panel; clear = the plain toast)
 +0x0C  row array, stride 8:
@@ -5150,16 +5145,15 @@ in that list at all. From the summon-commit function **`FUN_00306760`**, action 
 `DAT_022c215c == 1` — the Esper-summon class, action ids `0x106`..`0x112`, i.e. exactly the thirteen
 Espers:
 
-```c
-case 1:                                                   // Esper summon
-  *(u32*)(W + 0x5B04) |= 1;                               // summon-mode bit
-  *(u8 *)(W + 0x5AD5) = summonerBtlChr[0x04];             // control index := the SUMMONER's charId
-  *(u8 *)(W + 0x5AD4) = actionRec[0x26];                  // <-- the ESPER's BtlChr INDEX
-  iVar4 = FUN_002fa0e0(summonerBc, actionRec[0x26]);      // per-Esper master record byte +0x32
-  *(float*)(W + 0x5AD8) = *(float*)(W + 0x5ADC) = (float)iVar4;   // gauge: current, then max
-  lVar6 = FUN_00320a40(actionRec[0x26]);
-  FUN_0030c470(lVar6, summonerBc[0x1C2], 0);              // esper level := summoner level
-```
+its class-1 branch performs exactly six writes, in this order:
+
+1. sets bit 0 of the `u32` at `W+0x5B04` — the summon-mode gate;
+2. `W+0x5AD5` (`u8`, control index) := the SUMMONER's charId, from summoner BtlChr `+0x04`;
+3. `W+0x5AD4` (`u8`) := **the ESPER's BtlChr index**, taken from action record `+0x26`;
+4. calls `FUN_002fa0e0(summonerBc, esperIdx)` for the per-Esper master-record byte `+0x32`;
+5. writes that value as a float to **both** `W+0x5AD8` (gauge current) and `W+0x5ADC` (gauge max);
+6. resolves the Esper via `FUN_00320a40(esperIdx)` and sets its level to the summoner's
+   (`FUN_0030c470(esper, summonerBc[0x1C2], 0)`).
 
 | offset | width | meaning |
 |---|---|---|
@@ -5215,14 +5209,11 @@ summoned Esper resolves a name through `NameForBtlChr`: while it is out it has a
 
 The game's own rule, from the tail of that function:
 
-```c
-cVar9 = *(char *)(btlChr + 5);                 // BC_KIND -- 0 = party side
-if (value < 1) out = 1;
-else { cap = 1000000000; if (cVar9 == '\0') cap = 9999;
-       out = (cap < value) ? cap : value; }
-```
+it reads `BC_KIND` from `btlChr+0x05` (0 = party side), then clamps: anything below 1 becomes 1;
+otherwise the cap is **9999 for the party side and 1,000,000,000 for everyone else**, and the value
+is returned clamped to it.
 
-**`param_1` is a BtlChr on two independent counts:** `+0x05` is the field `phyre_types.h` already
+**The first argument is a BtlChr on two independent counts:** `+0x05` is the field `phyre_types.h` already
 documents as *"0 = party side"*, and a few lines above, the same function tests
 `charId - 0x1B < 0xD` — the exact guest range `0x1B..0x27` that `battle_state.cpp` carries.
 
