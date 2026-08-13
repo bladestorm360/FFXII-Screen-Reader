@@ -5,6 +5,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/nav_probe.h"
 #include "navigation/shout_meter.h"
+#include "navigation/statue_guide.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
 #include "ui/equip_compare.h"
@@ -221,7 +222,16 @@ void OnNavKey(int vk) {
         // above). Off a shout map both are silent no-ops -- the dispatcher always accepts the key
         // and ShoutMeter decides, which is what keeps the no-op quiet rather than "not available
         // here".
-        case 'B':           ShoutMeter::RequestMeterCheck();  break;  // B  infamy meter
+        // `B` IS CONTEXT-GATED, NOT DOUBLE-BOUND. Both requests are raised and each drains on the
+        // next field frame against its own structural gate -- a live shout sequence for the meter, a
+        // live `mrm_` script for the statues -- and the two contexts can never both be live (one is
+        // the Bhujerba streets, the other is the Stilshrine of Miriam). Raising both here rather
+        // than asking which applies keeps the decision on the game thread, where reading script
+        // modules is safe; deciding on the input thread is what the `'` probe's arrangement avoids.
+        case 'B':
+            ShoutMeter::RequestMeterCheck();                          // B  infamy meter
+            StatueGuide::RequestCheck();                              // B  statue puzzle status
+            break;
         case 'N':           ShoutMeter::RequestGuardCheck();  break;  // N  nearest NPCs
         case VK_HOME:       CombatLog::JumpOldest();          break;  // Home  oldest entry
         case VK_END:        CombatLog::JumpNewest();          break;  // End   newest entry

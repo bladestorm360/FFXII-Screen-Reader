@@ -158,7 +158,7 @@ void Capture(void* structPtr, bool listCapable) {
     STALL_SCOPE("TextCapture::Capture");
     // Closes the announce -> first-draw bracket. This used to hang off HookedPainter, but that hook
     // (FUN_002d28e0, the list painter) stopped firing after ~14s of the session while Capture kept
-    // going -- the field menu does not draw through it, so the menu under investigation produced no
+    // going -- the party menu does not draw through it, so the menu under investigation produced no
     // measurement at all. Capture fires for EVERY menu (2519 times in one party-menu window), so it
     // is the signal that actually means "the menu drew something". One-shot per mark, inside.
     StallProbe::NoteFirstPaint();

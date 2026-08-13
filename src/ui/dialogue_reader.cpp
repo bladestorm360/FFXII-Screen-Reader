@@ -94,7 +94,7 @@ void ForgetAll() {
 // `window+0xD0`, the same relation ChoiceReader walks in reverse to reach the window from the
 // widget. Membership in that registry IS the definition of "a message the game paginates", which is
 // what keeps this hook off every other text block the engine lays out through the same dispatch
-// slot -- the field menu shares the `FUN_002a6190` window class, so class identity alone would not
+// slot -- the party menu shares the `FUN_002a6190` window class, so class identity alone would not
 // do it. Eight guarded pointer reads, and it runs BEFORE the change-check so a foreign widget can
 // never disturb a live message's page key.
 int LiveMessageSlot(void* widget) {

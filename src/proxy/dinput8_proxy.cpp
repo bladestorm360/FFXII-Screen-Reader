@@ -137,7 +137,7 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
     if (cbData >= 256 && IsKeyboardDev(self)) {
         // WHICH THREAD is this? Never recorded before, and without it a clean FrameTick result is
         // ambiguous: "the game thread never stalled" and "my anchor was on a different thread that
-        // kept running" look identical. That ambiguity is why the field-menu freeze went unexplained.
+        // kept running" look identical. That ambiguity is why the party-menu freeze went unexplained.
         StallProbe::NoteThread("DInput::GetDeviceState");
         StallProbe::FrameTick(/*gapWarnMs=*/100.0);
         // Cadence report, one line per 10 s. This anchor keeps running in menus and loads where the

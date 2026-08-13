@@ -1,5 +1,6 @@
 #include "ui/ability_summary_reader.h"
 #include "ui/ability_entry.h"
+#include "ui/gambit_picker_reader.h"
 #include "ui/text_capture.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
@@ -66,6 +67,17 @@ using AbilityEntry::DecodeName;
 // entry-array and index offsets differ. Game thread, from the page's own focus routine.
 void AnnounceEntry(void* obj, uint32_t entriesOff, uint32_t indexOff, bool hasSections) {
     if (!obj) return;
+
+    // STAND DOWN FOR THE GAMBIT PICKER -- arbitration, not a speech filter.
+    //
+    // These page controllers do not belong exclusively to the license board's `F` overlay: the
+    // gambit action picker drives them too, and it drives them TWICE for one event. A live log
+    // caught "Cure, unavailable" spoken twice in the same millisecond from one owner, in the middle
+    // of a gambit edit. The picker has its own reader now, reading the picker's own row array, so
+    // the surface has one speaker again -- and the ability page keeps every case that is really
+    // its own. Deleting one of two paths that cover different cases is the mistake this project has
+    // already paid for; standing one down while the other drives is the sanctioned shape.
+    if (GambitPickerReader::IsLive()) return;
     uint16_t idx = 0;
     if (!SafeReadU16(obj, indexOff, &idx)) return;
     void* entry = reinterpret_cast<char*>(obj) + entriesOff + static_cast<size_t>(idx) * ENTRY_STRIDE;

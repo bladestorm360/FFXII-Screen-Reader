@@ -295,3 +295,721 @@ before any of it is called fixed:
    (that second test is what proves the disarm).
 5. **Menus:** heavy lists (save slots) → no new `TEXT NEVER PAINTED`.
 6. **Then the tester**, at their speed setting, on this build.
+
+## Session 153 — 2026-08-12 — [nav] The presence pruner deleted a gate crystal, and four named NPCs with it
+
+KEYWORDS: gate crystal dropped, Rabanastre Crystal, Weather Eye, absent pruner, READY_PRESENT_BIT,
+READY_POPULATION_BIT, sceneObj+0x14, 0x30, 0xB0, 0xF0, 0x70, LooksAbsent, OldRuleWouldDrop,
+s_absentSpared, spared:, isCharacter insufficient, scene category 5-7, S148 S150 follow-up,
+third time, entity_scan.cpp, Gate=0
+
+**Reported mid-session: "gate crystals are being dropped." They were, and so was a quarter of the
+NPC list — the report was the visible half of a wider deletion.**
+
+### The evidence was already in the live log
+
+```
+absent: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal" at (115.0,-10.0,151.0)
+rescan: 6 field objects (… Gate=0 …)
+```
+
+Grepping every `absent:` line in that session by byte shape settles it without a theory:
+
+| `+0x14` | drops | what they were |
+|---|---|---|
+| `0xB0` | 44 | all `kind=1` "Hyena" — **correct**, the corpses the filter exists for |
+| `0x30` | 153 | "Rabanastre Crystal" `kind=4`, and `kind=5` "Weather Eye", "Chocobo Aficionado", "Horne", "Rabanastran", one nameless — **all wrong** |
+
+So the shipped filter was wrong on roughly three quarters of what it touched.
+
+### Why the S150 fix did not hold — and the sentence that is now struck
+
+S148 measured bit `0x40` on combatants and pruned the whole handle table with it. S150 caught it
+deleting a **Save Crystal** and scoped it to `isCharacter`, reasoning:
+
+> ~~"`isCharacter` … is the population it was measured on and the only one it may speak for. A corpse
+> is a character; a crystal, a gate, a door and a treasure are not, so none of them can ever reach
+> this drop again."~~
+
+**STRUCK. A gate crystal IS scene category 5-7.** The gate was compiled in and the crystal went
+through it anyway. `isCharacter` never excluded what it was written to exclude, and nothing in the
+S150 log could have shown that, because that session's drops were all enemies.
+
+### The fix: test for the measured SHAPE, not for the bit
+
+Four values have ever been observed on `sceneObj+0x14`:
+
+```
+0xF0  live party / live enemy       present
+0xB0  defeated enemy, unspawned     ABSENT   <- the only thing the filter is for
+0x70  treasure, field gimmicks      0x40 set unconditionally, means nothing
+0x30  save crystal, gate crystal    0x40 CLEAR while standing in plain sight
+```
+
+`0x40` alone separates nothing — it is clear on `0xB0` (drop) **and** on `0x30` (keep). The bit that
+splits them is `0x80`, which **`nav_rva.h` has said in writing since S150** (*"bit 0x80 is what
+actually separates the two populations"*) and which nothing ever acted on. `EntityScan::LooksAbsent`
+now requires `0x80` set and `0x40` clear — `0xB0`'s high nibble — so all four observations fall out
+right: `0xF0`→keep, `0xB0`→**drop**, `0x70`→keep, `0x30`→keep.
+
+No claim is made about what `0x80` *means*. The rule is "drop only what looks like the thing we
+measured as absent", which is the same scoping S150 intended, expressed in the data instead of in an
+assumption about which objects are characters.
+
+**One predicate, both walks** (`ScanCombatants` and `BuildLocked`) — the two sites drifting apart is
+how a drop leaks back in.
+
+### Ships with its own falsifier
+
+`OldRuleWouldDrop` counts and names, capped at 4 per scan, every object the pre-S153 rule would have
+deleted and this one keeps:
+
+```
+spared: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal" at (…) -- pre-S153 rule would have dropped this
+handle-walk drops: N ABSENT (… measured 0xB0 shape) | M spared (0x40 clear but NOT that shape …)
+```
+
+A session that visits a gate crystal and produces **no** `spared:` line means S153 fixed something
+else. The `ABSENT` counter staying non-zero on a map with corpses is what proves the drop still works.
+
+### Play-confirm gate
+
+Stand at the Rabanastre gate crystal: `Gate=1` in the rescan line, the crystal is reachable with
+`=`/`\`, a `spared:` line names it, and the `ABSENT` count still rises when a Hyena dies.
+
+**LESSON (L-01 again, third instance on this one bit): a scoping rule derived from what you believe
+about a population is not a measurement of that population.** S150 scoped by "what kind of thing is
+this" and was wrong about the thing; the data had the discriminator written down the whole time.
+
+## Session 154 — 2026-08-12 — [nav] Stilshrine statues: the model came out of the bytecode, the numbers need one play pass
+
+KEYWORDS: Stilshrine Miriam Mariam statue Stone Brave guardians three mrm_b02 mrm_b03 mrm_b04
+mrm_c01 ebp_statue_census routine name pool bind map 598 599 600 全方向 北方向 clockwise
+counterclockwise sword lift StatueDiag FindModulesBySrcPrefix VarAddressRaw VarCount RawModule
+descriptor table storage class 4 global, statue_diag.cpp, no new hook
+
+**Goal: make the mod aware of each statue's facing and the facing it should have.** The player can
+press the button today — the dialogue reads — but nothing says which way the statue now points or
+whether it is right, so the puzzle is unsolvable except by brute force.
+
+### The logs had the interaction and none of the state
+
+The 2026-08-11 dungeon log (13,898 lines, maps 600/599/598) already has the statue as a scanned,
+routed-to object (`"Stone Brave"`, `nameIdx=-1` so the label is the map's own `fieldsignmes`
+string), the full three-choice interaction, and the hint verbatim — *"Guardians three, face ye the
+blade…"*, **the same string on every statue**. It has **no rotation value for any object**, because
+`EntityScan::Entity` has no angle member and nothing prints one; and **no correctness bit** — the
+statue's `flags` stayed `00002134` across every scan, before and after both rotations. Re-reading
+the logs could never have produced this; it had to be derived.
+
+### What the bytecode gave up, offline, for free
+
+`..\FFXII-Decompile\tools\ebp_statue_census.py` (new, with a falsifier that aborts rather than emit
+a table). Full findings in `GameArchitecture.md`; the short version:
+
+* **Exactly four scripts in the game mention a statue** — three rotatable guardians (`mrm_b03`,
+  `mrm_b04`, `mrm_c01`) and the big sword (`mrm_b02`). The inscription says *Guardians three*.
+* **Map bindings by exact routine-name-pool match** against the pools our own log printed:
+  600 Walk of Reason = `mrm_b04`, 599 Walk of Prescience = `mrm_b03`, 598 Cold Distance = `mrm_b02`.
+  Map 600's match runs 44 consecutive names. There is no mapId→script join in the data, so this is
+  the only honest way to name a map, and it is the census's self-check.
+* **The authors named the whole model in Japanese**: `北方向`/`東方向`/`南方向`/`西方向` (four rest
+  facings), `北～東`… (clockwise), `北～西`… (counterclockwise), `全方向` / `全方向NG` (the script's
+  own solved / not-solved verdict), `像回転振動開始` (statue spin) and **`剣持ち上げ振動開始` — the
+  sword lift, i.e. completion**. So a turn is 90°, there are four facings, and the two dialogue
+  choices are two distinct named transition families.
+* **`全方向` is in every guardian script.** A script on one map cannot judge two other maps' statues
+  from map-local state ⇒ the facings are cross-script globals. Structural, ~0.95, and measured below.
+
+### What it could NOT give up, and why that is a finding
+
+The map-script `.ebp` container is **not** the layout `EBP2_DBG_format.md` documents for the four
+controller scripts: on a map script `hdr+0x18` addresses the **message region** (the inscription's
+codec bytes are right past it), not a routine table, and the mod's live-blob model (`hdr+0x4C` →
+name pool) does not apply either. The **variable descriptor table is unreachable from the file**,
+and with it the facing variable, its storage class and each statue's target.
+
+Rather than decode a container format on spec, those go to a runtime capture — the engine builds
+that table, and the mod already decodes it for the shout gauge.
+
+### `StatueDiag` — built to answer everything in ONE visit
+
+Per the user's instruction this session (*"don't worry about frida, put the probes in c++ … if you
+just need to capture one thing, you can do it in C++"*), the probe is C++ and ships in the mod. A
+second capture costs a game reload, so it does not hunt one variable:
+
+* **logs the game's own verdict, by name.** This is the half that matters most, and the first draft
+  of the capture was missing it — a variable diff alone shows numbers moving and cannot say *which*
+  value is right, so the target would have to be inferred. That is modelling the verdict instead of
+  reading the word it is read from (L-07). **The script says it out loud:** `全方向` /`全方向NG`
+  are the solved / not-solved verdict and `北方向`/`東方向`/`南方向`/`西方向` name the facing a
+  statue settles into, so a routine FIRE carries the answer as a label. `StatueDiag::OnEventFire`
+  taps **`SneakAssist`'s existing `FUN_003dbb60` hook** — zero new hooks, one bool test off this
+  dungeon — resolves the name through `MapScript::FiredRoutineName` and matches it against a table
+  of raw cp932 bytes (that header is explicit that callers compare bytes; no locale is involved).
+  Watched names log every time, uncapped; everything else gets a deduped, capped census so an
+  unanticipated event is still visible. **An unresolved name is logged rather than skipped** — "the
+  statue's routines fire with no resolvable name" would itself be the finding;
+* **snapshots the module's ENTIRE variable table every field frame and reports what MOVED**, with
+  the descriptor's storage class alongside — class 4 is the shared global int array, which is the
+  fact that decides whether the readout can cover all three guardians from anywhere;
+* **retires per-frame counters automatically** (changed on 3 consecutive samples ⇒ excluded, logged
+  once) so a script clock cannot flood the log, and caps the whole visit at 400 change lines with an
+  explicit "budget reached" line — **no silent truncation**;
+* **dumps the statue scene objects raw**: scene category, class, `+0x0E`, `+0x14`, `+0x1C`, and the
+  eight candidate orientation floats on the transform node, diffed. Selected by `nameIdx == -1`
+  (the custom-string key), so it is locale-independent — the label is logged, never matched on.
+* **It does NOT call the engine's yaw getter.** That function's identity is inferred, not at the
+  0.98 bar, and a wrong signature on a game call is a crash, not a bad number (S129). Guarded reads
+  answer the same question and cannot fault.
+* **Armed on any live `mrm_` script, NOT on the statue table** — gating an instrument on the thing
+  it diagnoses is how S133's shout meter went dark on a map where its sequence was running.
+* **Zero new hooks** — it drains on the existing field tick beside `ShoutMeter::OnFieldFrame` and
+  clears on the existing teardown. MinHook is at 66 hooks against a 63-trampoline block.
+
+### Centralization
+
+`ShoutScript` grew a generic layer rather than being forked: `RawModule`,
+`FindModulesBySrcPrefix` (prefix, because a dungeon's rooms are separate scripts sharing one
+authoring prefix), `VarCount`, and `VarAddressRaw`. **`VarAddress(const Module&)` now delegates to
+`VarAddressRaw`**, so the descriptor decode exists exactly once and a `Module` and a `RawModule` can
+never disagree about where a variable lives. The namespace name is now historical and the header
+says so.
+
+### NOT BUILT YET, deliberately
+
+`statue_table` / `statue_guide` and the phrasebook strings are **not** in this build. They need the
+facing variable index and each statue's target, and writing a table on placeholders would be
+fabrication. The design is settled and approved — turn-count wording ("Stone Brave. Two turns
+clockwise." / "In place."), `B` reused and context-gated, all three guardians from anywhere if the
+state is global with a central-room fallback if it is not — and it lands the moment the capture
+returns.
+
+### Play-confirm gate
+
+One pass: load at *Walk of Reason* (600), turn the statue one click each way, walk to *Walk of
+Prescience* (599), same again, then finish the puzzle. That log must contain a variable stepping in
+time with each turn plus its storage class, the statue's scene category and class, and whatever
+moves when the sword lifts. **Both rooms, so the table is checked on two members, not one (L-01).**
+
+**Three independent nets, so one pass cannot come back empty-handed:** the named routine fires (the
+verdict, directly), the variable diff (the state, with its storage class), and the node-orientation
+diff (whether the transform moves at all, or the statue is animation-only as the census suggests).
+If the routine names resolve, the target facing needs no inference whatsoever — `全方向` firing
+after a turn IS the game saying that turn was the right one.
+
+## Session 155 — 2026-08-12 — [input+menus] Two keys that answered when they were not asked
+
+KEYWORDS: Alt+F4 combat verbosity, bare press, fkeyModifierHeld, DIK_LWIN, F4 F5 F6 F7 F8 F11,
+input_tracker, Libra describe key, SpeakTargetDetail, TargetSelectActive, P+0x10F78, OFF_GATE,
+ability description unreadable, battle menu, ResolveTarget commit-first, statue capture starved,
+kMaxVarLines kMaxObjLines, IsGimmick, kYawEpsilon, SnapshotGlobals, ClassBaseRaw
+
+Three reports, all deployed together.
+
+### 1. Every F-key now requires a bare press
+
+**Alt+F4 was flipping Combat verbosity on the way out of the game.** The mod cannot swallow a key,
+so an unguarded F-key fires *in addition* to whatever the chord already does — Ctrl+F4, Shift+F7 and
+the rest were the same defect, a silent state change the player never asked for.
+
+The guard already existed and had been **scoped to F11 alone** since S112 (*"Shift+F11 is an NVDA
+command the tester needs while playing"*). That reasoning was never specific to F11; scoping it to
+one key just meant the other five kept the bug. It is now one `fkeyModifierHeld` computed once and
+applied to `F4 F5 F6 F7 F8 F11`, and it covers the Windows keys as well as Shift/Ctrl/Alt.
+
+Holding a modifier makes the F-key read as **up** rather than suppressing the dispatch, so a modifier
+pressed mid-hold registers a clean release and cannot leave an edge armed.
+
+### 2. The Libra readout was eating every ability description
+
+Reported: *"libra branch for description reader is taking precedence over everything else in the
+battle menu, so impossible to read ability descriptions."*
+
+`SpeakTargetDetail` gated on "is there an enemy target", and `ResolveTarget` answers that from the
+**committed** target first — a path with no UI gate at all; only its browse fallback is gated. A
+commitment outlives the aiming step, so in the battle menu picking a spell, with an enemy still
+committed from the last action, `o` spoke Libra and the fall-through to the description bar was
+unreachable.
+
+**STRUCK** in both files: *"structurally silent everywhere else (no committed/browsed enemy target
+=> false)"*. It tested whether a target EXISTS, not whether the player is AIMING at one.
+
+`SpeakTargetDetail` now requires `TargetSelectActive()` — the game's own `P+0x10F78`, the same bit
+the browse path already trusts — before it claims the key. Enemy-only was already there, unchanged.
+
+**`ResolveTarget` was deliberately NOT touched.** Its commit-first order is load-bearing for `p` and
+`;` (the 2026-07-21 regression note on this file). The residual — while aiming, it can still name a
+stale commitment rather than the unit under the cursor — now emits a log line **only when the two
+disagree**. If a play log shows it, the fix is cursor-first resolution for this one key, with
+evidence behind it rather than a hunch.
+
+### 3. The statue capture starved itself, and the fix is structural
+
+The first run produced **no rotation data at all**, and looked in the log like a clean negative:
+
+```
+[00:22:27.718] change log budget reached
+[00:22:49.671] "Turn the statue clockwise."
+```
+
+362 of the 400 shared lines went on yaw jitter from **wandering enemies** — "Balloon 2", "Ghoul",
+"Zombie Warrior". The object selector was `nameIdx == -1`, which on this map catches enemies too,
+and with a collect cap of 8 they may have pushed the statue out of the window entirely. The user had
+said the dungeon was full of enemies before the instrument was written.
+
+Four corrections, the first being the one that matters:
+
+* **One budget per net, never a shared one.** A noisy net can now only starve itself. This is the
+  actual defect; the rest is why that net was noisy.
+* **Gimmick-class filter** — `sceneObj+0x03 >> 5 == 1`, measured in that same run: Stone Brave and
+  the Ancient Doors are `sceneCat=1 class=1`, enemies are characters (5-7). Cap 8 → 16.
+* **Epsilon compare** instead of `!=`. Baselines read `-0.0000`, a denormal from zero, which an exact
+  compare calls a change every frame. A quarter turn is ~1.57 rad.
+* **Per-slot animation retirement**, and object snapshots keyed on the scene-object POINTER rather
+  than the collect index — the order is not stable, which re-baselined the same objects 54 times.
+
+**A fourth net was added**, closing a gap the others leave: `SnapshotGlobals` diffs the shared
+class-4/5 arrays RAW via the new `ShoutScript::ClassBaseRaw`. The variable sweep only sees what
+`mrm_b04` itself declares; a flag declared by another script was invisible to it however global its
+storage.
+
+### What that run DID establish (kept, because it was not free)
+
+* **Stone Brave is `sceneCat=1 class=1`, `+0x14=0x70`** — a class-1 gimmick, and a byte shape the
+  S153 pruner can never touch.
+* **The statue's routines do NOT start via `FUN_003dbb60`.** 111 fires resolved by name across the
+  rotations, every one an engine lifecycle routine (`init`/`main`/`spawn`/`entry`/`respawn`), and the
+  unwatched-fire budget was never reached. That net is a clean negative and the tap stays only as a
+  cheap census.
+* **Both guardian scripts carry the same 7 messages**, decoded offline: *"The statue is firmly fixed
+  in place."*, *"You discover a mechanism in the statue's base…"*, *"The colossus has undergone some
+  change…"*. The first means some statues are locked, which changes which room can test a rotation.
+
+**LESSON: a shared budget makes one net's noise into another net's silence.** And the log said so
+plainly — the cap line was 22 seconds before the event. Grepping the instrument's own budget lines
+before reading its result is now part of reading any capture (L-04, L-05).
+
+## Session 156 — 2026-08-12 — [menus+nav] The statue state is SAVED game state, and `o` stopped answering the wrong question
+
+KEYWORDS: statue facing 0x0D 0x0E flag 0x07 0x08 target facing save block storage class 0
+0x02164480 FUN_002ef2b0 eye effect buzzing mrm_b03 mrm_b04 map 599 600, Libra description-first,
+BattleCommandActive, P+0x10F78 not target-select, stale build stamp, log trails the game,
+shared budget starvation, class-0 raw sweep 4096
+
+### 1. `o` — the description is the key's primary meaning, Libra is the fallback
+
+The S155 fix (gate the Libra branch on the target cursor) **did not work**, and the user was right
+to push back. Two compounding faults:
+
+* **`P+0x10F78` is NOT "target selection active".** It was true while the battle command menu was
+  open. The name in `battle_target_reader.cpp` was inferred and is now STRUCK.
+* **The ORDER was the real defect.** `SpeakTargetDetail()` ran first, so `TextCapture::CurrentHelpText()`
+  was **never called** in battle. The reporting log has four "Libra not active" lines and **zero**
+  `describe:` lines — which reads like "there is no description" and is nothing of the kind. *The
+  question was never asked.* Gating the Libra branch fixes the symptom and leaves everything resting
+  on that gate being right; asking the description FIRST removes the dependency.
+
+Now: help text (generation-gated to the current focus, so it cannot leak into the target cursor) →
+a refusal while `IngameMenuReader::BattleCommandActive()` → Libra → a log line saying which came back
+empty, so a silent `o` is never ambiguous again.
+
+`BattleCommandActive()` stores the battle panel and **re-validates it against the window class on
+every read**, so a freed or repurposed panel stops answering true by itself.
+
+### 2. Storage class 0 is the persistent SAVE BLOCK
+
+Both modules reported the same class-0 base `0x02164480` — which this repo already documents as
+`FUN_002ef2b0()`. Full write-up in `GameArchitecture.md`. The consequence that matters: **a module
+declares only the subset of that array it uses**, so a declared-variable sweep can never enumerate
+the region, and a raw byte diff is the only way to see a cell the current module does not name.
+
+### 3. The statue puzzle state, measured
+
+Facing and correctness both live in that save block, per statue. Table, addresses and semantics in
+`GameArchitecture.md`. Headlines:
+
+* facing is **1..4**, clockwise **increments** (`4→1` wrap), counterclockwise **decrements**;
+* each statue has its **own correctness flag**, and **the targets differ** (600 → 1, 599 → 2), so the
+  values are compass headings and "all three read 1 when solved" is **refuted**;
+* **the player identified the flag by ear before the instrument did** — the eye effect and a faint
+  buzz are on exactly while the flag is set;
+* therefore **the readout needs no solution table**: correctness is read from the game.
+
+### 4. Three instrument defects, all mine, all found by the data
+
+* **A SHARED BUDGET MADE ONE NET'S NOISE ANOTHER NET'S SILENCE.** 362 of 400 lines went on yaw jitter
+  from wandering enemies and the budget closed **22 seconds before the first rotation**. The run
+  looked like a clean negative and was a blinded one. Now one budget per net.
+* **The object selector was `nameIdx == -1`, which on that map catches enemies** — and the user had
+  said the dungeon was full of them before the instrument was written. Now also requires the class-1
+  gimmick shape, measured from the same run.
+* **The raw global diff covered classes 4 and 5 at 512 bytes and missed everything.** Class 0 was not
+  swept at all, and the statue cell sits at base+0x9B1 — past a 512-byte window either way. Class 0
+  is now swept at 4096 bytes, which is what will surface the third guardian's cells with no special
+  trip.
+
+### 5. Two ways I read evidence wrongly, both worth not repeating
+
+* **The `Build:` line is stale on an incremental build.** It is `__DATE__`/`__TIME__` compiled into
+  `logger.cpp`, which does not recompile unless it changes. I used it to tell the user they had not
+  run a fix — they had, and it had genuinely failed. **Compare the deployed DLL against the build
+  output instead**; `cmp` settles it in one line.
+* **The log file trails the running game by a minute or more.** Twice I read it, saw nothing past a
+  point, and reported absence; the writes had simply not landed. **Check the file's mtime against the
+  wall clock before concluding a thing did not happen.**
+
+### Deferred to next session, deliberately
+
+`statue_table` / `statue_guide` / the phrasebook strings. The design is settled and the measurements
+are in `GameArchitecture.md`; building it cold next session with the documentation in front of it was
+the user's call, and it is the right one — this session's context is spent.
+
+---
+
+## Session 157 — 2026-08-13 — [nav] The statue readout: three guardians, one key, no walkthrough
+
+**KEYWORDS: statue guide Stilshrine Miriam Mariam tomb statue_table statue_guide B key three
+guardians solved clockwise counterclockwise save block class 0 0x02164480 mrm_b03 mrm_b04 mrm_c01
+map 599 600 facing flag target learned offset phrasebook Statue StatueSolved StateUnknown**
+
+The build S156 deferred. Everything was measured; this session spent nothing on RE and all of it on
+shipping the readout.
+
+**`B`, anywhere in the Stilshrine, speaks all three guardians:**
+`Statue 1: counterclockwise once. Statue 2: solved. Statue 3: state unknown.`
+
+### 1. The two reach paths, and why both are needed
+
+A guardian's facing and correctness flag are two cells in the persistent save block (script storage
+class 0, `0x02164480`), so the state is not map-local — which is what makes one key able to answer
+for three rooms. But a cell can be addressed two ways and neither one covers every case:
+
+* **the module's descriptor index** works only while the player stands in that room, and needs no
+  hardcoded address at all;
+* **the save-block offset** works from anywhere, but has to have been measured first.
+
+So `statue_guide` prefers the live module, **learns** the offset from it (`address − class-0 base`),
+keeps it for the session, and uses offsets for the rooms the player is not in. A single walk through
+a room upgrades that statue from "readable here" to "readable anywhere", with no rebuild.
+
+### 2. What ships as unknown, and why that is spoken rather than skipped
+
+`mrm_c01` has never been visited: no map id, no variable indices, no target, no offsets. Nothing is
+interpolated for it. The tempting shortcut — the flag index is the facing index minus six in **both**
+captured modules — is written into `statue_table.cpp` as an observation and deliberately **not** used
+(L-01: two instances are not a population, and a wrong index reads some unrelated save-block byte and
+reports a confident wrong state).
+
+It is **spoken** as `state unknown` rather than omitted, because a readout that lists two statues
+reads as a two-statue puzzle. That is the one place the feature says something instead of nothing,
+and it is a positive claim about our own coverage, not filler about the game.
+
+**If NOT ONE statue resolves the key is silent** and logs why. Three "unknown"s would be filler
+dressed as an answer.
+
+### 3. The flag is the verdict; the target is only a count
+
+`solved` is read from the game's own per-statue flag, never inferred from the facing — the whole
+reason S156's measurement mattered is that it removed the need for a solution table. The target is
+used for exactly one thing, `(target − facing) mod 4`: 1 → clockwise once, 2 → twice (equal either
+way, said clockwise), 3 → counterclockwise once. **There is no three-turn case.**
+
+A flag/target disagreement resolves **in the flag's favour and logs loudly**, because it can only
+mean a baked constant has gone stale.
+
+### 4. The third guardian costs no special trip
+
+Two log nets, both bounded, both one-per-visit:
+
+* entering a guardian room whose cells are unmeasured — today only `mrm_c01` — dumps every class-0
+  variable that module declares, with offsets and values. Also fires for any `mrm_` module the table
+  does not know at all, which is how a fourth statue script would announce itself.
+* the save block either side of each **known** cell is dumped once per visit. The measured pair sits
+  in two different sub-regions (`+0x9B1` a facing, `+0x882` a flag); if one authoring template was
+  instantiated three times, the three facings are plausibly neighbours in one array and the three
+  flags in another, which would bind the third guardian with no visit at all. **Hypothesis only —
+  nothing reads on it.** The dump is how it gets tested or killed.
+
+### 5. `B` is context-gated, and the decision stays on the game thread
+
+`B` already meant the Bhujerba infamy meter. The two contexts can never both be live (a street
+sequence and a dungeon), so the dispatcher raises **both** requests and each drains on the next field
+frame against its own structural gate. Asking "which applies?" on the input thread would have meant
+resolving script modules off the game thread — the thing the `'` probe's arrangement exists to avoid.
+
+The gate is the **`mrm_` script prefix**, not an area name: the area name is localized text in twelve
+languages (the game calls it "Stilshrine of Miriam" in ours), and the prefix is the bind
+`ebp_statue_census.py` established.
+
+### 6. Wording
+
+The tester's own shape, this conversation: `Statue N: <verdict>`. Eight phrasebook ids, English only
+— `Statue`, `StatueSolved`, `StatueNotSolved`, `StateUnknown`, `Clockwise`, `Counterclockwise`,
+`Once`, `Twice`. The area name is **logged, not spoken**; adding it to the line is one edit if the
+numbering turns out to be harder to hold than the room names.
+
+### ~~Play-confirm owed~~ — PLAY-CONFIRMED 2026-08-13 (during Session 158)
+
+**The statue readout is confirmed working.** Map 599 reads from anywhere immediately; map 600 needs
+one entry into Walk of Reason before it reads from elsewhere — the `MEASURED …` log line is the
+receipt, and the offsets it printed were baked into `statue_table.cpp` in S157.
+
+### 7. A claim struck and un-struck inside one session: "`mrm_c01` is the boss room"
+
+S154 inferred "the boss/event room" from `BOSS_…`, `EventDirector`, `ReposDirector` and
+`PlayerJack*`. I repeated it to the user as if measured. They pushed back — *the boss room is what
+this puzzle unlocks, so no guardian stands in it* — and I struck it across `GameArchitecture.md` and
+`debug.md` and wrote a general lesson about routine-name pools on top of it.
+
+**Then they played it: it is the boss room AND the room where the last statue is turned.** The
+refutation was an argument about PROGRESSION and never excluded the two being one room. Everything
+was withdrawn the same session.
+
+The correction cost more than the original claim did. **L-64 now says what actually went wrong: a
+correction is a conclusion and carries the same bar as the thing it corrects — check whether a claim
+and its refutation are even exclusive before striking, and do not mint a lesson whose whole evidence
+is one unverified exchange.** What was never measured in either direction is the only thing the mod
+needs: `mrm_c01`'s map id and its two save-block cells.
+
+### 8. And the process failure that produced the 2-of-3 solver
+
+The user had asked outright whether a visit to the third statue was needed. The answer given was no,
+reasoning that the flag makes a solution table unnecessary — true, and irrelevant: not needing to
+know the correct *facing* says nothing about knowing the *address*. What shipped was a solver whose
+third line says "state unknown", against a feature whose whole premise is *one key, all three*.
+**L-63: a measurement only the player can take is a question to ask, not a constraint to design
+around.** The tell is writing "self-measures on first entry" about the deliverable itself.
+
+### 9. All three guardians bound the same day — the capture worked in one visit
+
+The user ran the capture. Every number the table was missing came back, and the two nets agreed
+byte-for-byte:
+
+| map | script | facing | flag | target |
+|---|---|---|---|---|
+| 599 | `mrm_b03` | `+0x9B1` | `+0x882` | 2 |
+| 600 | `mrm_b04` | `+0x9B3` | `+0x883` | 1 |
+| **603** | `mrm_c01` | `+0x9B5` | `+0x884` | **unsettled** |
+
+**`mrm_c01` declares all three statues' cells**, which is what exposed the layout: flags consecutive
+at `+0x882/883/884`, facings stride-2 at `+0x9B1/9B3/9B5`. The once-per-visit neighbourhood dump —
+added as a hypothesis test with nothing reading on it — is what made the pattern legible at a glance,
+and the census then confirmed it by index. **The hypothesis was right and it still did not need to be
+trusted**, which is the point of shipping it as a log line rather than as a lookup.
+
+`+0x885` flipped on the same frame as the third flag and is declared by `mrm_b02`, the SWORD script.
+That is the completion cell, banked for a future announcement. The player also identified two
+completion messages — *"the colossus"* on solving, and *"The statue is firmly fixed in place"*
+afterwards, i.e. **the statues lock once done.**
+
+**One number withheld: map 603's target.** Its flag set at facing 3, then the facing moved 3→4 five
+seconds later with no clear — unlike the other two, where facing and flag moved on the same frame.
+Target 3 plus a locking completion animation fits, and fits the "firmly fixed" message, but it is not
+0.98. That statue reports solved / not solved with no turn count until it is settled.
+
+Also corrected: `mrm_c01` is **map 603**, and the room is both the boss room and the last statue's —
+the S154 name-pool inference and the player's objection were describing the same place.
+
+### 10. Map 603's target IS 3, and withholding it was the wrong call
+
+I shipped 603 with no target on the grounds that the capture was "ambiguous": its flag set at facing
+3, then the facing moved 3→4 with no clear, unlike the other two where facing and flag moved on the
+same frame. The tester overruled it, and was right twice over:
+
+* **the rule is uniform** — 599's flag set at facing 2, 600's at facing 1, 603's at facing 3, each on
+  the frame its statue became correct;
+* **the 3→4 move is only anomalous if you forget the statues LOCK on completion.** "The statue is
+  firmly fixed in place" is the game saying the player cannot turn it any more, so that write is the
+  completion sequence's own, not a player turn.
+
+And the cost of "confirming" it would have been unsolving a finished puzzle to re-solve it — for a
+number three observations already agreed on. **Turn-by-turn directions are the entire point of this
+feature; a statue that reports only solved / not-solved is the feature not working.** Withholding a
+number is not automatically the conservative choice: here it degraded the deliverable to protect a
+confidence bar that was not actually in doubt.
+
+### 11. BEACON — it never had a "is the player driving" gate at all
+
+Reported: the beacon plays during cutscenes and with the battle menu open, but not with the party
+menu open. Diagnosed and fixed.
+
+**Root cause:** every gate in `AudioBeacon::OnGameFrame` asks whether the FIELD EXISTS — audio up,
+the setting on, a route loaded, epoch match, `IsFieldNavSafe()`, combat engagement. **None asks
+whether the player is in control.** `IsFieldNavSafe()` is six LIVENESS predicates and every one stays
+true through a conversation and a cutscene. Not an S152 regression: the gate never existed.
+
+**Why the party menu was quiet** — by accident. Opening it stops the field tick that calls
+`OnGameFrame` at all. That accident is what made the leak look selective.
+
+**Why the battle menu leaked** — the tester supplied the piece I had wrong: **FFXII lets the battle
+command menu be opened OUT OF COMBAT** on any map where battles can happen. So `PartyEngagement()`
+reads clear and the objective beacon runs underneath it. "Are we in combat" was never the right
+question.
+
+**The fix:** one suspension block ahead of the combat branch, so it covers BOTH beacons (tester's
+call on the target ping). Two gates, both the game's own state — `IngameMenuReader::
+BattleCommandActive()` (re-validates its panel against the window class on every read) and
+`DialogueReader::IsBoxLive()` (the engine's message-window registry, already `message_reader`'s
+choke point). **SUSPEND, NEVER STOP** — `Stop()` discards the legs, and a player closing a menu
+expects the same leg back, exactly as after a fight. Transition-only log line.
+
+Deliberately NOT used: `MenuState::IsAnyMenuOpen()` — one write, zero clears, answers "open" forever;
+a gate built on it once killed the field object scan for a whole fight.
+
+**Residual, stated rather than hidden:** a cutscene with NO message box is still uncovered. Most
+FFXII scenes caption through the same paginated box, so `IsBoxLive()` should carry them, but a silent
+camera scene has no measured signal in the codebase yet.
+
+**And `F9` doing nothing is correct, not a regression.** The game owns F9 ("Hide On-Screen Keyboard",
+S112); the beacon toggle is **F11**, bare press only, because Shift+F11 is an NVDA command.
+
+### PLAY-CONFIRMED 2026-08-13 (during Session 158) — PARTIALLY
+
+**The suspension works in menus**, which is the case the report was filed against. **The cutscene and
+dialogue cases are NOT yet verified** and the tester has deliberately left them for a later pass, so
+`IsBoxLive()` carrying a captioned scene is still an inference rather than a measurement — and the
+residual named above (a silent camera scene with no message box) is untouched by this confirmation.
+Do not upgrade either to "confirmed" without a log.
+
+## Session 158 — 2026-08-13 — [menus] The gambit editor: a class byte that meant "incomplete", and a list read from the wrong source
+
+**KEYWORDS: gambit half-set row condition without action empty rec+0x15 class incomplete rec+0x10
+rec+0x12 FUN_00567b60 FUN_0056a1d0 FUN_00569f90 FUN_00568bb0 gambit picker FUN_0056b4d0 stale
+category paint cache gambit_picker_reader picker+0x595 picker+0x0E0 ability summary double speak
+party menu rename field menu Session 93 reversed**
+
+Two reported defects on the gambit editor, one more found in the log while reproducing them, and the
+Session 93 "field menu" vocabulary reversed at the tester's request.
+
+### 1. "with a condition it should read something like: foe: party leader's target. empty. off"
+
+The reader called a row empty on `rec+0x15 == 2`, decoded nothing, and said "empty". That byte means
+**incomplete**, not empty: `FUN_00567b60` writes the condition id and the real condition name into
+the record first and only afterwards sets it to 2 when EITHER id is `0xFFFF`. The row painter assigns
+`rec+0x00` into the condition sprite for every row regardless of class, so the condition was on
+screen the whole time the mod was calling the row blank.
+
+The two ids answer separately, so the fix is to ask them separately. An unset half now contributes
+the word "empty", which makes the row read `"Foe: party leader's target, empty, off"` and gives every
+column something to say instead of dropping into the no-text SILENT path.
+
+**The log had already recorded the proof and I nearly walked past it.** In
+`FFXII-Screen-Reader-2026-08-12_10-31-36.log` the player picks a condition at +329015 ms, then moves
+`col=2 → col=1 → col=2` over the next four seconds hearing "empty" each time, and at +334750 the same
+row reads `"Foe: not targeted by ally"`. A value that survives four cursor moves and a picker re-open
+is stored, not staged — the row was never empty, and one log line five seconds apart says so.
+
+**A CORROBORATED CLAIM CAN STILL BE SCOPED WRONG (L-01 again, from the other end).** S94's probe
+output is in the archive and it shows the class byte taking 0, 1 and 2 on one screen. Its pass
+criterion — *"cond/action ids read 0xFFFF on exactly the rows whose class byte is 2, and nowhere
+else"* — was recorded as confirmed and was true of every row that run saw, because that run never
+edited a row. Nothing was measured wrong. The population was three quarters of one, and the note in
+`gambit_reader.h` carried the narrower claim as a general law for 64 sessions.
+
+### 2. The picker was reading the paint cache — the worse defect, and it was not the reported one
+
+The tester reported categories being announced as *"the trailing action that was selected from the
+last category"*. The mechanism turned out to be more serious than the wording suggests: the picker
+had **no reader at all** (S94 declined it as unmeasured), so it fell to the generic painted-row path,
+which resolves text out of `TextCapture`'s per-paint item map. The focus for a category switch
+arrives before the new rows are drawn, so the player heard the previous category's row 0 — and, on
+opening the action list over the condition list, `"Foe: party leader's target"` where `"Attack"` was
+highlighted. **A blind player was choosing gambit actions from a list reporting the wrong row**,
+which is not a wording problem.
+
+`ui/gambit_picker_reader.{h,cpp}` reads the picker's own array (`picker+0x0E0 + i*0x20`, 17 slots).
+Both rebuilds fill that array **before** they move the list cursor, so by the time the focus reaches
+us the rows are already the new ones — the timing question disappears instead of being tuned. No new
+hook: the focus is the same `FUN_00247510` `0x8000` the panel's arrives on. It claims the focus only
+when it actually spoke, so a shape it does not recognise still falls through to the path that covered
+the surface before — which is the protection S94 was reaching for when it declined to claim it.
+
+**Deferring to the next paint was the obvious fix and it is the wrong one.** `menu_reader.cpp`
+already has that idiom for the Clan Primer, and it would have narrowed the window rather than closing
+it: a deferral is a bet that the next paint is the one you want. The array is the answer. Written up
+as **L-65**, with S89 and the off-hand list as the two earlier instances of the same shape.
+
+### 3. The same screen was speaking twice, and nobody had reported it
+
+`[LICENSE] summary: "Cure, unavailable"` twice in the same millisecond, from one owner, in the middle
+of a gambit edit: the license board's ability page controller is driven by this picker as well, and
+driven twice per event. `AnnounceEntry` now stands down while `GambitPickerReader::IsLive()`. That is
+arbitration between two paths covering different cases — the sanctioned shape — not a same-as-last-
+time filter, and not the deletion of one path that this project has already paid for twice.
+
+### 4. The category name does not exist, so nothing was invented
+
+The tab descriptors carry a colour id and a member count; the tab strip draws coloured plates; no
+`FUN_002f9860` call in the picker resolves a category string. **The instrument shipped instead of a
+guess**, and the tester's category walk answered it in one pass — all four candidate routes refuted:
+`DefName(0x15, family)` collapses five magick tabs into "Magicks", `DefName(0x15, tabIndex)` returns
+"NOT USED concentration"/"Summon"/"Foecraft", `DefName(0x18, family)` names the wrong school because
+the family byte is not a school id, and `picker+0x580` is the *"you cannot pick this"* error banner
+the tab-step functions merely clear.
+
+The eleven action tabs are a gambit-specific grouping — 1 Attack, 5 Magicks, 3 Items, 2 Technicks —
+with no string table anywhere. **Tester's call: announce nothing.** The corrected first row of the
+tab just entered already distinguishes all eleven, and every alternative I could offer was either a
+number or a word I would have made up. The diagnostic came out again with the question it answered;
+what it learned is now in `GameArchitecture.md` and in the reader's own header, marked "do not
+re-derive".
+
+**A diagnostic is worth writing to be DELETED.** Four `DefName` calls per category switch bought one
+answer and then had no further job. Leaving it in would have looked like caution and been cost.
+
+Two corrections from the same walk. Row `+0x10`'s not-acquired value is **`0x10`**, not the `0x0F`
+the decompile suggested — tested `!= 0`, so both readings behave identically, but the measured one is
+what the file now says. And **`ingame_menu_reader.cpp` had `0x15` and `0x18` labelled the wrong way
+round**: `0x18` is the magick-school table, `0x15` the battle-command table. The values and the
+branch were always correct, so nothing ever behaved wrongly — but a comment that names the wrong
+table is exactly the kind of claim that gets built on three sessions later.
+
+### 5. "field menu" → "party menu", reversing Session 93
+
+S93 renamed the game's own **Party Menu** to *field menu* to avoid "a party menu inside the party
+menu". The tester's call: the collision never actually caused one, so the game's word comes back. The
+inner command keeps the name the live docs already gave it — the **Party screen**, never "party
+menu", which is what makes the outer name free.
+
+Docs-and-comments only: there is no `FieldMenu` identifier anywhere and **no spoken string contains
+"field menu"**, so the binary is unchanged by this item. 61 occurrences across README, `Controls.md`,
+`GameArchitecture.md`, `debug.md`, `release_procedure.md` and ~20 code comments. `Docs/sessions_*.md`
+deliberately untouched — it is the append-only record, and `sessions_051_100.md:4356-4360` is the
+entry recording the decision being reversed. The `IsFieldPaneOwner` / `HookedFieldPaneWnd` /
+`RVA_FIELD_PANE_WND` identifiers are also untouched: they name the window class `FUN_00280de0`, which
+is a different thing from the menu.
+
+### Files
+
+New: `ui/gambit_picker_reader.{h,cpp}`. Changed: `ui/gambit_reader.{h,cpp}`, `ui/menu_reader.cpp`
+(include, the picker branch, the panel-focus note), `ui/ability_summary_reader.cpp` (stand-down),
+`ui/ingame_menu_reader.cpp` (the reversed chooser-table names), `CMakeLists.txt`; the rename across
+`README.md`, `Docs/{Controls,GameArchitecture,debug,release_procedure}.md` and 15 source files.
+`GameArchitecture.md` gained the record-builder / commit / write-back chain, the save-block source at
+`panel+0x0F4`, `rec+0x17`, the picker's full layout and the closed category question; two claims
+struck there, one in `gambit_reader.h`, one in `ingame_menu_reader.cpp`.
+
+### PLAY-CONFIRMED, both halves, same day
+
+Tester: *"gambit fix for the empty action on a condition is confirmed working."* The picker is
+confirmed from the log of that session — eleven category switches, each speaking the new tab's own
+first row, zero stale items, zero duplicate `[LICENSE] summary` lines, and the picker class constant
+right on the first build. Entries the character has not acquired now say so ("Cure, unavailable"),
+which the old path dropped silently.
+
+**This build also carried S153-S157**, which had never been deployed, and two of those were played
+in the same sitting: **the Stilshrine statue readout is confirmed working**, and **the beacon
+suspension is confirmed in MENUS** — the case its report was filed against. The cutscene and dialogue
+cases are deliberately left for a later pass, so `IsBoxLive()` carrying a captioned scene remains an
+inference. S153's presence-pruner fix and S155/S156 were not exercised.
+
+### The commit
+
+S153-S158 land as ONE commit. They are six sessions across two tracks (nav/input and menus), and the
+house rule is one commit per session per track — but the S153-S157 work sat uncommitted for a day
+while S158 edited the same files (`menu_reader.cpp`, `ingame_menu_reader.cpp`, `CMakeLists.txt` and
+four shared documents all carry both tracks' hunks). Splitting them now would mean hand-partitioning
+mixed files into commits that were never built in that state, which buys a tidier log at the cost of
+a history whose intermediate points do not compile. **Recorded here and in the memory index so a
+future `git log` trace does not read six sessions as one.**

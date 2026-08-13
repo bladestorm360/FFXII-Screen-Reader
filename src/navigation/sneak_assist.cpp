@@ -12,6 +12,7 @@
 #include "navigation/entity_list.h"
 #include "navigation/map_names.h"
 #include "navigation/map_script.h"
+#include "navigation/statue_diag.h"
 #include "navigation/nav_common.h"
 #include "navigation/nav_rva.h"
 #include "navigation/path_danger.h"
@@ -575,6 +576,14 @@ void __fastcall HookedTriggerUpdate(void* container, void* object) {
 }
 
 int __fastcall HookedEventFire(void* object, uint32_t kind, uint32_t routineIdx, int mode, int flag) {
+    // OBSERVER TAP, ahead of this file's own gate (S154). The Stilshrine statue capture needs to see
+    // routine fires, and this is the only hook on `FUN_003dbb60` -- installing a second one would
+    // spend a MinHook trampoline the budget does not have (66 installs against a 63-slot block).
+    // It cannot decline a fire and cannot change the return value; off that dungeon it is one bool
+    // test. It sits ABOVE the mechanism gate deliberately: that gate early-outs on every map but
+    // this file's two, and the statues are on neither.
+    StatueDiag::OnEventFire(object, kind, routineIdx);
+
     // THE FIRST BRANCH IS THE MECHANISM GATE (S121; was the danger table until the tester's
     // instruction). On every map whose row is not engine-catch -- including 568 -- this is the
     // original plus one table scan, and nothing below is reachable: no name resolution, no logging,

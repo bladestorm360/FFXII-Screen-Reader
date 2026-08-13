@@ -58,7 +58,7 @@ const Row kTable[] = {
     // -- The one Libra word. USER-AUTHORIZED 2026-08-10 (S147).
     EN(L"Libra not active."),
 
-    // -- Field menu, Party screen (portrait position + alpha dim only; no string exists). USER-AUTHORIZED.
+    // -- Party menu, Party screen (portrait position + alpha dim only; no string exists). USER-AUTHORIZED.
     // POSITIONAL TABLE: these two must sit at the SAME index as in phrasebook.h's enum. The
     // static_assert only checks the COUNT, so inserting at the wrong offset silently shifts every later
     // phrase by two and the build still passes.
@@ -155,6 +155,16 @@ const Row kTable[] = {
     EN(L"On fills the meter on your first shout, and the scene continues from there."),
     // The summoned Esper's duration gauge (S148). Trailing space: a PREFIX, like HPPrefix above.
     EN(L"Summon gauge "),
+    // Stilshrine of Miriam statue puzzle (S157). `Statue` is a bare noun -- the call site composes
+    // "Statue 1: " with its own glue and number, per the no-pre-glued-variants rule above.
+    EN(L"Statue"),
+    EN(L"solved"),
+    EN(L"not solved"),
+    EN(L"state unknown"),
+    EN(L"clockwise"),
+    EN(L"counterclockwise"),
+    EN(L"once"),
+    EN(L"twice"),
 };
 
 #undef EN

@@ -37,10 +37,33 @@ constexpr uint32_t P_COUNT     = 0x126;     // u8  row count (max 12)
 constexpr uint32_t P_COL       = 0x33E;     // u8  column cursor: 0 whole row, 1 condition, 2 action
 constexpr uint32_t R_COND_NAME = 0x00;      // codec* -- rec 0 holds the CHARACTER name here
 constexpr uint32_t R_ACT_NAME  = 0x08;      // codec* -- null on rec 0 (the header has no action)
+constexpr uint32_t R_COND_ID   = 0x10;      // u16 condition id, 0xFFFF when that half is unset
+constexpr uint32_t R_ACT_ID    = 0x12;      // u16 action id,    0xFFFF when that half is unset
 constexpr uint32_t R_ON        = 0x14;      // u8  enabled; on rec 0 this is the MASTER toggle
-constexpr uint32_t R_CLASS     = 0x15;      // u8  2 = empty row
+constexpr uint32_t R_CLASS     = 0x15;      // u8  class -- LOGGED, NEVER GATED ON. See below.
 
-constexpr uint8_t  CLASS_EMPTY = 2;
+constexpr uint16_t ID_UNSET    = 0xFFFF;
+
+// **THE CLASS BYTE MEANS "INCOMPLETE", NOT "EMPTY", AND GATING ON IT WAS THE REPORTED DEFECT.**
+//
+// A gambit row can hold a CONDITION with no ACTION: the player picks the condition, the game commits
+// it, and the action cell stays blank until they pick one. The record builder FUN_00567b60 (RVA
+// 0x447B60) writes rec+0x10 and the real condition name into rec+0x00 FIRST, unconditionally, and
+// only afterwards downgrades rec+0x15 to 2 when EITHER id is 0xFFFF. The single-field commit
+// FUN_0056a1d0 (0x44A1D0) does the same on picker confirm, and FUN_00569f90 (0x449F90) writes the
+// half-set row back to the save block -- which is why a condition-only row survives closing the menu.
+// The row painter FUN_00568bb0 (0x448BB0) assigns rec+0x00 into the condition sprite for every row
+// regardless of class, so a sighted player READS THAT CONDITION ON SCREEN; class 2 only dims it.
+//
+// So the two ids are the only test that answers the question, and they answer it separately:
+//   rec+0x10 != 0xFFFF -> a condition is set        rec+0x12 != 0xFFFF -> an action is set
+// A truly empty row is both unset -- what the row-clear path writes.
+//
+// The S94 probe (probe_gambit_menu_output.log) had ALREADY caught the class byte taking 0, 1 and 2
+// on one screen. It read as "2 = empty" only because that run never edited a row, so every class-2
+// row it saw happened to be fully empty. The byte is kept on the log line below as evidence, and its
+// real meaning is recorded in GameArchitecture.md: 2 = incomplete, 0/1 = the condition's target
+// class (that last part is 0.80 and NOT acted on anywhere).
 
 // THE THREE COLUMNS, from the game's own help ids rather than from a guess. FUN_005691e0 `case 0xc`
 // picks the description by this very cursor -- 0xCF1 for 0, 0xCEE for 1, 0xCEF for 2 (and 0xCF2 when
@@ -73,16 +96,33 @@ bool RecByte(void* panel, int rec, uint32_t field, uint8_t* out) {
     return SafeReadU8(panel, P_RECS + static_cast<uint32_t>(rec) * REC_STRIDE + field, out);
 }
 
+bool RecU16(void* panel, int rec, uint32_t field, uint16_t* out) {
+    return SafeReadU16(panel, P_RECS + static_cast<uint32_t>(rec) * REC_STRIDE + field, out);
+}
+
+// ONE field of a row, as the player should hear it.
+//
+// An unset half is not a decode failure -- the builder stores the game's own blank placeholder
+// (FUN_002f9860(0x3EB), a single non-letter glyph) in that half's name pointer, which RecName's
+// printability gate correctly rejects. So the ID decides whether the field is absent, and the word
+// for an absent one is the phrasebook's, not the codec's.
+std::wstring FieldText(void* panel, int rec, uint32_t nameField, uint16_t id) {
+    if (id == ID_UNSET) return Phrase::Get(Phrase::Id::EmptySlot);
+    return RecName(panel, rec, nameField);
+}
+
 std::wstring OnOffWord(bool on) {
     return Phrase::Get(on ? Phrase::Id::On : Phrase::Id::Off);
 }
 
 // ONE emit function for this surface, per the one-choke-point rule: the wording, the logging and the
 // interrupt policy exist here and nowhere else.
-void Speak(void* owner, const std::wstring& line, int rec, int col) {
+// `cls` rides on the tag rather than in a separate line: it is the byte this reader used to gate on,
+// so every future log carries the state it was read in alongside what was actually said.
+void Speak(void* owner, const std::wstring& line, int rec, int col, uint8_t cls) {
     if (line.empty()) return;
     char tag[64];
-    snprintf(tag, sizeof(tag), "gambit rec=%d col=%d:", rec, col);
+    snprintf(tag, sizeof(tag), "gambit rec=%d col=%d cls=%u:", rec, col, cls);
     Log::WriteW("INGAME", tag, owner, line);
     Speech::Output(line, /*interrupt=*/true);
 }
@@ -165,28 +205,38 @@ bool OnFocus(void* panel, int recIndex) {
     RecByte(panel, recIndex, R_CLASS, &cls);
 
     // --- the character header + gambit master toggle ---
+    // BEFORE the unset test below, because record 0's ids are 0/0, not 0xFFFF -- it is not a gambit
+    // row and its two id slots do not mean what they mean everywhere else.
     if (recIndex == 0) {
         std::wstring line = RecName(panel, 0, R_COND_NAME);
         if (line.empty()) {
             Log::Write("INGAME", "gambit: header name did not decode -- SILENT");
             return true;
         }
-        Speak(panel, line + L", " + OnOffWord(on != 0), recIndex, col);
+        Speak(panel, line + L", " + OnOffWord(on != 0), recIndex, col, cls);
         return true;
     }
 
-    // --- an unset row ---
+    uint16_t condId = ID_UNSET, actId = ID_UNSET;
+    if (!RecU16(panel, recIndex, R_COND_ID, &condId) || !RecU16(panel, recIndex, R_ACT_ID, &actId)) {
+        char m[96];
+        snprintf(m, sizeof(m), "gambit: rec %d ids unreadable -- SILENT", recIndex);
+        Log::Write("INGAME", m);
+        return true;                       // silence beats guessing at a row's contents
+    }
+
+    // --- an unset row: BOTH halves missing ---
     // Spoken, not silent, and this is NOT the "never speak filler" case. That rule is about having
     // nothing to report; here the report IS that the slot is empty, and on a 12-row list silence
     // would leave the player unable to tell the cursor moved. `EmptySlot` already exists for exactly
     // this and ability_summary_reader sets the precedent.
-    if (cls == CLASS_EMPTY) {
-        Speak(panel, Phrase::Get(Phrase::Id::EmptySlot), recIndex, col);
+    if (condId == ID_UNSET && actId == ID_UNSET) {
+        Speak(panel, Phrase::Get(Phrase::Id::EmptySlot), recIndex, col, cls);
         return true;
     }
 
-    const std::wstring cond = RecName(panel, recIndex, R_COND_NAME);
-    const std::wstring act  = RecName(panel, recIndex, R_ACT_NAME);
+    const std::wstring cond = FieldText(panel, recIndex, R_COND_NAME, condId);
+    const std::wstring act  = FieldText(panel, recIndex, R_ACT_NAME,  actId);
 
     // BOTH WITNESSES TO THE ROW'S ON/OFF STATE ON ONE LINE. `rec+0x14` and bit i-1 of panel+0x124 are
     // two recordings of one fact and the probe showed them agreeing (mask 0x13, rows 1/2/5 set), so a
@@ -207,6 +257,10 @@ bool OnFocus(void* panel, int recIndex) {
     // WHICH KEY MOVED decides how much to say -- not the column, which is what the first version got
     // wrong. Arrive on a new ROW and you want all of it; move LEFT/RIGHT and you want only the field
     // you landed on, because you already heard the rest a moment ago and the row has not changed.
+    //
+    // A HALF-SET ROW ANSWERS ON EVERY COLUMN. `cond` and `act` are each either the game's own text or
+    // the word "empty", so the row reads "Foe: party leader's target, empty, off" and the action
+    // column answers "empty" instead of dropping into the no-text SILENT path below.
     std::wstring line;
     if (moved == Move::Row) {
         line = cond;
@@ -226,14 +280,18 @@ bool OnFocus(void* panel, int recIndex) {
     }
 
     if (line.empty()) {
-        char m[128];
+        // Reachable now only when a SET id's name failed to decode -- an unset half already carries
+        // the "empty" word. The ids are on the line so the next log says which half went wrong.
+        char m[160];
         snprintf(m, sizeof(m),
-                 "gambit: rec %d col %d produced no text (cond=%d act=%d chars) -- SILENT",
-                 recIndex, col, static_cast<int>(cond.size()), static_cast<int>(act.size()));
+                 "gambit: rec %d col %d produced no text (cond=%d act=%d chars, "
+                 "condId=0x%04X actId=0x%04X cls=%u) -- SILENT",
+                 recIndex, col, static_cast<int>(cond.size()), static_cast<int>(act.size()),
+                 condId, actId, cls);
         Log::Write("INGAME", m);
         return true;
     }
-    Speak(panel, line, recIndex, col);
+    Speak(panel, line, recIndex, col, cls);
     return true;
 }
 

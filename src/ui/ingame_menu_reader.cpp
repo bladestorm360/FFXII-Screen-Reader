@@ -16,6 +16,7 @@
 #include <Windows.h>
 #include <cstdint>
 #include <cstdio>
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -43,7 +44,7 @@ constexpr uint32_t ROW_STRIDE   = 0x20;   // row record size
 constexpr uint32_t OFF_ROW_NAME = 0x10;   // NAME codec* (built by FUN_002cd3c0)
 
 // ---- The field pause menu's OWN window handler (drives the entry announce) -------------------
-// FUN_00280de0 == ROW_CHAIN[0]. The FIELD MENU announces its first row the SAME WAY the battle
+// FUN_00280de0 == ROW_CHAIN[0]. The PARTY MENU announces its first row the SAME WAY the battle
 // command menu does: the entry focus is STASHED (see MenuReader::HookedFocusSet -> ArmPaneEntry) and
 // released by the menu's own "show" event, so speech lands WITH the menu instead of during its
 // construction. The battle menu releases on its row DRAW (FUN_00276be0); this window has no per-row
@@ -70,7 +71,7 @@ Pfn_FieldPaneWnd s_origFieldPaneWnd = nullptr;
 
 // ---- Battle command menu (CONFIRMED 2026-07-10 via probe) ------------------------------------
 // The in-battle command list (Attack / Magicks & Technicks / Items / ...) routes cursor moves
-// through the SAME FUN_00247510 msg-0x8000 dispatch the field menu uses. Its `owner` is the command
+// through the SAME FUN_00247510 msg-0x8000 dispatch the party menu uses. Its `owner` is the command
 // PANEL, window class FUN_0027ad70 (RVA 0x15AD70); the focus `val` is the highlighted row index.
 // The highlighted command id is a u16 at panel+0x510 + index*8 (count = int at panel+0x500). The
 // NAME is exactly what the game's own per-row draw FUN_00276be0 (RVA 0x156BE0) resolves into
@@ -175,8 +176,15 @@ constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 (items) — CONFI
                                               // moved to core/item_names.cpp -- shared with the
                                               // loot scanner)
 constexpr uint32_t CAT_MAGICK      = 0x14;     // FUN_0035d330 category for the spell/technick list
-constexpr uint32_t CAT_CHOOSER_TECH= 0x18;     // chooser category when flag bit2 set (Technicks)
-constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // chooser category otherwise (Magick schools)
+// THE TWO LABELS BELOW WERE THE WRONG WAY ROUND (measured S158, live, on the gambit picker's
+// diagnostic walk): **`0x18` is the MAGICK-SCHOOL table** (0-3 resolve to "White Magicks", "Black
+// Magicks", "Time Magicks", "Green Magicks") and **`0x15` is the BATTLE-COMMAND table** ("Attack",
+// "Magicks", "Technicks", "Items"). The VALUES and the flag test are unchanged and still correct --
+// each is passed with an id from the chooser's own rows, so the branch always worked; only the names
+// in this comment lied about which table is which. Left as two named constants precisely so the next
+// reader gets the corrected names rather than re-deriving them.
+constexpr uint32_t CAT_CHOOSER_TECH= 0x18;     // flag bit2 set  -> the magick-SCHOOL name table
+constexpr uint32_t CAT_CHOOSER_MAG = 0x15;     // otherwise      -> the battle-COMMAND name table
 
 
 // Battle target-selection readout lives in battle_target_reader.cpp now (hooks the vitals builder
@@ -729,6 +737,23 @@ bool IsBattleCommandOwner(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_BCMD_PANEL);
 }
 
+// THE LIVE-SURFACE FLAG. See the header for why `o` needs this and `IsBattleCommandOwner` will not
+// do: a hotkey has no owner pointer to ask about, only "where am I".
+//
+// Stored as a plain pointer and RE-VALIDATED against the window class on every read, so a panel that
+// has been freed or handed to another class stops answering true on its own. That liveness check is
+// the load-bearing half -- the explicit clears below are belt and braces.
+std::atomic<void*> g_bcmdLivePanel{nullptr};
+
+bool BattleCommandActive() {
+    void* p = g_bcmdLivePanel.load(std::memory_order_relaxed);
+    return IsBattleCommandOwner(p);
+}
+
+void ClearBattleCommandActive() {
+    g_bcmdLivePanel.store(nullptr, std::memory_order_relaxed);
+}
+
 // True if `owner` is the field pause menu's command column (window class FUN_00280de0). This is the
 // ONE class whose entry announce is deferred to the SHOW message; every other pane speaks on entry.
 bool IsFieldPaneOwner(void* owner) {
@@ -762,6 +787,7 @@ void ArmPaneEntry(void* owner, uint32_t rowOff, int index) {
 // path, so an unresolved focus is stashed here and replayed by the first FUN_00276be0 draw that
 // caches a name.
 void OnBattleCommandFocus(void* owner, int index) {
+    g_bcmdLivePanel.store(owner, std::memory_order_relaxed);
     if (TrySpeakBattleCommand(owner, index)) {
         std::lock_guard<std::mutex> lk(g_mutex);
         g_bcmdPendingPanel = nullptr; g_bcmdPendingIndex = -1;   // spoken -> drop any stale pending

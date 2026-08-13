@@ -85,6 +85,50 @@ Module FromRecord(void* record);
 // of the decompile.
 void DumpRecords();
 
+// ---- THE GENERIC LAYER (Session 154) -----------------------------------------------------------
+//
+// Everything below is true of ANY loaded map script, not just a shout one, and the statue-puzzle
+// reader in `statue_diag` / `statue_guide` is its second caller. It lives here rather than in a new
+// file because the descriptor decode must exist exactly once: `VarAddress` above now delegates to
+// `VarAddressRaw`, so a `Module` and a `RawModule` can never disagree about where a variable is.
+//
+// THE NAMESPACE NAME IS HISTORICAL. `ShoutScript` was named when the gauge was its only client; the
+// half below knows nothing about shouting. If a third client appears, lift this half into
+// `script_vm.{h,cpp}` and leave `Module` / `FindShoutModule` behind -- they are the only genuinely
+// shout-specific things here, because they resolve through `ShoutTable`.
+
+// A live script module with NO table lookup attached -- the raw fact that slot N holds a script
+// whose authoring name is this.
+struct RawModule {
+    bool  valid   = false;
+    void* record  = nullptr;
+    void* ebpBase = nullptr;
+    int   slot    = -1;
+    char  srcName[32] = {};
+};
+
+// Every live module whose `.src` name starts with `prefix` (exact ASCII, case-sensitive), written
+// into `out` up to `cap`. Returns how many were written. GAME THREAD only.
+//
+// A PREFIX rather than an exact name because a dungeon's rooms are separate scripts sharing one
+// authoring prefix (`mrm_` is the whole Stilshrine of Miriam), and the caller wants "am I anywhere
+// in this dungeon" without enumerating every room.
+int FindModulesBySrcPrefix(const char* prefix, RawModule* out, int cap);
+
+// How many variables the module's descriptor table declares (its word 0). 0 when unreadable.
+// Bounded by the caller -- a torn record can report anything.
+uint32_t VarCount(void* record);
+
+// The base address of one storage class on a raw record, or null. Classes 4 and 5 are the
+// CROSS-SCRIPT global arrays every module shares, which is what makes them worth reading directly:
+// a flag written by a script whose descriptor table we are not sweeping still lands there.
+// Class 3 needs `ebpBase`; class 2 is unsupported and always returns null.
+void* ClassBaseRaw(void* record, void* ebpBase, uint8_t cls);
+
+// The descriptor decode, on a raw record. `VarAddress` below is a thin wrapper on this.
+bool VarAddressRaw(void* record, void* ebpBase, uint8_t varIdx, void** outAddr,
+                   uint8_t* outElemType, uint32_t* outRawDesc);
+
 // Decode one of the module's variables to an absolute address.
 // Returns false when the descriptor is unreadable, its storage class is unsupported (2), or the
 // resulting address is null. `outElemType` receives the descriptor's element type.

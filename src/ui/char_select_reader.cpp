@@ -86,7 +86,7 @@ bool RowWitnessAgrees(const SlotInfo& v) {
     return ((v.rowFlags & ROW_FLAG_INPARTY) != 0) == v.inParty;
 }
 
-// Which field-menu command is active. Empty-handed answer is -1, which makes every caller fall through
+// Which party-menu command is active. Empty-handed answer is -1, which makes every caller fall through
 // to the stat readout -- the pre-existing behaviour, so an unreadable chain degrades to what shipped
 // rather than to silence.
 int ActiveFieldCmd() {

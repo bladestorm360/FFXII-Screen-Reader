@@ -1,6 +1,6 @@
 #pragma once
 
-// Gambit setup screen (field menu -> Gambits -> a character).
+// Gambit setup screen (party menu -> Gambits -> a character).
 //
 // The screen is a 13-record display array on one panel class, FUN_005691e0 (RVA 0x4491E0), pause
 // command 0x4B9. Record 0 is the character header carrying the gambit MASTER toggle; records 1..N are
@@ -14,14 +14,18 @@
 // CONFIRMED LIVE, 2026-07-30 (probe_gambit_menu_output.log), all four pass criteria:
 //   * `owner` IS the panel object, so the existing hook sees this surface.
 //   * `val` IS the record index -- 0 for the header, 1..panel+0x126 for the rows. No off-by-one.
-//   * cond/action ids read 0xFFFF on exactly the rows whose class byte is 2, and nowhere else.
+//   * ~~cond/action ids read 0xFFFF on exactly the rows whose class byte is 2, and nowhere else.~~
+//     STRUCK (Session 158). The two are not equivalent: class 2 means INCOMPLETE, so it also covers
+//     a row with a condition and no action -- and reading it as "empty" silenced that row's real,
+//     on-screen condition text for as long as the action was missing. The probe agreed with the
+//     wrong reading only because that run never edited a row. Test the two ids SEPARATELY; the
+//     builder's own order is written up in gambit_reader.cpp.
 //   * popcount(panel+0x124) == the number of rows whose own on-bit is set, so the mask's bit i-1
 //     belongs to display row i.
 //
-// The PICKER (the condition/action chooser this screen opens on Confirm) is NOT handled here. The
-// probe run never confirmed on a row, so it captured no picker messages at all and its row layout is
-// unmeasured -- shipping a reader for it would be a guess, and a wrong one would claim the surface
-// and silence whatever covers it today.
+// The PICKER (the condition/action chooser this screen opens on Confirm) has its own reader now --
+// gambit_picker_reader.{h,cpp}, Session 158, once its row array had been measured. Until then it was
+// read by the generic painted-row path, which is why it spoke the previous list's row.
 namespace GambitReader {
 
 // Is this dispatch owner the gambit panel? Discriminated by CLASS (obj[0]), never by address: menu

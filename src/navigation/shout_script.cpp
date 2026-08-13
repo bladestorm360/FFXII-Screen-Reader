@@ -208,14 +208,63 @@ Module FindShoutModule(char* outNames, int outNamesCap) {
     return m;
 }
 
-bool VarAddress(const Module& m, uint8_t varIdx, void** outAddr, uint8_t* outElemType,
-                uint32_t* outRawDesc) {
+int FindModulesBySrcPrefix(const char* prefix, RawModule* out, int cap) {
+    if (!prefix || !out || cap <= 0) return 0;
+    const size_t plen = strlen(prefix);
+    int n = 0;
+    for (int slot = 0; slot < kSlots && n < cap; ++slot) {
+        void* rec = SlotRecord(slot);
+        if (!rec) continue;
+        void* ebpBase = MemRead::PtrAt(rec, kOffEbpBase);
+        char name[32] = {};
+        if (!ReadSrcName(ebpBase, name, sizeof(name))) continue;
+        if (strncmp(name, prefix, plen) != 0) continue;
+        out[n].valid   = true;
+        out[n].record  = rec;
+        out[n].ebpBase = ebpBase;
+        out[n].slot    = slot;
+        strncpy_s(out[n].srcName, sizeof(out[n].srcName), name, _TRUNCATE);
+        ++n;
+    }
+    return n;
+}
+
+uint32_t VarCount(void* record) {
+    if (!record) return 0;
+    void* descTable = MemRead::PtrAt(record, kOffDescTable);
+    if (!descTable) return 0;
+    uint32_t count = 0;
+    // Word 0 of the descriptor table is the entry count, the same shape the routine table uses
+    // (map_script_internal.h records that reading word 0 as a record is what once reported "2
+    // routines" on a 24-routine map). Callers still bound it -- a torn record can say anything.
+    if (!MemRead::SafeReadU32(descTable, 0, &count)) return 0;
+    return count;
+}
+
+void* ClassBaseRaw(void* record, void* ebpBase, uint8_t cls) {
+    if (!record) return nullptr;
+    switch (cls) {
+        case 0: return MemRead::PtrAt(record, kOffClass0);
+        case 1: return MemRead::PtrAt(record, kOffClass1);
+        case 4: return MemRead::PtrAt(record, kOffClass4);
+        case 5: return MemRead::PtrAt(record, kOffClass5);
+        case 3: {
+            uint32_t rel = 0;
+            if (!ebpBase || !MemRead::SafeReadU32(ebpBase, kEbpClass3Off, &rel)) return nullptr;
+            return reinterpret_cast<char*>(ebpBase) + rel;
+        }
+        default: return nullptr;   // class 2 is per-actor; there is no honest address
+    }
+}
+
+bool VarAddressRaw(void* record, void* ebpBase, uint8_t varIdx, void** outAddr,
+                   uint8_t* outElemType, uint32_t* outRawDesc) {
     if (outAddr) *outAddr = nullptr;
     if (outElemType) *outElemType = 0xFF;
     if (outRawDesc) *outRawDesc = 0;
-    if (!m.valid || !m.record) return false;
+    if (!record) return false;
 
-    void* descTable = MemRead::PtrAt(m.record, kOffDescTable);
+    void* descTable = MemRead::PtrAt(record, kOffDescTable);
     if (!descTable) return false;
 
     uint32_t desc = 0;
@@ -230,14 +279,14 @@ bool VarAddress(const Module& m, uint8_t varIdx, void** outAddr, uint8_t* outEle
 
     void* classBase = nullptr;
     switch (cls) {
-        case 0: classBase = MemRead::PtrAt(m.record, kOffClass0); break;
-        case 1: classBase = MemRead::PtrAt(m.record, kOffClass1); break;
-        case 4: classBase = MemRead::PtrAt(m.record, kOffClass4); break;
-        case 5: classBase = MemRead::PtrAt(m.record, kOffClass5); break;
+        case 0: classBase = MemRead::PtrAt(record, kOffClass0); break;
+        case 1: classBase = MemRead::PtrAt(record, kOffClass1); break;
+        case 4: classBase = MemRead::PtrAt(record, kOffClass4); break;
+        case 5: classBase = MemRead::PtrAt(record, kOffClass5); break;
         case 3: {
             uint32_t rel = 0;
-            if (!m.ebpBase || !MemRead::SafeReadU32(m.ebpBase, kEbpClass3Off, &rel)) return false;
-            classBase = reinterpret_cast<char*>(m.ebpBase) + rel;
+            if (!ebpBase || !MemRead::SafeReadU32(ebpBase, kEbpClass3Off, &rel)) return false;
+            classBase = reinterpret_cast<char*>(ebpBase) + rel;
             break;
         }
         // Class 2 is per-actor: the engine resolves it by CALLING mod[0x13] with a VM context that
@@ -249,6 +298,17 @@ bool VarAddress(const Module& m, uint8_t varIdx, void** outAddr, uint8_t* outEle
 
     if (outAddr) *outAddr = reinterpret_cast<char*>(classBase) + byteOff;
     return true;
+}
+
+// The shout-side wrapper. One decode, two entry points -- see the header's note on why this
+// delegates rather than repeating the descriptor arithmetic.
+bool VarAddress(const Module& m, uint8_t varIdx, void** outAddr, uint8_t* outElemType,
+                uint32_t* outRawDesc) {
+    if (outAddr) *outAddr = nullptr;
+    if (outElemType) *outElemType = 0xFF;
+    if (outRawDesc) *outRawDesc = 0;
+    if (!m.valid) return false;
+    return VarAddressRaw(m.record, m.ebpBase, varIdx, outAddr, outElemType, outRawDesc);
 }
 
 bool ReadVar(void* addr, uint8_t elemType, int32_t* out) {

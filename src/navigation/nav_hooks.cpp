@@ -9,6 +9,8 @@
 #include "navigation/entity_list.h"
 #include "navigation/sneak_assist.h"
 #include "navigation/shout_meter.h"
+#include "navigation/statue_diag.h"
+#include "navigation/statue_guide.h"
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
@@ -170,6 +172,12 @@ uint64_t __fastcall HookedFieldFrame() {
         // finished gauge burst. Same reason as the probe above -- reading npcdic names and live
         // transforms is a game-thread job. A few pointer reads when nothing is happening.
         { STALL_SCOPE("ShoutMeter::OnFieldFrame"); ShoutMeter::OnFieldFrame(); }
+        // Stilshrine of Miriam statue capture. Off that dungeon it is five slot reads
+        // and a return -- it arms on a live `mrm_` script, never on a map id.
+        { STALL_SCOPE("StatueDiag::OnFieldFrame"); StatueDiag::OnFieldFrame(); }
+        // The statue readout `B` answers from. Same gate and same cost as the capture above -- it
+        // arms on a live `mrm_` script, and off that dungeon it is five slot reads and a return.
+        { STALL_SCOPE("StatueGuide::OnFieldFrame"); StatueGuide::OnFieldFrame(); }
     }
     return s_origFieldFrame ? s_origFieldFrame() : 1;
 }
@@ -192,6 +200,8 @@ void __fastcall HookedTeardown() {
         // Same rule: a script-module identity and a resolved variable address belong to the map
         // they were read on, and the instant-fill latch must re-arm for the next one.
         ShoutMeter::OnMapTeardown();
+        StatueDiag::OnMapTeardown();
+        StatueGuide::OnMapTeardown();
     }
     if (s_origTeardown) s_origTeardown();
 }

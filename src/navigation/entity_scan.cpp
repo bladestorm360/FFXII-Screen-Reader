@@ -44,8 +44,10 @@ int s_poolKind5  = 0;   // actor-pool entries skipped as KIND_DEAD, a constant d
 int s_knownName  = 0;   // objects speaking the PERSONAL npcdic name because the player knows it
                         // (odd slot; e.g. "Arjie" rather than "Nomad").
 // S148, both dropped in the handle-table walk itself so they never depend on the actor pool.
-int s_dropAbsent   = 0; // sceneObj+0x14 bit 0x40 clear -- the engine has stopped presenting it
+int s_dropAbsent   = 0; // sceneObj+0x14 reads the measured ABSENT shape -- see LooksAbsent
 std::vector<std::string> s_absentLines;   // up to 8, so a WRONG prune names itself in the log
+int s_absentSpared = 0; // characters the OLD rule would have deleted and this one keeps (S153)
+std::vector<std::string> s_sparedLines;   // up to 4 -- the falsifier for the S153 narrowing
 int s_dropOwnParty = 0; // matched a live scene handle in the battle-work party table
 int s_dropTaken    = 0; // Category::Treasure whose coordinates the game already awarded (S150)
 int s_dropOddKind  = 0; // a named character whose scene KIND the engine's own candidate filter
@@ -91,6 +93,55 @@ std::vector<PoolEntry> s_poolObjs;
 // this scan gets dumped. It cannot be logged inline: `detail` is only known after the object loop
 // finishes, and the loop runs several times a second -- writing there would flood the log.
 std::vector<std::string> s_facLines;
+
+// DOES `sceneObj+0x14` READ THE SHAPE THE ABSENT STATE WAS ACTUALLY MEASURED IN?
+//
+// ---- THIRD TIME (Session 153). IT DROPPED A GATE CRYSTAL. --------------------------------------
+//
+// S148 measured bit 0x40 on combatants and pruned the whole handle table with it. S150 caught it
+// deleting a SAVE CRYSTAL and scoped it to `isCharacter`, on the stated reasoning that "a crystal, a
+// gate, a door and a treasure are not [characters]". **That reasoning is STRUCK.** The live log has
+//     absent: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal" at (115.0,-10.0,151.0)
+// with `Gate=0` on a map that has one, WITH the isCharacter gate compiled in -- so a gate crystal IS
+// scene category 5-7 and the gate never excluded it. Losing a gate crystal is losing the map's fast
+// travel; it is the same severity as the save crystal, from the same bit, for the third time.
+//
+// WHAT IS ACTUALLY MEASURED -- four values, and only four:
+//     0xF0  live party member / live enemy      present
+//     0xB0  defeated enemy, never-spawned slot  ABSENT   <-- the only thing this filter exists for
+//     0x70  treasure, field gimmicks            0x40 set unconditionally, means nothing
+//     0x30  save crystal, gate crystal          0x40 clear while standing in plain sight
+//
+// So `0x40` alone separates nothing: it is clear on 0xB0 (drop) and on 0x30 (keep). The bit that
+// splits those two is 0x80, which `nav_rva.h` has said in writing since S150 -- *"bit 0x80 is what
+// actually separates the two populations"* -- and which nothing ever acted on.
+//
+// THIS TESTS FOR THE MEASURED SHAPE, NOT FOR A MEANING. No claim is made about what 0x80 denotes.
+// The rule is only "drop what looks like the thing we measured as absent", i.e. exactly 0xB0's high
+// nibble, and every one of the four observations above falls out right:
+//     0xF0 -> 0xC0  keep      0xB0 -> 0x80  DROP      0x70 -> 0x40  keep      0x30 -> 0x00  keep
+//
+// AND IT WAS NOT ONLY THE CRYSTAL. Every `absent:` line in the reporting session, by byte shape:
+//     0xB0  44 drops   all "Hyena" kind=1                       <- correct, the corpses
+//     0x30 153 drops   "Rabanastre Crystal" kind=4, and kind=5
+//                      "Weather Eye" / "Chocobo Aficionado" /
+//                      "Horne" / "Rabanastran" / one nameless   <- FOUR NAMED NPCs, plus the crystal
+// So the shipped filter was wrong on three quarters of what it touched, and the report that started
+// this ("gate crystals are being dropped") was the visible half of a wider deletion. This rule keeps
+// all 44 and stops all 153.
+//
+// Narrower is the safe direction here and deliberately so. Failing to drop a corpse leaves a stale
+// entry in a list; dropping a crystal takes away somewhere the player was trying to walk to.
+bool LooksAbsent(uint8_t ready) {
+    return (ready & (NavRva::READY_POPULATION_BIT | NavRva::READY_PRESENT_BIT))
+           == NavRva::READY_POPULATION_BIT;
+}
+
+// Would the pre-S153 rule have deleted this object? Log-only, and the falsifier for the narrowing
+// above: every line it produces is something the shipped build was throwing away.
+bool OldRuleWouldDrop(uint8_t ready) {
+    return (ready & NavRva::READY_PRESENT_BIT) == 0 && !LooksAbsent(ready);
+}
 }
 
 void NoteFiltered(void* sceneObj) { if (sceneObj) s_filtered.push_back(sceneObj); }
@@ -193,14 +244,19 @@ void ScanCombatants(std::vector<Entity>& out) {
         // DROPS an absent object rather than listing it, so every corpse it prunes would arrive here
         // looking like a fresh combatant nobody had claimed yet. `AlreadyListed` cannot tell "not
         // listed because it is new" from "not listed because we just refused it". Full derivation of
-        // bit 0x40: nav_rva.h, READY_PRESENT_BIT.
+        // bit 0x40 and of the shape test: nav_rva.h READY_PRESENT_BIT, and `LooksAbsent` above.
+        //
+        // BOTH WALKS USE THE ONE PREDICATE (S148's rule, and the reason S153's fix is a one-line
+        // change here): the two sites drifting apart is how a drop leaks back in.
         {
             uint8_t ready = 0;
-            if (SafeReadU8(sceneObj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
-                (ready & NavRva::READY_PRESENT_BIT) == 0) {
-                ++s_dropAbsent;
-                NoteFiltered(sceneObj);
-                continue;
+            if (SafeReadU8(sceneObj, NavRva::SCENEOBJ_READY_OFF, &ready)) {
+                if (LooksAbsent(ready)) {
+                    ++s_dropAbsent;
+                    NoteFiltered(sceneObj);
+                    continue;
+                }
+                if (OldRuleWouldDrop(ready)) ++s_absentSpared;
             }
         }
 
@@ -277,6 +333,8 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     s_dropOwnParty = 0;
     s_dropOddKind  = 0;
     s_lastOddKind  = -1;
+    s_absentSpared = 0;
+    s_sparedLines.clear();
     s_dropAbsent   = 0;
     s_dropTaken    = 0;
     s_absentLines.clear();
@@ -451,21 +509,44 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
             //
             // This does not weaken the corpse case at all -- a defeated enemy still reads 0xB0 and is
             // still a character. It only stops the filter answering a question it was never asked.
+            //
+            // ---- AND SCOPED AGAIN TO THE MEASURED BYTE SHAPE (Session 153) ----------------------
+            //
+            // `isCharacter` was not enough, and the sentence above explaining why it would be is
+            // STRUCK: a GATE CRYSTAL is scene category 5-7, so it passed that gate and was deleted
+            // anyway (`+0x14=0x30`, `Gate=0` on a map with one). The test is now `LooksAbsent`,
+            // which requires the byte to match the shape ABSENT was measured in instead of reading
+            // bit 0x40 on its own -- see its derivation at the top of this file.
             if (isCharacter) {
                 uint8_t ready = 0;
-                if (SafeReadU8(obj, NavRva::SCENEOBJ_READY_OFF, &ready) &&
-                    (ready & NavRva::READY_PRESENT_BIT) == 0) {
-                    ++s_dropAbsent;
-                    if (s_absentLines.size() < 8) {
-                        char al[192];
-                        char nm[96]; Log::ToUtf8(name, nm, sizeof(nm));
-                        snprintf(al, sizeof(al),
-                                 "absent: [%u:%u] +0x14=0x%02X kind=%u \"%s\" at (%.1f,%.1f,%.1f)",
-                                 c, i, ready, kind, nm, pos.x, pos.y, pos.z);
-                        s_absentLines.emplace_back(al);
+                if (SafeReadU8(obj, NavRva::SCENEOBJ_READY_OFF, &ready)) {
+                    if (LooksAbsent(ready)) {
+                        ++s_dropAbsent;
+                        if (s_absentLines.size() < 8) {
+                            char al[192];
+                            char nm[96]; Log::ToUtf8(name, nm, sizeof(nm));
+                            snprintf(al, sizeof(al),
+                                     "absent: [%u:%u] +0x14=0x%02X kind=%u \"%s\" at (%.1f,%.1f,%.1f)",
+                                     c, i, ready, kind, nm, pos.x, pos.y, pos.z);
+                            s_absentLines.emplace_back(al);
+                        }
+                        NoteFiltered(obj);
+                        continue;
                     }
-                    NoteFiltered(obj);
-                    continue;
+                    // KEPT, and the old rule would have deleted it. This is the line that says what
+                    // the fix bought -- if it never appears, the defect was not what we think.
+                    if (OldRuleWouldDrop(ready)) {
+                        ++s_absentSpared;
+                        if (s_sparedLines.size() < 4) {
+                            char sl[192];
+                            char nm[96]; Log::ToUtf8(name, nm, sizeof(nm));
+                            snprintf(sl, sizeof(sl),
+                                     "spared: [%u:%u] +0x14=0x%02X kind=%u \"%s\" at (%.1f,%.1f,%.1f)"
+                                     " -- pre-S153 rule would have dropped this",
+                                     c, i, ready, kind, nm, pos.x, pos.y, pos.z);
+                            s_sparedLines.emplace_back(sl);
+                        }
+                    }
                 }
             }
 
@@ -748,14 +829,16 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     //               the rest of the visit; `TreasureState` drops it on a map change. If a treasure is
     //               still spoken while the `treasure: collected` line is in the log, this counter is
     //               the one that says whether the scan side or the match tolerance is at fault.
-    if (s_dropAbsent > 0 || s_dropOwnParty > 0 || s_dropOddKind > 0 || s_dropTaken > 0) {
-        char dm[288];
+    if (s_dropAbsent > 0 || s_dropOwnParty > 0 || s_dropOddKind > 0 || s_dropTaken > 0 ||
+        s_absentSpared > 0) {
+        char dm[352];
         snprintf(dm, sizeof(dm),
-                 "handle-walk drops: %d ABSENT (sceneObj+0x14 bit 0x40 clear) | "
+                 "handle-walk drops: %d ABSENT (sceneObj+0x14 matches the measured 0xB0 shape) | "
+                 "%d spared (0x40 clear but NOT that shape -- the pre-S153 rule deleted these) | "
                  "%d own-party (by scene handle, pool-independent) | "
                  "%d named character(s) on a kind the engine's own filter rejects (last kind=%d) | "
                  "%d collected treasure (%d award record(s) held)",
-                 s_dropAbsent, s_dropOwnParty, s_dropOddKind, s_lastOddKind,
+                 s_dropAbsent, s_absentSpared, s_dropOwnParty, s_dropOddKind, s_lastOddKind,
                  s_dropTaken, TreasureState::RecordedCount());
         Log::Write("NAV", dm);
     }
@@ -763,6 +846,10 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // a presence test is that it removes something the player still needs, and a bare count could not
     // tell "one corpse" from "one NPC we just deleted by mistake".
     for (const std::string& al : s_absentLines) Log::Write("NAV-DIAG", al.c_str());
+    // And every SPARE names itself too, capped at 4 -- the other half of the same falsifier. A
+    // `spared:` line is an object the shipped build was deleting; no `spared:` line anywhere in a
+    // session that visits a gate crystal means S153 fixed something else.
+    for (const std::string& sl : s_sparedLines) Log::Write("NAV-DIAG", sl.c_str());
 
     if (s_charByName > 0 || s_poolKind5 > 0 || s_dropKind1 > 0 || s_dropKind5 > 0 ||
         s_dropOther > 0 || s_namelessAct > 0 || s_poolOverlap > 0 || OddSlotWins() > 0) {

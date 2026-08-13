@@ -1,6 +1,6 @@
 #pragma once
 
-// The FIELD MENU's shared character chooser -- the "select a character" portrait grid.
+// The PARTY MENU's shared character chooser -- the "select a character" portrait grid.
 //
 // ONE surface, four commands. `0x4b3` Party, `0x4b4` Status, `0x4b6` Equipment and `0x4b9` Gambits all
 // activate the SAME controller (FUN_00285290, parked at menuCtx+0xf8); only the mode the field pane arms

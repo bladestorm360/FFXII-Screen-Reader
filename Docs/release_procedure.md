@@ -200,7 +200,7 @@ entry at all, both of them keys that already worked:
   its own for a reader to look them up in. It has a two-sentence one now.
 
 **One key changed meaning on a screen, and the readme still described the old behaviour.** `4` on
-the field menu's **Equipment** screen: S150 put that per-highlight stat preview behind **AutoDetail**
+the party menu's **Equipment** screen: S150 put that per-highlight stat preview behind **AutoDetail**
 (`equip_compare.cpp:405`), so the readme's "is the exception, and deliberately so" — i.e. it reads
 automatically — had been false since. Corrected. `4` still reads it in both modes; AutoDetail only
 decides whether it *also* speaks on its own.
@@ -436,7 +436,7 @@ of the shipped `ReadMe.txt`, not from memory:
 - **Notice board reader** (Session 87) — new gap. `notice` occurs once and it is the palace guards.
 - **In-dialogue choices** (Session 87) — new gap. Both `choice` hits are "your choices are
   remembered between sessions" in the beacon/menu sections.
-- **Party membership on the field menu** (Session 93) — new gap. `R` is listed only as a game key.
+- **Party membership on the party menu** (Session 93) — new gap. `R` is listed only as a game key.
 - **Equipment reading** — `equip` occurs zero times.
 
 Not fixed here because readme edits are a separate commit made *before* the release trigger (see
@@ -454,7 +454,7 @@ the tester stated that all of it had in fact been confirmed in play and that the
 simply were not reported back at the time.** The tester is the only person who plays this game, so
 their word is the primary evidence and it supersedes the silence of the logs: **the whole Session
 84–123 feature set is play-confirmed**, including the notice board, in-dialogue choices, the
-personal-name NPC lookup, the field-menu party list, the mod menu, the beacons, and the navmesh
+personal-name NPC lookup, the party-menu party list, the mod menu, the beacons, and the navmesh
 route rebuild.
 
 **Note the shape of this evidence, because it changes how a future defect should be read.** It is a

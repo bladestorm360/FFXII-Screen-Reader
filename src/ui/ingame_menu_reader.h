@@ -38,8 +38,23 @@ void OnRowChainFocus(void* owner, uint32_t rowOff, int index);
 
 // Battle command menu (owner class FUN_0027ad70): recognise it, and speak the highlighted command
 // (owner+0x510+index*8 -> cmdId -> name cached from the FUN_00276be0 draw). Same FUN_00247510 0x8000
-// dispatch as the field menu, just an unmapped owner class.
+// dispatch as the party menu, just an unmapped owner class.
 bool IsBattleCommandOwner(void* owner);
+
+// IS THE BATTLE COMMAND MENU THE LIVE SURFACE RIGHT NOW? (Session 156)
+//
+// `IsBattleCommandOwner` answers about a pointer you already have; this answers about the CURRENT
+// state, which is what a hotkey needs. It exists because `o` must never be the Libra key while the
+// player is choosing a Magick or Technick -- reading the ability's description is the whole point of
+// the key there, and a committed target from the previous action is not a question about a monster.
+//
+// Self-clearing three ways: the stored panel is re-validated against the window class on every read
+// (a freed or repurposed object stops matching), any focus on a different owner clears it, and
+// battle teardown clears it. Safe from any thread.
+bool BattleCommandActive();
+
+// Drop the live-surface flag. Called when focus lands anywhere that is not the battle command menu.
+void ClearBattleCommandActive();
 void OnBattleCommandFocus(void* owner, int index);
 
 // Field pause menu command column (owner class FUN_00280de0). Its entry announce is DEFERRED, unlike

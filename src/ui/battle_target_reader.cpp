@@ -99,6 +99,18 @@ void ClearCache() {
 
 void* Pstate() { return PtrAt(Hooks::ResolveRva(RVA_BSTATE), 0); }
 
+// IS THE TARGET CURSOR ACTUALLY UP? The game's own bit, the same one the browse path in
+// `ResolveTarget` already trusts and the nameplate hook disarms on.
+//
+// This is a SEPARATE question from "is there a target", and conflating the two is what broke the
+// describe key -- see the note in `SpeakTargetDetail`. A commitment outlives the aiming UI: it is
+// still there while the player is in the battle menu picking a spell, which is exactly when they
+// want the description bar, not a monster's vitals.
+bool TargetSelectActive() {
+    void* P = Pstate();
+    return P && PtrAt(P, OFF_GATE) != nullptr;
+}
+
 // ---- LIBRA -------------------------------------------------------------------------------------
 // Is the party's Libra up right now? This is the game's OWN answer, mirrored into the battle-HUD
 // context once per frame, so reading it costs one guarded u32 and calls nothing:
@@ -661,16 +673,57 @@ bool SpeakTargetStatus() {
 // through to the help text everywhere this has nothing to say -- the same first-refusal shape `;`
 // already uses with InteractTarget::SpeakCurrent.
 //
-// No enemy target => SILENT and false. `o` keeps every meaning it already had; a player pressing it
-// on a menu row is not asking about a monster.
+// Not aiming, or not aiming at an enemy => SILENT and false. `o` keeps every meaning it already had;
+// a player pressing it on a menu row is not asking about a monster.
+//
+// ~~"No enemy target => SILENT and false"~~ was the whole gate until 2026-08-12 and it is **STRUCK**:
+// it tested whether a target EXISTS, not whether the player is aiming at one, and a commitment
+// outlives the aiming UI. See the first gate in the body.
 //
 // Enemy targeted but Libra down => "Libra not active." This is a USER-INSTRUCTED exception to the
 // never-speak-filler rule (granted 2026-08-10) and it is not filler: `o` is a direct question, and
 // silence here is indistinguishable from a broken mod. It fires on the KEY only -- the
 // per-highlight autodetail path in AnnounceTargetBc deliberately never says it.
 bool SpeakTargetDetail() {
+    // ---- FIRST GATE: THE CURSOR MUST ACTUALLY BE UP (reported 2026-08-12) --------------------
+    //
+    // The header above claimed this was "structurally silent everywhere else (no committed/browsed
+    // enemy target => false)". **That was wrong, and it made ability descriptions unreadable.**
+    // `ResolveTarget` resolves the COMMITTED target first and that path has no UI gate at all -- only
+    // its browse fallback is gated. A commitment outlives the aiming step, so standing in the battle
+    // menu choosing a spell, with an enemy still committed from the last action, this returned true,
+    // spoke Libra, and shadowed the description bar on every press. The fall-through was unreachable
+    // exactly where it was needed most.
+    //
+    // `o` is the description key. It only becomes the Libra key while the player is genuinely aiming,
+    // which is the one moment "tell me about this monster" is the question being asked.
+    if (!TargetSelectActive()) return false;
+
     ResolvedTarget t;
     if (!ResolveTarget(t) || t.ally || !t.bc) return false;
+
+    // RESIDUAL, LOGGED RATHER THAN GUESSED AT. With the cursor up, `ResolveTarget` still answers
+    // with the COMMITTED target when there is one, not the unit under the cursor -- so aiming at a
+    // second enemy could report the first. That order is deliberate and load-bearing for `p` and `;`
+    // (the 2026-07-21 regression note on this file), so it is not being changed on a hunch. This line
+    // says whether the two ever actually disagree; if a play log shows it, the fix is a cursor-first
+    // resolution for this key only, and it will have evidence behind it.
+    if (!t.browsing) {
+        uint32_t cursorHandle = 0;
+        void* P = Pstate();
+        if (P && MemRead::SafeReadU32(P, OFF_TARGETID, &cursorHandle) && cursorHandle != 0) {
+            void* cursorActor = BattleState::ActorForHandle(static_cast<int32_t>(cursorHandle));
+            if (cursorActor && cursorActor != t.actor) {
+                char m[192];
+                char nm[96];
+                Log::ToUtf8(BattleState::DisplayNameForActor(cursorActor), nm, sizeof(nm));
+                snprintf(m, sizeof(m),
+                         "o: DISAGREEMENT -- committed target spoken, but the cursor is on \"%s\"",
+                         nm);
+                Log::Write("TARGET", m);
+            }
+        }
+    }
 
     if (!LibraActive()) {
         Log::Write("TARGET", "o: Libra not active");

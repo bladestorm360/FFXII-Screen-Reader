@@ -7,6 +7,64 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### SOLVED (S157) — the audio beacon pinged through cutscenes, dialogue and the battle command menu
+
+KEYWORDS: beacon audio playing during cutscene dialogue battle menu open party menu quiet F9 F11
+toggle IsFieldNavSafe liveness player control BattleCommandActive IsBoxLive suspend not stop
+
+**Reported:** the beacon plays during cutscenes and with the battle menu open; it does NOT play with
+the party menu open; and `F9` "appears disabled".
+
+**`F9` is correct behaviour, not a defect.** The game owns F9 ("Hide On-Screen Keyboard", S112). The
+beacon toggle is **F11**, bare press only (Shift+F11 is an NVDA command). See L-51.
+
+**Root cause of the leak:** every gate in `AudioBeacon::OnGameFrame` asks whether the FIELD EXISTS —
+audio available, setting on, a route loaded, epoch match, `IsFieldNavSafe()`, combat engagement.
+**None of them asks whether the player is in control.** `IsFieldNavSafe()` is six LIVENESS predicates
+(field sim live, module started, actor pool, leader pointer, world, leader object) and every one of
+them stays true through a conversation and through a cutscene. **The gate never existed — this is NOT
+the S152 stray-timer change.**
+
+**Why the party menu was quiet:** by accident. Opening it stops the field tick that calls
+`OnGameFrame` at all. The selective-looking symptom was a side effect, not a gate.
+
+**Why the battle menu leaked, and the piece that was wrong:** **FFXII lets the battle command menu be
+opened OUT OF COMBAT** on any map where battles can happen. `PartyEngagement()` therefore reads clear
+and the objective beacon runs underneath it. "Are we in combat" was never the right question.
+
+**Fix:** a suspension block ahead of the combat branch, covering BOTH beacons, on two game-owned
+predicates — `IngameMenuReader::BattleCommandActive()` and `DialogueReader::IsBoxLive()`.
+**SUSPEND, NEVER STOP:** `Stop()` discards the legs; a player closing a menu expects the same leg
+back, as after a fight.
+
+**Do NOT use `MenuState::IsAnyMenuOpen()` for this** — 1 write, 0 clears, answers "open" forever; a
+gate built on it once killed the field object scan for a whole fight.
+
+**Residual:** a cutscene with no message box is still uncovered. Most FFXII scenes caption through the
+paginated box, so `IsBoxLive()` should carry them; a silent camera scene has no measured signal yet.
+
+### WITHDRAWN SAME SESSION (S157) — the strike on "`mrm_c01` is the Stilshrine's boss/event room"
+
+KEYWORDS: mrm_c01 boss room Stilshrine Miriam Mariam third guardian statue routine name pool
+BOSS_ EventDirector ReposDirector PlayerJack room identification map id unknown false dichotomy
+over-correction
+
+**The claim:** S154's census read `BOSS_…`, `EventDirector`, `ReposDirector` and `PlayerJack*` out of
+`mrm_c01`'s routine-name pool and recorded the room as *"the boss/event room"*.
+
+**The strike, and why it was wrong:** I struck it on the argument *"the boss room is what this puzzle
+UNLOCKS, so no guardian stands in it"*. **The player then played it: it is the boss room AND the room
+where the last statue is turned.** The unlock argument is about PROGRESSION and never excluded the
+two being one room — an "A, therefore not B" where A and B were never disjoint. Do not re-strike it.
+
+**What was never measured, in either direction:** `mrm_c01`'s MAP ID and its two save-block cells.
+Those are the only things the mod needs, and both come from standing in the room.
+
+**Recorded because the correction cost more than the original claim:** it propagated through three
+documents and a brand-new lesson entry before one line of play settled it. General form:
+`Docs/Lessons.md` L-64 — a correction is a conclusion and carries the same bar as the thing it
+corrects.
+
 ### OPEN (S152) — dialogue misread + "aaaaaaaaa" runaway, AT RAISED GAME SPEED ONLY, ONE TESTER
 
 KEYWORDS: aaaaaaaa runaway loop dialogue reading incorrectly repeating game speed 2x 4x speed mode
@@ -756,7 +814,7 @@ no clamp row+0xfc bit 3 menuCtx+0xb10 charId not story order**
 
 **It is correct.** `FUN_00284c90` XORs bit 3 **unconditionally** — no member count appears anywhere in
 it. The size rule is enforced on menu EXIT, where the game shows *"The party cannot contain more than
-three characters."* and bounces the player back to the field menu. The tester confirms this is the
+three characters."* and bounces the player back to the party menu. The tester confirms this is the
 game's behaviour, and the live log shows that message already going out through the ordinary message
 reader, so it needs no announce of its own. Bit 3 is a **staged selection**, and "In party" is the right
 word for it.
@@ -2140,7 +2198,7 @@ in-game polarity confirmation).
 
 **KEYWORDS: in-game menu reading field FUN_002a6190 battle FUN_0055cd40 0x8000 not-index cell-pointer** SOLUTION:
 The "universal" 0x8000 focus reader was silent in-game because `FUN_00247510`/0x8000 is a shared
-transport, not a shared contract. FIELD menu = window class `FUN_002a6190` (0x186190; ALL submenus);
+transport, not a shared contract. PARTY menu = window class `FUN_002a6190` (0x186190; ALL submenus);
 row text = `0x03`-separated codec buffer at `window+0xF8`, focused row DATA index at `window+0x124`
 (set by the game handler → read AFTER `s_origDispatch`). BATTLE command menu = window class
 `FUN_0055cd40` (0x43CD40; ALL submenus); 0x8000 `val` is a POINTER to the focused 0x38-byte cell, name
@@ -5595,18 +5653,20 @@ That scoping is structural rather than a flag: the battle menu is already a sepa
 codebase, releasing on its row DRAW (`FUN_00276be0`) with no pane-replay path
 (`ingame_menu_reader.cpp:49`, `:160`).
 
-**VOCABULARY.** The game's own Controls screen says **"Battle Menu"** and **"Party Menu"**
-(`Docs/Controls.md:100-110`, captured verbatim). It does not say "command menu". Internally this
-project calls the `R` menu the *field menu* and reserves *party menu* for that menu's first command.
-User-facing wording uses the GAME's words.
+**VOCABULARY (revised Session 158).** The game's own Controls screen says **"Battle Menu"** and
+**"Party Menu"** (`Docs/Controls.md:100-110`, captured verbatim). It does not say "command menu".
+This project now uses the game's words throughout: the `R` menu is the **party menu**, and its first
+command — the membership screen — is the **Party screen**, never "party menu". The Session 93
+convention that called the `R` menu the *field menu* is retired; the collision it was written to
+prevent never actually caused one.
 
 ### 3. ~~Item quantity is BROKEN IN BOTH menus~~ — SOLVED, and "BOTH" was WRONG (Session 146)
 
-~~**Tester report: the count is not announced in EITHER the field/Party menu or the Battle menu.**~~
+~~**Tester report: the count is not announced in EITHER the party menu or the Battle menu.**~~
 **STRUCK 2026-08-05.** The field side was **never broken**. The tester re-tested on the current
 build and the log says it plainly:
 
-    [INV]    item: "Potion 32"   "Antidote 5"          <- FIELD menu, count SPOKEN
+    [INV]    item: "Potion 32"   "Antidote 5"          <- PARTY menu, count SPOKEN
     [INGAME] command: 0x52 "Potion"   0x5B "Antidote"  <- BATTLE menu, count MISSING
 
 The 2026-08-03 tester log had already said the same thing — `"Wind Stone 6"`, `"Bone Fragment 7"`,
@@ -6242,3 +6302,171 @@ automatically on each highlight". `FUN_003fe720` has exactly two call sites — 
 (the 4-row action list) and `FUN_002c2cd0:20` via `FUN_003ff360:91` (the 5-slot list) — and
 **neither is the candidate-item list** (`FUN_003fdfe0`, `menuCtx+0x150`). The preview announces per
 SLOT, and is silent while the player cursors the actual candidates.
+
+## Gate crystals deleted by the presence pruner — SOLVED (Session 153, 2026-08-12)
+
+**KEYWORDS: gate crystal dropped Rabanastre Crystal Weather Eye absent pruner READY_PRESENT_BIT
+READY_POPULATION_BIT sceneObj+0x14 0x30 0xB0 LooksAbsent OldRuleWouldDrop spared isCharacter
+insufficient scene category 5-7 S148 S150 third time Gate=0**
+
+**Report:** *"gate crystals are being dropped."* Correct, and understated.
+
+**The log already had it** — `absent: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal" at
+(115.0,-10.0,151.0)` next to `rescan: … Gate=0 …` on a map that has one.
+
+**Byte-shape histogram of every `absent:` drop in the reporting session:**
+
+| `+0x14` | drops | what |
+|---|---|---|
+| `0xB0` | 44 | `kind=1` "Hyena" — correct, the corpses the filter is for |
+| `0x30` | 153 | "Rabanastre Crystal" `kind=4`; `kind=5` "Weather Eye", "Chocobo Aficionado", "Horne", "Rabanastran", one nameless — **all wrong** |
+
+**Root cause.** S148 measured bit `0x40` on combatants; S150 caught it deleting a Save Crystal and
+scoped it to `isCharacter` on the reasoning that *"a crystal, a gate, a door and a treasure are
+not [characters]"*. **That is false — a gate crystal is scene category 5-7**, so the gate never
+excluded it. `0x40` alone separates nothing: clear on `0xB0` (drop) and on `0x30` (keep).
+
+**Fix.** `EntityScan::LooksAbsent` tests the byte *shape* the ABSENT state was measured in — `0x80`
+set and `0x40` clear, i.e. `0xB0`'s high nibble — instead of reading `0x40` alone. `0xF0`→keep,
+`0xB0`→drop, `0x70`→keep, `0x30`→keep. One predicate, both walks. `nav_rva.h` had already recorded
+*"bit 0x80 is what actually separates the two populations"* in S150; nothing acted on it until now.
+
+**Instrument shipped with it (L-39).** `OldRuleWouldDrop` emits a capped `spared:` line naming every
+object the old rule deleted and this one keeps, plus a `spared` count on the drop-census line. No
+`spared:` line in a session that visits a gate crystal ⇒ S153 fixed something else.
+
+**Play-confirm gate:** at the Rabanastre gate crystal — `Gate=1`, reachable with `=`/`\`, a
+`spared:` line naming it, and `ABSENT` still rising when a Hyena dies.
+
+**Tried & Failed, recorded so it is not retried:** *scoping the pruner by what kind of object it is*
+(S150's `isCharacter`). It is not a measurement of the population, and the population disagreed.
+Scope by the measured data instead.
+
+## `o` spoke Libra instead of ability descriptions in battle — SOLVED (Session 156, 2026-08-12)
+
+**KEYWORDS: Libra not active describe key battle menu magick technick description SpeakTargetDetail
+TextCapture CurrentHelpText BattleCommandActive P+0x10F78 OFF_GATE committed acting ordering**
+
+**Report (twice):** *"o when highlighting a magick or technick should read its description, not say
+'libra not active'."*
+
+**Two compounding faults, and the first hid the second.**
+
+1. **`P+0x10F78` is NOT "target selection active".** That name was inferred and is **STRUCK**. It is
+   true while the battle command menu is open, so the S155 gate on it changed nothing. The reporting
+   log shows `ResolveTarget: "Zombie Warrior D" committed/acting enemy` — a spell already executing
+   — being treated as an aiming cursor.
+2. **THE ORDER WAS THE REAL DEFECT.** `SpeakTargetDetail()` ran first and returned true, so
+   `TextCapture::CurrentHelpText()` was **never called**. The log has four "Libra not active" lines
+   and **zero** `describe:` lines, which looks like "there is no description available" and is
+   nothing of the kind — *the question was never asked.* Any fix that only gates the Libra branch
+   leaves the outcome resting on that gate being correct.
+
+**Fix — ask the description FIRST.** `MenuReader::DescribeHotkey` now runs: help text (which is
+generation-gated to the current focus, `g_helpTextGen == g_helpGen`, so it cannot leak a stale
+description into the target cursor) → refuse Libra while `IngameMenuReader::BattleCommandActive()` →
+Libra → a log line naming which came back empty. A silent `o` is never ambiguous again.
+
+`BattleCommandActive()` stores the battle panel and **re-validates it against the window class on
+every read**, so a freed or repurposed panel stops answering true on its own.
+
+**`ResolveTarget` was deliberately NOT changed** — its commit-first order is load-bearing for `p` and
+`;` (2026-07-21 regression note). The residual (while aiming it can name a stale commitment rather
+than the unit under the cursor) now emits a log line ONLY when the two disagree.
+
+**Tried & Failed:** gating the Libra branch on `P+0x10F78` (S155). The flag does not mean what its
+name said, and gating alone would not have fixed the ordering fault underneath it.
+
+## A gambit row with a condition and no action read as "empty" — SOLVED (Session 158, 2026-08-13)
+
+**KEYWORDS: gambit half-set row condition no action empty rec+0x15 class byte incomplete rec+0x10
+rec+0x12 0xFFFF FUN_00567b60 FUN_0056a1d0 picker stale category paint cache FUN_0056b4d0
+gambit_picker_reader ability summary double speak**
+
+Reported: *"an empty gambit row is correctly being announced as empty; however, when a condition is
+selected, that row remains empty, even when browsing the individual columns."* Both halves of the
+report were in our own logs, and the second one — the action picker — turned out to be the worse
+defect of the two.
+
+### 1. The class byte meant INCOMPLETE, and the reader read it as EMPTY
+
+`gambit_reader.cpp` decided a row was empty on `rec+0x15 == 2` **before decoding anything**. The
+builder `FUN_00567b60` writes the condition id and the real condition name into the record first and
+only then sets that byte to 2 when EITHER id is `0xFFFF` — so a row with a condition and no action is
+class 2 as well, and its condition is on screen the whole time (`FUN_00568bb0` assigns `rec+0x00`
+into the condition sprite for every row; class 2 only dims the colour). Full write-up, with the
+commit and write-back functions, in `GameArchitecture.md`.
+
+Fixed by testing the two ids separately (`rec+0x10`, `rec+0x12`), so an unset half contributes the
+word "empty" and the row reads `"Foe: party leader's target, empty, off"` with every column
+answering for its own field. `cls=` now rides on the reader's log line: the byte is evidence, not a
+gate.
+
+**A CORROBORATED CLAIM CAN STILL BE SCOPED WRONG.** S94's own probe output already showed the class
+byte taking 0, 1 **and** 2 on a single screen, and its pass criterion — "ids read `0xFFFF` on exactly
+the rows whose class byte is 2" — was recorded as confirmed. It was true of every row that run saw,
+because that run never edited a row. The measurement was sound; the population was three quarters of
+one.
+
+### 2. The picker was being read from the paint cache, which is always one event behind
+
+The condition/action chooser had no reader (S94 declined it as unmeasured), so it fell to the generic
+painted-row path — and that resolves a row's text out of `TextCapture`'s per-paint cache. The focus
+for a category switch arrives BEFORE the new rows are drawn, so the player heard:
+
+    [READER] item: "Attack"     <- landed on Technicks
+    [READER] item: "Horology"   <- then moved down INSIDE Technicks
+    [READER] item: "Traveler"
+
+and, on opening the action list over the condition list, `"Foe: party leader's target"` where
+`"Attack"` was highlighted. A blind player was choosing gambit actions from a list that reported the
+wrong row.
+
+`ui/gambit_picker_reader.{h,cpp}` reads the picker's own row array instead. Both rebuilds
+(`FUN_0056a890` / `FUN_0056bc70`) fill that array before they move the list cursor, so the timing
+question disappears rather than being tuned. It claims the focus only when it actually spoke, so an
+unrecognised shape still falls through to the path that covered the surface before.
+
+**Tried & Failed — not attempted, and here is why.** Deferring the announcement to the next paint
+(the `PrimerReader` idiom in `menu_reader.cpp`) would have worked only as long as the row happens to
+repaint inside the retry budget, and it would have left the mod reading a cache when the game's own
+array was sitting right there. Reading the source removes the failure mode; deferring only narrows
+its window.
+
+### 3. The same screen was speaking twice
+
+`[LICENSE] summary: "Cure, unavailable"` twice in the same millisecond, from one owner, mid-edit: the
+license board's ability page controller is driven by this picker too, and driven twice per event.
+`AnnounceEntry` now stands down while `GambitPickerReader::IsLive()` — arbitration between two paths
+that cover different cases, which is the sanctioned shape; the alternative (deleting a path, or
+adding a same-as-last-time filter) is the mistake this project has already paid for twice.
+
+### The category NAME — ASKED, ANSWERED, CLOSED (same day, play-confirmed)
+
+There isn't one. A diagnostic build walked all eleven action tabs live and refuted every candidate:
+`DefName(0x15, family)` gives only the four battle commands (all five magick tabs share family 1);
+`DefName(0x15, tabIndex)` gives nonsense ("NOT USED concentration", "Summon", "Foecraft");
+`DefName(0x18, family)` is the magick-SCHOOL table but the family byte is not a school id; and
+`picker+0x580`, which the tab-step functions clear, is the 180-frame *"you cannot pick this"* error
+banner. The tabs are a gambit-specific grouping (1 Attack, 5 Magicks, 3 Items, 2 Technicks) drawn as
+icons, with no string table behind them.
+
+**So any category label would have been invented. Tester's call: announce nothing** — the corrected
+first row of the tab just entered already distinguishes all eleven. The diagnostic and its four
+`DefName` calls per switch were removed with the question they answered, and the finding is written
+into `GameArchitecture.md` and the reader's own header so it is not re-derived.
+
+**Two corrections fell out of the same walk.** Row `+0x10`'s not-acquired value is **`0x10`**, not
+the `0x0F` the decompile suggested. And `ingame_menu_reader.cpp`'s chooser constants had their names
+reversed: **`0x18` is the magick-school table, `0x15` is the battle-command table.** The values and
+the branch were always right — each is passed with an id from the chooser's own rows — so nothing
+behaved wrongly; the comment simply named the wrong table, which is exactly the kind of claim that
+gets built on later.
+
+### PLAY-CONFIRMED 2026-08-13
+
+Tester: *"gambit fix for the empty action on a condition is confirmed working."* The picker half is
+confirmed from the log of the same session: eleven category switches, each speaking the new tab's own
+first row (`Attack` → `Cure, unavailable` → `Protectga` → `Aero, unavailable` → … → `Traveler`), zero
+stale items, zero duplicate `[LICENSE] summary` lines, and the picker class constant right first
+time.

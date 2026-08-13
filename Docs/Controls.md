@@ -102,12 +102,15 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | Game Speed (1×/2×/4×) | 1 | 2 | 3 |
 | Escape | Left Ctrl | — | — |
 
-> **VOCABULARY (Session 93).** The row above is the GAME's own label, captured verbatim from its
-> Controls screen, and it stays that way — the mod reads that screen back to you, so rewriting it here
-> would put a word on your screen that the game never says. Internally the project calls the outer `R`
-> menu the **field menu**, because its own first command is now a distinct **Party** screen for
-> managing who is in the active party. So: the game's "Party Menu" (`R`) is our "field menu"; our
-> "party menu" means that first command.
+> **VOCABULARY (Session 93, reversed Session 158).** The row above is the GAME's own label, captured
+> verbatim from its Controls screen, and it stays that way — the mod reads that screen back to you, so
+> rewriting it here would put a word on your screen that the game never says. **The project uses the
+> game's word too: the `R` menu is the party menu.** Its first command, the screen for managing who is
+> in the active party, is the **Party screen** — never "party menu", which is the whole reason that
+> name is free to mean what the game means by it.
+>
+> Session 93 had called the `R` menu the *field menu* to keep the two apart. In practice the two words
+> never got confused, and one of them was not the game's.
 
 > **CORRECTION (Session 44):** an earlier capture of this menu row mislabeled `1`/`2`/`3`
 > as "Game Speed / Target Group / Lock On". **Runtime disproved that — `1`, `2`, and `3`
@@ -155,6 +158,12 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > reading a different profile and it has not been measured which. Do not act on either until it is.
 
 ## Mod-reserved keys (all STANDALONE — no Shift)
+
+> **EVERY F-KEY IS BARE-PRESS ONLY (Session 155).** `F4`, `F5`, `F6`, `F7`, `F8` and `F11` do
+> nothing at all while Shift, Ctrl, Alt or a Windows key is held. A chord belongs to whatever owns
+> the chord — **Alt+F4 is the OS closing the game**, and until this session the mod read it as a bare
+> `F4` and flipped Combat verbosity on the way out. The mod cannot swallow a key, so an unguarded
+> F-key fires *in addition* to whatever the chord already does.
 | Key | Mod function | Conflict status |
 |---|---|---|
 | `o` | Describe / read focused tooltip — **and, with an enemy under the battle target cursor, the LIBRA readout** (HP as numbers, Level, MP where the unit has a gauge, statuses, and elemental weaknesses). Says **"Libra not active."** when an enemy is targeted and Libra is down; falls through to the tooltip everywhere else, so no existing meaning was taken away. The weakness clause is omitted for the marks and bosses the game itself refuses Libra on — the mod does not out-reveal the screen (S147) | free |
@@ -165,7 +174,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
 | `F7` | **Autodetail — Off ⇄ On (Session 147).** Speaks the new setting. Same value the `F8` menu holds. Changes only what is VOLUNTEERED: the shop equipment comparison on each highlight, and the Libra readout on each target change. `4`-`9` and `o` answer identically in both modes | free — reserved from S90, spent in S147 |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
-| `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY (S112):** with Shift, Ctrl or Alt held it does nothing, because **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys. **Moved off `F9`, which belongs to the game** | free |
+| `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY** — see the rule below, which now covers every F-key. **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys, which is where that rule started (S112). **Moved off `F9`, which belongs to the game** | free |
 | `F9` | **NOT A MOD KEY — the GAME uses it** for *Hide On-Screen Keyboard* (S112). Left alone deliberately | game-owned |
 | `F10` | ~~**Sneak assist — On ⇄ Off (Sessions 107/109).**~~ **STRUCK, Session 115: the mod no longer binds `F10`.** Sneak assist is now **automatic** on the maps `path_danger.cpp` lists (the Royal Palace Cellars and Lower Halls) and has no setting, no menu row and no key — see the Sneak assist note below. Before re-binding this key for anything, check the game's **on-screen-keyboard overlay**, not its Controls screen (S112) | unbound by the mod |
 | `p` | Nav: turn-by-turn route to the current battle target (see note) | free |
@@ -214,13 +223,21 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `.` | Combat log: forward one entry, newer | free |
 | `Home` | Combat log: jump to oldest entry — **except on the Status screen**, see below | free |
 | `End` | Combat log: jump to newest entry — **except on the Status screen**, see below | free |
-| `B` | Bhujerba shout minigame: the infamy meter as a percentage | unproven — collision watch |
+| `B` | Bhujerba shout minigame: the infamy meter as a percentage — **and**, in the Stilshrine of Miriam, all three statue guardians' state | unproven — collision watch |
 | `N` | Bhujerba shout minigame: the crowd around you, and the nearest guard's bearing and distance | unproven — collision watch |
 
 > **Both keys answer only while the shouting sequence is actually RUNNING**, not merely while the
 > player is on a Bhujerba street. The gate is the game's own gauge-shown bit (`gauge+0xD8` bit 2,
 > written by the script's `setgaugeshowstatus`), so it opens and closes with the sequence itself.
 > Off it, and with the **Puzzle guide** setting off, both keys are silent no-ops with one log line.
+
+> **`B` is CONTEXT-GATED, not double-bound.** Its second meaning is the Stilshrine of Miriam statue
+> readout, gated on a live `mrm_` map script — and the two contexts can never both be live, because
+> one is the Bhujerba streets and the other is a dungeon. The dispatcher raises BOTH requests and
+> each drains on the next field frame against its own gate, so the decision stays on the game thread
+> where reading script modules is safe. Neither half has a **Puzzle guide** row of its own in the
+> Stilshrine: that setting is context-gated to the shout sequence, so the statue readout is not
+> subject to it.
 >
 > Two mod-menu rows are **context-gated to that same predicate** and appear only during the
 > sequence: **Puzzle guide** (default ON — the spoken meter and these two keys) and **Instant
@@ -235,7 +252,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `Up` / `Down` | **Status Attributes page** and **an open Clan Primer entry:** previous / next entry in the virtual buffer | free on those pages |
 | `Left` / `Right` | **Status Attributes page only:** previous / next group (Character / Attributes / Status effects) | free on that page |
 
-> **Party screen — who is in the party (Session 93).** The field menu's first command, **Party**, is a
+> **Party screen — who is in the party (Session 93).** The party menu's first command, **Party**, is a
 > membership toggle rather than a stat screen. Moving between the portraits speaks the character and
 > their membership — "Vaan: In party", "Balthier: Not in party" — and pressing Confirm (or Left / Right)
 > speaks just the new state, because the toggle does not move the cursor. The game refuses some presses

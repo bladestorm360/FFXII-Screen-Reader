@@ -7,6 +7,7 @@
 #include "ui/license_reader.h"
 #include "ui/choice_reader.h"
 #include "ui/gambit_reader.h"
+#include "ui/gambit_picker_reader.h"
 #include "ui/ability_summary_reader.h"
 #include "ui/shop_reader.h"
 #include "ui/equip_compare.h"
@@ -165,21 +166,59 @@ using MenuState::IsTitleMenu;
 // current item has none (silence beats a wrong or invented string). Runs on the
 // input thread.
 void DescribeHotkey() {
-    // FIRST REFUSAL: in battle, with an enemy under the target cursor, `o` is the Libra readout.
-    // It is structurally silent everywhere else (no committed/browsed enemy target => false), so
-    // this cannot shadow the description bar outside combat. Same shape `;` uses with
-    // InteractTarget::SpeakCurrent, and for the same reason: one key, two surfaces, one owner each.
-    if (BattleTargetReader::SpeakTargetDetail()) return;
+    // ---- THE DESCRIPTION IS THIS KEY'S PRIMARY MEANING. LIBRA IS THE FALLBACK. ------------------
+    //
+    // Reported twice, and the second report is what settled the ORDER (2026-08-12):
+    //   *"o when highlighting a magick or technick should read its description, not say 'libra not
+    //    active'."*
+    //
+    // The original arrangement ran `SpeakTargetDetail()` FIRST and only fell through to the help
+    // text when it declined. Two things follow from that, and the first hid the second:
+    //   1. A committed target outlives the aiming UI, so in the battle menu it did not decline --
+    //      it spoke Libra on every press and the description was unreachable.
+    //   2. Because it never declined, `CurrentHelpText()` was NEVER CALLED in battle. The reporting
+    //      log has four "Libra not active" lines and **zero** `describe:` lines, which looks like
+    //      "there is no description" and is nothing of the kind: the question was never asked.
+    // Adding a gate to the Libra branch fixes (1) and leaves (2) resting on that gate being right.
+    // Asking the description first removes the dependency entirely.
+    //
+    // This is safe to put first because the help text is GENERATION-GATED to the current focus
+    // (`text_capture.cpp`: `g_helpTextGen == g_helpGen`), so it goes empty the moment focus moves or
+    // the surface tears down. It cannot leak a stale description into the target cursor, which is
+    // the one place Libra has to win.
     std::wstring desc = TextCapture::CurrentHelpText();
-    if (desc.empty()) return;
-    Log::WriteW("READER", "  describe: ", desc);
-    Speech::Output(desc, /*interrupt=*/true);
+    if (!desc.empty()) {
+        Log::WriteW("READER", "  describe: ", desc);
+        Speech::Output(desc, /*interrupt=*/true);
+        return;
+    }
+
+    // ---- SECOND: Libra, and never while the battle command menu is the live surface -------------
+    //
+    // Belt and braces with `SpeakTargetDetail`'s own target-cursor gate. That gate reads a HUD flag
+    // whose meaning is inferred; this one reads the mod's own knowledge of which surface the player
+    // is on, re-validated against the window class. If the flag turns out to mean something other
+    // than "the target cursor is up", the battle menu is still protected.
+    if (IngameMenuReader::BattleCommandActive()) {
+        Log::Write("READER", "o: battle command menu is live -- Libra declined, description only");
+        return;
+    }
+    if (BattleTargetReader::SpeakTargetDetail()) return;
+
+    // NOTHING TO SAY -- stay silent, and say WHY in the log. Silence beats wrong speech, but a
+    // silent key with no diagnostic is indistinguishable from a broken one, and that ambiguity is
+    // what cost this defect two rounds.
+    Log::Write("READER", "o: no description for this focus and no enemy under the target cursor");
 }
 
 void OnFocus(void* owner, int index, bool fromPaint) {
     STALL_SCOPE("MenuReader::OnFocus");
     if (index < 0) return;
     if (IsTitleMenu(owner)) return;               // TitleReader handles the title command menu
+
+    // Leaving the battle command menu disarms `o`'s description-only rule. The flag re-validates
+    // itself against the window class anyway; this is the cheap explicit half.
+    if (!IngameMenuReader::IsBattleCommandOwner(owner)) IngameMenuReader::ClearBattleCommandActive();
 
     // 1-frame settle: defer config-row speech to the next paint so a scrolled-in row
     // has settled text + value (fixes the occasional missed/stale read on fast scroll).
@@ -345,7 +384,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
         // the painter, which is the entire reason for the replay above -- and TextCapture's dump
         // holds TextCapture::g_mutex across 257 Log::Write calls. That is the same mutex the menu's
         // first paint needs on EVERY row (CellWrapper) and EVERY string (Capture), so the dump
-        // serialized the menu's own paint behind our logging and the field menu took ~0.5s to open
+        // serialized the menu's own paint behind our logging and the party menu took ~0.5s to open
         // while the battle menu -- which never reaches OnFocus -- stayed instant.
         //
         // Gating it to once-per-surface did not help: initial open is exactly when ownerChanged is
@@ -445,7 +484,25 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 
         // Gambit setup screen (FUN_005691e0). `val` is the display-record index, not a row offset in
         // any ROW_CHAIN class, so the generic content path below has nothing for it.
-        if (GambitReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val))))
+        if (GambitReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val)))) {
+            // The panel holds the cursor, so any picker it opened has closed. This is the ONLY
+            // place that can know it: the picker sends no teardown message of its own.
+            GambitPickerReader::NotePanelFocus();
+            return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
+        }
+
+        // The gambit PICKER (FUN_0056b4d0) -- the condition/action chooser that screen opens. Read
+        // from the picker's own row array rather than the paint cache, because the focus for a
+        // category switch arrives before the new rows are drawn and the cache still holds the
+        // previous category's (S158; the S89 stale-paint hazard on an unguarded surface).
+        //
+        // ABOVE the pane gate deliberately: the picker's first focus arrives while the PANEL still
+        // holds the cursor -- "focus msg on a NON-cursor pane" in both logs -- so the gate would
+        // drop the one announcement that matters most, the list's first row on open.
+        //
+        // Claims the focus only when it actually spoke, so an unrecognised shape still falls through
+        // to the generic painted-row path that covers this surface today.
+        if (GambitPickerReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val))))
             return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
 
         const int index = static_cast<int>(static_cast<intptr_t>(val));
@@ -460,7 +517,7 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         // FUN_00244830 (e.g. focus returning after a pop-up closed) replayed a focus the dispatch
         // path had ALREADY spoken: the row was announced twice, which meant two blocking
         // Tolk_Output(interrupt) calls on the game thread in one frame and a visible hitch on
-        // opening the field menu. The battle command menu never had it because FUN_00244830 does
+        // opening the party menu. The battle command menu never had it because FUN_00244830 does
         // not replay that path -- which is why it always felt instant by comparison.
         void* focusWin = MenuState::FocusedOwner();
         const bool willBeGated = (owner != focusWin);
@@ -527,7 +584,7 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 
         if (IngameMenuReader::IsBattleCommandOwner(owner)) {
             // Battle command menu (Attack / Magicks & Technicks / Items / ...). A SEPARATE system —
-            // NOT gated by the field-menu IsFocusedPane pane isolation. `index` = highlighted command.
+            // NOT gated by the party-menu IsFocusedPane pane isolation. `index` = highlighted command.
             IngameMenuReader::OnBattleCommandFocus(owner, index);
         } else if (hostedCursor) {
             // A cursor move inside the off-hand candidate list, addressed to its host. Speak it
@@ -582,7 +639,7 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     // report a window that actually burned real time; the gap anchors dump unconditionally anyway.
     StallProbe::DumpAndReset("menu entry", /*minTotalMs=*/25.0);
     // Start the announce -> first-paint bracket. This hook is where we speak the entered pane, and
-    // it is the exact instant the field-menu freeze begins.
+    // it is the exact instant the party-menu freeze begins.
     StallProbe::MarkMenuEntry("pane-entry");
     StallProbe::MarkMenuEntryDoneGuard _mmDone;
     STALL_SCOPE("MenuReader::HookedFocusSet");
@@ -602,7 +659,7 @@ void HookedFocusSet(void* oldWin, void* newWin, int flag) {
     // DAT_0208ebc0), so if this does not speak it, nothing does.
     //
     // WHEN to speak splits by pane, exactly mirroring the battle command menu. FUN_00244830 fires at
-    // the START of menu construction, so for the field menu (FUN_00280de0) speaking here lands
+    // the START of menu construction, so for the party menu (FUN_00280de0) speaking here lands
     // "Status" in the player's ear before the menu is visible -- the reported "speaks then lags". For
     // that ONE class we stash the focus and let the menu's own SHOW message (cat 0x13, in
     // IngameMenuReader) release it, so speech coincides with the menu appearing -- just as the battle
@@ -771,7 +828,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_GFX_WRITE,   &HookedGfxWrite,   &s_origGfxWrite);
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
-    ok     &= CharSelectReader::Init();   // field-menu character chooser: Party membership + Status vitals
+    ok     &= CharSelectReader::Init();   // party-menu character chooser: Party membership + Status vitals
     ok     &= ChoiceReader::Init();       // mid-dialogue choice widget (polls input, sends no message)
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP

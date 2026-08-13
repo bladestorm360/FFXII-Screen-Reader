@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-// Reader for the License Board / Job system (field menu -> "Licenses"). Three surfaces:
+// Reader for the License Board / Job system (party menu -> "Licenses"). Three surfaces:
 //
 //   * Character-select (FUN_00560910, menuCtx+0x158) -- a DEDICATED window-proc hook (this
 //     surface does NOT route focus through the shared FUN_00247510 dispatch). Announces the

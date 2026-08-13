@@ -73,6 +73,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/menu_reader.cpp
     src/ui/choice_reader.cpp
     src/ui/gambit_reader.cpp
+    src/ui/gambit_picker_reader.cpp
     src/ui/ingame_menu_reader.cpp
     src/ui/char_select_reader.cpp
     src/ui/license_reader.cpp
@@ -148,6 +149,9 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/shout_script.cpp
     src/navigation/shout_fill.cpp
     src/navigation/shout_meter.cpp
+    src/navigation/statue_diag.cpp
+    src/navigation/statue_table.cpp
+    src/navigation/statue_guide.cpp
     src/navigation/path_planner.cpp
     src/navigation/audio_beacon.cpp
     src/navigation/auto_walk.cpp

@@ -86,7 +86,7 @@ enum class Id {
     // This is the ONLY spoken exception in the file; the per-highlight autodetail path never says it.
     LibraNotActive,
 
-    // -- Field menu, Party screen: membership is a portrait POSITION plus an alpha dim, with no text
+    // -- Party menu, Party screen: membership is a portrait POSITION plus an alpha dim, with no text
     // anywhere in the binary to read. USER-AUTHORIZED this conversation (Session 93), for exactly these
     // two words and no others. (char_select_reader.cpp)
     InParty, NotInParty,
@@ -190,6 +190,20 @@ enum class Id {
     // actions, so the word names the gauge and claims nothing about what it counts. `PARTY` logs the
     // raw floats on every press; once a summon has been watched to its end this can be sharpened.
     SummonGauge,
+
+    // -- Stilshrine of Miriam statue puzzle (statue_guide.cpp, key B). USER-AUTHORIZED 2026-08-12
+    // for this feature, English only. Every word here names something FFXII renders as nothing at
+    // all: the three guardians have no on-screen state and no text anywhere says which way one
+    // points or whether it is right -- the rotation dialogue offers "clockwise" / "counterclockwise"
+    // and then says nothing about the result, which is what makes the puzzle unplayable blind.
+    //
+    // `Clockwise` / `Counterclockwise` deliberately match the game's own two dialogue choices, so
+    // the readout and the menu the player is about to use share one vocabulary.
+    // `StatueSolved` / `StatueNotSolved` report the GAME's own per-statue verdict flag, never an
+    // inference of ours; `StateUnknown` is spoken for a statue whose cells have not been measured,
+    // because silently listing two of three would read as a two-statue puzzle.
+    Statue, StatueSolved, StatueNotSolved, StateUnknown,
+    Clockwise, Counterclockwise, Once, Twice,
 
     Count
 };

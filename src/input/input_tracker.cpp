@@ -148,6 +148,8 @@ constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F7 = 0x41, DIK_F8
 // Ctrl/Alt scan codes for the BARE-KEY guard below. (DIK_LSHIFT / DIK_RSHIFT are already declared
 // with the movement keys above.)
 constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0xB8;
+// Windows keys, for the same guard: Win+F-key is a shell chord and belongs to the shell.
+constexpr int DIK_LWIN = 0xDB, DIK_RWIN = 0xDC;
 // DIK_SPACE / DIK_RETURN are gone with the Confirm observation. The mod has no reason to watch the
 // game's own Confirm: the only consumer was dialogue pagination, and a keyboard scan code cannot
 // answer "did the box advance" for a player on a pad.
@@ -433,23 +435,31 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_4,      g_navDown[1],  (dik[DIK_LBRACKET]   & 0x80) != 0, true);  // [  prev object
     DInputEdge(VK_OEM_6,      g_navDown[2],  (dik[DIK_RBRACKET]   & 0x80) != 0, true);  // ]  next object
     DInputEdge(VK_OEM_3,      g_navDown[3],  (dik[DIK_GRAVE]      & 0x80) != 0, true);  // `  rescan
-    DInputEdge(VK_F4,         g_extraDown[14],(dik[DIK_F4]         & 0x80) != 0, true);  // F4 combat verbosity
-    DInputEdge(VK_F5,         g_extraDown[15],(dik[DIK_F5]         & 0x80) != 0, true);  // F5 all/story-gated
-    DInputEdge(VK_F6,         g_extraDown[20],(dik[DIK_F6]         & 0x80) != 0, true);  // F6 label from clipboard
-    DInputEdge(VK_F7,         g_extraDown[27],(dik[DIK_F7]         & 0x80) != 0, true);  // F7 autodetail
-    DInputEdge(VK_F8,         g_extraDown[21],(dik[DIK_F8]         & 0x80) != 0, true);  // F8 mod menu
-    // F11 audio beacon -- BARE PRESS ONLY (Session 112, tester instruction). **Shift+F11 is an NVDA
-    // command the tester needs while playing**, and the mod cannot swallow keys, so an unguarded F11
-    // would flip the beacon underneath every use of it. Ctrl and Alt are excluded on the same
-    // principle: a chord belongs to whatever owns the chord, never to us. The guard is deliberately
-    // LOCAL to this one key -- every other hotkey keeps the behaviour it was tested with.
-    {
-        const bool modifierHeld =
-            ((dik[DIK_LSHIFT] | dik[DIK_RSHIFT] | dik[DIK_LCTRL] |
-              dik[DIK_RCTRL]  | dik[DIK_LALT]   | dik[DIK_RALT]) & 0x80) != 0;
-        DInputEdge(VK_F11,    g_extraDown[22],
-                   !modifierHeld && (dik[DIK_F11] & 0x80) != 0, true);  // F11 audio beacon on/off
-    }
+    // ---- EVERY F-KEY IS BARE-PRESS ONLY (Session 155, user instruction) -------------------------
+    //
+    // A chord belongs to whatever owns the chord, never to us. **Alt+F4 is the operating system
+    // closing the game** -- and until this session the mod read it as a bare F4 and flipped combat
+    // verbosity on the way out. Ctrl+F4, Shift+F7 and the rest were the same class of bug: the mod
+    // cannot swallow a key, so an unguarded F-key fires IN ADDITION to whatever the chord already
+    // does, and the player gets a silent state change they never asked for.
+    //
+    // This guard used to be LOCAL to F11 (S112, because Shift+F11 is an NVDA command the tester
+    // needs while playing). That reasoning was never specific to F11 -- it is the general rule, and
+    // scoping it to one key just meant the other five kept the defect.
+    //
+    // Holding a modifier makes the F-key read as UP rather than suppressing the dispatch, so a
+    // modifier pressed mid-hold registers a clean release and cannot leave an edge armed.
+    const bool fkeyModifierHeld =
+        ((dik[DIK_LSHIFT] | dik[DIK_RSHIFT] | dik[DIK_LCTRL] | dik[DIK_RCTRL] |
+          dik[DIK_LALT]   | dik[DIK_RALT]   | dik[DIK_LWIN]  | dik[DIK_RWIN]) & 0x80) != 0;
+    const auto bareF = [&](int scan) { return !fkeyModifierHeld && (dik[scan] & 0x80) != 0; };
+
+    DInputEdge(VK_F4,         g_extraDown[14], bareF(DIK_F4),  true);  // F4 combat verbosity
+    DInputEdge(VK_F5,         g_extraDown[15], bareF(DIK_F5),  true);  // F5 all/story-gated
+    DInputEdge(VK_F6,         g_extraDown[20], bareF(DIK_F6),  true);  // F6 label from clipboard
+    DInputEdge(VK_F7,         g_extraDown[27], bareF(DIK_F7),  true);  // F7 autodetail
+    DInputEdge(VK_F8,         g_extraDown[21], bareF(DIK_F8),  true);  // F8 mod menu
+    DInputEdge(VK_F11,        g_extraDown[22], bareF(DIK_F11), true);  // F11 audio beacon on/off
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

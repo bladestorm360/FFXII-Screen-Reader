@@ -193,7 +193,7 @@ widget the release is `002a9980:45-64`, which masks the engine's unified button 
 Live-widget gate: `FUN_002e16b0` stores the window it builds in **`DAT_0215f200` (RVA `0x203F200`)**
 — 8 slots, stride `0x68`, window pointer at `+0x00` — and the text widget is `window+0xD0`.
 Membership there is what separates a paginated message from every other text block the same dispatch
-slot lays out (the field menu shares the `FUN_002a6190` window class, so class identity alone is not
+slot lays out (the party menu shares the `FUN_002a6190` window class, so class identity alone is not
 enough). Shipped in `src/ui/dialogue_reader.cpp`.
 
 **⚠ `widget+0xC0` (end of message) IS A LEVEL, NOT AN EVENT** (S149). `FUN_002a8c50` sets it to 1 at
@@ -2030,11 +2030,11 @@ Built + deployed, pending integrated play-test. Optional aid: `..\FFXII-Decompil
 
 ## Field pause-menu entry announce — SHOW message (Session 52, 2026-07-21) — CONFIRMED in play
 
-**Problem it solves:** the field/party menu spoke its focused row on key-press, before the menu was
+**Problem it solves:** the party menu spoke its focused row on key-press, before the menu was
 visible. The battle command menu did not. The difference was purely *when the stashed entry focus is
-released*: the battle menu waits for its own row draw (`FUN_00276be0`); the field menu was releasing
+released*: the battle menu waits for its own row draw (`FUN_00276be0`); the party menu was releasing
 at `FUN_00244830` (RVA `0x124830`), the focus **assignment**, which fires at the START of menu
-construction. Fixed by giving the field menu its own "menu is visible" event, mirroring the battle
+construction. Fixed by giving the party menu its own "menu is visible" event, mirroring the battle
 menu exactly. Confidence 0.98 (in-play confirmed).
 
 **The field pause-menu command column = `FUN_00280de0`** (RVA `0x160DE0`, == `ROW_CHAIN[0]`,
@@ -2070,7 +2070,7 @@ visible-open event.
 ## Battle Command Menu + Targeting (Session 30, 2026-07-10) — CONFIRMED
 
 **Battle command menu (the seamless-combat ATB list: Attack / Magicks & Technicks / Items / …).**
-It routes cursor moves through the **SAME `FUN_00247510` msg `0x8000`** dispatch the field menu uses —
+It routes cursor moves through the **SAME `FUN_00247510` msg `0x8000`** dispatch the party menu uses —
 it was just an unmapped owner class (showed as `[focus] UNKNOWN owner obj[0]=+0x15ad70`).
 - **Owner (focus target) = the command PANEL, window class `FUN_0027ad70`** (RVA `0x15AD70`). It is
   built in place inside the container `FUN_002778c0` (RVA `0x1578C0`) at `container+0xf0`, so the
@@ -2162,7 +2162,7 @@ for the highlight menu.** The reader that hooked it spoke nothing.
   > This file's `actor+0x18` decode was a SECOND naming path that never grew one; there is exactly one
   > now, `BattleState::DisplayNameForActor`.
 
-**Field-menu "Select a character" (Status) reader — DEFERRED (Session 31, NOT working).** Chooser
+**Party-menu "Select a character" (Status) reader — DEFERRED (Session 31, NOT working).** Chooser
 controller `FUN_00285290` (RVA `0x165290`, POLLED, not a 0x8000 owner); cursor-set `FUN_00285a10(slot)`
 (RVA `0x165A10`). Per-slot read (mirrors portrait draw `FUN_00283e40`): `ctx = *(DAT_0209ac30)` (RVA
 **`0x1F7AC30`**) → `ctrl = *(ctx+0xf8)` → `portrait = *(ctrl+0xc0+slot*8)` → `block = *(ctx+0xac8 +
@@ -2505,7 +2505,7 @@ SEPARATE selector on `DAT_0209be80` (`P+0x9FD8` handle, gate `P+0x10f78`), NOT t
 name/HP via actor pool, faction via scene-kind; enemy=HP%, ally=HP numbers. `src/ui/battle_target_reader.*`.
 Session 31 — Magicks & Technicks two-level sub-lists SHIPPED (chooser
 `FUN_0027d240`, spell list `FUN_0027ce70`; items `FUN_0027e530`→`FUN_00272cb0`); targeting NAME gate fixed
-(dropped the wrong mode-3 bail); Status field-menu char-select reader DEFERRED (hook doesn't fire on entry).
+(dropped the wrong mode-3 bail); Status party-menu char-select reader DEFERRED (hook doesn't fire on entry).
 Session 30: Battle command menu located (`FUN_0027ad70` via `FUN_00247510` 0x8000) + SHIPPED; targeting
 `node+0x48`/`+0x54` confirmed; corrected the `FUN_002c2320`=field-Equipment and `FUN_002b7590`=dialogue mislabels.
 Prior: 2026-07-07 (Session 18) — Message/dialogue/panel reader SHIPPED in C++
@@ -3870,7 +3870,7 @@ survived. Both bits are now **log-only**; `IsFieldNavSafe()` keeps the six condi
 something navigation actually dereferences. Labelled `areaId(log)` / `areaManifest(log)` in the fail-mask
 formatter so the old "areaColl" misnomer cannot be read as collision again.
 
-## Field-menu character chooser + the Party screen (Session 93)
+## Party-menu character chooser + the Party screen (Session 93)
 
 One controller, four commands. `FUN_00285290` (RVA `0x165290`, parked at `menuCtx+0xf8`) serves Party
 `0x4b3`, Status `0x4b4`, Equipment `0x4b6` and Gambits `0x4b9`; only the mode the field pane arms it in
@@ -3894,7 +3894,7 @@ unchanged — so a reader that re-speaks the state after the call reports the tr
 **THERE IS NO PARTY-SIZE CLAMP IN THE TOGGLE (Session 94, conf 1.00).** `FUN_00284c90` XORs bit 3
 unconditionally; its guards test only an invalid charId, the GUEST bit and two `menuCtx+0xd3c` mode
 bits. Nothing counts members. The size rule is enforced on menu EXIT, which surfaces the panel message
-*"The party cannot contain more than three characters."* and returns the player to the field menu —
+*"The party cannot contain more than three characters."* and returns the player to the party menu —
 tester-confirmed, and visible in the live log going through the ordinary message reader, so it needs no
 announce of its own. Consequence for readers: **bit 3 is a STAGED selection, and five or six characters
 reading "In party" at once is the game's own state, not a mod fault.** Do not "fix" it.
@@ -3921,7 +3921,8 @@ Display records at `panel + 0x160 + i*0x20`, 13 of them (the array is `memset` `
 | `rec+0x08` | codec\* — ACTION name; **null on record 0** (the header has no second column) |
 | `rec+0x10` / `+0x12` | u16 condition / action id, `0xFFFF` when unset. Condition ids are biased: the master table index is `id - 0x6000` |
 | `rec+0x14` | u8 enabled; on record 0 this is the gambit MASTER toggle |
-| `rec+0x15` | u8 class, `2` = empty row |
+| `rec+0x15` | u8 class — `2` = **INCOMPLETE**, `0`/`1` = complete. ~~`2` = empty row~~ STRUCK S158, below |
+| `rec+0x17` | u8 the cell being edited: `1` condition, `2` action. The panel vetoes cursor moves on it and clears it when the picker closes |
 | `panel+0x0F0` | i32 the character's BtlChr index (not a scene handle) |
 | `panel+0x124` | u16 per-row enable mask, **bit `i-1` for display row `i`** |
 | `panel+0x126` | u8 row count (max 12) |
@@ -3963,9 +3964,106 @@ off-by-one. Two measured hazards any reader must handle:
 Corroborating detail, not needed by the reader: msg `0x8005` accompanies a ROW change only, never a
 column-only move.
 
-**The PICKER (`FUN_0056b4d0`, RVA `0x44B4D0`, rows at `picker+0x0E0 + i*0x20`) is UNMEASURED.** The
-probe run never confirmed on a row, so it captured no picker messages at all. Do not build a reader
-against that row layout until it has been.
+~~**The PICKER (`FUN_0056b4d0`, RVA `0x44B4D0`, rows at `picker+0x0E0 + i*0x20`) is UNMEASURED.**~~
+**MEASURED, Session 158** — see the picker section below. The S94 probe run never confirmed on a row
+so it captured no picker messages, and until the decompile was read properly the surface was covered
+by the generic painted-row path, which is what made it speak the previous list's row.
+
+
+## The gambit records: where they come from, and what the class byte means (Session 158, conf 0.99)
+
+The display array is rebuilt by **`FUN_00567b60` (RVA `0x447B60`)**, reached from the panel through
+`FUN_0056a010` (`0x44A010`, refresh / character switch). Its source is a 0x34-byte blob at
+**`panel + 0x0F4`**, filled by `FUN_00327c40` (`0x207C40`) out of the save block —
+`DAT_02ebf190 + 0x5B10 + (page + charIdx*3)*0x34`, where the gambit-set page (0..2) is
+`*(i32*)(DAT_02ebf190 + 0x7370 + charIdx*4)`. The blob is **12 × { u16 conditionId, u16 actionId }**,
+then `+0x30` u16 enable mask and `+0x32` u8 row count. Display record *i* (i ≥ 1) is source row *i-1*.
+
+Two more writers: **`FUN_0056a1d0` (`0x44A1D0`)** patches ONE field in place on picker confirm or an
+enable toggle, and **`FUN_00569f90` (`0x449F90`)** copies `rec+0x10`/`+0x12`/`+0x14` back out to the
+blob and persists it.
+
+**THE CLASS BYTE IS "INCOMPLETE", NOT "EMPTY", AND THE DIFFERENCE COST A ROW ITS VOICE.** The builder
+writes the condition id into `rec+0x10` and the real condition name codec into `rec+0x00` FIRST,
+unconditionally — an unset half gets the game's own blank placeholder `FUN_002f9860(0x3EB)` — and
+only afterwards runs `if (rec+0x10 == 0xFFFF || rec+0x12 == 0xFFFF) rec+0x15 = 2`. So:
+
+| `rec+0x15` | meaning |
+|---|---|
+| `0` / `1` | both halves set; the two differ by the condition record's own field `+0x38` (`3` → 0, else 1). What that field distinguishes is **conf 0.80 and not acted on** |
+| `2` | **either** id is `0xFFFF` — a fully empty row **and** a row with a condition but no action |
+
+`FUN_0056a1d0` mode 1 (condition chosen) writes `rec+0x10`/`rec+0x00` and then downgrades `rec+0x15`
+to 2 because `rec+0x12` is still `0xFFFF`; it never touches the action fields. The row painter
+**`FUN_00568bb0` (`0x448BB0`)** assigns `rec+0x00` into the condition sprite for every row regardless
+of class — class 2 only changes the plate/text colour — so **a sighted player reads that condition on
+screen** while a class-2 reader says "empty". Both `FUN_0056a1d0` mode 0 and `FUN_00567d80`
+(`0x447D80`) refuse to ENABLE a row when either id is `0xFFFF`, which is only meaningful because
+half-set rows exist.
+
+**Read the two ids, separately: `rec+0x10 != 0xFFFF` = a condition is set, `rec+0x12 != 0xFFFF` = an
+action is set.** A truly empty row is both unset, which is exactly what the row-clear path writes
+(both ids as one `0xFFFF` u32, both name pointers = placeholder, `rec+0x14` = 0, `rec+0x15` = 2).
+
+
+## Gambit PICKER — `FUN_0056b4d0` (RVA `0x44B4D0`) (Session 158, conf 0.98)
+
+One object serves both lists; `picker+0x588` says which (`1` conditions, `2` actions). Object size
+`0x5A8`. Focus arrives on the same `FUN_00247510` msg-`0x8000` dispatch the panel uses, so no new
+hook is needed.
+
+| offset | meaning |
+|---|---|
+| `picker+0x0C0` | the scrolling list widget · `+0x0C8` back-pointer to the gambit panel |
+| `picker+0x0D0` | the panel display record being edited (so `[+0x10]`/`[+0x12]` are the current ids) |
+| `picker+0x0D8` | the tab-strip window · `picker+0x584` character index |
+| `picker+0x0E0 + i*0x20` | **17 row slots**: `+0x00` name codec, `+0x08` u16 id (`0xFFFF` unused), `+0x0A` icon, `+0x0C` u16 cost, `+0x10` availability (`0` selectable, `0x0F` not acquired → the game substitutes menu text `0x4C7` "???" and help `0xCD7`/`0xCD8`), `+0x11` has-cost, `+0x18` help codec |
+| `picker+0x300 + c*8` | per-category tab descriptor: `+0x00` u16 COLOUR id, `+0x02` u16 member count, `+0x04` kind, `+0x07` category index. **No text id — see below** |
+| `picker+0x595` / `+0x596` | current category (s8) / category count · `+0x599`/`+0x59A` row cursor and its saved copy |
+
+Category stepping is `FUN_0056aac0` (`0x44AAC0`, previous) / `FUN_0056ad50` (`0x44AD50`, next); both
+only move `+0x595`. The REBUILD happens back in `FUN_0056b4d0` case 10 — **`FUN_0056a890`
+(`0x44A890`)** for actions, **`FUN_0056bc70` (`0x44BC70`)** for conditions. Both memset
+`picker+0x0E0` for `0x220`, fill the rows from the enumeration query `FUN_0031eb20` (kind `0x22`
+actions / `0x23` conditions), and only THEN set the list widget's count and cursor — which is why
+reading the row array on the focus is never stale, and reading the paint cache always is.
+
+Category membership is a flat grid built at load: `FUN_00237fc0` (`0x117FC0`) builds `DAT_0208d308`
+("gmbtAct") from action-data fields `+0x38` (category) / `+0x39` (slot); `FUN_00238880` (`0x118880`)
+builds `DAT_0208d318` ("gmbtTgt") the same way for conditions from fields `+0x16`/`+0x17`.
+
+**THE CATEGORY HAS NO NAME IN THE DATA — MEASURED AND CLOSED 2026-08-13, conf 0.99.** The tab
+descriptors carry a colour and a count; the tab strip (`FUN_0056c170` → `FUN_0056c060`) draws a plate
+whose frame is the tab's ordinal and whose colour is `FUN_002dd7e0(descriptor+0x00)`, and the value
+handed to `FUN_00247680` on a tab change is `colourId - 0x82` — a window-skin index, not a string. No
+`FUN_002f9860` call anywhere in the picker resolves a category string; the only ids it resolves are
+`0x3EB` (blank), `0x4C7` ("???"), `0xCD7`/`0xCD8` (not-acquired help) and `0xC75`-`0xC7A`/`0xCF0`
+("can't pick this").
+
+A diagnostic build walked every action tab live and refuted all four candidate routes:
+
+| route | what it actually returns |
+|---|---|
+| `DefName(0x15, family)` | the four BATTLE COMMANDS — `Attack` / `Magicks` / `Technicks` / `Items`. All five magick tabs share family `1` |
+| `DefName(0x15, tabIndex)` | the battle-command table indexed by a tab number: `NOT USED concentration`, `Summon`, `Foecraft` |
+| `DefName(0x18, family)` | the MAGICK-SCHOOL table (`0`-`3` = White / Black / Time / Green Magicks) — but the family byte is not a school id, so it names the wrong school |
+| `picker+0x580` | the 180-frame *"you cannot pick this"* ERROR banner (`FUN_0056ac50`), which the tab-step functions merely CLEAR. Not a label |
+
+**STRIKES `ingame_menu_reader.cpp`'s `CAT_CHOOSER_MAG = 0x15` / `CAT_CHOOSER_TECH = 0x18` comment,
+which has the two the wrong way round**: measured live, **`0x15` is the battle-command table and
+`0x18` is the magick-school table**. The battle chooser still works because it passes that category
+together with an id from its own rows; only the naming in the comment was reversed.
+
+The 11 action tabs are a **gambit-specific grouping** — 1 Attack, 5 Magicks, 3 Items, 2 Technicks,
+keyed by action-record field `+0x38` (`FUN_00237fc0` builds the `gmbtAct` grid from `+0x38`/`+0x39`)
+— with no string table behind them. The condition list has 15 tabs on the same scheme. **So anything
+the mod said for a tab would be a fabricated label. Tester's call, asked and answered 2026-08-13: the
+mod announces nothing for a category.** The corrected first row of the newly entered tab already
+distinguishes all eleven (`Attack` / `Cure` / `Protectga` / `Aero` / `Hastega` / `Gravity` / `Potion`
+/ `Serum` / `Dispel Mote` / `Steal` / `Traveler`). **Do not re-derive this.**
+
+One correction from the same walk: row `+0x10`'s not-acquired value measured **`0x10`**, not the
+`0x0F` the decompile suggested.
 
 **STRIKES the `ROW_CHAIN[2] { 0x445E00, 0xC8 } // gambits` label** in `ingame_menu_reader.cpp`: that
 class is command `0x4B8`, not this screen. The entry is structurally valid; only the name was wrong.
@@ -5254,6 +5352,13 @@ predicate `FUN_002675c0` tests). Observed values:
 | `0xF0` | live party members, a live enemy | present |
 | `0x70` | **treasure, field gimmicks** | **always set — carries no information** |
 | `0xB0` | a DEFEATED enemy; reserve slots never spawned | absent |
+| `0x30` | **save crystal, gate crystal, several named NPCs** | **bit CLEAR while in plain sight** |
+
+> **SESSION 153 — the bit is READ AS A SHAPE NOW, not on its own.** `0x40` separates nothing by
+> itself: it is clear on `0xB0` (drop) **and** on `0x30` (keep). The discriminator is `0x80`, which
+> the strike below already named. `EntityScan::LooksAbsent` requires **`0x80` set and `0x40` clear**
+> — `0xB0`'s high nibble — so `0xF0`→keep, `0xB0`→drop, `0x70`→keep, `0x30`→keep. No meaning is
+> claimed for `0x80`; it only marks the byte shape `0x40` was measured in.
 
 The entity scan applies it as a **general stale-entity pruner** and not as a kill detector — the
 user's own framing, and the correct one: *"you're still tracking it as if kills matter, when what we
@@ -5284,6 +5389,25 @@ only sees what the handle walk did not list, so a prune in one is an admission i
 Every prune logs itself (`[NAV-DIAG] absent: [c:slot] +0x14=0x.. kind=.. "name" at (x,y,z)`, capped
 at 8 per scan): the risk of a presence test is that it removes something still wanted, and a bare
 count cannot tell one corpse from one NPC deleted by mistake.
+
+> **STRUCK — Session 153. The Session 150 `isCharacter` scoping was NOT sufficient, and its stated
+> reason was wrong.** It read: *"A corpse is a character; a crystal, a gate, a door and a treasure
+> are not, so none of them can ever reach this drop again."* **A gate crystal IS scene category
+> 5-7.** With that gate compiled in, the live log of 2026-08-12 still shows
+> `absent: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal"` beside `Gate=0` on a map that has one.
+>
+> Byte-shape histogram of every `absent:` drop in that session: **`0xB0` × 44** (all `kind=1`
+> "Hyena" — correct) and **`0x30` × 153** (the gate crystal plus `kind=5` "Weather Eye", "Chocobo
+> Aficionado", "Horne", "Rabanastran" and one nameless — **four named NPCs, all wrong**). The filter
+> was wrong on three quarters of what it touched, and had never once been seen to hit its target
+> before S150 either.
+>
+> Fixed by testing the measured *shape* (above) rather than the bit. `isCharacter` is kept as well,
+> and the pruner now ships `OldRuleWouldDrop` — a capped `spared:` line naming every object the old
+> rule deleted and this one keeps, so the next log either proves the change or names what disagrees.
+>
+> **The transferable half:** a scoping rule derived from what you believe about a population is not
+> a measurement of that population. Third failure on this one bit (S148 → S150 → S153).
 
 **What this REPLACED, and why none of it was needed:** an HP gate on the actor-pool walk (S147's
 proposal, struck by the user — the fix is not about death), a liveness test on the BtlChr, and a
@@ -5439,3 +5563,237 @@ recorded because it is the right lead for the separate walkmap-IDENTITY question
 DIFFERENT world from the SQEX one `CondWorld` tests (`BulletQuery::HasWorld()` reads `*(ctx+0x60)`;
 `MapQuery::HasWorld()` reads the globals above). The existing world-pointer cache says nothing about
 nav readiness — do not reach for it as one.
+
+## Stilshrine of Miriam — the statue-rotation puzzle (Session 154, measured offline)
+
+**KEYWORDS: Stilshrine Miriam Mariam statue Stone Brave mrm_b02 mrm_b03 mrm_b04 mrm_c01 guardians
+three rotation clockwise counterclockwise sword lift 全方向 北方向 statue_farst statue_fs_ALL
+ebp_statue_census map 598 599 600 puzzle**
+
+Source: `..\FFXII-Decompile\tools\ebp_statue_census.py`, which carries its own falsifier and aborts
+rather than emit a table. All of it is read from the shipped bytecode; none of it needed the game.
+
+### Which scripts run it
+
+A whole-corpus byte search over the 769 extracted `plan_map` scripts finds **exactly four** that
+mention a statue — and the inscription says *"Guardians three"*:
+
+| script | role |
+|---|---|
+| `mrm_b04.src` | rotatable guardian — **map 600, Walk of Reason** |
+| `mrm_b03.src` | rotatable guardian — **map 599, Walk of Prescience** |
+| `mrm_c01.src` | rotatable guardian — map never logged. Its name pool also carries `ReposDirector`, `EventDirector`, `BOSS_…` and `PlayerJack*` |
+| `mrm_b02.src` | the big sword statue — **map 598, Cold Distance**. No rotatable guardian, and the field scan reports `Object=0` there: the big statue is not a scene object at all |
+
+### How the map ids were bound — no guessing
+
+There is no mapId → script join in the data. The bind is by **exact match of the routine-name pool**:
+the live blob's routine list is the TAIL of the file's name pool, and our own play log printed that
+list for maps 598/599/600 (`x64\logs\FFXII-Screen-Reader-2026-08-11_14-49-37.log`, lines 275-279,
+11751-11754, 13517-13519). All three match byte-for-byte in the mod's `AsciiSafe` rendering — map
+600's runs 44 consecutive names. The census aborts if any of the three stops matching.
+
+### The rotation model, in the authors' own routine names (cp932)
+
+| routine | meaning |
+|---|---|
+| `北方向` `東方向` `南方向` `西方向` | the **four rest facings**: north / east / south / west |
+| `北～東` `東～南` `南～西` `西～北` | the four **clockwise** transitions |
+| `北～西` `西～南` `南～東` `東～北` | the four **counterclockwise** transitions |
+| `全方向` / `全方向NG` | **"all directions" / "all directions NG"** — the script's own solved / not-solved verdict |
+| `像回転振動開始` | statue-rotation shake |
+| `剣持ち上げ振動開始` | **sword-lift shake — the completion event** |
+| `石扉振動開始` / `階段振動開始` | stone-door and stairway shakes |
+| `statue_farst`, `statue_fs_ALL`, `statue_fs_ALL_off`, `fs_change`, `fs_on`, `fs_off`, `sml_statue`, `sml_statue_eye_effect`, `mrm_statue_gimm_se`, `mrm_statue_gimm_eye_se` | the ASCII half of the same machinery |
+
+So **a turn is exactly 90°, there are four facings, and clockwise / counterclockwise are distinct
+named transitions** — which is exactly the pair of choices the game's own dialogue offers.
+
+#### `mrm_c01` IS BOTH — the boss room AND the third guardian's room (confirmed in play, S157)
+
+S154 inferred "the boss/event room" from `BOSS_…`, `EventDirector`, `ReposDirector` and
+`PlayerJack*`. That inference is **correct, and it is not in tension with the room holding a
+guardian**: the player confirmed in play that the last statue is turned in the boss room.
+
+This entry exists because both readings were briefly over-stated in S157 — first the room identity
+was asserted as if measured, then it was struck outright on the reasoning that "the boss room is what
+the puzzle unlocks, so no guardian stands in it". **That is an argument about PROGRESSION, and it
+never excluded the two rooms being one room.** The strike was withdrawn the same session. See
+`Docs/Lessons.md` L-64.
+
+Still unmeasured, and the only thing the mod actually needs: **`mrm_c01`'s map id and its two
+save-block cells.** The mod names the map and lists its class-0 variables the first time the player
+stands there.
+
+**Every guardian script carries `全方向` / `全方向NG`.** A script on one map cannot judge statues on
+two other maps out of map-local state, so the facings are cross-script globals (storage class 4).
+That is a structural inference, ~0.95, and `StatueDiag` measures the storage class to settle it.
+
+### What the file CANNOT answer, and why
+
+The map-script `.ebp` container is **not** the layout `notes\EBP2_DBG_format.md` documents for the
+four controller scripts. On a map script `hdr+0x18` addresses the **message region** — the
+inscription's codec bytes sit a few hundred bytes past it — not a routine table; and the mod's
+live-blob model (`hdr+0x4C` → name pool) does not apply to the file either (`+0x4C` reads 0). The
+name pool is locatable only by walking back from `hdr+0x18`. So the **variable descriptor table is
+not reachable offline**, and with it the facing variable index, its storage class and each statue's
+target. Those are measured at runtime by `StatueDiag` instead — the engine builds that table, and
+`ShoutScript::VarAddressRaw` already decodes it.
+
+### The player-facing gap this exists to close
+
+The interaction reads fine today ("The statue bears a timeworn inscription." → *Read the
+inscription* / *Rotate the statue* → *Turn the statue clockwise* / *counterclockwise*), and the hint
+is captured verbatim and is **identical on every statue**: *"Guardians three, face ye the blade.
+With relic-bearer join, your fealty swear to me."* What is missing is the state: which way a statue
+now faces, and whether it is right. Nothing on screen or in text says it.
+
+## Script storage class 0 IS the persistent SAVE BLOCK (Session 156, measured)
+
+**KEYWORDS: storage class 0 save block 0x02164480 FUN_002ef2b0 DAT_02164280 shared across modules
+script variable descriptor class base statue facing persists ClassBaseRaw**
+
+Both Stilshrine modules report the **same** class-0 base, live, minutes apart:
+
+```
+mrm_b04 (map 600):  storage class 0 base = 0x02164480
+mrm_b03 (map 599):  storage class 0 base = 0x02164480
+```
+
+That address is already documented in this file from unrelated work: `FUN_002ef2b0()` returns
+`&DAT_02164280 + 0x200` = RVA `0x2044480` = **absolute `0x02164480`** — the persistent block the
+treasure one-time flags (`+0x14B4`) and the NPC-name bitmap (`+0x13B4`) hang off.
+
+**So storage class 0 is not module-local.** The `shout_script.h` header describes classes 4 and 5 as
+"the cross-script globals"; class 0 is a third shared region, and it is the one that **survives a
+save**. Anything a map script keeps there is saved game state, readable from any map, by any script.
+
+Corollaries worth stating because they are what make features possible:
+- A value in class 0 can be read **from anywhere in the game** once its offset is known — no need to
+  be on the map whose script declares it.
+- **A module only DECLARES the subset of the array it uses.** `mrm_b04` declares 46 variables and
+  `mrm_b03` declares 33, and they name *different* cells of the same array. So sweeping a module's
+  declared variables can never enumerate the region — a raw byte diff of the class-0 window is the
+  only way to see a cell the current module does not declare.
+
+Class 3's base compared equal across the two modules as well, but that is an **artifact**: both were
+slot 0 and the record is reused when one map script replaces another. Class 3 is
+`ebpBase + *(u32*)(ebpBase+0x40)` and remains module-local. Do not read that coincidence as sharing.
+
+## Stilshrine of Miriam — the statue puzzle STATE (Session 156, measured in play)
+
+**KEYWORDS: Stone Brave statue facing flag target clockwise counterclockwise 0x0D 0x0E 0x07 0x08
+0x02164E31 0x02164D02 eye effect buzzing mrm_b03 mrm_b04 map 599 600 save block**
+
+Each guardian keeps **two cells in the class-0 save block**: its FACING, and whether the game
+considers it correctly aligned.
+
+| map | script | facing var | flag var | target facing | measured addresses |
+|---|---|---|---|---|---|
+| 599 Walk of Prescience | `mrm_b03` | `0x0D` | `0x07` | **2** | facing `0x02164E31` (base+0x9B1), flag `0x02164D02` (base+0x882) |
+| 600 Walk of Reason | `mrm_b04` | `0x0E` | `0x08` | **1** | facing `0x02164E33` (base+0x9B3), flag `0x02164D03` (base+0x883) |
+| **603** (the boss room, and where the last statue is turned) | `mrm_c01` | `0x1C` | `0x14` | **3** | facing `0x02164E35` (base+0x9B5), flag `0x02164D04` (base+0x884) |
+
+**All three captured (S157).** Map 603's two cells were measured by **two independent nets that agree
+exactly**: the module's declared-variable diff and the raw class-0 byte diff.
+
+#### The layout, and the completion cell
+
+`mrm_c01` declares **all three** statues' cells, which is what exposed the shape:
+
+```
+flags     class0+0x882   +0x883   +0x884     one byte per statue, CONSECUTIVE
+            (599)    (600)    (603)
+facings   class0+0x9B1   +0x9B3   +0x9B5     one byte per statue, STRIDE 2
+            (599)    (600)    (603)
+```
+
+The interleaved `+0x9B2` / `+0x9B4` / `+0x9B6` each read 1 once their room has been entered
+(`+0x9B6` flipped 0→1 on first entry to 603, alongside the facing initialising to 1). Read as a
+per-statue "initialised" byte — **observed, not relied on**.
+
+**`+0x885` is the strongest candidate for "the puzzle is complete".** It flipped 0→1 on the same
+frame as the third statue's flag `+0x884`, and it is declared by `mrm_b02` — the **sword** script on
+map 598, the thing that lifts on completion. Not used yet; recorded so a completion announcement
+needs no second capture. The player also reports two completion-time messages worth binding later:
+*"the colossus"* on solving, and *"The statue is firmly fixed in place"* when interacting with a
+statue afterwards — i.e. **the statues LOCK once the puzzle is done.**
+
+#### Map 603's target is 3 — read by the same rule that fixed the other two
+
+**The flag set while the facing read 3.** 599's flag set at facing 2, 600's at facing 1, and this one
+at facing 3, on the same frame the completion cell `+0x885` went up. The facing then moved **3→4 five
+seconds later without the flag clearing** — which is the COMPLETION SEQUENCE turning a statue the
+player can no longer touch (*"The statue is firmly fixed in place"*), not a player turn, so it says
+nothing about the target.
+
+Recorded because it was briefly withheld as "ambiguous": the 3→4 move only looks anomalous if you
+forget the statues lock on completion, and the tester's point stands — **confirming it would have
+meant unsolving the puzzle to re-solve it, for a number three independent observations already
+agree on.** Turn-by-turn directions are the entire point of the readout; a statue reporting only
+solved / not-solved is the feature not working.
+
+**Facing is 1..4, four states, 90° apart.** `elemType 1` (s8). **Clockwise INCREMENTS** with `4→1`
+wrap; **counterclockwise DECREMENTS** with `1→4` wrap. Confirmed on two statues, both directions,
+nine transitions.
+
+**The flag is the game's own verdict, and it is per statue.** On map 599 it set on reaching facing 2
+and cleared on leaving it, three times, both directions. **The player confirmed it by ear**: the
+statue's eye effect and a faint buzzing over the dungeon ambience are on exactly while the flag is
+1 — that is `sml_statue_eye_effect` / `mrm_statue_gimm_eye_se` from the offline census.
+
+**THE TARGETS DIFFER PER STATUE (600 → 1, 599 → 2).** So the values are compass headings, matching
+the `北方向`/`東方向`/`南方向`/`西方向` routine names — **not** a shared "correct" value. A model in
+which all three read the same number when solved is REFUTED.
+
+**This is why the readout needs no solution table.** The flag answers "is this one right" directly,
+so the mod reads correctness from the game rather than encoding a walkthrough. Targets are only
+needed to say *how many turns remain*, and two of the three are measured above.
+
+The flag's variable index is the facing index **minus 6** in both modules (`0x0E`/`0x08`,
+`0x0D`/`0x07`) — one authoring template instantiated three times. **Recorded as an observation, not
+relied on:** indices are per-module and the third instance is unverified.
+
+### SHIPPED (Session 157): the readout, and what it can and cannot reach today
+
+`src\navigation\statue_table.{h,cpp}` holds the measured numbers above; `statue_guide.{h,cpp}` is
+the `B` readout. Two reach paths, because a variable index and a save-block offset answer in
+different places:
+
+- **the module's descriptor index** resolves only while the player stands in that room, and needs no
+  hardcoded address at all. It is also how an offset gets measured: the guide subtracts the class-0
+  base from the resolved address, **learns** the offset for the rest of the session, and logs it as
+  `MEASURED <module>: … <== bake these into statue_table.cpp`.
+- **the save-block offset** is class-0 base + a constant, so it reads from anywhere. Only map 599's
+  pair is baked (`+0x9B1` / `+0x882`); map 600's are learned on the next visit because the capture
+  that found its indices ran on a build whose log line had no address column.
+
+Coverage as shipped: **map 599 from anywhere; map 600 from anywhere once its room has been entered
+this session; `mrm_c01` not at all** — that room has never been visited, so it has no map id, no
+indices, no target and no offsets, and the readout says `state unknown` for it rather than inventing
+one. On first entry the guide logs every class-0 variable that module declares, which is the missing
+measurement.
+
+**Speech reads the FLAG, never the facing.** `solved` is the game's own per-statue verdict; the
+target is used only to count turns, as `(target - facing) mod 4` — 1 = clockwise once, 2 = twice
+(equal either way), 3 = counterclockwise once. There is no three-turn case. A flag/target
+disagreement is resolved **in the flag's favour and logged**, because it means a baked constant has
+gone stale.
+
+**Also logged once per visit: the save block either side of each known cell.** The two measured cells
+sit in different sub-regions (`+0x9B1` a facing, `+0x882` a flag), and if one authoring template was
+instantiated three times then the three facings are probably neighbours in one array and the three
+flags in another — which would bind the third guardian with no visit. That is a **hypothesis, and
+nothing reads on it**; the dump is how it gets tested or killed.
+
+### What the statue is NOT
+
+- **Not a transform rotation.** `Stone Brave` is `sceneCat=1 class=1` (gimmick), `+0x14=0x70`, and
+  every candidate orientation float on its transform node read `0.0000` — the model turns as an
+  animation. Reading a yaw off the object would have measured nothing.
+- **Not reachable through the event-fire path.** 111 routine fires were resolved by name across four
+  rotations and every one was an engine lifecycle routine (`init`/`main`/`spawn`/`entry`/`respawn`).
+  The statue's own routines do not start via `FUN_003dbb60`, so the named-routine tap is a dead end
+  for this puzzle and survives only as a cheap census.
+- **Not the class-5 globals.** `class 5 +0x086` / `+0x088` flip `0→1` on map 600, but at **Ancient
+  Door** opens, minutes before any statue interaction. Do not mis-attribute them.

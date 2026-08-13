@@ -11,6 +11,8 @@
 #include "navigation/nav_blocked.h"
 #include "navigation/auto_walk.h"
 #include "input/input_tracker.h"
+#include "ui/dialogue_reader.h"
+#include "ui/ingame_menu_reader.h"
 #include "ui/mod_menu.h"
 
 #include <windows.h>
@@ -85,6 +87,11 @@ uint64_t           g_nextPingMs = 0;
 uint64_t           g_straySinceMs = 0;   // first frame of the CURRENT stray run; 0 == on route
 uint64_t           g_lastReplanMs = 0;
 bool               g_wasEngaged = false;  // edge-detect combat so the log says when it flipped
+// Why the beacon is currently suspended, or null when it is not. Compared BY POINTER on purpose:
+// every value is one of the string literals below, so identity is a clean state test and the log
+// line fires on the TRANSITION only. That is a state machine detecting a change, not a speech dedup
+// (nothing here speaks) -- see the CLAUDE.md carve-out for exactly this shape.
+const char*        g_busyWhy    = nullptr;
 float              g_stuckBestDist = -1.0f;   // closest we have come to the current leg point
 uint64_t           g_stuckSinceMs  = 0;       // when that closest approach happened
 float              g_motionAccum   = 0.0f;    // 2D displacement since the stuck clock (re)started
@@ -266,6 +273,50 @@ void OnGameFrame() {
 
     FVec3 me;
     if (!PlayerState::IsFieldNavSafe() || !PlayerState::ReadPlayerPos(me)) return;   // skip the frame
+
+    // ---- SUSPEND WHILE THE PLAYER IS NOT DRIVING (Session 157) ---------------------------------
+    //
+    // EVERY GATE ABOVE THIS LINE ASKS WHETHER THE FIELD EXISTS. None of them asks whether the player
+    // is in control of it. `IsFieldNavSafe()` is six LIVENESS predicates -- field sim live, module
+    // started, actor pool, leader pointer, world, leader object -- and every one stays true through a
+    // conversation and through a cutscene. So the beacon pinged through both, and had done since it
+    // was written. **This is not the S152 stray-timer change; the gate never existed.**
+    //
+    // The field pause menu was quiet only BY ACCIDENT: opening it stops the field tick that calls
+    // this function at all. The battle command menu does not stop it -- and FFXII lets that menu be
+    // opened OUT OF COMBAT on any map where battles can happen, so `PartyEngagement()` reads clear
+    // and the objective beacon kept running underneath it. That is exactly where the tester still
+    // had it firing, and it is why "in combat" was never the right question.
+    //
+    // BOTH beacons are covered, deliberately: this sits ahead of the combat branch, so the target
+    // ping is silenced by an open command menu too (tester's call).
+    //
+    // SUSPEND, NEVER STOP. `Stop()` throws the legs away; a player closing a menu expects to be back
+    // on the same leg, the same way they are after a fight -- which is how the combat branch below
+    // has always behaved. Silence what is ringing and drop the ping phase so nothing bursts on resume.
+    //
+    // Both predicates are the GAME's own state, not mod-side bookkeeping: `BattleCommandActive()`
+    // re-validates its panel against the window class on every read, and `IsBoxLive()` asks the
+    // engine's message-window registry. Note what is deliberately NOT used --
+    // `MenuState::IsAnyMenuOpen()` reads a global the decompile writes once and never clears, so it
+    // answers "open" forever; a gate built on it once killed the field object scan for a whole fight.
+    {
+        const char* busy = nullptr;
+        if (IngameMenuReader::BattleCommandActive()) busy = "battle command menu open";
+        else if (DialogueReader::IsBoxLive())        busy = "dialogue or message box on screen";
+
+        if (busy != g_busyWhy) {
+            g_busyWhy = busy;
+            char m[160];
+            snprintf(m, sizeof(m), "%s%s", busy ? "suspended -- " : "resumed", busy ? busy : "");
+            Log::Write("BEACON", m);
+        }
+        if (busy) {
+            AudioEngine::SilenceAll();
+            g_nextPingMs = 0;
+            return;
+        }
+    }
 
     float facingRad = 0.0f;
     PlayerState::ReadCameraForwardStable(facingRad);

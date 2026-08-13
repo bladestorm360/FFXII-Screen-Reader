@@ -71,8 +71,8 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 * Space or Enter: confirm, battle menu.
 * C or Backspace: cancel.
 * F: battle menu.
-* R: field menu (the game's own Controls screen calls this the "Party Menu").
-* Left Ctrl: escape. This is a toggle,  pressing it plays a sound and locks the menus when in battle. so the battle menu and field menu will not open. Pressing it again plays another sound and unlocks them. If your menus suddenly stop opening, press Left Ctrl once.
+* R: party menu.
+* Left Ctrl: escape. This is a toggle,  pressing it plays a sound and locks the menus when in battle. so the battle menu and party menu will not open. Pressing it again plays another sound and unlocks them. If your menus suddenly stop opening, press Left Ctrl once.
 * Esc: pause game. Note that alt tabbing out of the game window pauses the game automatically. To resume press backspace.
 * M, Numpad Plus, or Z: display map.
 * H, Numpad 0, or X: reset camera.
@@ -168,7 +168,7 @@ Shops and the "equip to whom" screen draw a column of numbers per character show
 
 It is on a keypress rather than automatic because six characters times two stats is far too much to hear every time the cursor moves. A key you did not press costs you nothing; press only the characters you are choosing between.
 
-The field menu's own Equipment screen compares one character, usually one or two stats. 4 reads it there too, and with Auto detail on it also reads as you move.
+The party menu's own Equipment screen compares one character, usually one or two stats. 4 reads it there too, and with Auto detail on it also reads as you move.
 
 New in this build: item and equipment descriptions now read the elements as words. The game draws those as small pictures — "Element: Fire", "Immune: Fire, Lightning" — so they were silently dropped before. Equipment that blocks four or more status effects used to read as "Various status effects", which is the game's own shorthand; the mod now names them.
 
@@ -197,6 +197,12 @@ How much gets spoken aloud is up to you — see Combat verbosity below.
 * N: how many people are around you to shout at, and where the nearest guard is.
 
 The meter also speaks on its own whenever it moves, whether it rises or an Imperial hears you and it falls. The keys and the spoken meter work only while the shouting is actually running, and are silent everywhere else in the game.
+
+#### Stilshrine of Miriam: the three statues
+
+* B: each of the three guardians in turn — either solved, or which way to turn it and how many times.
+
+It reads all three from anywhere in the Stilshrine, and is silent everywhere else.
 
 Two settings appear in the mod menu while you are shouting, and only then. Puzzle guide covers the spoken meter and the two keys, and starts on. Instant success fills the meter on your first shout, and starts off.
 

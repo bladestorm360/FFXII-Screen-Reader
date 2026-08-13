@@ -31,15 +31,15 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64 |
 | a tester reported something | `TAG:tester` | L-10…L-14 |
-| reading a log to find out what happened | `TAG:logreading` | L-15…L-19 |
+| reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
 | editing code that already works | `TAG:refactor` | L-27…L-32 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43 |
-| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51 |
+| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -93,6 +93,57 @@ reads `cell+0x18 & 0x1000`, and `FUN_00323600` has no adjacency test at all.
 first" and blocked four fixes for three months. The answer was in `FUN_0022a770` the whole time.
 **Inverse also true:** some facts are runtime-only (who calls a dispatch-table slot; what rate a
 loop actually runs at). Say which kind you have.
+
+### L-59 ⟲ SCOPE A RULE BY THE MEASURED DATA, NOT BY WHAT YOU BELIEVE THE POPULATION IS
+**"Only ask this of X" is worthless if your test for X is an assumption.**
+**Why:** S153, the third failure on one bit. S148 pruned the entity list on `sceneObj+0x14 & 0x40`;
+S150 caught it deleting a Save Crystal and scoped it to `isCharacter`, reasoning *"a crystal, a gate,
+a door and a treasure are not characters"*. A gate crystal **is** scene category 5-7, so the gate
+excluded nothing — the shipped filter went on deleting a gate crystal and four named NPCs (153 wrong
+drops against 44 right ones in one session). The fix scopes by the **byte shape the state was
+measured in** (`0x80` set, `0x40` clear) instead of by a belief about object kinds — and the
+discriminating bit had been written down in `nav_rva.h` since S150 with nothing acting on it.
+**Corollaries:** narrow in the direction where being wrong is cheap (a stale list entry beats a
+deleted landmark); and when a filter has never been observed to hit its target, that is the finding.
+
+### L-60 ⟲ A SHARED BUDGET MAKES ONE NET'S NOISE INTO ANOTHER NET'S SILENCE
+**Give every instrument its own budget. A noisy channel must only ever starve itself.**
+**Why:** S156. One 400-line budget served a variable diff and an object diff; wandering enemies burned
+362 lines on yaw jitter and the cap closed **22 seconds before** the event the whole visit existed to
+capture. The log then looked like a clean negative result rather than a blinded run.
+**Corollaries:** compare floats with an epsilon, never `!=` (a denormal reads as a change every
+frame); retire a channel that moves on consecutive samples instead of letting it spend the budget;
+and never truncate silently -- log what was dropped.
+
+### L-61 THE LOG FILE TRAILS THE RUNNING GAME
+**Check the file's mtime against the wall clock before concluding something did not happen.**
+**Why:** S156, twice in one session. Both times I read the log, saw nothing past a point, and told the
+user the event was missing; the writes had simply not landed yet. This is L-16's other half -- an
+absent entry may mean nobody wrote one *yet*.
+
+### L-62 A BUILD STAMP COMPILED INTO ONE TRANSLATION UNIT IS STALE ON AN INCREMENTAL BUILD
+**Prove which binary is deployed by comparing it with the build output, not by reading its banner.**
+**Why:** S156. `Build: … compiled <time>` is `__DATE__`/`__TIME__` in `logger.cpp`, which does not
+recompile unless it changes. I used it as evidence that the user had not run a fix. They had, and it
+had genuinely failed -- so the stamp cost a real defect a round of denial. `cmp` on the two files
+settles it in one line. Related: L-10, read the build first -- but read it from the bytes.
+
+### L-64 ⟲ BEFORE STRIKING A CLAIM, CHECK WHETHER IT AND ITS REFUTATION ARE ACTUALLY EXCLUSIVE
+**A correction is a conclusion and carries the same bar as the thing it corrects. Do not strike a
+standing claim on one remark, and do not generalise a strike into a rule in the same breath.**
+**Why:** S157, a full round trip inside one session. S154 inferred from `mrm_c01`'s routine-name pool
+(`BOSS_…`, `EventDirector`, `PlayerJack*`) that it was *"the boss/event room"*. I repeated that to the
+user as if measured. They pushed back — *the boss room is what this puzzle unlocks, so no guardian
+stands in it* — and I struck the claim across three documents and wrote it up as a general lesson
+about name pools. **Then they played it: it is the boss room AND the third guardian's room.** The
+refutation was an argument about PROGRESSION and never excluded the two being one room; nothing in
+either account required "boss room" and "guardian room" to be different places.
+**The tells, both present:** an "A, therefore not B" where A and B were never disjoint; and a brand-new
+`L-` entry whose entire evidence is one unverified exchange. A lesson wants a measurement behind it,
+not a conversation.
+**What is genuinely left:** the room identity was never MEASURED in either direction — only the map id
+and the two save-block cells matter, and both come from standing in the room. Related: L-01 (a sample
+is not a population), L-09 (state the scope you measured).
 
 ### L-09 STATE THE SCOPE YOU MEASURED, NOT THE SCOPE YOU WERE THINKING ABOUT
 **Why:** S152, within a single session. "Game speed cannot move a frame counter" was verified for
@@ -291,6 +342,20 @@ Hundreds of lines at once crashes the screen reader. Console output must be O(un
 A constant "tuned" against an unverified number is a guess wearing a measurement's clothes. Every
 cell of the audit's `at 144 fps` column was arithmetic on an assumption nobody had checked.
 
+### L-65 ⟲ TEXT READ FROM THE PAINT CACHE IS ALWAYS ONE EVENT BEHIND — READ THE GAME'S OWN ARRAY
+**`TextCapture`'s item map is filled per row per PAINT, and a focus message arrives before the paint
+it belongs to. Any surface whose CONTENT changes without the cursor index changing will therefore
+report the previous content. Fix it by reading the list's own row array, not by deferring the
+announcement until the paint you hope is the right one.**
+**Why:** three times now. S89 — an empty category spoke the previous category's row. S150/S151 — the
+off-hand list, where the shape of the container was the question. S158 — the gambit action picker
+spoke the previous category's first row on every switch, and the condition list's first row when the
+action list opened over it; the picker's own row array was filled *before* the cursor moved, so
+reading it removed the timing question instead of narrowing it. **A deferral is a bet that the next
+paint is the one you want; the array is the answer.** Corollary: a reader that has no measured layout
+is not thereby excused — S94 declined this surface as unmeasured and left it on the cache for 64
+sessions, which is 64 sessions of a list reporting the wrong row.
+
 ---
 
 ## Scope, tooling and environment
@@ -312,6 +377,32 @@ Detail: `feedback_hidden_menu_row_reads_off.md`.
 **The game owns `F9`.** Check the on-screen keyboard overlay. The beacon is `F11`, bare press only.
 Left Ctrl is an Escape TOGGLE — check `Docs/Controls.md` before instrumenting input.
 Detail: `feedback_config_screen_is_not_key_freedom.md`, `feedback_check_controls_md_before_input_diag.md`.
+
+### L-63 A MEASUREMENT ONLY THE PLAYER CAN TAKE IS A QUESTION, NOT A DESIGN CONSTRAINT
+**When a feature needs a number that can only come from the user going somewhere in the game, ASK
+FOR THE TRIP. Never route around it by shipping the part that works and reporting the rest as a
+scope limitation.**
+**Why:** S157. The statue readout needed `mrm_c01`'s two save-block offsets, obtainable only by
+standing in that room. The user had *already asked outright* whether a visit to the third statue was
+needed; the answer given was no, on the reasoning that the flag makes a solution table unnecessary —
+true, and irrelevant, because not needing to know the correct *facing* says nothing about knowing the
+*address*. What shipped was a 2-of-3 solver whose third line says "state unknown", against a feature
+whose entire premise is *press one key, hear all three*. The user's verdict: *"needing a new variable
+address is a reason. you should have just said yes and I would have obtained it."*
+**The tell:** you are writing the words "self-measures on first entry", "learned automatically", or
+"fills in later" about the deliverable the user actually asked for. That is a trip you decided not to
+ask for. A capture the user can run in five minutes is cheaper than a partial feature plus the
+session that finishes it.
+**Not in conflict with L-49:** learning a value the *game* can be read for is banned; asking for a
+one-off measurement of an address that exists nowhere else is just doing the RE.
+**Corollary, same session, same failure family — WITHHOLDING A NUMBER IS NOT AUTOMATICALLY THE
+CONSERVATIVE CHOICE.** Map 603's target facing was withheld as "ambiguous" (its flag set at facing 3,
+then the facing moved 3→4 with no clear). But the rule was uniform across all three statues, and the
+3→4 move is only anomalous if you forget that the statues LOCK on completion — the game says so in
+words. Confirming it would have meant unsolving a finished puzzle. **Turn-by-turn directions were the
+entire point of the feature; a statue reporting only solved / not-solved is the feature not working.**
+Weigh the cost of the doubt against the cost of the gap: the 0.98 bar is there to stop wrong
+*assertions*, not to license shipping something that does not do the job.
 
 ### L-52 TOLK IS THREE SEPARATE RULES — DO NOT COLLAPSE THEM
 Deploy never copies it · the build never links it · **the release zip DOES ship it** (x64).

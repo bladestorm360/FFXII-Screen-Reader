@@ -10,7 +10,7 @@
 // a 400 ms stall and a 0 ms one can land on the same timestamp. This measures with
 // QueryPerformanceCounter instead.
 //
-// It answers three questions the field-menu stall needed and the log could not give:
+// It answers three questions the party-menu stall needed and the log could not give:
 //   1. Which hook consumed the time (self time, EXCLUDING the s_orig* trampoline).
 //   2. Was it one slow call or ten thousand cheap ones (max vs total).
 //   3. Was it BLOCKING on one of our own mutexes -- i.e. our lock sitting in the game's hot path.
@@ -86,7 +86,7 @@ void GapTick(const char* anchor, double gapWarnMs);
 // MENU-OPEN BRACKET. MarkMenuEntry() stamps the moment we announce a newly-entered menu;
 // NoteFirstPaint() is called from the paint path and, on the first paint after a mark, logs the
 // split: how long we spent inside our own hook, and how long the game then took before it drew
-// anything. The field-menu freeze needs exactly that split -- 2235 ms of silence with no scope
+// anything. The party-menu freeze needs exactly that split -- 2235 ms of silence with no scope
 // reporting is otherwise unattributable. Repeat calls before the next mark are ignored.
 // Logger self-measurement. Log::Write cannot use Scope/TimedLock -- StallProbe reports THROUGH
 // Log::Write, so any logging from inside the logger recurses. These accumulate into a counter that

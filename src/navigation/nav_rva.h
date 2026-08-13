@@ -473,7 +473,23 @@ constexpr uint8_t  READY_MODEL_BIT      = 0x20;
 // So this pruner already runs on every treasure, in both walks, and PROVABLY CANNOT EVER FIRE ON
 // ONE. Do not widen the bit to try to fix that -- it is being asked a question these objects do not
 // answer. Collected-treasure state lives elsewhere; see the treasure notes in GameArchitecture.md.
+// STRUCK AGAIN (Session 153) -- the S150 scoping above is NOT sufficient, and its stated reason was
+// wrong. It read: "`isCharacter` ... is the population it was measured on and the only one it may
+// speak for. A corpse is a character; a crystal, a gate, a door and a treasure are not, so none of
+// them can ever reach this drop again." **A GATE CRYSTAL IS scene category 5-7.** With that gate
+// compiled in, the live log still shows
+//     absent: [0:17] +0x14=0x30 kind=4 "Rabanastre Crystal" at (115.0,-10.0,151.0)
+// and `Gate=0` on a map that has one. Same bit, same failure, third object.
+//
+// The bit that separates the populations is 0x80 -- which the paragraph above already says, and
+// which nothing acted on until S153. The pruner now requires the byte to match the shape ABSENT was
+// measured in (0x80 set, 0x40 clear = 0xB0's high nibble) rather than reading 0x40 on its own.
+// Derivation and the four measured values: `EntityScan::LooksAbsent` in entity_scan.cpp.
 constexpr uint8_t  READY_PRESENT_BIT    = 0x40;
+// The GUARD on the bit above, not a meaning of its own: it marks the byte shape 0x40 was measured
+// in (0xF0 present / 0xB0 absent). Objects without it -- treasure 0x70, crystals 0x30 -- are never
+// asked, because on them 0x40 takes both values and answers nothing.
+constexpr uint8_t  READY_POPULATION_BIT = 0x80;
 constexpr uint8_t  SCENEOBJ_CLASS_MASK  = 0xE0;     // high 3 bits of the +0x03 type byte
 constexpr uint8_t  SCENEOBJ_CLASS_INTERACT = 0x60;  // class 3 == an interactable object
 // The story gate is written by FUN_0026ba60(obj, enable) (RVA 0x14BA60), whose only caller

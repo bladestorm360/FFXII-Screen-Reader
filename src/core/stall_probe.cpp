@@ -39,7 +39,7 @@ Counter g_counters[kMaxCounters];
 // PER-THREAD BREADCRUMB: the last scope entered and the last one exited, per thread.
 //
 // When the game thread blocks somewhere we do NOT instrument, no scope reports -- the log simply
-// goes silent, which is what happened at the field-menu freeze. The last mod code that ran before
+// goes silent, which is what happened at the party-menu freeze. The last mod code that ran before
 // the silence is then the only evidence there is, and it was being thrown away. thread_local, so
 // recording costs one store and needs no synchronisation.
 struct Crumb { const char* entered = nullptr; const char* exited = nullptr; int64_t enteredAt = 0; };
