@@ -8,7 +8,7 @@ Adds NVDA output, pathfinding, menu reading and other accessibility aides to Fin
 
 This is an early test build. The following are known — please report anything else you run into.
 
-Button prompts inside tutorial text are still skipped. A line like "press \[button] to save" reads as "press to save" — The text around it should now be intact: this build fixes a decoding bug that also swallowed the punctuation after an icon and could leave a stray letter behind. If you still hear a sentence lose its ending, or a stray letter appear mid-word, that is worth reporting.
+Button prompts inside tutorial text are skipped. A line like "press \[button] to save" reads as "press to save". The text around it should be intact — if you hear a sentence lose its ending, or a stray letter appear mid-word, that is worth reporting.
 
 Pathfinding directions can change abruptly if the game moves the camera. Directions are given relative to the camera — "north" means the way an Up push sends you — because that is the only frame the stick can actually act in. The game moves the camera on its own: stepping onto a ledge or stairs, hugging a wall, and constantly in battle as it tracks your target. When it does, the same route is described from the new angle, so a route that was "northeast" can become "southwest" without you having gone wrong — the way you push the stick has changed with it. If directions reverse or swing suddenly, the camera moved: press the directions key again and follow the new reading. There is no way for the mod to prevent this without breaking battle targeting, which uses the same camera to lock onto enemies.
 
@@ -170,8 +170,6 @@ It is on a keypress rather than automatic because six characters times two stats
 
 The party menu's own Equipment screen compares one character, usually one or two stats. 4 reads it there too, and with Auto detail on it also reads as you move.
 
-New in this build: item and equipment descriptions now read the elements as words. The game draws those as small pictures — "Element: Fire", "Immune: Fire, Lightning" — so they were silently dropped before. Equipment that blocks four or more status effects used to read as "Various status effects", which is the game's own shorthand; the mod now names them.
-
 #### Save and load (4 to 9)
 
 Each row of the save and load lists reads as you move to it: the slot number, where the save was made, the playtime, the party leader and their level, gil, and the clan rank and points. That is the row plus the panel underneath it, which is what a sighted player takes in at a glance. The row the game marks with an icon instead of a number is read without one, and a save from before you have a clan says nothing about rank or points, because the screen shows neither.
@@ -228,7 +226,7 @@ Two things worth knowing. The mod cannot take keys away from the game, so while 
 
 #### Reading
 
-* O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help, which is what it used to read on the Equipment screen. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on. With an enemy under the target cursor in battle it reads what Libra reveals — HP as numbers, level, MP where the enemy has any, any statuses on it, and what it is weak to — or says Libra is not active. Marks and bosses that shrug off Libra give you the same nothing they give a sighted player.
+* O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on. With an enemy under the target cursor in battle it reads what Libra reveals — HP as numbers, level, any statuses on it, and what it is weak to, absorbs, halves or is immune to — or says Libra is not active. Marks and bosses that shrug off Libra give you the same nothing they give a sighted player.
 * T: repeat the last line of dialogue — a conversation page, a prompt, or an obtained-item message. Silent when none of those is on screen.
 * U: current License Points, on the License Board.
 * ': write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.
