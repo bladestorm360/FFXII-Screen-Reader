@@ -130,6 +130,19 @@ documents keys and screen contexts, not the feature set, and a feature with no k
 player to look up. Treating every unlisted feature as a gap is what produced the long lists in the
 V0.2.1–V0.5 records; corrected 2026-08-03 and struck in the V0.6 record.
 
+**Auditing a key means grepping the readme for it and reading EVERY hit (added 2026-08-14, L-67).**
+A key is commonly described twice — a loose sentence in prose and the enumerated entry in the key
+list — and **the two rot at different rates**. The prose one usually says what the key is *for* and
+survives anything; the enumerated one lists what it actually says and goes stale the moment a
+readout changes. V0.6.4 checked `o`'s prose sentence, found it still true, and shipped a record
+claiming no gaps while the key list two hundred lines down still promised MP that S160 had removed.
+**One reassuring hit is not coverage.**
+
+**And if a flag survives two records, fix it or say why it cannot be fixed (L-68).** "Readme edits
+are a separate commit made *before* the trigger" bounds a release's **scope** — it does not forbid
+correcting a line already known to violate `CLAUDE.md`. Three records flagged the same changelog
+sentence and shipped it three times.
+
 ### 5. Report
 
 Confirm the zip was created and list its contents. Do not push, tag, or publish anything.
@@ -161,10 +174,19 @@ the only record in the repo that a given zip ever existed.
 
 ## V0.6.4-Test-Build — 2026-08-14
 
-**Built from:** `c488495`. **The DLL's code traces to `6bfa74a`** — the one commit after it is
-V0.6.3's own release record, documentation only, so nothing in this binary post-dates S161. Covers
-**Sessions 159–161** since `V0.6.3-Shotgun-Build`'s `5f13705` — five commits, of which **three carry
-code**: `7b8af05` (S159), `5c38af7` (S160) and `6bfa74a` (S161).
+**Built from:** `3c2c7fc`. **The DLL's code traces to `6bfa74a`** — the two commits after it are
+V0.6.3's release record and this release's readme commit, both documentation only, so nothing in
+this binary post-dates S161. Covers **Sessions 159–161** since `V0.6.3-Shotgun-Build`'s `5f13705` —
+six commits, of which **three carry code**: `7b8af05` (S159), `5c38af7` (S160) and `6bfa74a` (S161).
+
+> **THE ZIP WAS CUT TWICE, and the second cut is the one to ship.** The first assembly was completed
+> at `c488495` and is described below as originally written; the user then struck a readme line, the
+> readme fix turned up a **false claim about a key**, and the zip was re-cut on the corrected readme.
+> **`dinput8.dll` is byte-for-byte the same binary in both** — it was not rebuilt, and its build
+> stamp still names `c488495`, which is why "built from" and "the stamp" disagree by one docs commit
+> here. Only `ReadMe.txt` and the zip around it changed. **This is the one case where overwriting an
+> assembled release directory is right rather than forbidden:** the precondition exists to stop a
+> *shipped* release being clobbered, and nothing had left the machine.
 
 **The tree was DIRTY at the trigger, and the fix is recorded because the dirt was this file.** The
 V0.6.3 record above had been written at that release and deliberately left uncommitted; 117 lines of
@@ -180,7 +202,8 @@ keep a space out of the zip name, as every release since V0.6 has been. Note the
 V0.6.3 record says the same thing happened at that release, from the opposite direction (the user
 said "0.5.3", which was too low). **Check the last record before taking a version at face value.**
 
-**Zip:** `FFXII-Screen-ReaderV0.6.4-Test-Build.zip`, 1,244,003 bytes, five files, root flat.
+**Zip:** `FFXII-Screen-ReaderV0.6.4-Test-Build.zip`, **1,243,806 bytes** (the first cut was 1,244,003
+— the difference is the deleted readme paragraph), five files, root flat.
 - `dinput8.dll` 881,152 bytes (sha256 `da38ebb4…d1ba9c38`) — up from V0.6.3's 878,080; three
   sessions covering the Libra key's un-shadowing, the Libra readout's contents, and the floor-trap
   navigation category.
@@ -191,14 +214,45 @@ said "0.5.3", which was too low). **Check the last record before taking a versio
   `c4fb11d3…48197225`, `nvdaControllerClient64.dll` 153,600 sha256 `41c1f5df…b23a0b09`).
 - All four DLLs verified PE machine `8664`.
 
-**ReadMe: UNCHANGED — and this is the first record in this file that can say so truthfully.** 21,052
-bytes / 234 lines (sha256 `4cf81a2d…9c10cbe3`), **byte-identical to the shipped
-`Releases\V0.6.3-Shotgun-Build\ReadMe.txt`, verified with a real `cmp`**. Zero commits touched
-`README.md` in this range, and `git diff 5f13705 HEAD -- README.md` is empty, so the source the
-converter ran on is itself the same bytes V0.6.3 converted. **Read the V0.2 record at the bottom of
-this file before trusting any future "unchanged" claim**: that record asserted byte-identity with
-V0.1.1's ReadMe.txt, it was struck as false three days later, and the `cmp` it cited had not been
-run. Here it was run, and its output is quoted above.
+**ReadMe: CHANGED** — 20,500 bytes / 232 lines (sha256 `a1c57381…97407eaf`), against V0.6.3's 21,052
+/ 234. One commit touched `README.md` in this range, `3c2c7fc`, and it was made **in response to the
+user at the release trigger**, after the first zip had already been assembled.
+
+> ~~**ReadMe: UNCHANGED — and this is the first record in this file that can say so truthfully.**
+> 21,052 bytes / 234 lines, byte-identical to V0.6.3's, verified with a real `cmp`. Zero commits
+> touched `README.md` in this range.~~ **STRUCK the same day.** It was true of the *first* cut and is
+> false of the shipped one. Kept visible rather than deleted because the paragraph it was proudest of
+> — reproducing the previous artifact byte-for-byte — is still the gate that ran, and because a
+> record that quietly rewrote itself would hide the reason the readme changed.
+
+**Why it changed, in the user's own framing:** *"readMe should not have a 'New in this build,' ever.
+the ReadMe is not a changelog as is stated in claude.md. the changelog is mine to post on discord
+when I actually ship the release."* **The changelog is the USER's artifact and it lives on Discord,
+not in the zip.** `CLAUDE.md` already said "Never a changelog"; what this adds is *why* — there is a
+real changelog with a real author, and the readme duplicating it badly is worse than useless.
+
+Three passages went, and a **fourth problem surfaced only because the first three were being fixed**:
+- **"New in this build: item and equipment descriptions now read the elements as words"** — the line
+  V0.6.2, V0.6.3 and this record's own first draft all *flagged and shipped anyway*. **Removed
+  outright rather than reworded**: element reading has no key and the player makes no decision about
+  it, so under the keys-only rule there is nothing to look up and no entry to keep.
+- The **Known Issues** button-prompt paragraph carried "still skipped", "this build fixes" and
+  "silently dropped before". Rewritten to describe current behaviour, keeping the issue itself and
+  the request to report a lost sentence ending.
+- **`O`'s entry** said the Equipment screen "used to read" the standing help.
+- **`O`'S ENTRY WAS ALSO FALSE, AND THAT IS THE PART THAT MATTERED.** It promised the Libra readout
+  gives *"MP where the enemy has any"* — and **S160 took MP out deliberately** three commits before
+  this build (`battle_target_reader.cpp:242`: a number the enemy does not spend). It had also never
+  gained the **Absorb / Half / Immune** clauses S160 added. Now: HP as numbers, level, statuses, and
+  what it is weak to, absorbs, halves or is immune to.
+
+**The converter was re-validated a second time, immediately before the second conversion**, and
+passed again: `git show 5f13705:README.md` still reproduces the shipped
+`V0.6.3-Shotgun-Build\ReadMe.txt` byte-identically. Output audit of the new file: zero `#`, zero `*`,
+zero `](`, zero leftover escapes, zero `&#x20;`, zero doubled spaces, no BOM, CRLF on all 232 lines
+with no bare LF, and **exactly one backtick** — the literal `` ` `` key name, the same single
+survivor as the last eight releases. The shipped artifact was then grepped directly for the offending
+string: **zero occurrences of "new in this build", zero of the MP claim.**
 
 **The converter had to be REBUILT, and that is the finding worth keeping from this release.** The
 script V0.6.3 used lived in a session scratchpad and no longer exists — nothing in the repo carries
@@ -209,25 +263,35 @@ rules written down here are sufficient to regenerate the artifact, with no undoc
 is the strongest evidence this file has ever carried that its own procedure is complete, and it is
 also the reason not to bother checking a converter into the repo. It keeps V0.6.3's fix: it writes
 its output as **bytes** to a destination path given as an argument, so no shell can re-encode it.
-Only `git show … > f` is still a redirect and still needs git-bash.
+Only `git show … > f` is still a redirect and still needs git-bash. (It earned its keep an hour
+later, when the readme changed and the whole conversion had to be run a second time — the audit of
+that run is above.)
 
-Output audit: zero `#`, zero `*`, zero `](`, zero leftover backslash escapes, zero `&#x20;`, zero
-doubled spaces, no BOM, CRLF on all 234 lines with no bare LF, and **exactly one backtick** — line
-89's literal `` ` `` key name, the same single survivor as the last eight releases.
+**Readme key coverage: ONE GAP, FOUND LATE AND FIXED — and the way it was missed is the lesson.**
+The *registration* half was settled by measurement and holds: `src\input\` was **not touched at all**
+in this range (`git diff --stat 5f13705 HEAD -- src/input/` returns empty), and grepping the entire
+`src/` diff for `DInputEdge`, `DInputMenuNavEdge`, `VK_` and `DIK_` returns **zero added or removed
+lines**. No key was added, removed or rebound. But "no key was added" is only half the audit this
+file asks for; the other half is **an existing key whose meaning changed**, and that half was
+answered wrong:
 
-**Readme key coverage: NO GAPS, and this one was settled by measurement rather than by audit.**
-`src\input\` was **not touched at all** in this range — `git diff --stat 5f13705 HEAD -- src/input/`
-returns empty — and grepping the entire `src/` diff for `DInputEdge`, `DInputMenuNavEdge`, `VK_` and
-`DIK_` returns **zero added or removed lines**. No key was added, removed or rebound. Two existing
-keys changed what they *produce*, and neither needs a readme edit:
-- **`o`, the Libra readout.** S159 restored it (S156's gate had shadowed the very key it was added to
-  protect) and S160 took MP out and put Absorb/Half/Immune and the full 128-bit status space in. The
-  readme's sentence — *"With Libra up the enemy gives real numbers too, and O reads the rest of what
-  Libra reveals"* — is generic by construction and stayed true across a wholesale content change.
-  **A readme line written about what a key is FOR survives changes to what it says.**
-- **`-` / `=`, the navigation category cycle**, which gained **Trap**. No new key; traps ride the
-  existing cycle, and the readme names no category at all — the gap the V0.5 record flagged, carried
-  forward unchanged rather than created here.
+> ~~**`o`, the Libra readout.** The readme's sentence — *"With Libra up the enemy gives real numbers
+> too, and O reads the rest of what Libra reveals"* — is generic by construction and stayed true
+> across a wholesale content change. **A readme line written about what a key is FOR survives
+> changes to what it says.**~~ **STRUCK the same day. `o` HAD A SECOND ENTRY AND IT WAS FALSE.**
+
+**THE README DESCRIBED `o` IN TWO PLACES AND ONLY ONE OF THEM WAS CHECKED.** Line 17, in Known
+Issues, is the generic sentence quoted above, and it did survive. **Line 231, in the Reading key
+list, is the real entry** — it enumerated the readout clause by clause and promised *"MP where the
+enemy has any"*, which S160 had removed three commits earlier. The audit found the first, reasoned
+about it correctly, and stopped. **A key can have more than one entry, and the one that goes stale
+is the SPECIFIC one, never the generic one** — precisely because the generic one commits to nothing.
+Grep the readme for the key and read **every** hit before declaring coverage; a single hit that reads
+reassuringly is the failure mode. Fixed in `3c2c7fc`, with the Absorb/Half/Immune clauses added.
+
+- **`-` / `=`, the navigation category cycle**, gained **Trap**. No new key; traps ride the existing
+  cycle, and the readme names no category at all — the gap the V0.5 record flagged, carried forward
+  unchanged rather than created here.
 
 **One behavioural change to a documented key, flagged not fixed.** `=` now **skips** the Trap
 category when the game's own visibility latch is clear (`entity_commands.cpp:135`), so the cycle has
@@ -245,10 +309,14 @@ is state-dependent. **If a tester reports "the category key skipped one", this i
   nobody has noticed. **This also falsified a claim in this file's own "What this procedure does NOT
   do", now struck above.** Bumping it is a build change and belongs in a commit *before* the next
   release trigger.
-- `ReadMe.txt` line 173 still carries **"New in this build: item and equipment descriptions now read
-  the elements as words"** — new in **V0.6** (S125), now **four** releases ago, and the changelog
-  framing the README rule in `CLAUDE.md` forbids. Flagged by V0.6.2 and V0.6.3 and still shipping.
-  Unavoidable here: with no readme commit ahead of this trigger, the shipped text cannot change.
+- ~~`ReadMe.txt` line 173 still carries **"New in this build…"** … Unavoidable here: with no readme
+  commit ahead of this trigger, the shipped text cannot change.~~ **FIXED, and the excuse was wrong.**
+  It was removed in `3c2c7fc` and this zip re-cut. **"A readme edit is a separate commit made before
+  the trigger" is a rule about SCOPE, not a prohibition** — it stops a release quietly rewriting the
+  readme, and it has been misread three releases running as a reason to ship a line already known to
+  violate `CLAUDE.md`. **Flagging the same defect in three consecutive records is not respecting the
+  rule, it is documenting a failure to apply it.** If a flag survives two records, fix it or say
+  plainly why it cannot be fixed.
 - **The Puzzle-guide paragraph still sits under the Stilshrine section**, so it still reads as though
   Puzzle guide and Instant success belong to the statues. Introduced by V0.6.3's own readme edit,
   still a two-line reorder.

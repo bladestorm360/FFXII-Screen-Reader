@@ -37,7 +37,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
 | editing code that already works | `TAG:refactor` | L-27…L-32 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
-| writing docs, committing, closing a session | `TAG:process` | L-38…L-43 |
+| writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
@@ -321,6 +321,27 @@ commits listed in `MEMORY.md`.
 
 ### L-43 BYTE-EXACT COMPARES MUST RUN IN BASH
 PowerShell's `>` re-encodes and adds a BOM; it faked a converter mismatch at V0.6.2.
+
+### L-67 GREP EVERY HIT FOR A KEY BEFORE DECLARING README COVERAGE — THE GENERIC ENTRY SURVIVES, THE SPECIFIC ONE ROTS
+A key is often described in **two** places: a loose sentence in prose, and the enumerated entry in
+the key list. They rot at different rates, and **the reassuring one is the one that never goes
+stale**, because it commits to nothing.
+**Why:** at V0.6.4 the `o` audit found `README.md:17` — *"O reads the rest of what Libra reveals"* —
+reasoned correctly that a line about what a key is FOR survives changes to what it says, and stopped.
+`README.md:231` enumerated the readout clause by clause and still promised *"MP where the enemy has
+any"*, which S160 had deleted three commits earlier. The record shipped claiming "no gaps". One hit
+that reads well is the failure mode; count the hits before trusting any of them.
+
+### L-68 ⟲ A FLAG THAT SURVIVES TWO RECORDS IS A FIX YOU DECLINED TO MAKE
+Recording a known rule violation is not respecting the rule. **If the same defect appears in two
+consecutive release records or session logs, fix it or state plainly why it cannot be fixed** — a
+third flag is not diligence.
+**Why:** *"New in this build: …"* violated `CLAUDE.md`'s no-changelog rule, was flagged in the
+V0.6.2, V0.6.3 **and** V0.6.4 records, and shipped in all three. The stated reason — "readme edits
+are a separate commit made *before* the trigger" — is a rule about **scope**, meant to stop a release
+quietly rewriting the readme; it was misread as a prohibition on fixing anything. The user removed it
+in one sentence at the V0.6.4 trigger. **Related:** the changelog is the USER's artifact and it lives
+on Discord — the readme describes the mod as it is now.
 
 ---
 
