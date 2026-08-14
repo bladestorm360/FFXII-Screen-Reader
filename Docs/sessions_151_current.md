@@ -1188,7 +1188,29 @@ are visible now", for one guarded read. It also avoids a real hazard: `LibraActi
 awaiting a run. It hooks the visibility toggle rather than polling — `setInterval` does not exist in
 an injected script, and the mod it feeds is bound by the same no-polling rule.
 
-### 5. Play-confirm gates — OPEN
+### 5. Play-confirm — PARTIAL, and the gap is named
 
-Built, deployed, binary `cmp`-verified. Needs: an enemy with a known absorb (Flan family vs its
-element) to hear the Absorb clause; any enemy to confirm MP is gone and statuses still read.
+Tester: *"works."* Confirmed from the play log of the same session — note the `Build:` line reads
+`7b8af05`, one commit BEHIND, because the DLL was built at 05:56:48 and S160 was not committed until
+06:00:53. **The stamp names the tree's last commit, not the code** (L-62 again, from the other
+direction: last time it was stale, this time it is merely early). The DLL mtime settles it.
+
+```
+o: Hyena A, HP 95/95. Level 2, Weak: Water
+o: Giza Rabbit A, HP 85/85. Level 1, Libra, Weak: Fire
+```
+
+**CONFIRMED:** MP is gone — zero `o:` lines carry an MP clause. Level, statuses and the Weak clause
+all read, and the baked falsifier printed `libra bit30 = "Libra"`.
+
+**NOT CONFIRMED, and it is the half the session was actually about:** Absorb, Half and Immune. Giza
+Rabbits and Hyenas are early trash with none of the three, so **every clause added this session is
+still unexercised.** "Works" here means nothing regressed, not that the new feature fired. Needs an
+enemy with a known absorb — the Flan family against its own element is the cheap test.
+**DO NOT RECORD THIS AS A FULL PLAY-CONFIRMATION.**
+
+**Observation, not yet a defect:** `Giza Rabbit A` lists **`Libra`** among its statuses and the Hyena
+does not, so it is a real per-enemy state rather than the party's buff leaking in — and it is
+**pre-existing**, bit 30 sitting inside the u32 words the readout always walked, not something the
+S160 widening introduced. Whether an enemy should announce the player's own scan is a wording
+question for the tester, not a correctness one.
