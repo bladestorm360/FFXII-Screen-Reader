@@ -151,6 +151,123 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.6.3-Shotgun-Build — 2026-08-13
+
+**Built from:** `5f13705`, which is also HEAD, so nothing in this binary post-dates S158. Tree clean
+before and after. Covers **Sessions 152–158** since `V0.6.2-Shotgun-Build`'s `75af007` — six commits,
+of which only **two carry code**: `592e142` (S152) and `5f13705` (S153–S158, one commit for six
+sessions). The other four are documentation, one of them V0.6.2's own release record.
+
+**The version number was changed before the build, and the reason belongs here.** The user asked for
+"0.5.3-Shotgun Build". Releases number upward and the previous one is **V0.6.2**, so `0.5.3` would
+have sorted this build *below* the release it supersedes — a zip a player could reasonably read as
+older. Asked rather than assumed; the user confirmed **0.6.3**. Directory and zip are
+`V0.6.3-Shotgun-Build`, hyphenated to keep a space out of the zip name, as V0.6, V0.6.1 and V0.6.2
+all were.
+
+**Zip:** `FFXII-Screen-ReaderV0.6.3-Shotgun-Build.zip`, 1,242,229 bytes, five files, root flat.
+- `dinput8.dll` 878,080 bytes (sha256 `643e2c36…375f5578`) — up from V0.6.2's 846,848; seven sessions
+  covering the frame-budget conversion, the presence pruner's scope fix, the Stilshrine statue
+  readout, the bare-key F-key guard, the beacon's driving gate, and the gambit editor's row decode
+  and picker.
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` — **byte-identical to V0.6.2's,
+  V0.6.1's and V0.6's** (sha256 `056db4a9…fa3a1d19`), same source, unchanged build. **Four releases
+  running.**
+- TTS pair carried over unchanged from `V0.6.2-Shotgun-Build` (`Tolk.dll` 122,368 sha256
+  `c4fb11d3…48197225`, `nvdaControllerClient64.dll` 153,600 sha256 `41c1f5df…b23a0b09`).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: CHANGED** — 21,052 bytes / 234 lines (sha256 `4cf81a2d…9c10cbe3`), against V0.6.2's 20,879
+/ 228. **One commit touched `README.md` in this range** (`5f13705`) and it made exactly three edits:
+the new **Stilshrine of Miriam: the three statues** section on `B`, and two "field menu" → "party
+menu" renames — S158's reversal of the Session 93 vocabulary, at the tester's request.
+
+**Converter re-validated the documented way, and it passed.** Run against `git show 75af007:README.md`
+it reproduced the shipped `Releases\V0.6.2-Shotgun-Build\ReadMe.txt` **byte-identically** — 20,879
+bytes both, sha256 `1d9f2db7…c1ba4e4a`. The current file was then converted from `git show
+HEAD:README.md` with the same code. Rules unchanged from V0.6.2. Output audit: zero `#`, zero `*`,
+zero `](`, zero leftover escapes, zero doubled spaces, no BOM, CRLF on all 234 lines with no bare LF,
+and **exactly one backtick** — line 89's literal `` ` `` key name, the same single survivor as the
+last seven releases.
+
+> **V0.6.2's byte-exactness trap was avoided by construction rather than worked around.** That record
+> records PowerShell's `>` re-encoding redirected output and producing a false MISMATCH. The fix used
+> then was to run the whole validation through git-bash. This time the converter **writes its output
+> as bytes itself** and takes the destination path as an argument, so the conversion step cannot be
+> spoiled by whichever shell it runs under. `git show … > f` is still a shell redirect and still needs
+> git-bash; only that one step does.
+
+**Readme key coverage: NO GAPS — and no key was added or removed in this range.** Every `DInputEdge` /
+`DInputMenuNavEdge` registration in `input_tracker.cpp` was diffed against `75af007`, not sampled.
+Two existing keys changed, and both are already covered:
+- **`B` gained a second context** — the Stilshrine of Miriam statue readout, alongside Bhujerba's
+  infamy meter. The two can never both be live, and `nav_commands.cpp` raises both requests rather
+  than deciding which applies on the input thread. The readme gives it its own section, and
+  `Docs\Controls.md` carries it too.
+- **The bare-press rule now actually holds for all six F-keys.** S155 moved `F4`, `F5`, `F6`, `F7`
+  and `F8` onto the same `bareF()` guard `F11` already had. The readme **needed no edit**: it already
+  asserted the rule in general terms ("Every mod key is pressed on its own — no Shift, Ctrl or Alt")
+  and spelled it out for `F11`. Before S155 that claim was true only of `F11` — `Alt+F4` flipped
+  Combat verbosity as the OS closed the game. **The code caught up to what the readme already said**,
+  which is the one shape of key change that produces no readme work.
+
+**Flagged, not fixed — one stale line, one new misdirection, one doc gap:**
+- `ReadMe.txt` line 173 still carries **"New in this build: item and equipment descriptions now read
+  the elements as words"**. That was new in **V0.6** (S125), three releases ago, and it is the
+  changelog framing the README rule in `CLAUDE.md` forbids. V0.6.2 flagged it and it is still
+  shipping. It belongs in the next readme commit.
+- **NEW, and introduced by this release's own readme edit.** The Stilshrine section was inserted
+  between the Bhujerba paragraph and the sentence that follows it, so **"Two settings appear in the
+  mod menu while you are shouting, and only then. Puzzle guide covers…" now sits directly under the
+  Stilshrine section** and reads as though Puzzle guide and Instant success belong to the statues.
+  They do not: `mod_menu.cpp:97` gates both rows on `ShoutMeter::PuzzleActive`, and the statue
+  readout consults neither. A player reading in order will look for a Puzzle guide row in the
+  Stilshrine and never find one. **Move that paragraph above the Stilshrine section** — a two-line
+  reorder in the next readme commit, not a rewrite.
+- **`Docs\Controls.md` still does not list `Home`/`End` for the mod menu** — the same gap V0.6.2
+  flagged, and the one the README closed for itself in `75af007`. Controls.md's mod-menu row (line
+  176) and its section (line 312) still stop at Up/Down, Left/Right and `o`.
+
+**Purpose:** shotgun build of Sessions 152–158. What the tester is exercising: the four frame budgets
+now on wall-clock deadlines (S152), the presence pruner that no longer deletes gate crystals and
+named NPCs (S153), the Stilshrine of Miriam statue readout on `B` (S154/S156/S157), the bare-key
+F-key guard (S155), the audio beacon's "is the player driving" gate (S157), and the gambit editor's
+incomplete-row decode and its picker (S158).
+
+**Play-confirmation status — MIXED, and this is the part to read before diagnosing anything on this
+build.** Unlike V0.5's blanket attestation, this range has per-session evidence:
+- **Confirmed 2026-08-13**, on the build that became this one: the gambit editor's incomplete-row
+  decode and the gambit picker (S158, both halves — the picker from that session's own log: eleven
+  category switches, zero stale items, zero duplicate `[LICENSE] summary` lines), and the
+  **Stilshrine statue readout** (S157 — map 599 reads from anywhere immediately; map 600 needs one
+  entry into Walk of Reason before it reads from elsewhere).
+- **Partially confirmed:** the beacon's driving gate (S157) is **confirmed in MENUS**, the case its
+  report was filed against. The **cutscene and dialogue cases are not verified** — the tester
+  deliberately left them for a later pass — so `IsBoxLive()` carrying a captioned scene remains an
+  inference. A silent camera scene with no message box has no measured signal at all. **Do not
+  upgrade either without a log.**
+- **NOT exercised:** S153's presence-pruner fix, and S155/S156. S153's play-confirm gate is written
+  down in the session log — stand at the Rabanastre gate crystal and expect `Gate=1` in the rescan
+  line, the crystal reachable with `=`/`\`, a `spared:` line naming it, and the `ABSENT` count still
+  rising when a Hyena dies.
+- **⚠ S152's four converted budgets have NO targeted measurement.** They were deployed 2026-08-12 and
+  they are in the build played on 2026-08-13, so they have been *in play* — but nothing measured
+  them. **S152 touched nav, beacon, menu and dialogue timing in one commit, so a fault in any of
+  those four on this build should suspect it before the session that owns the surface.**
+
+**Known-unfinished items still shipping, unchanged and still open in `Docs\debug.md`:** the **Clan
+Primer wrap-around settle is SILENT** (S127, tester-accepted, with the do-not-fix-by-reverting
+warning recorded there), and the `__MJ_CTRL` exit-builder widening means maps **318, 319, 321, 322
+and 568** may list exits they previously dropped.
+
+**The three frame-counting offenders V0.6.2 named are CLOSED in this build** — `path_planner` and
+`nav_probe` (`kWaitFrames=90` → `kWaitMs=1500`) and `audio_beacon` (`kStrayFrames=45` → `kStrayMs=750`),
+plus a fourth in `menu_reader`. **But the biggest item in `Docs\PerFrameAudit.md` is OPEN, not
+closed:** the tester's "aaaaaaaaa" runaway reproduces at **raised game speed**, not at high frame
+rate, which points at a hook inside the sim loop rather than at any frame budget. The `textWalk
+…/frame` probe **ships in this build** and is how that gets settled — roughly `1.00` per frame refutes
+the sim-loop lead, roughly `4.00` at 4× speed confirms it.
+
 ## V0.6.2-Shotgun-Build — 2026-08-11
 
 **Built from:** `75af007`. Tree clean before and after. **The DLL's code traces to `f017e24`** — the
