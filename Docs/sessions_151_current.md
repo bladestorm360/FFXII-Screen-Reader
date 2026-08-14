@@ -604,6 +604,12 @@ to push back. Two compounding faults:
 
 * **`P+0x10F78` is NOT "target selection active".** It was true while the battle command menu was
   open. The name in `battle_target_reader.cpp` was inferred and is now STRUCK.
+  > **⚠ THIS STRIKE IS ITSELF UNMEASURED — flagged S159 (2026-08-14).** Every archived log in the
+  > corpus runs build `f544fe1`, which predates the S155 gate; only the 2026-08-14 log runs a build
+  > containing it. **No log ever existed that could have tested this claim**, and the offset is
+  > still named and trusted at `battle_target_reader.cpp:52,109` — so the strike and the code have
+  > contradicted each other since. S159 ships a log-only state line on the `o` press to settle it
+  > rather than infer a third time. Do not act on either reading until that line is in a play log.
 * **The ORDER was the real defect.** `SpeakTargetDetail()` ran first, so `TextCapture::CurrentHelpText()`
   was **never called** in battle. The reporting log has four "Libra not active" lines and **zero**
   `describe:` lines — which reads like "there is no description" and is nothing of the kind. *The
@@ -1013,3 +1019,92 @@ four shared documents all carry both tracks' hunks). Splitting them now would me
 mixed files into commits that were never built in that state, which buys a tidier log at the cost of
 a history whose intermediate points do not compile. **Recorded here and in the memory index so a
 future `git log` trace does not read six sessions as one.**
+
+---
+
+## Session 159 — 2026-08-14 — [menus] Libra's key was shadowed by the gate added to protect it
+
+KEYWORDS: Libra o key regression BattleCommandActive g_bcmdLivePanel target cursor aiming phase
+menu focus surface belt and braces second gate unmeasured flag P+0x10F78 OFF_GATE 0x10F78
+SpeakTargetDetail DescribeHotkey description-first hot-reload dropped payload split L-66
+
+### 1. The defect: `o` announced nothing in battle
+
+Reported: with Libra up the enemy's HP reads correctly, but `o` never speaks level, absorbs or
+weaknesses. The user's own guess named the cause — *"this likely has to do with your hardening
+against firing in the battle menu"* — and it was right.
+
+`MenuReader::DescribeHotkey` early-returned on `IngameMenuReader::BattleCommandActive()` before
+`BattleTargetReader::SpeakTargetDetail()` was ever reached. **That flag is true for the entire
+aiming phase.** Two independent reasons, and each alone is enough:
+
+* `g_bcmdLivePanel` is cleared only when a menu focus lands on a *different* owner. **The target
+  cursor is not a menu focus surface** — confirming a command emits no 0x8000 for another owner, so
+  nothing clears it.
+* The re-validation that was supposed to be the load-bearing half checks *liveness*, and the command
+  panel is still allocated and still its own class behind the cursor. **Liveness catches a dead
+  object, never a live one the player has navigated away from.**
+
+### 2. The measurement
+
+`x64\FFXII-Screen-Reader-Latest.log`, build `5f13705`, one battle:
+
+| time | line |
+|---|---|
+| 15:38:19.328 | `HookedBcmdConfirm` — Attack confirmed |
+| 15:38:19.359 | `[TARGET] handle=0x200021 enemy "Hyena A, HP 95/95"` — cursor up |
+| 15:38:20.062 … 27.046 | **nine** × `o: battle command menu is live -- Libra declined` |
+| 15:38:23.343 / 24.234 / 24.953 | `[TARGET] ResolveTarget: "Hyena A" BROWSING enemy` |
+| 15:38:27.828 → 31.4 | back in the command list: zero `[TARGET]` lines; `describe:` fires for Protectga |
+
+Nine presses, cursor demonstrably up and on an enemy throughout, zero Libra. The two phases never
+overlap in the log — `[TARGET]` lines only during aiming, `[INGAME] command:` only during browsing.
+
+**Corpus:** the refusal line appears in exactly one log (9 hits) and its fall-through
+(`o: no description for this focus`) in **none**. The gate never once fired in the case it was
+written for.
+
+### 3. The fix — one behavioural change
+
+`menu_reader.cpp`: the early return is **STRUCK**; the flag survives as a log-only discriminator
+*below* `SpeakTargetDetail()`, where it cannot shadow anything. Arbitrating it instead
+(`!TargetSelectActive() && BattleCommandActive()`) would have been identical to having no gate,
+because `SpeakTargetDetail` already returns false whenever the cursor is down — so the early return
+bought nothing except the outage.
+
+**Description-first ordering is untouched.** That is S156's real fix and it works: log
+`2026-08-13_03-11-17` shows 18 `describe:` lines over 355 command-menu focus events with zero wrong
+Libra, on a build predating the gate. **S156 fixed this defect twice and only the second one could
+regress** — the lesson is L-66.
+
+`ingame_menu_reader.cpp`: comment-only correction. The flag was documented as "the mod's own
+knowledge of which surface the player is on"; it means "the command panel is alive and was the last
+thing to take a menu focus". Its lifetime is deliberately unchanged — one consumer, now log-only.
+
+### 4. An unmeasured strike, found while checking the other side
+
+S156 STRUCK the name of `P+0x10F78` on the claim that it "was true while the battle command menu was
+open". **Every archived log runs `f544fe1`, which predates the gate that would have tested it**; only
+the 2026-08-14 log runs a build containing it. The claim was never measurable, the offset is still
+named and trusted at `battle_target_reader.cpp:52,109`, and the strike and the code have contradicted
+each other since. Rather than infer a third time, a **log-only state line** now prints
+`gate / handle / bcmdLive` on the `o` press, keyed on the state tuple so it emits once per distinct
+combination. One play session closes it; the block is commented to be deleted afterwards.
+
+### 5. Hot-reload — investigated, viable, and dropped by the user
+
+Asked whether the DLL could hot-reload, and whether "forcing the executable to re-scan for proxy
+DLLs" works. **It does not** — `dinput8.dll` is loaded once and locked for the life of the process;
+Windows never re-scans, and `FreeLibrary` on the proxy while the game holds forwarded exports, the
+patched vtable slot and 72 MinHook trampolines is an immediate crash. The working shape is a thin
+resident host + a reloadable payload DLL loaded from a temp copy — which also removes the file lock
+that stops `build_and_deploy.bat` running while the game is up.
+
+**The user dropped it**, on the correct reading that the prerequisite work destabilises exactly the
+systems they don't want touched. The audit is preserved in `debug.md` so it is not re-derived.
+
+### 6. Play-confirm gates — OPEN
+
+Built and deployed (binary `cmp`-verified against the build output, per L-62). Needs one battle:
+Libra up + aiming → full readout; Libra down → "Libra not active"; a magick row → its description;
+**Attack (no description) → whatever it does, the new state line records it.**

@@ -39,7 +39,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -403,6 +403,30 @@ words. Confirming it would have meant unsolving a finished puzzle. **Turn-by-tur
 entire point of the feature; a statue reporting only solved / not-solved is the feature not working.**
 Weigh the cost of the doubt against the cost of the gap: the 0.98 bar is there to stop wrong
 *assertions*, not to license shipping something that does not do the job.
+
+### L-66 BELT AND BRACES IS ONLY INSURANCE IF THE BACKUP IS MEASURED TO BE MORE RELIABLE
+**A second gate on a second, unmeasured flag is a second failure mode, not redundancy.** Before
+adding one, state what each flag reads in EACH state you are separating. If you cannot, you are not
+hardening the decision — you are widening it.
+**Why:** S156 gated `o`'s Libra branch on `IngameMenuReader::BattleCommandActive()` as belt and
+braces over `SpeakTargetDetail`'s own target-cursor gate, reasoning that the first reads an
+*inferred* HUD flag while this one reads "the mod's own knowledge of which surface the player is
+on". It does not read that. It means "the command panel is alive and was the last thing to take a
+menu focus" — and the target cursor is not a menu focus surface, so nothing clears it, while the
+panel stays alive behind the cursor so its liveness re-validation passes too. **The flag was true
+for the whole aiming phase, which is precisely when Libra is the question.** S159 measured it: nine
+`o` presses, all declined, interleaved with `ResolveTarget … BROWSING enemy`. Across the entire
+corpus the refusal line appears in one log and its fall-through in none — **the gate never once
+fired in the case it was written for, and cost the feature outright.**
+**The tell:** the new gate is justified by distrust of the old one, and the sentence "if X turns out
+to mean something other than Y, we are still protected" appears without a measurement of either.
+Liveness catches a DEAD object, never a live one the player has navigated away from.
+**Corollary — CHECK WHETHER THE FIX YOU ALREADY SHIPPED MADE THE SECOND ONE UNNECESSARY.** S156
+fixed this defect twice in one session: reordering to description-first (which worked — 18
+`describe:` lines, zero wrong Libra) *and* this gate. The second was never needed, and only it could
+regress. When two fixes land together, say which one you expect to do the work.
+**Related:** L-03 (the flag's own comment asserted the meaning it did not have), L-64 (S156's strike
+of `P+0x10F78` was recorded against no log that could have tested it — see S159).
 
 ### L-52 TOLK IS THREE SEPARATE RULES — DO NOT COLLAPSE THEM
 Deploy never copies it · the build never links it · **the release zip DOES ship it** (x64).

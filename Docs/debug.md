@@ -7,6 +7,95 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### FAILED (S156, fixed S159) — a SECOND gate on `o`, on a flag that reads the same in both states
+
+KEYWORDS: Libra o key silent battle BattleCommandActive g_bcmdLivePanel target cursor aiming
+belt and braces second gate liveness re-validation menu focus surface DescribeHotkey
+SpeakTargetDetail description-first regression
+
+**The approach that failed:** gating `o`'s Libra branch on `IngameMenuReader::BattleCommandActive()`
+in addition to `SpeakTargetDetail`'s own target-cursor gate, so that the ability-description bar
+could never be shadowed by Libra in the battle command menu. Justified as belt and braces: the first
+gate reads an *inferred* HUD flag, this one reads "the mod's own knowledge of which surface the
+player is on", re-validated against the window class.
+
+**Why it failed: THE FLAG IS TRUE DURING TARGET SELECTION TOO**, so `o` declined everywhere and
+Libra became unreachable. Two independent causes, either sufficient:
+
+1. `g_bcmdLivePanel` is cleared only when a menu focus lands on a *different* owner. **The target
+   cursor is not a menu focus surface** — confirming a command emits no 0x8000 for another owner.
+2. The window-class re-validation checks **liveness**, and the command panel is still allocated and
+   still its own class behind the cursor. Liveness catches a DEAD object, never a live one the
+   player has navigated away from.
+
+**Evidence** (`x64\FFXII-Screen-Reader-Latest.log`, build `5f13705`): nine `o` presses between
+15:38:20 and 15:38:27 all logged `o: battle command menu is live -- Libra declined`, interleaved with
+`ResolveTarget: "Hyena A" BROWSING enemy` at 23.343 / 24.234 / 24.953 — cursor up, on an enemy,
+throughout. Across the whole corpus the refusal line appears in that one log and its fall-through in
+**none**: the gate never once fired in the case it was written for.
+
+**Do not re-add it.** Arbitrating it (`!TargetSelectActive() && BattleCommandActive()`) is
+behaviourally identical to deleting it, because `SpeakTargetDetail` already returns false whenever
+the cursor is down. The flag now survives only as a log-line discriminator *below* that call.
+
+**What actually fixed the original defect** was the other half of S156 — asking
+`TextCapture::CurrentHelpText()` FIRST. Log `2026-08-13_03-11-17` shows 18 `describe:` lines over 355
+command-menu focus events with zero wrong Libra, on a build that predates the gate. **Two fixes
+landed together for one defect and only the second could regress.** Generalised as L-66.
+
+**Still open, and NOT to be inferred a fourth time:** whether `P+0x10F78` reads up while the command
+list holds the cursor. S156 STRUCK the offset's name on that claim, but every archived log runs
+`f544fe1`, which predates the gate that would have tested it — **no log ever existed that could
+confirm it**, while `battle_target_reader.cpp:52,109` still names and trusts the offset. A log-only
+state line (`o: state gate=… handle=… bcmdLive=…`, keyed on the state tuple) now measures it. Delete
+that block once a play log has named the state for both the command list and the target cursor.
+
+### DROPPED BY THE USER (S159) — hot-reloading the mod DLL; the audit, so it is not re-derived
+
+KEYWORDS: hot reload hotreload FreeLibrary LoadLibrary payload DLL split resident host proxy
+re-scan file lock build_and_deploy locked dinput8 dev loop iterate live
+
+**Asked, answered, and deliberately not built.** Recorded because the research is the expensive part.
+
+**"Can the executable be forced to re-scan for proxy DLLs?" — NO.** `dinput8.dll` is resolved once at
+process start and stays mapped and file-locked for the life of the process. There is no re-scan, and
+`FreeLibrary` on the proxy is fatal: the game holds forwarded export pointers into it, the patched
+`GetDeviceState` vtable slot points into it, and 72 MinHook trampolines return into it.
+
+**What WOULD work:** `dinput8.dll` becomes a thin permanent *host* and all mod logic moves to a
+payload DLL loaded from a temp copy (which also removes the file lock that stops `build_and_deploy.bat`
+running while the game is up). The architecture is unusually well suited to it —
+`dllmain.cpp:201-223` already has a correctly-ordered teardown chain written explicitly for the
+`FreeLibrary` case, and `Hooks::Shutdown` already does `MH_DisableHook(MH_ALL_HOOKS)` +
+`MH_Uninitialize`. **It has never once executed.** Re-init measures ~1.8 s, mostly 72 serialized
+`MH_CreateHook` calls.
+
+**The hard blocker:** the DirectInput boundary cannot move to the payload. `g_kbDevices[]`
+(`dinput8_proxy.cpp:111-112`) is filled only inside `HookedCreateDevice`, which the game calls **once
+at startup and never again** — a fresh payload gets an empty array and every mod hotkey is dead for
+the rest of the session. The two vtable patches also have **no revert path** (originals are saved at
+`:107-108`, nothing writes them back). Host must own the patch, the device list and MinHook, and
+forward through a re-bindable indirection.
+
+**Teardown gaps that must be closed first** (all pre-existing, none of them a bug today because the
+chain never runs): `input_tracker.cpp:380` ignores the `WaitForSingleObject(g_thread, 2000)` return
+and proceeds to `CloseHandle` on timeout; `GameText::SetElementSpriteResolver` and
+`TextCapture::SetMenuPaintedCallback` are never nulled, and `InputTracker`'s 9 callback slots only
+partially; `SneakAssist`, `ShoutMeter`, `ShoutGauge`, `MessageMacro` and 4 others have no `Shutdown`
+at all (10 hooks rely on `MH_Uninitialize`); and MinHook's `ProcessThreadIPs` relocates IPs only
+inside the prologue/trampoline — **it cannot evacuate a thread parked inside a detour body**, so an
+unload needs a drain gate. `STALL_SCOPE` (`core/stall_probe.h:117`) already wraps 69 of the 70
+detours and is the natural single choke point for one.
+
+Also: `Log::Init` rotates the log on every call, so each reload would burn one of the 20 archive
+slots and split a session's evidence across two files. Combat-log history (100 events) and the
+collected-treasure set are the only unrecoverable losses; the user's call was to hand both across a
+reload via the resident host if this is ever built.
+
+**Why dropped:** the prerequisite work lands in `treasure_state`, `combat_log`, `sneak_assist` and
+the input-thread join — exactly the systems the user does not want destabilised. *"I think we're
+fine as is and this creates serious regression risks."*
+
 ### SOLVED (S157) — the audio beacon pinged through cutscenes, dialogue and the battle command menu
 
 KEYWORDS: beacon audio playing during cutscene dialogue battle menu open party menu quiet F9 F11

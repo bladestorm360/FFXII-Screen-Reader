@@ -193,22 +193,40 @@ void DescribeHotkey() {
         return;
     }
 
-    // ---- SECOND: Libra, and never while the battle command menu is the live surface -------------
+    // ---- SECOND: Libra ---------------------------------------------------------------------------
     //
-    // Belt and braces with `SpeakTargetDetail`'s own target-cursor gate. That gate reads a HUD flag
-    // whose meaning is inferred; this one reads the mod's own knowledge of which surface the player
-    // is on, re-validated against the window class. If the flag turns out to mean something other
-    // than "the target cursor is up", the battle menu is still protected.
-    if (IngameMenuReader::BattleCommandActive()) {
-        Log::Write("READER", "o: battle command menu is live -- Libra declined, description only");
-        return;
-    }
+    // ~~"...and never while the battle command menu is the live surface"~~ was an EARLY RETURN on
+    // `IngameMenuReader::BattleCommandActive()` here until 2026-08-14, and it is **STRUCK**. It was
+    // added as belt and braces on the reasoning that `SpeakTargetDetail`'s own gate reads a HUD flag
+    // whose meaning is inferred, while this one reads the mod's own knowledge of which surface the
+    // player is on -- so if that flag ever meant something other than "the target cursor is up", the
+    // battle menu would still be protected.
+    //
+    // THE INSURANCE WAS LESS RELIABLE THAN THE THING IT INSURED, AND IT TOOK LIBRA OUT ENTIRELY.
+    // `g_bcmdLivePanel` stays true for the whole aiming phase -- the target cursor is not a menu
+    // focus surface, so nothing clears it, and the command panel is still alive behind the cursor so
+    // its window-class re-validation passes. Measured, 2026-08-14 log: nine `o` presses between
+    // 15:38:20 and 15:38:27 all declined here, interleaved with `ResolveTarget: "Hyena A" BROWSING
+    // enemy` proving the cursor was up and on an enemy throughout. Across the whole corpus the
+    // refusal line appears in that one log and the fall-through below appears in none -- the gate
+    // never once fired in the case it was written for.
+    //
+    // Arbitrating it (`!TargetSelectActive() && BattleCommandActive()`) would be identical to having
+    // no gate at all, because `SpeakTargetDetail` already returns false whenever the cursor is down.
+    // So the flag keeps its diagnostic value BELOW the call, where it cannot shadow anything.
+    //
+    // The description-first ordering above is what actually fixed the reported defect and is
+    // untouched: log 2026-08-13_03-11-17 shows 18 `describe:` lines over 355 command-menu focus
+    // events with zero wrong Libra, on a build that predates this gate.
     if (BattleTargetReader::SpeakTargetDetail()) return;
 
     // NOTHING TO SAY -- stay silent, and say WHY in the log. Silence beats wrong speech, but a
     // silent key with no diagnostic is indistinguishable from a broken one, and that ambiguity is
-    // what cost this defect two rounds.
-    Log::Write("READER", "o: no description for this focus and no enemy under the target cursor");
+    // what cost this defect two rounds. Naming the surface as well as the outcome is what turns the
+    // next silent `o` into one line of evidence instead of another round of guessing.
+    Log::Write("READER", IngameMenuReader::BattleCommandActive()
+                             ? "o: no description for this battle-command row, and Libra declined"
+                             : "o: no description for this focus and no enemy under the target cursor");
 }
 
 void OnFocus(void* owner, int index, bool fromPaint) {

@@ -1,6 +1,7 @@
 #include "ui/battle_target_reader.h"
 #include "ui/mod_menu.h"               // AutoDetailOn (whether the Libra detail volunteers itself)
 #include "ui/text_capture.h"           // ResolveStringById -- THE message-id resolver, game thread only
+#include "ui/ingame_menu_reader.h"     // BattleCommandActive -- log-only, for the `o` state line
 #include "battle/battle_state.h"
 #include "battle/battle_state_diag.h"
 #include "core/game_text.h"
@@ -697,6 +698,42 @@ bool SpeakTargetDetail() {
     //
     // `o` is the description key. It only becomes the Libra key while the player is genuinely aiming,
     // which is the one moment "tell me about this monster" is the question being asked.
+    //
+    // ---- THE STATE LINE: what the two candidate discriminators actually read, per state ----------
+    //
+    // S156 STRUCK the name of OFF_GATE on the claim that `P+0x10F78` "was true while the battle
+    // command menu was open" -- but every archived log runs a build that predates the gate which
+    // would have tested it, so the claim has NO MEASUREMENT BEHIND IT, and this file has gone on
+    // naming and trusting the offset regardless. Rather than settle that with a third inferred gate,
+    // this prints the raw facts and lets one play session close it: the gate pointer, the highlighted
+    // target handle, and whether the battle command panel is live.
+    //
+    // Keyed on the state TUPLE, not the press, so it emits once per distinct combination and a
+    // hundred presses in one state cost one line. Not throttled and not capped -- a rate-limited
+    // line is not a measurement (L-04), and this line exists to be one.
+    //
+    // DELETE THIS once the log has named the state for both the command list and the target cursor.
+    // It is written to be thrown away.
+    {
+        void*    P      = Pstate();
+        void*    gate   = P ? PtrAt(P, OFF_GATE) : nullptr;
+        uint32_t handle = 0;
+        if (P) MemRead::SafeReadU32(P, OFF_TARGETID, &handle);
+        const bool bcmd = IngameMenuReader::BattleCommandActive();
+
+        const int state = (gate ? 4 : 0) | (handle ? 2 : 0) | (bcmd ? 1 : 0);
+        static int s_lastState = -1;
+        if (state != s_lastState) {
+            s_lastState = state;
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "o: state gate=%s handle=0x%X bcmdLive=%d  (gate is P+0x10F78; "
+                     "does it read up in the COMMAND LIST?)",
+                     gate ? "up" : "down", static_cast<unsigned>(handle), bcmd ? 1 : 0);
+            Log::Write("TARGET", m);
+        }
+    }
+
     if (!TargetSelectActive()) return false;
 
     ResolvedTarget t;

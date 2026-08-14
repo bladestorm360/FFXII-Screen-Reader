@@ -737,12 +737,24 @@ bool IsBattleCommandOwner(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_BCMD_PANEL);
 }
 
-// THE LIVE-SURFACE FLAG. See the header for why `o` needs this and `IsBattleCommandOwner` will not
-// do: a hotkey has no owner pointer to ask about, only "where am I".
+// WHAT THIS FLAG ACTUALLY MEANS: "the battle command panel is still alive, and it was the last
+// thing to take a menu focus". It is NOT "the surface the player is on", which is what the comment
+// here used to claim and what `menu_reader.cpp` then acted on.
+//
+// THE DIFFERENCE IS THE WHOLE 2026-08-14 LIBRA OUTAGE. Confirming a command raises the target
+// cursor, and the target cursor is not a menu focus surface -- no 0x8000 arrives for another owner,
+// so `ClearBattleCommandActive` is never called; and the command panel is still allocated and still
+// its own class behind the cursor, so the re-validation below passes too. Both halves therefore keep
+// answering true through the entire aiming phase, which is exactly when the player is asking about
+// the monster. Measurement and the fix are in `MenuReader::DescribeHotkey`.
 //
 // Stored as a plain pointer and RE-VALIDATED against the window class on every read, so a panel that
 // has been freed or handed to another class stops answering true on its own. That liveness check is
-// the load-bearing half -- the explicit clears below are belt and braces.
+// the load-bearing half -- the explicit clears below are belt and braces. Note what liveness does
+// and does not buy: it catches a DEAD panel, never a live one the player has navigated away from.
+//
+// One consumer only (`menu_reader.cpp`), and there it is log-only. Do not promote it back into a
+// decision without first measuring what it reads during target selection.
 std::atomic<void*> g_bcmdLivePanel{nullptr};
 
 bool BattleCommandActive() {
