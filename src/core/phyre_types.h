@@ -76,13 +76,32 @@ constexpr uint32_t BC_KIND       = 0x05;   // u8  0 = party side (IsPartySide); 
 constexpr uint32_t BC_MAXHP      = 0x24;   // i32 (btlAtelGetHpMaxFromPartySlot)
 constexpr uint32_t BC_MAXMP      = 0x28;   // i16 (btlAtelGetMpMaxFromPartySlot)
 constexpr uint32_t BC_STATUS_A   = 0x3C;   // u32 status word A
-// ELEMENT WEAKNESS, one byte, bits 0..7 = Fire Lightning Ice Earth Water Wind Holy Dark -- the same
-// bit order as the element sprites and BattleState::ElementName. This is the mask the game itself
-// draws as the target panel's "Weak:" row under Libra: FUN_00329220 copies it to snapshot +0x89,
-// and FUN_002bfd20 hands that byte to FUN_00295d90, which emits message 0x2331 ("Weak: ") followed
-// by one 0x4B27+bit element string per set bit. NOT a quartet -- Absorb/Half/Immune belong to the
-// EQUIPMENT record and are never shown here.
-constexpr uint32_t BC_WEAK_MASK  = 0x40;   // u8  element weakness bits (Libra's "Weak:" row)
+// THE ELEMENTAL AFFINITY QUARTET, four consecutive bytes, each an 8-bit element mask in the same
+// bit order as the element sprites and BattleState::ElementName (Fire Lightning Ice Earth Water Wind
+// Holy Dark). FUN_00329220 copies all four out together (+0x40 -> snapshot +0x89, then +0x41/+0x42
+// to +0x8A/+0x8B and +0x43 onward), which is what shows they are one block.
+//
+// ~~"NOT a quartet -- Absorb/Half/Immune belong to the EQUIPMENT record and are never shown here"~~
+// is **STRUCK (S160)**. It conflated two different questions: what the in-battle target PANEL draws
+// (weaknesses only -- FUN_00295d90 hardcodes message 0x2331 and has one caller, still true) with
+// what the BtlChr CARRIES. It carries all four.
+//
+// MEASURED FROM THE CONSUMER, not inferred from the equipment record's layout -- S147 explicitly
+// flagged that analogy as "a tempting fit" and refused to ship on it, and it was right to. The
+// damage path's elemental resolver FUN_0038b6a0 tests each byte against the action's element mask
+// (row+0x13, the same byte BattleState::AbilityElements reads) and does something different with
+// each, which is what assigns the meanings:
+//     +0x43 & element -> sets DAT_02aedfcc and SKIPS every other affinity test   => IMMUNE
+//     +0x40 & element -> damage * 2.0, result flag bit 0x2                       => WEAK
+//     +0x42 & element -> damage * 0.5, result flag bit 0x4                       => HALF
+//     +0x41 & element -> sets DAT_02aedfd0 (a flag, no multiplier)               => ABSORB
+// The control is +0x40 landing on the x2 branch: that byte is independently confirmed as the
+// weakness mask by the display chain above, so the known value falling in the right slot is what
+// makes the other three readable rather than guessed. Confidence 0.98.
+constexpr uint32_t BC_WEAK_MASK   = 0x40;  // u8  element weakness  (x2 damage; Libra's "Weak:" row)
+constexpr uint32_t BC_ABSORB_MASK = 0x41;  // u8  element absorb    (damage heals instead)
+constexpr uint32_t BC_HALF_MASK   = 0x42;  // u8  element halved    (x0.5 damage)
+constexpr uint32_t BC_IMMUNE_MASK = 0x43;  // u8  element nullified (damage skipped entirely)
 constexpr uint32_t BC_CURHP      = 0x48;   // i32 (btlAtelGetHpNowFromPartySlot)
 constexpr uint32_t BC_CURMP      = 0x4C;   // i16 (btlAtelGetMpNowFromPartySlot)
 constexpr uint32_t BC_STATUS_B   = 0x64;   // u32 status word B

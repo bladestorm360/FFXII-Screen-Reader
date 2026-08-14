@@ -137,38 +137,52 @@ bool LibraActive() {
     return (flags & LIBRA_BIT) != 0;
 }
 
-// THE "Weak: " LABEL, and why it is cached rather than resolved on demand.
+// THE FOUR AFFINITY LABELS, and why they are cached rather than resolved on demand.
 //
-// It is the GAME's word (message id 0x2331, the same one FUN_00295d90 puts at the head of the row it
-// draws), so it must be read, not invented. But the one sanctioned resolver --
-// TextCapture::ResolveStringById -- is GAME THREAD ONLY, and `o` runs on the input thread. Adding a
-// private ResolveMsgCodec here is exactly what text_capture.h asks callers not to do; it already
-// exists because two files had each grown one.
+// They are the GAME's words -- the same four message ids the equipment detail panels head their rows
+// with (FUN_00293310 / FUN_00293fe0 / FUN_00294b50 each emit all four in this order), and 0x2331 is
+// additionally what FUN_00295d90 puts at the head of the row the target panel draws. So they must be
+// read, not invented. But the one sanctioned resolver -- TextCapture::ResolveStringById -- is GAME
+// THREAD ONLY, and `o` runs on the input thread. Adding a private ResolveMsgCodec here is exactly
+// what text_capture.h asks callers not to do; it already exists because two files had each grown one.
 //
-// So it is resolved once from HookedSnapshot, which runs on the game thread every time a target
+// So they are resolved once from HookedSnapshot, which runs on the game thread every time a target
 // nameplate renders -- necessarily before `o` can mean anything, because there has to be a target.
-// The string is locale-fixed and never changes, so one resolve per session is all it needs.
-// If it is somehow still empty, the caller speaks the element names bare rather than inventing a
-// label for them.
-constexpr int MSG_WEAK_LABEL = 0x2331;
-std::mutex   g_weakLabelMx;
-std::wstring g_weakLabel;
+// The strings are locale-fixed and never change, so one resolve per session is all they need.
+// If one is somehow still empty, the caller speaks that clause's element names bare rather than
+// inventing a label for them.
+//
+// ORDER HERE IS THE SPOKEN ORDER, and it is deliberately not the equipment panels': weak first
+// because it is what the player is nearly always asking for, then the three that were never spoken
+// before. Each clause is omitted entirely when its mask is zero -- see LibraDetail.
+enum class Affinity { Weak = 0, Absorb, Half, Immune, COUNT };
+constexpr int kAffinityMsg[static_cast<int>(Affinity::COUNT)] = {
+    0x2331,   // "Weak: "
+    0x232F,   // "Absorb: "
+    0x2330,   // "Half Damage: "
+    0x232E,   // "Immune: "
+};
+std::mutex   g_affinityLabelMx;
+std::wstring g_affinityLabel[static_cast<int>(Affinity::COUNT)];
 
-std::wstring WeakLabel() {
-    std::lock_guard<std::mutex> lk(g_weakLabelMx);
-    return g_weakLabel;
+std::wstring AffinityLabel(Affinity a) {
+    std::lock_guard<std::mutex> lk(g_affinityLabelMx);
+    return g_affinityLabel[static_cast<int>(a)];
 }
 
-// GAME THREAD ONLY.
-void CacheWeakLabel() {
-    {
-        std::lock_guard<std::mutex> lk(g_weakLabelMx);
-        if (!g_weakLabel.empty()) return;
+// GAME THREAD ONLY. Resolves whichever of the four are still missing; a partial result is fine
+// because each is retried independently on the next render.
+void CacheAffinityLabels() {
+    for (int i = 0; i < static_cast<int>(Affinity::COUNT); ++i) {
+        {
+            std::lock_guard<std::mutex> lk(g_affinityLabelMx);
+            if (!g_affinityLabel[i].empty()) continue;
+        }
+        std::wstring s = TextCapture::ResolveStringById(kAffinityMsg[i]);
+        if (s.empty()) continue;                 // try again on the next render
+        std::lock_guard<std::mutex> lk(g_affinityLabelMx);
+        g_affinityLabel[i] = s;
     }
-    std::wstring s = TextCapture::ResolveStringById(MSG_WEAK_LABEL);
-    if (s.empty()) return;                       // try again on the next render
-    std::lock_guard<std::mutex> lk(g_weakLabelMx);
-    g_weakLabel = s;
 }
 
 // IS THIS UNIT LIBRA-PROOF? Marks, bosses and rare game show "????" instead of vitals even with
@@ -223,36 +237,69 @@ std::wstring LibraDetail(void* bc) {
     if (MemRead::SafeReadU8(bc, BC_LEVEL, &level) && level > 0)
         add(Phrase::Get(Phrase::Id::LevelPrefix) + std::to_wstring(level));
 
-    // MP is an i16 pair, and plenty of enemies have no MP gauge at all. The gate is the GAME's own
-    // test, not "is max MP above zero": btlAtelGetMpMaxFromPartySlot returns 0 unless both guard
-    // bytes have their sign bit clear, and the same guard appears independently in the HUD builder
-    // and the MP clamp. A gauge-less enemy is omitted rather than announced as "MP 0 of 0".
-    uint8_t gA = 0xFF, gB = 0xFF;
-    uint16_t curMPu = 0, maxMPu = 0;
-    if (MemRead::SafeReadU8(bc, BC_MP_GUARD_A, &gA) && MemRead::SafeReadU8(bc, BC_MP_GUARD_B, &gB) &&
-        static_cast<int8_t>(gA) >= 0 && static_cast<int8_t>(gB) >= 0 &&
-        MemRead::SafeReadU16(bc, BC_CURMP, &curMPu) && MemRead::SafeReadU16(bc, BC_MAXMP, &maxMPu) &&
-        static_cast<int16_t>(maxMPu) > 0) {
-        add(Phrase::Get(Phrase::Id::MPPrefix) + std::to_wstring(static_cast<int16_t>(curMPu))
-            + L"/" + std::to_wstring(static_cast<int16_t>(maxMPu)));
-    }
+    // ~~MP~~ REMOVED (S160, user instruction): "enemies don't use MP, neither is it shown on libra."
+    // The clause read the i16 pair behind the game's own MP-gauge guard, which meant it was correct
+    // and still wrong to speak -- a number the enemy does not spend and the game's own Libra never
+    // puts on screen is noise in the one readout the player is querying under time pressure. The
+    // BC_CURMP / BC_MAXMP / BC_MP_GUARD_A / BC_MP_GUARD_B offsets stay in phyre_types.h; the ALLY
+    // readouts still use them, and this was only ever the enemy path.
 
-    // Statuses, as the game's own words. BattleState::StatusNames has always been able to do this;
-    // it had simply never been pointed at an enemy. A clean enemy adds nothing -- silence, not
-    // "no statuses".
+    // Statuses, as the game's own words, across the WHOLE status space.
+    //
+    // This used to read only the two u32 words (+0x3C, +0x64) -- 32 distinct bits, because both
+    // index the same 32 statuses. The rest of an enemy's statuses live in the two 16-byte EXTENDED
+    // masks at +0x68/+0x78, ~128 further bits that index the SAME master table (FUN_00385570 walks
+    // those bits and looks each one up for its timer slot), and none of them was ever spoken.
+    //
+    // The two spaces are OR'd into ONE mask and walked ONCE, which is what makes a bit that exists
+    // in both impossible to say twice. Anything the table does not cover, or that carries the
+    // suppress marker, drops out inside StatusName -- so widening the read cannot invent a word.
+    // A clean enemy adds nothing: silence, not "no statuses".
+    uint8_t status[16] = {};
+    uint8_t extA[16] = {}, extB[16] = {};
+    const bool haveA = MemRead::SafeReadBytes(
+        reinterpret_cast<char*>(bc) + BC_EXT_A, extA, sizeof(extA));
+    const bool haveB = MemRead::SafeReadBytes(
+        reinterpret_cast<char*>(bc) + BC_EXT_B, extB, sizeof(extB));
+    for (size_t i = 0; i < sizeof(status); ++i)
+        status[i] = static_cast<uint8_t>((haveA ? extA[i] : 0) | (haveB ? extB[i] : 0));
+
     uint32_t sa = 0, sb = 0;
     MemRead::SafeReadU32(bc, BC_STATUS_A, &sa);
     MemRead::SafeReadU32(bc, BC_STATUS_B, &sb);
-    add(BattleState::StatusNames(sa | sb));
+    const uint32_t base = sa | sb;
+    for (int i = 0; i < 4; ++i)
+        status[i] = static_cast<uint8_t>(status[i] | ((base >> (i * 8)) & 0xFF));
 
-    // Weaknesses last, because they are the longest clause and the one the player is most often
-    // waiting for the rest to get out of the way of. A zero mask adds NOTHING -- a non-elemental
-    // enemy draws no icons, so "no weaknesses" would be a sentence the screen never shows.
+    add(BattleState::StatusNamesMask(status, sizeof(status)));
+
+    // THE ELEMENTAL AFFINITIES, all four, last -- they are the longest clauses and the ones the
+    // player is most often waiting for the rest to get out of the way of.
+    //
+    // Absorb, Half and Immune were added in S160 on the user's instruction ("it should show absorb
+    // as well"). They are NOT on the game's own target panel, which draws the Weak row alone -- but
+    // they are on the enemy, they are the game's own data with the game's own labels, and an absorb
+    // is the single most consequential thing to not know about the monster you are about to hit.
+    // Byte meanings are measured from the damage path's own resolver, not inferred from the
+    // equipment record's layout: see the block over BC_WEAK_MASK in phyre_types.h.
+    //
+    // Each clause is omitted entirely when its mask is zero -- a non-elemental enemy draws no icons,
+    // so "no weaknesses" would be a sentence the screen never shows. All four sit behind the same
+    // LibraSuppressed gate the weakness row already honoured: a mark the game is deliberately
+    // hiding behind "????" must not have its affinities read out by the mod either.
     if (!LibraSuppressed(bc)) {
-        uint8_t weak = 0;
-        if (MemRead::SafeReadU8(bc, BC_WEAK_MASK, &weak) && weak != 0) {
-            const std::wstring names = BattleState::ElementNames(weak);
-            if (!names.empty()) add(WeakLabel() + names);
+        struct Clause { uint32_t off; Affinity label; };
+        static constexpr Clause kClauses[] = {
+            { BC_WEAK_MASK,   Affinity::Weak   },
+            { BC_ABSORB_MASK, Affinity::Absorb },
+            { BC_HALF_MASK,   Affinity::Half   },
+            { BC_IMMUNE_MASK, Affinity::Immune },
+        };
+        for (const Clause& c : kClauses) {
+            uint8_t mask = 0;
+            if (!MemRead::SafeReadU8(bc, c.off, &mask) || mask == 0) continue;
+            const std::wstring names = BattleState::ElementNames(mask);
+            if (!names.empty()) add(AffinityLabel(c.label) + names);
         }
     }
 
@@ -425,7 +472,7 @@ void* HookedSnapshot(void* bc, int p2, void* outBuf, int p4) {
     STALL_SCOPE("BattleTarget::HookedSnapshot");
     if (g_wantTargetBc && bc) {
         g_wantTargetBc = false;                 // take only the first (the target) per render
-        CacheWeakLabel();                       // game thread: the one place `o`'s label can be read
+        CacheAffinityLabels();                  // game thread: the one place `o`'s labels can be read
         bool ally = false; FVec3 pos; bool havePos = false; PosDiag pd;
         std::wstring name = NameForBtlChr(bc, &ally, &pos, &havePos, &pd);
         if (!name.empty()) {

@@ -226,7 +226,11 @@ uint8_t AbilityCategory(uint16_t actionId);
 // the derivation; feed set bits to ElementName.
 uint8_t AbilityElements(uint16_t actionId);
 
-// Battle status name for a status bit 0..31 (KO, Stone, Poison, Confuse, ...).
+// Battle status name for a status bit 0..127 (KO, Stone, Poison, Confuse, ...).
+//
+// PAST 31 IS REAL, NOT PADDING: the extended masks at BtlChr +0x68/+0x78 index this same table.
+// The bound is the mask width, not the row count -- MasterRecord rejects an index past the table's
+// own header count, so an unpopulated index simply returns empty.
 //
 // Four statuses carry a SUPPRESS marker (rec+0x02 == 0xFF): KO, Invisible, HP Critical and X-Zone.
 // They are hidden by default because on the battle HUD they are noise — KO is already announced as
@@ -244,6 +248,12 @@ std::wstring ElementName(int bitIndex);
 std::wstring ElementNames(uint8_t elementMask);
 
 // Names of every set bit in a status word, comma-joined. `statusWord` is BtlChr+0x3c | +0x64.
+// A thin adapter onto StatusNamesMask -- there is ONE naming loop, not two.
 std::wstring StatusNames(uint32_t statusWord);
+
+// Names of every set bit in an arbitrary-width status mask, comma-joined. `bytes` is little-endian
+// bit order: byte i, bit b == status index i*8 + b. Use for the 16-byte extended masks (BC_EXT_A /
+// BC_EXT_B), which carry ~128 further statuses the 32-bit form cannot reach.
+std::wstring StatusNamesMask(const uint8_t* bytes, size_t nBytes);
 
 } // namespace BattleState

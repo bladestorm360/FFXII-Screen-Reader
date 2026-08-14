@@ -131,8 +131,20 @@ uint8_t AbilityElements(uint16_t actionId) {
     return mask;
 }
 
+// THE BIT INDEX IS THE TABLE INDEX, AND IT RUNS PAST 31.
+//
+// The cap here used to be 31, matching the two u32 status words the callers had. That is not the
+// status space: `bc+0x68` and `bc+0x78` are 16-byte EXTENDED masks (~128 further bits), and they
+// index THIS SAME TABLE -- `FUN_00385570` walks those extended bits and looks each one up as
+// `statusMasterRec+0x06` for its timer slot (GameArchitecture.md, conf 0.99). So a status beyond 31
+// was never unnameable, it was simply never asked for.
+//
+// The upper bound is deliberately the mask width and NOT a guess at the row count: `MasterRecord`
+// rejects `index >= count` from the table's own header, so an index past the end returns nullptr and
+// this returns empty. The table bounds itself; hardcoding a number here would just be a second,
+// staler copy of it.
 std::wstring StatusName(int bitIndex, bool includeSuppressed) {
-    if (bitIndex < 0 || bitIndex > 31) return std::wstring();
+    if (bitIndex < 0 || bitIndex > 127) return std::wstring();
     void* rec = MasterRecord(RVA_STATUSTBL, static_cast<uint32_t>(bitIndex));
     if (!rec) return std::wstring();
     // rec+0x02 == 0xFF marks a status the game suppresses (KO, Invisible, HP Critical, X-Zone).
@@ -215,16 +227,37 @@ std::wstring ElementNames(uint8_t elementMask) {
     return out;
 }
 
-std::wstring StatusNames(uint32_t statusWord) {
+// ONE naming loop for every status mask in the game, whatever its width. `StatusNames(u32)` is a
+// thin adapter onto it, so the 32-bit and 128-bit callers can never drift into two spellings of the
+// same list.
+//
+// `bytes` is little-endian bit order: byte i, bit b == status index i*8 + b. That is the order
+// `FUN_00329220`'s 4x4 copy loop and `FUN_00385570`'s walk both use, and it is the order
+// `BC_EXT_LIBRAPROOF_BYTE`/`_BIT` already encode (byte 5, bit 1 == extended bit 41).
+std::wstring StatusNamesMask(const uint8_t* bytes, size_t nBytes) {
+    if (!bytes) return std::wstring();
     std::wstring out;
-    for (int bit = 0; bit < 32; ++bit) {
-        if ((statusWord & (1u << bit)) == 0) continue;
-        std::wstring nm = StatusName(bit);
-        if (nm.empty()) continue;                    // suppressed or unresolvable
-        if (!out.empty()) out += L", ";
-        out += nm;
+    for (size_t i = 0; i < nBytes; ++i) {
+        if (bytes[i] == 0) continue;
+        for (int b = 0; b < 8; ++b) {
+            if ((bytes[i] & (1u << b)) == 0) continue;
+            std::wstring nm = StatusName(static_cast<int>(i * 8 + b));
+            if (nm.empty()) continue;                // suppressed, out of table, or unresolvable
+            if (!out.empty()) out += L", ";
+            out += nm;
+        }
     }
     return out;
+}
+
+std::wstring StatusNames(uint32_t statusWord) {
+    const uint8_t bytes[4] = {
+        static_cast<uint8_t>(statusWord),
+        static_cast<uint8_t>(statusWord >> 8),
+        static_cast<uint8_t>(statusWord >> 16),
+        static_cast<uint8_t>(statusWord >> 24),
+    };
+    return StatusNamesMask(bytes, sizeof(bytes));
 }
 
 } // namespace BattleState

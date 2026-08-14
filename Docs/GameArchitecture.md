@@ -5106,9 +5106,20 @@ mod mirrors the game's own swap rather than bypassing it. Corroboration: `FUN_00
 trap-visibility toggle (Libra's other documented effect), is driven by the same predicate.
 
 Mod side: `BattleTargetReader::LibraActive()` — one guarded u32 read, no game call. `HpClause()` is
-the single HP choke point; `LibraDetail()` adds Level (`bc+0x1C2`), MP (`bc+0x4C`/`+0x28`, gated on
-the game's own `BC_MP_GUARD_A/B` sign test), statuses (`BattleState::StatusNames`) and the elemental
-weaknesses (see the next block).
+the single HP choke point; `LibraDetail()` adds Level (`bc+0x1C2`), statuses, and all four elemental
+affinities (see the next block).
+
+**~~MP~~ REMOVED from the enemy readout (S160, user instruction):** *"enemies don't use MP, neither
+is it shown on libra."* The clause was correct — it read `bc+0x4C`/`+0x28` behind the game's own
+`BC_MP_GUARD_A/B` sign test — and still wrong to speak: a number the enemy does not spend and the
+game's own Libra never puts on screen. The offsets stay in `phyre_types.h` for the ALLY readouts.
+
+**Statuses now cover the WHOLE space (S160).** The readout used to walk only the two u32 words
+(`+0x3C`, `+0x64`) — 32 bits. The rest live in the two 16-byte EXTENDED masks at `+0x68`/`+0x78`,
+which index the SAME master table (`FUN_00385570` walks those bits and looks each up for its timer
+slot). Both spaces are OR'd into one 16-byte mask and walked ONCE, so a bit present in both cannot
+be spoken twice; `StatusName`'s bound is the mask width, not a row count, because `MasterRecord`
+rejects `index >= count` from the table header and unpopulated indices return empty.
 
 ### ENEMY ELEMENTAL WEAKNESS = `BtlChr + 0x40`, ONE BYTE (conf 0.98)
 
@@ -5150,9 +5161,40 @@ hold; none of them is about a **single byte on the BtlChr**. The lesson is in `d
 result is only as good as the shape you searched for — when one comes back empty, re-derive what the
 DISPLAY reads, because the game draws it, so something reads it.
 
-**Adjacent and deliberately NOT identified:** `bc+0x41`, `+0x42`, `+0x43`, `+0x44`, which
-`FUN_00329220` copies to snapshot `+0x8A..+0x8D`. Nothing displays them. The equipment quartet's
-order is a tempting fit for them and that guess is precisely what produced the struck claim above.
+~~**Adjacent and deliberately NOT identified:** `bc+0x41`, `+0x42`, `+0x43`, `+0x44`… The equipment
+quartet's order is a tempting fit for them and that guess is precisely what produced the struck claim
+above.~~ — **RESOLVED S160, and the refusal was the right call.** They are identified below, from the
+CONSUMER rather than from the analogy. Note the analogy would have given the right answer; that does
+not make it evidence, and shipping it in S147 would have been a guess that happened to land.
+
+#### `bc+0x40..+0x43` IS the affinity quartet — measured from the damage path (conf 0.98)
+
+`FUN_0038b6a0(attacker, bc, result)` is the elemental affinity resolver. It tests each of the four
+bytes against the ACTION's element mask — `row+0x13`, the same byte `BattleState::AbilityElements`
+already reads at 0.99 — and does something different with each. That is what assigns the meanings:
+
+| byte | test outcome | meaning |
+|---|---|---|
+| `+0x43` | sets `DAT_02aedfcc`, **returns before every other affinity test** | **Immune** (nullified) |
+| `+0x40` | damage `* 2.0`, result flag `+0x140 \|= 0x2` | **Weak** |
+| `+0x42` | damage `* 0.5`, result flag `+0x140 \|= 0x4` | **Half** |
+| `+0x41` | sets `DAT_02aedfd0` (a flag, no multiplier) | **Absorb** |
+
+Also there, on the ATTACKER and not the target: `param_1+0x44 & element` → damage `* 1.5`, flag
+`0x8` — an attacker-side potency mask, do not confuse it with the target quartet.
+
+**The control that makes this readable rather than guessed:** `+0x40` lands on the `* 2.0` branch,
+and `+0x40` is independently confirmed as the weakness mask by the display chain above. A known value
+falling in the expected slot is what licenses reading the other three off the same function.
+
+**The order happens to match the equipment record's** (`Weak, Absorb, Half, Immune`). It is still not
+derived from it.
+
+**The in-battle target panel still draws Weak alone** — `FUN_00295d90` hardcodes `0x2331` and has one
+caller; that half of the struck note was always true. The mod speaks all four anyway, on the user's
+instruction (S160): the data is the enemy's own, the labels are the game's own four message ids, and
+an absorb is the most consequential thing to not know about a monster. All four sit behind the same
+`LibraSuppressed` gate as the weakness row.
 
 ### `+0x42..+0x51` / `target+0x17C..+0x18A` are PER-STATUS TIMERS, not affinity (conf 0.99)
 
@@ -5441,6 +5483,50 @@ X×10/Z×10, a "consume" that clears the mask bit — and it is traps. Five inde
 
 The treasure ring is **`DAT_02ec3e60`** (RVA `0x2DA3E60`), written by `FUN_002fb430` (`0x1DB430`);
 3 × `{mapId @+0, presenceMask @+4, decidedMask @+8}`.
+
+#### THE TRAP TABLE, and how to enumerate every trap on a map (S160, conf 0.98 — probe pending)
+
+Unlike treasure, traps **are** enumerable: the records live in one indexed table rather than arriving
+as script-bytecode literals. Two functions run the identical walk, which is what makes the shape
+certain — `FUN_002f8060` (the per-frame trigger, from the actor tick) and `FUN_002f82f0` (the
+visibility toggle).
+
+| what | symbol | RVA | shape |
+|---|---|---|---|
+| record table | `DAT_022be948` | **`0x219E948`** | `int*`: `[0]` = count, `[1+i]` = **byte offset of record i, relative to the table pointer itself** |
+| visibility latch | `DAT_022be944` | **`0x219E944`** | the game's OWN "traps are shown" state — see below |
+| per-map masks | `DAT_02ec3ea0` | **`0x2DA3EA0`** | `{mapId @+0, presenceMask @+4, decidedMask @+8}`, **stride `0xC`** |
+| mask count | `DAT_02ec3ec8` | **`0x2DA3EC8`** | N entries in the above |
+| current map id | `FUN_003148f0` | `0x1F48F0` | the id the mask array is keyed on (mod side: `MapNames::CurrentMapId()`) |
+| visibility toggle | `FUN_002f82f0` | `0x1D82F0` | runs the mask walk; the natural event-driven tick source |
+| trigger check | `FUN_002f8060` | `0x1D8060` | fires on distance `<= 1.3` (`FUN_003a1920`) |
+| model-state setter | `FUN_003ec700` | `0x2CC700` | `(trapIndex, state)`; 1/2 = shown/hidden, 3 = consumed |
+
+**Slot cap is the game's own:** `count = min(*DAT_022be948, 0x20)` — 32 traps per map, in both walkers.
+
+**Record layout**, read off `FUN_002f8060`'s own use of it:
+
+| off | type | meaning |
+|---|---|---|
+| `+0x00` | s16 | world **X × 10** (`x = v / 10.0`) |
+| `+0x02` | s16 | world **Z × 10**; y is a literal `0.0` at the distance test |
+| `+0x04` | s8 | one-time global flag id; **`-1` = respawner** (same convention as treasure's `+0x09`) |
+| `+0x06` | s16 | effect when `rand % 100 < 75` |
+| `+0x08` | s16 | effect otherwise |
+| `+0x0A` | u8 | AoE radius — `FUN_002fb8c0` returns every party member inside it |
+
+**Trap `i` is present on the current map iff `presenceMask >> i & 1`.** Consuming one clears that bit
+via `FUN_002fb3b0`.
+
+**`DAT_022be944` is the gate to use, not a re-derived Libra test.** `FUN_002f82f0` latches it 0→1
+when `FUN_0030c300()` (THE Libra predicate) returns 1 and 1→0 when it returns 0, then drives every
+present trap's model state from it. So it already *is* the game's answer to "are traps visible right
+now", it costs one guarded u32 read, and mirroring it is the same principle `LibraActive()` follows
+for HP digits. It also sidesteps a real hazard: `LibraActive()` reads the **battle-HUD** mirror
+`P+0x10F68`, and traps are a FIELD concern where that context may not be live.
+
+⚠ **Confirmation probe written and NOT yet run:** `..\FFXII-Decompile\frida\probe_traps.js`. Nothing
+here is ported to C++ until it reports.
 
 ### The definition record (script-bytecode data, not a table in memory)
 

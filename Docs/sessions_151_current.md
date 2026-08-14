@@ -1108,3 +1108,87 @@ systems they don't want touched. The audit is preserved in `debug.md` so it is n
 Built and deployed (binary `cmp`-verified against the build output, per L-62). Needs one battle:
 Libra up + aiming → full readout; Libra down → "Libra not active"; a magick row → its description;
 **Attack (no description) → whatever it does, the new state line records it.**
+
+---
+
+## Session 160 — 2026-08-14 — [menus] The Libra readout: MP out, the other three affinities in
+
+KEYWORDS: Libra readout MP removed enemy absorb half immune elemental affinity quartet bc+0x40
+bc+0x41 bc+0x42 bc+0x43 FUN_0038b6a0 row+0x13 element mask extended status masks bc+0x68 bc+0x78
+StatusNamesMask 128 bits traps category DAT_022be948 DAT_022be944 DAT_02ec3ea0 FUN_002f82f0
+FUN_002f8060 probe_traps.js S159 play-confirmed
+
+### 0. S159 PLAY-CONFIRMED
+
+Tester: *"the gate is working, pressing o now properly reads libra when an enemy is targeted and
+reads ability descriptions when a magick or technick is targeted."* Both halves, one press each.
+
+### 1. MP is gone from the enemy readout
+
+*"enemies don't use MP, neither is it shown on libra."* The clause was **correct and still wrong to
+speak** — it read the i16 pair behind the game's own MP-gauge guard, so it never said "MP 0/0", but
+it announced a number the enemy does not spend and the game's own Libra never draws. In the one
+readout a player queries under time pressure, a correct irrelevant clause costs the same as a wrong
+one. Offsets stay in `phyre_types.h`; the ally readouts still use them.
+
+### 2. The affinity quartet — and why S147 was right to refuse it
+
+`bc+0x40..+0x43` is a four-byte elemental block: **Weak, Absorb, Half, Immune**. S147 saw the four
+bytes copied out together by `FUN_00329220`, noted that the equipment record's quartet order was "a
+tempting fit", and **deliberately declined to identify them** — because that guess was what produced
+the claim it had just struck.
+
+It was right, and the analogy would have given the right answer. That does not make it evidence.
+
+Identified this session from the **consumer** instead: `FUN_0038b6a0` is the damage path's elemental
+resolver, testing each byte against the action's element mask (`row+0x13`, already at 0.99):
+
+| byte | outcome | meaning |
+|---|---|---|
+| `+0x43` | sets a flag and **returns before every other affinity test** | Immune |
+| `+0x40` | damage `* 2.0` | Weak |
+| `+0x42` | damage `* 0.5` | Half |
+| `+0x41` | sets a flag, no multiplier | Absorb |
+
+**The control is `+0x40` landing on the `* 2.0` branch** — that byte is independently confirmed as
+the weakness mask by the display chain, so a known value falling in the expected slot is what makes
+the other three readable rather than guessed. **IDENTIFY A FIELD FROM WHAT CONSUMES IT, AND CHECK
+THAT THE ONE FIELD YOU ALREADY KNOW LANDS WHERE IT SHOULD.**
+
+All four are now spoken, behind the same `LibraSuppressed` gate the weakness row already honoured,
+with the game's own four labels (`0x2331`/`0x232F`/`0x2330`/`0x232E`) — `CacheWeakLabel` generalised
+to `CacheAffinityLabels`. The in-battle panel still draws Weak alone; speaking the rest is the user's
+call and the data is the enemy's own.
+
+### 3. Statuses: 32 bits was never the status space
+
+The readout walked the two u32 words and stopped. The rest of an enemy's statuses live in the two
+16-byte EXTENDED masks at `bc+0x68`/`+0x78` — ~128 further bits that **index the same master table**
+(`FUN_00385570` walks exactly those bits to find each status's timer slot, a 0.99 fact already in
+`GameArchitecture.md`). Nobody had pointed the namer at them.
+
+Both spaces are now OR'd into ONE 16-byte mask and walked ONCE, so a bit in both cannot be said
+twice. `StatusName`'s cap went 31 → 127, and **the bound is the mask width, not a guess at the row
+count**: `MasterRecord` already rejects `index >= count` from the table's own header, so widening
+cannot invent a name — an unpopulated index returns empty and drops out. One naming loop
+(`StatusNamesMask`); `StatusNames(u32)` is now an adapter onto it.
+
+### 4. Traps — researched, probe written, NOT ported
+
+The floor-trap category the user asked for. Unlike treasure, traps **are** enumerable: one indexed
+table, walked identically by `FUN_002f8060` (per-frame trigger) and `FUN_002f82f0` (visibility
+toggle). Table, mask array, record layout and RVAs are in `GameArchitecture.md`.
+
+**The gate is `DAT_022be944`, not a re-derived Libra test.** `FUN_002f82f0` latches it from
+`FUN_0030c300` and drives every trap's model state from it — so it already IS the game's own "traps
+are visible now", for one guarded read. It also avoids a real hazard: `LibraActive()` reads the
+**battle-HUD** mirror, and traps are a FIELD concern where that context may not be live.
+
+**Per FRIDA-FIRST, no C++ was written.** `..\FFXII-Decompile\frida\probe_traps.js` is written and
+awaiting a run. It hooks the visibility toggle rather than polling — `setInterval` does not exist in
+an injected script, and the mod it feeds is bound by the same no-polling rule.
+
+### 5. Play-confirm gates — OPEN
+
+Built, deployed, binary `cmp`-verified. Needs: an enemy with a known absorb (Flan family vs its
+element) to hear the Absorb clause; any enemy to confirm MP is gone and statuses still read.
