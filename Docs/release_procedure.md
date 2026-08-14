@@ -140,8 +140,16 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 - **Does not create a GitHub Release.** The repo is private and holds source only.
 - **Does not modify `README.md`.** If the readme needs changes, that is a separate commit made
   *before* the release-prep trigger.
-- **Does not bump a version string in code.** There is no version constant in the build; the release
-  is identified by its directory and zip name.
+- **Does not bump a version string in code.** ~~There is no version constant in the build; the
+  release is identified by its directory and zip name.~~ **CORRECTED 2026-08-14 — the second half is
+  false and has been since the build stamp landed.** `CMakeLists.txt:185` sets
+  `FFXII_SR_VERSION` (a `CACHE STRING` whose own comment reads *"Mod version, as it appears in the
+  release zip name"*) and `logger.cpp:165` writes `Build: V<version> (<git hash>)` into every log's
+  INIT line. **It still reads `0.6`**, so a log from the V0.6.4 zip says `Build: V0.6`. The *hash*
+  half is generated per configure and is correct, so a log still traces to a commit — which is why
+  this has gone four releases unnoticed. **The procedure still does not bump it**: that is a build
+  change, and this file forbids one at release time. Bumping it belongs in a commit made *before* a
+  release trigger, like a readme edit.
 - **Does not overwrite an existing release.** If `Releases\V<version>\` exists, stop and report.
 
 ---
@@ -150,6 +158,146 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
+
+## V0.6.4-Test-Build — 2026-08-14
+
+**Built from:** `c488495`. **The DLL's code traces to `6bfa74a`** — the one commit after it is
+V0.6.3's own release record, documentation only, so nothing in this binary post-dates S161. Covers
+**Sessions 159–161** since `V0.6.3-Shotgun-Build`'s `5f13705` — five commits, of which **three carry
+code**: `7b8af05` (S159), `5c38af7` (S160) and `6bfa74a` (S161).
+
+**The tree was DIRTY at the trigger, and the fix is recorded because the dirt was this file.** The
+V0.6.3 record above had been written at that release and deliberately left uncommitted; 117 lines of
+it were still unstaged. Precondition 1 stops the release there, so it was committed as `c488495`
+before anything was built. Tree clean before and after the build. **A release record that never
+reaches git is invisible to the next release** — commit it at the release that writes it.
+
+**The version number was changed before the build, for the second release running.** The user asked
+for "0.6.3-Test Build", but **`V0.6.3-Shotgun-Build` had been cut the previous day**, so a second
+0.6.3 would have sat beside it in `Releases\` with only the label to tell them apart. Asked rather
+than assumed; the user confirmed **0.6.4**. Directory and zip are `V0.6.4-Test-Build`, hyphenated to
+keep a space out of the zip name, as every release since V0.6 has been. Note the shape of this: the
+V0.6.3 record says the same thing happened at that release, from the opposite direction (the user
+said "0.5.3", which was too low). **Check the last record before taking a version at face value.**
+
+**Zip:** `FFXII-Screen-ReaderV0.6.4-Test-Build.zip`, 1,244,003 bytes, five files, root flat.
+- `dinput8.dll` 881,152 bytes (sha256 `da38ebb4…d1ba9c38`) — up from V0.6.3's 878,080; three
+  sessions covering the Libra key's un-shadowing, the Libra readout's contents, and the floor-trap
+  navigation category.
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` — **byte-identical to V0.6.3's,
+  V0.6.2's, V0.6.1's and V0.6's** (sha256 `056db4a9…fa3a1d19`), same source, unchanged build. **Five
+  releases running.**
+- TTS pair carried over unchanged from `V0.6.3-Shotgun-Build` (`Tolk.dll` 122,368 sha256
+  `c4fb11d3…48197225`, `nvdaControllerClient64.dll` 153,600 sha256 `41c1f5df…b23a0b09`).
+- All four DLLs verified PE machine `8664`.
+
+**ReadMe: UNCHANGED — and this is the first record in this file that can say so truthfully.** 21,052
+bytes / 234 lines (sha256 `4cf81a2d…9c10cbe3`), **byte-identical to the shipped
+`Releases\V0.6.3-Shotgun-Build\ReadMe.txt`, verified with a real `cmp`**. Zero commits touched
+`README.md` in this range, and `git diff 5f13705 HEAD -- README.md` is empty, so the source the
+converter ran on is itself the same bytes V0.6.3 converted. **Read the V0.2 record at the bottom of
+this file before trusting any future "unchanged" claim**: that record asserted byte-identity with
+V0.1.1's ReadMe.txt, it was struck as false three days later, and the `cmp` it cited had not been
+run. Here it was run, and its output is quoted above.
+
+**The converter had to be REBUILT, and that is the finding worth keeping from this release.** The
+script V0.6.3 used lived in a session scratchpad and no longer exists — nothing in the repo carries
+it. It was reconstructed **from the conversion rules recorded in this file and nothing else**, and
+it reproduced the shipped `V0.6.3-Shotgun-Build\ReadMe.txt` from `git show 5f13705:README.md`
+**byte-identically on the first attempt** — 21,052 bytes both, sha256 `4cf81a2d…9c10cbe3`. **So the
+rules written down here are sufficient to regenerate the artifact, with no undocumented step.** That
+is the strongest evidence this file has ever carried that its own procedure is complete, and it is
+also the reason not to bother checking a converter into the repo. It keeps V0.6.3's fix: it writes
+its output as **bytes** to a destination path given as an argument, so no shell can re-encode it.
+Only `git show … > f` is still a redirect and still needs git-bash.
+
+Output audit: zero `#`, zero `*`, zero `](`, zero leftover backslash escapes, zero `&#x20;`, zero
+doubled spaces, no BOM, CRLF on all 234 lines with no bare LF, and **exactly one backtick** — line
+89's literal `` ` `` key name, the same single survivor as the last eight releases.
+
+**Readme key coverage: NO GAPS, and this one was settled by measurement rather than by audit.**
+`src\input\` was **not touched at all** in this range — `git diff --stat 5f13705 HEAD -- src/input/`
+returns empty — and grepping the entire `src/` diff for `DInputEdge`, `DInputMenuNavEdge`, `VK_` and
+`DIK_` returns **zero added or removed lines**. No key was added, removed or rebound. Two existing
+keys changed what they *produce*, and neither needs a readme edit:
+- **`o`, the Libra readout.** S159 restored it (S156's gate had shadowed the very key it was added to
+  protect) and S160 took MP out and put Absorb/Half/Immune and the full 128-bit status space in. The
+  readme's sentence — *"With Libra up the enemy gives real numbers too, and O reads the rest of what
+  Libra reveals"* — is generic by construction and stayed true across a wholesale content change.
+  **A readme line written about what a key is FOR survives changes to what it says.**
+- **`-` / `=`, the navigation category cycle**, which gained **Trap**. No new key; traps ride the
+  existing cycle, and the readme names no category at all — the gap the V0.5 record flagged, carried
+  forward unchanged rather than created here.
+
+**One behavioural change to a documented key, flagged not fixed.** `=` now **skips** the Trap
+category when the game's own visibility latch is clear (`entity_commands.cpp:135`), so the cycle has
+a different number of stops with Libra up than with it down. Trap is the **only** category that can
+vanish — the obvious generalisation "skip any empty category" would silence `"Shop, 0"` and every
+other zero the cycle deliberately announces, which is a surface the tester navigates by (L-48). This
+is not a readme gap under the keys-only rule, but it is the first time a documented key's stop list
+is state-dependent. **If a tester reports "the category key skipped one", this is the answer.**
+
+**Flagged, not fixed — one new, three inherited:**
+- **NEW: the build stamp's version half has been stale for four releases.** Every log this zip writes
+  opens with **`Build: V0.6 (c488495)`** while the zip says 0.6.4. `FFXII_SR_VERSION` in
+  `CMakeLists.txt:185` has not moved since V0.6. The hash half is right — `c488495` was verified
+  present in the shipped `dinput8.dll`'s own bytes — so a log still traces to a commit, which is why
+  nobody has noticed. **This also falsified a claim in this file's own "What this procedure does NOT
+  do", now struck above.** Bumping it is a build change and belongs in a commit *before* the next
+  release trigger.
+- `ReadMe.txt` line 173 still carries **"New in this build: item and equipment descriptions now read
+  the elements as words"** — new in **V0.6** (S125), now **four** releases ago, and the changelog
+  framing the README rule in `CLAUDE.md` forbids. Flagged by V0.6.2 and V0.6.3 and still shipping.
+  Unavoidable here: with no readme commit ahead of this trigger, the shipped text cannot change.
+- **The Puzzle-guide paragraph still sits under the Stilshrine section**, so it still reads as though
+  Puzzle guide and Instant success belong to the statues. Introduced by V0.6.3's own readme edit,
+  still a two-line reorder.
+- **`Docs\Controls.md` still does not list `Home`/`End` for the mod menu** — third release running.
+
+**Purpose:** test build of Sessions 159–161. The user's framing at the trigger was *"this is just a
+libra bug fix"*, and that is right about the headline — S159 and S160 are both the Libra readout —
+**but the zip also carries S161's floor-trap category, which is navigation, is unverified, and ships
+a diagnostic.** Recorded here so a later reader does not take "libra bug fix" as the whole contents.
+
+**Play-confirmation status — MIXED, and this is the part to read before diagnosing anything on this
+build.**
+- **S159 — CONFIRMED, transitively and deliberately noted as such.** Its own session entry left the
+  play-confirm gate OPEN. The **S160 play session on 2026-08-14 exercised `o` and it read**, which
+  is exactly the gate S159 needed: a key that answers at all is a key no longer shadowed.
+- **S160 — PARTIAL, and the unexercised half is named.** Confirmed 2026-08-14 on the immediate
+  pre-release build: MP is gone (**zero** `o:` lines carry an MP clause), level, statuses and the
+  **Weak** clause all read, and the baked falsifier printed libra bit30 = "Libra". **Absorb, Half and
+  Immune did NOT fire** — the test enemies were a Giza Rabbit and a Hyena, and neither has any of the
+  three. **Every clause S160 added is still unexercised**; "the readout works" means nothing
+  regressed, not that the feature landed. Do not upgrade this without a log against an enemy that
+  actually has one of the three.
+- **S161 — UNVERIFIED, and it could not be verified before the build.** There is **no save near a
+  trap dungeon**, which is why it went straight to C++ with the instrument attached. The trap list
+  has never run against real data. What *is* checkable on any map is the negative: the category is
+  skipped with Libra down, every other category announces exactly as before, and the scan runs on
+  rescan rather than per frame.
+- **A DIAGNOSTIC SHIPS IN THIS ZIP AND IS MEANT TO BE DELETED.** `entity_scan.cpp:337` emits one
+  `[NAV] traps: map=… latch=… mask=0x… tableCount=… listed=… [i]=(x,z) r=… flag=…` line per distinct
+  `(map, mask, latch, count)` state — not throttled, not capped, silent while standing still.
+  **One log from Barheim Passage, Lhusu Mines, Zertinan Caverns or Garamsythe Waterway settles the
+  whole chain in a single pass**: a plausible count with in-map coordinates confirms it, an absurd
+  `tableCount` condemns `TRAP_TABLE`, and a latch that never reads 1 under Libra condemns the gate.
+  **Delete the block once that log exists.**
+- **The S160 build-stamp caveat does NOT apply to this zip.** That session's log read one commit
+  behind because its DLL was built before the session was committed. This build was made after
+  `c488495` and the hash baked into the shipped DLL is HEAD — confirmed by finding `c488495` in the
+  binary itself, not by assuming the configure step re-ran.
+
+**⚠ S152's four converted frame budgets STILL have no targeted measurement**, and they are in this
+binary exactly as they were in V0.6.3's. **A nav, beacon, menu or dialogue timing fault on this build
+should suspect `592e142` before the session that owns the surface.** The `textWalk …/frame` probe
+ships again and is still how the "aaaaaaaaa" runaway gets settled — roughly `1.00` per frame refutes
+the sim-loop lead, roughly `4.00` at 4× speed confirms it.
+
+**Known-unfinished items still shipping, unchanged and still open in `Docs\debug.md`:** the **Clan
+Primer wrap-around settle is SILENT** (S127, tester-accepted, with the do-not-fix-by-reverting
+warning recorded there), and the `__MJ_CTRL` exit-builder widening means maps **318, 319, 321, 322
+and 568** may list exits they previously dropped.
 
 ## V0.6.3-Shotgun-Build — 2026-08-13
 
