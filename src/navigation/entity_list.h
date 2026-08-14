@@ -25,6 +25,8 @@ enum class Category {
     Object,       // unclassified gimmick — signs, levers, switches: NO map transition
     Enemy,        // live battle combatant (BtlWork pool), read separately from the handle table
     Items,        // ground loot an enemy dropped (DAT_02ec0fa0 pool), read separately again
+    Trap,         // floor trap: NOT a scene object at all -- a model instance enumerated from the
+                  // game's own per-map trap table, and only while the game is showing them
     Count
 };
 // Door and Shop sit IMMEDIATELY after Exit on purpose (tester's instruction): all three are ways off
@@ -35,6 +37,9 @@ enum class Category {
 // Items sits IMMEDIATELY after Enemy on purpose: the cycle is a plain modulo over [0, Count), so
 // one `=` press flips between the enemies you are fighting and the loot they left. Requested by the
 // tester -- checking for drops is what you do the moment a fight ends. Do not reorder.
+// Trap is APPENDED, deliberately disturbing none of the adjacencies above. It is also the one
+// category the `=` cycle can SKIP entirely: the game hides traps until a party member has Libra up,
+// and the mod hides the category on the same condition (ChangeCategoryLocked).
 // (Category::Event is RETIRED. It was created in Session 43 to hold the mapData+0x54 table after that
 //  table was wrongly demoted from Exit — see map_query.h. The +0x54 entries are map-jump exits and are
 //  back under Category::Exit; nothing else ever produced an Event, so the category had no source left.

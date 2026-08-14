@@ -690,6 +690,34 @@ constexpr uint32_t MAPJUMP_ARRAY_LOOKUP   = 0x144B90;  // FUN_00264b90 (exit arr
 // this header. NavRva keeps the FIELD-NAVIGATION addresses: the walkmap, the handle table,
 // the scene objects, the actor pool and the game-thread lifecycle.
 
+// ---- FLOOR TRAPS -------------------------------------------------------------
+// Derived offline from the two functions that walk this data and AGREE on every field of it:
+// FUN_002f8060 (the per-frame trigger, reached from the actor tick) and FUN_002f82f0 (the
+// visibility toggle). Producer + consumer agreement, conf 0.98. Layout in GameArchitecture.md.
+//
+// ⚠ TRAP_TABLE HOLDS A POINTER -- deref once before reading anything. Then:
+//     count  = min(*(int32*)P, 32)          <- the game's own cap, in both walkers
+//     rec i  = P + *(uint32*)(P + 4 + i*4)  <- offsets are RELATIVE TO P, not absolute
+// and trap i exists on this map only if the map's presence mask has bit i set.
+//
+// TRAP_VISIBLE is the gate to use, NOT a re-derived Libra test. FUN_002f82f0 latches it from
+// FUN_0030c300 (THE Libra predicate) and drives every trap's model state from it, so it already IS
+// the game's answer to "are traps on screen right now". BattleTargetReader::LibraActive() must NOT
+// be used here: that reads the BATTLE-HUD mirror P+0x10F68, and traps are a FIELD concern where
+// that context may not be live at all.
+constexpr uint32_t TRAP_TABLE      = 0x219E948;  // DAT_022be948 (ptr -> count/offset table)
+constexpr uint32_t TRAP_VISIBLE    = 0x219E944;  // DAT_022be944 (the Libra visibility latch)
+constexpr uint32_t TRAP_MASK_ARRAY = 0x2DA3EA0;  // DAT_02ec3ea0 {mapId, present, decided} x N
+constexpr uint32_t TRAP_MASK_COUNT = 0x2DA3EC8;  // DAT_02ec3ec8 (N)
+constexpr uint32_t TRAP_MASK_STRIDE = 0xC;
+constexpr uint32_t TRAP_SLOT_CAP    = 32;        // min(*table, 0x20) in both walkers
+// Record fields. There is NO Y: FUN_002f8060 builds the trap position with a literal 0.0 for Y and
+// zeroes the PARTY position's Y too before the 3D distance call, so the game's own test is flat.
+constexpr uint32_t TRAP_REC_X10    = 0x00;  // s16, world X * 10
+constexpr uint32_t TRAP_REC_Z10    = 0x02;  // s16, world Z * 10
+constexpr uint32_t TRAP_REC_FLAG   = 0x04;  // s8, one-time global flag id; -1 = respawner
+constexpr uint32_t TRAP_REC_RADIUS = 0x0A;  // u8, AoE radius (FUN_002fb8c0); 0 = triggerer only
+
 // ---- Gimmick tables (classification; from FUN_0031c2f0) ----------------------
 constexpr uint32_t GIMMICK_INSTANCE_TABLE = 0x2D9F120;  // DAT_02ebf120
 constexpr uint32_t GIMMICK_DEF_TABLE      = 0x2D9F150;  // DAT_02ebf150 (def id / model)

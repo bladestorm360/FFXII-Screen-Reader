@@ -5525,8 +5525,24 @@ now", it costs one guarded u32 read, and mirroring it is the same principle `Lib
 for HP digits. It also sidesteps a real hazard: `LibraActive()` reads the **battle-HUD** mirror
 `P+0x10F68`, and traps are a FIELD concern where that context may not be live.
 
-⚠ **Confirmation probe written and NOT yet run:** `..\FFXII-Decompile\frida\probe_traps.js`. Nothing
-here is ported to C++ until it reports.
+**No probe was needed or used.** A `probe_traps.js` was written and **deleted unrun** — it asked
+whether these globals were right, which is discovery, and Frida does not do discovery here. The two
+walkers above agree on every field; that is the evidence.
+
+**Mod side (S161):** `EntityScan::ScanTraps` (`entity_scan.cpp`), RVAs in `nav_rva.h` as `TRAP_*`,
+appended as `EntityList::Category::Trap`. Three things that are not obvious from the table:
+
+- **A trap record has no Y.** Position is `(x, GroundY(x, z, playerY), z)` — `PathMarch::GroundY`
+  returns the walkmap floor under the point and falls back to its seed off-mesh, so an uncovered
+  trap lands at the player's height rather than at `y = 0`, which on a map whose floor sits at
+  `-32` would put every trap 32 m in the air.
+- **`sceneObj` is null and that is load-bearing.** `RescanLocked` skips the grace window for
+  null-scene-object entries, so a sprung trap leaves the list on the next scan instead of lingering
+  for 2 s.
+- **`nameIdx` must be unique per trap.** `CursorMatch` falls back to `(nameIdx, category)` when
+  there is no scene object, so a shared value would make every trap one entity to the focus clamp.
+  Traps use the negative synthetic band `-(3000 + slot)`, after exits `-(1000 + i)` and ground drops
+  `-(2000 + i)`.
 
 ### The definition record (script-bytecode data, not a table in memory)
 

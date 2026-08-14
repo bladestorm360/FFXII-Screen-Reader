@@ -11,6 +11,8 @@
 #include "navigation/exit_scan.h"
 #include "navigation/item_scan.h"
 #include "navigation/treasure_state.h"
+#include "navigation/path_march.h"     // GroundY -- a trap record carries no Y of its own
+#include "speech/phrasebook.h"         // CatTrap -- the trap label is a mod word, not a game string
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/phyre_types.h"
@@ -207,6 +209,135 @@ bool IsPartyMemberActor(void* actor) {
     for (int slot = 0; slot < BattleState::kRosterSlots; ++slot)
         if (BattleState::BtlChrForSlot(slot) == bc) return true;
     return false;
+}
+
+// Append FLOOR TRAPS, and only while the game is showing them.
+//
+// A FOURTH backing store, and the reason this cannot ride on any pass above: a trap is not a scene
+// object at all. `FUN_003ec700` sets a MODEL-INSTANCE state, never a scene object, so the handle
+// table never lists one and the interaction scanner cannot see one.
+//
+// Everything here was derived offline from the two functions that walk this data and agree on every
+// field of it -- FUN_002f8060 (the per-frame trigger) and FUN_002f82f0 (the visibility toggle).
+// Addresses, cap and record layout: nav_rva.h TRAP_*.
+//
+// THE GATE IS THE GAME'S OWN LATCH. `TRAP_VISIBLE` is set from FUN_0030c300 (the Libra predicate)
+// by FUN_002f82f0, which then drives every present trap's model state from it -- so it already IS
+// "are traps on screen right now", for one guarded read, and mirroring it is the same principle
+// LibraActive() follows for HP digits. Deliberately NOT LibraActive() itself: that reads the
+// BATTLE-HUD mirror, and this runs on the field where that context may not be live.
+//
+// Caller holds g_mutex.
+void ScanTraps(std::vector<Entity>& out) {
+    uint32_t visible = 0;
+    if (!SafeReadU32(Hooks::ResolveRva(NavRva::TRAP_VISIBLE), 0, &visible) || visible == 0)
+        return;                       // Libra down -> the game hides them, so the mod lists none
+
+    void* tbl = PtrAt(Hooks::ResolveRva(NavRva::TRAP_TABLE), 0);
+    if (!tbl) return;                 // no trap table loaded for this map
+
+    uint32_t rawCount = 0;
+    if (!SafeReadU32(tbl, 0, &rawCount)) return;
+    const uint32_t count = rawCount > NavRva::TRAP_SLOT_CAP ? NavRva::TRAP_SLOT_CAP : rawCount;
+    if (count == 0) return;
+
+    // THE PRESENCE MASK IS WHAT MAKES A STALE TABLE POINTER HARMLESS. The table is loaded with the
+    // map, but the mask array is keyed on map id -- so on a map with no entry we get 0 and list
+    // nothing, even if `tbl` still points at the previous map's records. That is the same protection
+    // the game's own walkers rely on, not an extra safety net invented here.
+    const int mapId = MapNames::CurrentMapId();
+    uint32_t mask = 0;
+    uint32_t nMask = 0;
+    if (SafeReadU32(Hooks::ResolveRva(NavRva::TRAP_MASK_COUNT), 0, &nMask) && nMask > 0 &&
+        nMask <= 4096) {
+        void* arr = Hooks::ResolveRva(NavRva::TRAP_MASK_ARRAY);
+        for (uint32_t i = 0; i < nMask; ++i) {
+            const uint32_t off = i * NavRva::TRAP_MASK_STRIDE;
+            uint32_t entryMap = 0;
+            if (!SafeReadU32(arr, off, &entryMap)) break;
+            if (static_cast<int>(entryMap) != mapId) continue;
+            SafeReadU32(arr, off + 4, &mask);
+            break;
+        }
+    }
+
+    // A trap record carries NO Y -- the game builds its position with a literal 0.0 and zeroes the
+    // party's Y too before comparing, so its own test is flat. Seed the walkmap lookup with the
+    // player's height: GroundY returns the floor under (x,z) and falls back to the seed off-mesh,
+    // so a trap the walkmap does not cover lands at the player's own height instead of at y=0 --
+    // which on a map whose floor sits at -32 would put every trap 32 m in the air.
+    FVec3 playerPos;
+    const bool havePlayer = PlayerState::ReadPlayerPos(playerPos);
+    const float seedY = havePlayer ? playerPos.y : 0.0f;
+
+    char diag[512];
+    int  diagLen = 0;
+    int  listed  = 0;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (((mask >> i) & 1u) == 0) continue;          // not present on this map (or already sprung)
+
+        uint32_t recOff = 0;
+        if (!SafeReadU32(tbl, 4 + i * 4, &recOff)) continue;
+        void* rec = static_cast<char*>(tbl) + recOff;
+
+        int16_t x10 = 0, z10 = 0;
+        if (!SafeReadS16(rec, NavRva::TRAP_REC_X10, &x10)) continue;
+        if (!SafeReadS16(rec, NavRva::TRAP_REC_Z10, &z10)) continue;
+        uint8_t radius = 0, flagRaw = 0;
+        SafeReadU8(rec, NavRva::TRAP_REC_RADIUS, &radius);
+        SafeReadU8(rec, NavRva::TRAP_REC_FLAG,   &flagRaw);
+
+        Entity e;
+        e.sceneObj   = nullptr;   // load-bearing: RescanLocked skips the grace window for these, so a
+                                  // sprung trap leaves the list on the very next scan
+        // IDENTITY, and it is NOT optional. With no scene object, `CursorMatch` falls back to
+        // (nameIdx, category) -- so leaving nameIdx at its default 0 would make every trap on the map
+        // the SAME entity to the focus clamp, and a cursor parked on trap 5 would re-lock onto
+        // whichever trap sorted nearest on the next rescan. The slot index is a real identity: it is
+        // the bit position in the presence mask and it is stable for as long as the map is loaded.
+        // Negative synthetic band, following the convention already in use -- exits are -(1000+i)
+        // (exit_scan.cpp) and ground drops -(2000+i) (item_scan.cpp).
+        e.nameIdx    = static_cast<int16_t>(-(3000 + static_cast<int>(i)));
+        e.category   = Category::Trap;
+        e.label      = Phrase::Get(Phrase::Id::CatTrap);
+        e.pos.x      = static_cast<float>(x10) / 10.0f;
+        e.pos.z      = static_cast<float>(z10) / 10.0f;
+        e.pos.y      = PathMarch::GroundY(e.pos.x, e.pos.z, seedY);
+        e.fixed      = true;      // no scene node to refresh a position from
+        e.noBearing  = false;     // x/z ARE world space, so a bearing is real
+        e.available  = true;      // nothing to interact with -> no filter may hide it
+        e.gameNamed  = false;     // the word is ours; NumberDuplicateLabels turns it into "Trap 1"
+        out.push_back(e);
+        ++listed;
+
+        if (diagLen >= 0 && diagLen < static_cast<int>(sizeof(diag)) - 64) {
+            const int n = snprintf(diag + diagLen, sizeof(diag) - diagLen,
+                                   " [%u]=(%.1f,%.1f) r=%u flag=%d",
+                                   i, e.pos.x, e.pos.z, radius,
+                                   static_cast<int>(static_cast<int8_t>(flagRaw)));
+            if (n > 0) diagLen += n;
+        }
+    }
+
+    // THE INSTRUMENT, and it ships with the feature because the feature cannot be play-tested here:
+    // there is no save near a trap dungeon, so the first log from any trap map has to be decisive on
+    // its own. A plausible count with in-map coordinates confirms the whole chain; an absurd
+    // `tableCount` condemns TRAP_TABLE; a latch that never reads 1 under Libra condemns the gate.
+    //
+    // Keyed on the STATE tuple, so it prints once per distinct state and standing still is silent.
+    // Not throttled and not capped -- a rate-limited line is not a measurement (L-04).
+    static int      s_lastMap   = -1;
+    static uint32_t s_lastMask  = 0xFFFFFFFFu;
+    static uint32_t s_lastVis   = 0xFFFFFFFFu;
+    static uint32_t s_lastCount = 0xFFFFFFFFu;
+    if (mapId != s_lastMap || mask != s_lastMask || visible != s_lastVis || count != s_lastCount) {
+        s_lastMap = mapId; s_lastMask = mask; s_lastVis = visible; s_lastCount = count;
+        char line[640];
+        snprintf(line, sizeof(line), "traps: map=%d latch=%u mask=0x%X tableCount=%u listed=%d%s",
+                 mapId, visible, mask, rawCount, listed, diagLen > 0 ? diag : "");
+        Log::Write("NAV", line);
+    }
 }
 
 // Append live COMBATANTS (allies + enemies) from the BtlWork pool. Field NPCs/gimmicks come
@@ -776,6 +907,10 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // Ground loot — what an enemy dropped when it died. A third source with a third backing store:
     // not the handle table, not the actor pool, but the engine's own 10-slot drop pool.
     ItemScan::ScanDrops(out);
+
+    // Floor traps — a FOURTH store again, and the only one the mod lists conditionally: a trap is a
+    // model instance with no scene object, and the game hides them until a party member has Libra up.
+    ScanTraps(out);
 
     // ApplyPlayerLabels + NumberDuplicateLabels USED TO RUN HERE, and that was a latent bug the
     // persistent store happened to hide. RescanLocked merges the grace-window survivors into this

@@ -1214,3 +1214,93 @@ does not, so it is a real per-enemy state rather than the party's buff leaking i
 **pre-existing**, bit 30 sitting inside the u32 words the readout always walked, not something the
 S160 widening introduced. Whether an enemy should announce the player's own scan is a wording
 question for the tester, not a correctness one.
+
+---
+
+## Session 161 — 2026-08-14 — [nav] Floor traps as a category, and a probe that should never have existed
+
+KEYWORDS: traps category Category::Trap ScanTraps DAT_022be948 DAT_022be944 DAT_02ec3ea0 presence
+mask trap record X10 Z10 radius respawner GroundY no elevation nameIdx synthetic band 3000
+ChangeCategoryLocked skip probe_traps.js deleted frida discovery violation
+
+### 1. The probe I should not have written, deleted unrun
+
+S160 ended with `..\FFXII-Decompile\frida\probe_traps.js` presented as the confirmation step before
+any C++. **It was a discovery probe.** It asked whether `DAT_022be948` was the right global, whether
+the `/10` scale held, and carried *"if the latch is wrong, gate on `FUN_0030c300` instead"*.
+
+The tester: *"no discovery probe. traps settle from decompile alone, you know this already. probes
+are **not** for discovery."* Correct on every count.
+
+**A probe with a fallback branch is a search.** A confirmation probe has no alternative hypothesis in
+it — it asserts the derived values and either matches or condemns them. If it cannot be written
+without a fallback, the decompile is not finished. Recorded in `debug.md`.
+
+Worse, the facts were **already settled** when it was written: `FUN_002f8060` and `FUN_002f82f0` walk
+the trap data independently and agree on the table pointer, the `0x20` cap, the offset indirection,
+the mask stride and the latch. Producer + consumer agreement — the same standard that had put the
+affinity quartet at 0.98 an hour earlier **in the same session**. I applied the bar to one finding
+and not to the next.
+
+### 2. Traps, built
+
+`EntityList::Category::Trap`, appended after `Items` so none of the enum's deliberate adjacencies
+move. `EntityScan::ScanTraps` is a fourth backing store beside the handle table, the actor pool and
+the drop pool — a trap is not a scene object at all (`FUN_003ec700` sets a MODEL-INSTANCE state), so
+no existing pass could ever have seen one.
+
+**The gate is `DAT_022be944`, the game's own visibility latch**, not a re-derived Libra test.
+`FUN_002f82f0` sets it from `FUN_0030c300` and drives every trap's model state from it, so it already
+IS "are traps on screen right now". Deliberately **not** `LibraActive()`: that reads the BATTLE-HUD
+mirror `P+0x10F68`, and traps are a FIELD concern where that context may not be live.
+
+Three things the decompile settled that the design turns on:
+
+* **A trap record has no Y.** `FUN_003a1920` is a 3D distance, but `FUN_002f8060` builds the trap
+  position with a literal `0.0` for Y **and zeroes the party's Y** right before the call
+  (`FUN_002fb8c0` flattens identically). Position is therefore
+  `(x, PathMarch::GroundY(x, z, playerY), z)` — GroundY falls back to its seed off-mesh, so an
+  uncovered trap lands at the player's height instead of at `y=0`, which on a map whose floor sits
+  at `-32` would put every trap 32 m in the air.
+* **`sceneObj = nullptr` is load-bearing.** `RescanLocked` skips the grace window for exactly those,
+  so a sprung trap leaves the list on the next scan rather than lingering 2 s.
+* **`nameIdx` MUST BE UNIQUE PER TRAP, and I nearly shipped it at 0.** With no scene object
+  `CursorMatch` falls back to `(nameIdx, category)`, so one shared value makes every trap on the map
+  the same entity to the focus clamp — a cursor on trap 5 would re-lock onto whichever sorted
+  nearest. Caught by reading `CursorMatch` rather than by testing, which is the only way it could
+  have been caught here. Traps take the next synthetic band, `-(3000 + slot)`, after exits
+  `-(1000 + i)` and drops `-(2000 + i)`.
+
+**The `=` cycle skips Trap, and ONLY Trap, when the latch is clear.** The obvious generalisation —
+skip any empty category — would silence `"Shop, 0"` and every other zero the cycle deliberately
+announces, which is a working surface the tester navigates by (L-48).
+
+Label: one new phrasebook string, `"Trap"`, English column only. Permission asked and given.
+`NumberDuplicateLabels` turns it into `Trap 1`, `Trap 2`.
+
+### 3. Explicitly NOT done
+
+**Routing and danger zones are untouched.** Feeding traps into `PathDanger` would re-open the
+S106/S108 revert — *a penalty is only a detour when a detour exists*. A trap is a thing to hear and
+walk around, not a cost on the graph. Do not re-propose without new evidence.
+
+### 4. UNVERIFIED — and it cannot be verified here
+
+**The tester has no save near a trap dungeon**, which is why this went straight to C++. So the list
+itself has never run against real data. What can be checked on any map is the *negative*: the
+category is skipped with Libra down, every other category announces exactly as before, and the scan
+adds no per-frame cost (it runs on rescan, not per frame).
+
+**The instrument ships with it, because there is no play test to fall back on** (S148). One `[NAV]`
+line per distinct `(map, mask, latch, count)` state:
+
+```
+traps: map=<id> latch=<0|1> mask=0x<hex> tableCount=<n> listed=<n> [i]=(x,z) r=<n> flag=<id>
+```
+
+A plausible count with in-map coordinates confirms the whole chain; an absurd `tableCount` condemns
+`TRAP_TABLE`; a latch that never reads 1 under Libra condemns the gate. **The first log from
+Barheim Passage, Lhusu Mines, Zertinan Caverns or Garamsythe Waterway settles it in one pass** — no
+second session to add logging. Delete the block once that log exists.
+
+**Record this as UNVERIFIED, not shipped.**

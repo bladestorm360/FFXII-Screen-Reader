@@ -7,6 +7,32 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### RULE VIOLATION (S160, corrected S161) — a Frida probe that asked whether an offset was right
+
+KEYWORDS: frida discovery probe fishing probe_traps.js confirmation not discovery RVA guess
+fallback branch CLAUDE.md rule violation traps DAT_022be948
+
+**What was written and why it was wrong.** `..\FFXII-Decompile\frida\probe_traps.js`, presented as a
+confirmation probe standing between the decompile and the C++. It was not one. It asked whether
+`DAT_022be948` was the right global, whether the `/10` coordinate scale was right, and carried an
+explicit **fallback branch** — *"if `libraLatch` never changes, `DAT_022be944` is wrong or is not the
+visibility state; fall back to gating on `FUN_0030c300` directly."*
+
+**A probe with a fallback branch is a search.** CLAUDE.md: Frida confirms values already derived
+offline; it does not find them. The tester's correction: *"probes are **not** for discovery."*
+
+**The facts were already settled when it was written**, which is what makes this a process failure
+rather than a research one. `FUN_002f8060` and `FUN_002f82f0` walk the same trap data independently
+and agree on the table pointer, the `0x20` cap, the offset indirection, the mask array's stride, and
+the latch. That is producer + consumer agreement — the same standard that put the S160 affinity
+quartet at 0.98 an hour earlier in the same session.
+
+**The file was deleted unrun** and S161 went straight to C++.
+
+**The tell, for next time:** you are writing "if X is wrong, try Y" into a probe. A confirmation
+probe has no alternative hypothesis in it — it asserts the derived values and either matches or
+condemns them. If you cannot write it without a fallback, the decompile is not finished.
+
 ### FAILED (S156, fixed S159) — a SECOND gate on `o`, on a flag that reads the same in both states
 
 KEYWORDS: Libra o key silent battle BattleCommandActive g_bcmdLivePanel target cursor aiming

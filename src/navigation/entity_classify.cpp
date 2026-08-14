@@ -29,6 +29,7 @@ const wchar_t* CategoryWord(Category c) {
         case Category::Object:       return Phrase::Get(Id::CatInteractables);
         case Category::Enemy:        return Phrase::Get(Id::CatEnemy);
         case Category::Items:        return Phrase::Get(Id::CatItems);
+        case Category::Trap:         return Phrase::Get(Id::CatTrap);
         default:                     return Phrase::Get(Id::CatInteractables);
     }
 }

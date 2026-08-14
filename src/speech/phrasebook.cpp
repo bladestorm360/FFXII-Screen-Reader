@@ -37,7 +37,7 @@ const Row kTable[] = {
     // -- Entity categories --------------------------------------------------------------------
     EN(L"All"), EN(L"Exit"), EN(L"Save Crystal"), EN(L"Gate Crystal"), EN(L"Treasure"),
     EN(L"NPC"), EN(L"Interactables"), EN(L"Enemy"), EN(L"Items"), EN(L"Sign"), EN(L"Story-gated"),
-    EN(L"Door"), EN(L"Shop"),
+    EN(L"Door"), EN(L"Shop"), EN(L"Trap"),
 
     // -- Navigation status --------------------------------------------------------------------
     EN(L"Position unavailable"), EN(L"Path clear"), EN(L"Blocked, bear "), EN(L"Blocked"),

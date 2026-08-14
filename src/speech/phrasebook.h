@@ -57,7 +57,7 @@ enum class Id {
     // -- Entity categories (entity_classify.cpp, entity_postscan.cpp, entity_commands.cpp) ----
     CatAll, CatExit, CatSaveCrystal, CatGateCrystal, CatTreasure,
     CatNPC, CatInteractables, CatEnemy, CatItems, CatSign, StoryGated,
-    CatDoor, CatShop,
+    CatDoor, CatShop, CatTrap,
 
     // -- Navigation status (entity_commands.cpp, path_planner.cpp, entity_list.cpp, ...) ------
     PositionUnavailable, PathClear, BlockedBearPrefix, BlockedWord, RouteUnavailable,

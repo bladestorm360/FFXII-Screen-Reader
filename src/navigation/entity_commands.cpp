@@ -5,7 +5,10 @@
 #include "navigation/map_names.h"
 #include "navigation/map_query.h"
 #include "navigation/nav_common.h"
+#include "navigation/nav_rva.h"        // TRAP_VISIBLE -- the cycle hides Traps on the game's own latch
 #include "navigation/player_state.h"
+#include "core/hooks.h"
+#include "core/mem_read.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
 #include "core/logger.h"
@@ -109,10 +112,31 @@ void CmdDescribeCurrent() {
     }
 }
 
+// Is the game showing floor traps right now? The latch FUN_002f82f0 keeps from the Libra predicate
+// -- see NavRva::TRAP_VISIBLE. One guarded read, no game call, and the same value EntityScan::ScanTraps
+// gates on, so the category cycle and the list can never disagree about whether traps exist.
+static bool TrapsVisible() {
+    uint32_t v = 0;
+    return MemRead::SafeReadU32(Hooks::ResolveRva(NavRva::TRAP_VISIBLE), 0, &v) && v != 0;
+}
+
 static void ChangeCategoryLocked(int dir) {
     int c = static_cast<int>(g_currentCategory);
     int n = static_cast<int>(Category::Count);
     c = ((c + dir) % n + n) % n;
+    // TRAPS ARE THE ONE CATEGORY THAT CAN VANISH FROM THE CYCLE. The game hides floor traps until a
+    // party member has Libra up, and the tester asked for the category to be hidden on the same
+    // condition -- so with the latch clear, stepping onto it carries straight on in the same
+    // direction. Bounded by `n` so a hypothetical all-skipping state cannot spin.
+    //
+    // SKIPS TRAP AND NOTHING ELSE. The obvious generalisation -- "skip any empty category" -- would
+    // silence `"Shop, 0"` and every other zero this cycle deliberately announces, which is a working
+    // surface the tester navigates by. Widening onto it to save a branch is exactly L-48.
+    if (static_cast<Category>(c) == Category::Trap && !TrapsVisible()) {
+        const int step = (dir >= 0) ? 1 : -1;
+        for (int guard = 0; guard < n && static_cast<Category>(c) == Category::Trap; ++guard)
+            c = ((c + step) % n + n) % n;
+    }
     g_currentCategory = static_cast<Category>(c);
     // Rescan live actors BEFORE counting — the other commands (Next/Prev/Describe)
     // rescan, but this one used to count over the previous scan's stale set, so a
