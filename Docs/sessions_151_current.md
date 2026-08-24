@@ -1304,3 +1304,166 @@ Barheim Passage, Lhusu Mines, Zertinan Caverns or Garamsythe Waterway settles it
 second session to add logging. Delete the block once that log exists.
 
 **Record this as UNVERIFIED, not shipped.**
+## Session 163 — 2026-08-24 — [menus] The Draklor lift was a number, not a list
+
+**KEYWORDS: Draklor Laboratory 66th Floor North Lift Terminal Select destination floor picker
+silent highlights numeric entry field 0F 2D escape mode 4 widget+0xB0 state byte widget+0x54 value
+widget+0x58 packed spinner widget+0xA1 digits widget+0xA2 digit width FUN_002b35a0 0x1935A0
+FUN_002a8c50 FUN_002a9980 FUN_002a5590 window+0xC0 child option list no 0x0E block choice_reader
+HookedChoiceTick TickNumericField NumericFieldScope GameText decode DecodePages NotePage seed
+OptionCodec named exits LogFail L-69 SOLVED**
+
+**Reported:** on Draklor Laboratory: 66th Floor (5 objects), the North Lift Terminal prompt speaks
+*"Select destination: F (Current location: 68F)"* — no floor number — and moving the highlight is
+silent. The log had one line for it:
+
+    [READER] choice SILENT (choice widget: no 0x0E block at the widget's own offset)
+             wnd=000000002BEE9F90 a=0 b=2
+
+followed by `ChoiceReader::HookedChoiceTick calls=11` — eleven moves, eleven silences.
+
+### The finding
+
+**It is not a choice list.** The field message widget has two selection modes and the low byte of
+`widget+0xB0` says which. Mode 2 is the `0x0E` option block the reader already knew. **Mode 4 is an
+editable number**, produced when `FUN_002a8c50` reaches a `0F 2D` escape and configured by
+`FUN_002b35a0` (RVA `0x1935A0`) — a routine with exactly one caller in the binary. Such a page has no
+`0x0E` block, and the child option-list window at `window+0xC0` is never built. **`OptionCodec`
+finding nothing was correct.**
+
+**Why it looked like a two-option list.** In mode 4 the same fields carry different meanings, and
+every one of them returned a believable number: `+0xA2` = 2 is the *digit width* of the maximum (66
+to 70), not an option count; `+0x58` is a packed spinner state, not a row cursor, so it genuinely
+moved eleven times; `+0x54` = 66 is the *selected value*, and `dialogue_reader` printed it under the
+label `wait=`, where a floor number reads as noise. → **`Docs/Lessons.md` L-69.**
+
+**The mode byte was in the same log line the whole time.** `mode=4` appears on exactly two dialogue
+pages in the entire session and both are this prompt; every other page in the log is mode 0 or 1.
+That is the corroboration that carried the decompile's state enumeration over the bar — producer
+(`FUN_002b35a0` sets the mode and the digit width) and consumer (our own log) agreeing without either
+being fitted to the other.
+
+### What shipped
+
+1. **`ChoiceReader::HookedChoiceTick` asks the widget which selection it is running** before reading
+   a single field, and takes `TickNumericField` for mode 4. That branch speaks `widget+0x54` on
+   change. **It is authoritative in both flavours the field can take** — a free numeric range and a
+   pick-from-candidates list — so the reader keeps no index of its own and never touches the packed
+   state. Transition detector on a per-frame hook, naming `FUN_002a9980`, as the exception requires.
+2. **`GameText`'s decode loop renders `0F 2D`** when a `NumericFieldScope` is open. Purely additive
+   and the advance is unchanged: `0x2D` already fell into the generic `0x20..0x70` two-parameter arm
+   and emitted nothing, and with no scope open it still does, so every other page decodes byte for
+   byte as before. `DialogueReader::EmitPage` opens one in mode 4, which is what puts the floor
+   number into the spoken sentence. Width and pad character come from the escape's OWN format byte
+   (`fmt & 0x0F`, `fmt & 0x20`), never from a parameter we chose.
+
+   **The scope is CONSUMED by the first `0x2D` and disarmed before the decoder's sprite pass.** Not
+   tidiness: `ResolveSprites` calls `BattleState::ElementName`, which decodes a pool string of its
+   own -- a nested decode that would otherwise have seen an armed field. `ElementName` already
+   carries its own re-entrancy guard for exactly this shape; this is the same reasoning applied to
+   the new state.
+3. **`NotePage` carries the value the page line just spoke and SEEDS the tick's baseline.** Entry
+   says the whole sentence once; each move says the new number. A seed, not a filter: a move back to
+   the starting floor differs from the value last spoken and is announced. Both run on the game
+   thread, so the seed cannot land after the tick that would use it.
+4. **`OptionCodec`'s seven false returns each name themselves.** All seven reported as *"no 0x0E
+   block"*, which is what let a surface the reader had never met read as a parse failure.
+
+### The instrument was the wrong answer, and the decompile had the right one
+
+The first build shipped `LogNumericFieldDiag`: argument slots 28-31 plus 64 bytes of page hex, to
+discover at runtime which flavour the field was and what it held. **The user asked why I had done
+live reads instead of finding the lift menu's actual mechanism, and they were right.**
+
+`FUN_002b35a0` is **92 lines** and states the whole thing outright — it is the only caller-less
+configuration routine for this field, and reading it takes two minutes. The configuration is slots
+28-31, but **the destinations are argument slots `0 .. count-1`**. So the instrument was aimed at the
+wrong slots: it would have logged the count, the opening index and the bounds, and **never once the
+floors themselves**. It could not have answered the question it was shipped to answer.
+
+Worse was the framing. I sold *"the reader never has to know which flavour is running"* as a virtue.
+A design that does not need to know is a design that did not find out — the same shape as the
+fallback-probe rule this project already has, applied to a C++ instrument instead of a Frida script.
+
+**Replaced with `ChoiceReader::ReadNumericField`**, which reads the field the way `FUN_002b35a0`
+wrote it: candidate count from slot 29, the destinations from slots `0..count-1`, the live index from
+`widget+0x58` bits 12-17 with the same clamp the game applies; or, in range flavour, the two bounds
+from **the slots the cursor word names** (bits 0-5 and 6-11) rather than a hardcoded 30/31, because
+the function swaps them when slot 30 holds the larger number. One log line per prompt says what the
+menu HOLDS, and carries a control: in candidate mode `table[index]` must equal `widget+0x54`, and the
+line says so loudly when it does not.
+
+The 64-byte page hex went too. It existed to recover the `0F 2D` format byte, which only sets the
+render width and pad — both of which the decoder already reads off the escape itself.
+
+### Regression audit (asked for explicitly: dialogue must not move)
+
+The two handlers are separate in the game and had to stay separate here. Walked the diff path
+by path:
+
+- **`EmitPage`, non-mode-4** -- the widget reads moved above the decode, but they are guarded
+  getters with no side effects and nothing runs between them and the decode. `DecodePages` is
+  called identically, `NotePage` skips the seed and the instrument, and only the log LABEL
+  changed. No behavioural change.
+- **`HookedChoiceTick`, non-mode-4** -- one extra guarded byte read, then the original path
+  verbatim. The branch tests `== 4`, not `== 2`, so every other state falls through unchanged.
+- **`OnFocus`** (notice board, gate-crystal teleport list) -- `OptionCodec`'s logic is
+  unchanged line for line; it only gained a `why` out-param. `LogFail`'s pointer-based dedup
+  still separates the reasons because they are all literals.
+- **`GameText` with no scope open** -- byte-identical output; the `0x2D` arm is not taken.
+
+**Three things the audit actually caught, all fixed before the build shipped:**
+1. **A live cross-contamination path.** `ResolveSprites` runs a NESTED decode through
+   `BattleState::ElementName`, inside the scope's lifetime. Fixed by consuming the scope at
+   the first `0x2D` and disarming before the sprite pass.
+2. **An invented parameter.** The scope took a `padZero` flag that the caller had no way to
+   know; the escape's own `fmt & 0x20` bit is the truth. Parameter removed.
+3. **A dead constant** (`MODE_LIST`) and a **stale row key**: `TickNumericField` now clears
+   `g_lastCursor`, so a widget that has been a numeric field cannot carry a stale key back
+   into mode 2 and go silent on re-entry. Can only add speech.
+
+### The destination list is READ but NOT SPOKEN -- asked, answered, closed
+
+With the menu's own data in hand the reader could have announced the set ("66, 67, 70", the
+game's own numbers and no invented words) or a position on each move ("67, 2 of 3", which needs
+`of` in the phrasebook). **Tester's call: neither.** Speech stays the prompt line on entry and
+the number on each move; the destinations go to the log.
+
+So reading the mechanism is a CORRECTNESS fix, not a louder one -- and that is the right reason
+to have done it. The reader now knows what it is looking at, carries a control that fails loudly
+if the model is wrong, and needs no runtime hunt to answer what the lift holds. **Do not
+re-propose announcing the set.**
+
+### Play-confirmed, on ONE lift
+
+**Tester 2026-08-24: *"lift vocalization works."*** Draklor Laboratory: 66th Floor, North Lift
+Terminal. The prompt speaks with its floor number and the selection speaks as it moves.
+
+**⚠ THAT IS ONE LIFT, AND IT IS NOT THE ONLY ONE.** The tester's own caveat: whether this holds
+across the other lifts remains to be seen. What is confirmed is the mode-4 branch on a field
+whose flavour that one prompt happened to have. **Another lift can differ in ways this session
+never exercised:**
+
+- the OTHER flavour -- a free numeric RANGE instead of a candidate list. `ReadNumericField`
+  handles it and reads its bounds from the slots the cursor word names, but no range field has
+  ever been seen live.
+- the DIGIT-COLUMN cursor (`widget+0x98`). A free-entry field is edited one digit column at a
+  time, and the reader says nothing about which column the player is on. On such a lift the
+  number would speak and the position within it would not.
+- a `0F 2D` whose format byte asks for a WIDTH or ZERO PADDING. Both are implemented from the
+  escape's own bits, neither has been exercised.
+
+**Where to look first if another lift is silent or wrong:** the `[READER] numeric field:` line.
+It names the flavour, lists the destinations, and carries the control -- in candidate mode
+`table[index]` must equal `widget+0x54`, and the line says so loudly when it does not. If that
+line is absent the prompt never reached mode 4, which is a different defect entirely and means
+the surface is not this one.
+
+### Open
+
+- **The other Draklor lifts, and any lift elsewhere, are UNVERIFIED.** See above.
+- The `0F 2E` substitution on other surfaces (the Orrachea Armlet tutorial, the level-up banner)
+  stays open — nothing on this page uses it, and resolving it needs the window's argument table in a
+  decoder that touches every surface.
+- The lift says *"Current location: 68F"* on a map the mod names *"66th Floor"*. Two numbering
+  schemes of the game's own; not a mod defect.

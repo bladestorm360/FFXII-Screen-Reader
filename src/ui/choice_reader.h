@@ -70,7 +70,13 @@ namespace ChoiceReader {
 // STRUCK: "the setter's 4th argument is the argument block". It is null on this path, and so is the
 // window+0x1A8 copy FUN_002a35b0 makes of it -- both were measured. The real table is param_7 of
 // FUN_002b32d0, which Ghidra does not render at the call site.
-void NotePage(const uint8_t* base, size_t byteOffset);
+//
+// `numericField` / `value` describe the OTHER thing a page can host: an EDITABLE NUMBER rather than
+// an option list (see the mode note on HookedChoiceTick below). The page line the caller is about to
+// speak already contains that number, so it is handed over here to SEED the tick's baseline -- the
+// tick then speaks only once the player has moved it. Both run on the game thread, so the seed
+// cannot land after the first tick that would use it.
+void NotePage(void* widget, const uint8_t* base, size_t byteOffset, bool numericField, int32_t value);
 
 // Is this the field dialogue / choice window class (obj[0] == FUN_002a6190)?
 bool IsChoiceWindow(void* owner);
@@ -99,7 +105,29 @@ bool OnFocus(void* window, int visibleIndex);
 //     widget+0x58  i16             cursor index
 //     widget+0xA2  u8              option count (written by FUN_002a8c50 from the 0x0E header)
 //
-// Install() hooks FUN_002a9980 and speaks on cursor CHANGE. Returns false if the hook fails.
+// THE WIDGET HAS TWO SELECTION MODES AND ONLY ONE OF THEM IS A LIST. The low byte of widget+0xB0
+// says which, and FUN_002a9980 is the state machine for both -- which is why one hook covers them:
+//
+//     2   an OPTION LIST, the 0x0E block above. widget+0x58 is the row cursor and widget+0xA2 the
+//         raw option count.
+//     4   an EDITABLE NUMBER -- the Draklor lift's "Select destination: __F". Set by the codec
+//         escape `0F 2D` when the stepper FUN_002a8c50 reaches it, then configured by
+//         FUN_002b35a0 (RVA 0x1935A0), which has exactly one caller in the binary. There is NO 0x0E
+//         block on such a page, and the child option-list window (window+0xC0) is never created.
+//
+// In mode 4 the SAME FIELDS MEAN DIFFERENT THINGS, and that is what cost a session: widget+0xA2 is
+// the digit width of the maximum (2, for floors 66-70) and reads exactly like a two-option list;
+// widget+0x58 is a packed spinner state (min slot / max slot / candidate index, 6 bits each) and
+// changes on every move without ever naming a row. The value the player is choosing is at
+// widget+0x54, and it is authoritative in BOTH flavours the field can take -- a free numeric range
+// and a pick-from-candidates list -- so the reader never has to know which one is running.
+//
+//     widget+0x54  i32  mode 4: the SELECTED VALUE (mode 0/5: park reason; mode 2: raw option index)
+//     widget+0xA1  u8   mode 4: digit count of the field
+//     widget+0x98  u8   mode 4: digit-column cursor (free-entry flavour only)
+//
+// Install() hooks FUN_002a9980 and speaks on CHANGE -- of the row cursor in mode 2, of the value in
+// mode 4. Returns false if the hook fails.
 //
 // NOTE that FUN_002a9980 is slot 2 of the text dispatch table and exists ONLY on choice-capable
 // widgets (type 0); a plain dialogue box has null there. That is why this tick can drive an option

@@ -6585,3 +6585,48 @@ confirmed from the log of the same session: eleven category switches, each speak
 first row (`Attack` → `Cure, unavailable` → `Protectga` → `Aero, unavailable` → … → `Traveler`), zero
 stale items, zero duplicate `[LICENSE] summary` lines, and the picker class constant right first
 time.
+## SOLVED — the Draklor lift was a NUMBER, not a list (Session 163, 2026-08-24)
+
+**KEYWORDS: Draklor Laboratory 66th Floor North Lift Terminal Select destination floor picker
+silent highlights numeric field 0F 2D mode 4 widget+0x54 widget+0xA2 digit width no 0x0E block
+choice_reader HookedChoiceTick FUN_002b35a0 SOLVED**
+
+**Reported 2026-08-24:** the lift prompt speaks *"Select destination: F (Current location: 68F)"* —
+the floor number missing before the `F` — and moving the highlight says nothing at all.
+
+**The reader was hunting the wrong kind of surface.** This prompt hosts the message widget's
+**numeric field**, not an option list. `FUN_002a8c50` reaches a `0F 2D` escape, puts the widget's
+`+0xB0` low byte into **state 4** and hands off to `FUN_002b35a0`; there is no `0x0E` block on the
+page and `window+0xC0` (the child option-list window) is never created. `OptionCodec` finding nothing
+was **correct behaviour**, not a parse failure.
+
+**What made it read as a two-option list.** In state 4 the same bytes carry different meanings:
+
+| logged | field | what the reader assumed | what it is |
+|---|---|---|---|
+| `b=2` | `widget+0xA2` | option count | **digit width of the maximum** (floors 66–70) |
+| `a=0` | `widget+0x58` | row cursor | **packed spinner state**, three 6-bit fields |
+| `wait=66` | `widget+0x54` | park reason | **the selected value** — floor 66 |
+
+Every one of those is a plausible number, so nothing anywhere looked wrong. The full mode table is in
+`GameArchitecture.md` under PAGINATION.
+
+**Fixed three ways, all in one build:**
+1. `ChoiceReader::HookedChoiceTick` reads the `+0xB0` mode **before any other field** and takes a
+   numeric branch that speaks `widget+0x54` on change. `+0x54` is authoritative in both flavours the
+   field can take (free range / pick-from-candidates), so the reader needs no index of its own.
+2. `GameText`'s decode loop renders `0F 2D` when a `NumericFieldScope` is open — purely additive,
+   identical advance, so every page without one decodes byte for byte as before. `DialogueReader`
+   opens it in mode 4, which is what puts the floor number into the spoken sentence.
+3. `NotePage` now carries the value the page line just spoke and **seeds** the tick's baseline, so
+   entry says the whole sentence once and each move says the new number. It is a seed, not a filter:
+   a move back to the starting floor differs from the value last spoken and is announced.
+
+**Also fixed:** `OptionCodec` had seven false returns all reported as *"no 0x0E block"*. Each now
+names itself. A diagnostic that collapses seven causes into one sentence is what let this look like a
+parse bug for a session.
+
+**Tried & Failed, recorded so it is not retried:** scanning further for the marker. `widget+0xA2`
+reading 2 was taken as proof the game had found a `0x0E` header (`choice_reader.h` says that field is
+written from it), which pointed at the page-offset scan as the culprit. It was not — in mode 4 that
+field is never touched by the block walk at all.

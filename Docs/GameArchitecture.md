@@ -180,9 +180,65 @@ of BOTH live entries** in the text-draw dispatch table **`PTR_FUN_009164c8` (RVA
 
 Widget fields (same object `FUN_002a9980` receives — both use the `+0xB0` state word):
 `+0x28` text base · **`+0x8A` u16 BYTE OFFSET of the page on screen** · `+0xA3` type ·
-`+0xB0` state (low byte = mode; 5 = parked at a break) · `+0x54` park reason (`3` = page break,
-`0x23` = the `0F 23` wait escape) · `+0xC0` = 1 when the message ended (codec `0x00`) — **the next
+`+0xB0` state (low byte = mode) · `+0xC0` = 1 when the message ended (codec `0x00`) — **the next
 call CONSUMES it** (`002a8c50:535-536` clears it), so read `+0xC0` PRE-call.
+
+**⚠ `+0x54`, `+0x58`, `+0xA1` and `+0xA2` MEAN DIFFERENT THINGS IN DIFFERENT MODES** (S163). The
+`+0xB0` low byte says which, and reading any of them without it yields a plausible wrong number
+rather than an error — which is exactly how a session was lost. **STRUCK:** ~~"`+0x54` = park
+reason"~~ and ~~"`+0xA2` = option count"~~ as unconditional statements; both are mode-2/mode-0
+readings presented as universal.
+
+| `+0xB0` low byte | what it is | `+0x54` | `+0x58` | `+0xA1` | `+0xA2` |
+|---|---|---|---|---|---|
+| 0 / 5 | text advancing / parked at a break | park reason (`3` = page break, `0x23` = the `0F 23` wait escape) | — | — | — |
+| 1 | waiting for confirm to close | — | — | — | — |
+| 2 | **option list** (a `0x0E` block) | raw option index | row cursor (i16) | enabled option count | raw option count |
+| 4 | **editable number** (a `0F 2D` field) | **the SELECTED VALUE** | packed spinner state: min slot bits 0-5, max slot bits 6-11, candidate index bits 12-17 | digit count | **digit width of the maximum** |
+| 6 / 7 | selection accepted / measurement scratch | — | — | — | — |
+
+Mode 4 also uses `+0x98` (digit-column cursor, free-entry flavour) and bit 28 of the `+0xB0` word
+(`0x10000000`): **set** = pick from a script-supplied candidate array, **clear** = a free numeric
+range. `FUN_002a5cc0` (RVA `0x185CC0`, the field-dialogue tick) treats modes 2 and 4 as one class on
+confirm — the test is `(state - 2) & ~2`, true only for 2 and 4 — so the game itself regards the
+list and the number as the same kind of interaction.
+
+**THE NUMERIC FIELD'S PRODUCER (S163, conf 0.99 — read directly from the function).**
+`FUN_002a8c50` hits the codec escape **`0F 2D <idx> <fmt>`**, writes the digit count to `+0xA1`, puts
+`+0xB0` into state 4 and calls **`FUN_002b35a0` (RVA `0x1935A0`)** — which has **exactly one caller
+in the binary** — to configure the field from the window's inline argument table (`window+0x1B8`,
+32 entries, stride `0x10`, the integer at entry`+8`). It zeroes `+0x54`, `+0x58` and `+0xA2` first,
+then branches on bit 0 of the escape's flags: **clear → free digit entry** and it returns; **set →**
+it reads **slot 29** as a candidate count.
+
+| slot | role |
+|---|---|
+| **0 … count-1** | **THE CANDIDATES THEMSELVES** — the selectable values |
+| 28 | the candidate index the field opens on (clamped to `count-1`) |
+| 29 | candidate count. `>= 1` → pick-from-list; `< 1` → numeric range |
+| 30, 31 | the two bounds of a range |
+
+- **Candidate list** (`count >= 1`): sets `+0xB0` bit 28, puts the clamped index in `+0x58` bits
+  12-17, and writes `+0x54 = table[index]`. `+0xA2` is then the digit width of the **largest**
+  candidate, obtained by walking `table[0 .. count-1]`. That walk is the second, independent
+  confirmation that the candidates are slots `0..count-1`.
+- **Range** (`count < 1`): both bounds zero → error bit `0x60000000` and it gives up. Otherwise it
+  **orders slots 30 and 31** and records **which slot is the low one in `+0x58` bits 0-5 and the high
+  one in bits 6-11** — so the bound slots are *named by the cursor word*, not fixed at 30/31. The
+  opening value is the LOW slot's value, and `+0xA2` is the digit width of the high one.
+
+Such a page has **no `0x0E` block at all**, and the child option-list window at `window+0xC0` is never
+created — `FUN_002a5590` builds it only when the descriptor's list field is non-zero.
+
+**⚠ `widget+0x54` IS THE DISPLAYED VALUE, NOT THE MENU.** It is correct and it is the game's own
+write, but a reader built on it alone can only echo the number on screen — it cannot say how many
+destinations there are or what they are. The menu is the argument table. Shipped that way in
+`ChoiceReader::ReadNumericField`, with `table[index] == +0x54` logged as the control.
+
+**MEASURED, Draklor Laboratory 66th Floor, North Lift Terminal (2026-08-24):** `mode=4`,
+`+0x54 = 66`, `+0xA2 = 2` — the lift's floor picker, opening on floor 66 with a two-digit maximum.
+`mode=4` appeared on exactly two dialogue pages in that whole session and both were this prompt;
+every other page was mode 0 or 1.
 
 `002a8c50:77` starts its walk at `textBase + *(u16*)(widget+0x8A)`, and **`:199-200` is the write
 that advances `+0x8A` past a `0x03` page break** (guarded by `+0x54 == 3 && mode == 0`) — so this

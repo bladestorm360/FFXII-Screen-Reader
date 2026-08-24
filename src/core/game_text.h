@@ -81,6 +81,36 @@ bool IsMostlyPrintable(const std::wstring& s);
 using SpriteNameFn = std::wstring (*)(int spriteIndex);
 void SetElementSpriteResolver(SpriteNameFn fn);
 
+// ---- the NUMERIC ENTRY field (0F 2D) ------------------------------------------------------------
+// A field message can host an EDITABLE NUMBER instead of an option list -- the Draklor lift's
+// "Select destination: __F" is one. The byte stepper FUN_002a8c50 turns a `0F 2D <idx> <fmt>`
+// escape into that field: it writes the digit count to the widget and puts the widget's state byte
+// (widget+0xB0 low byte) into state 4, then FUN_002b35a0 -- the only caller in the binary --
+// configures the bounds. The LIVE VALUE then lives on the widget at +0x54, and the escape itself
+// carries no number at all.
+//
+// The decoder sees codec BYTES and has no widget, so the value is handed in the way MessageMacro's
+// already is: a thread-local the reader opens around its own decode. WITHOUT AN ACTIVE SCOPE 0x2D
+// behaves exactly as it did before this existed -- it already fell into the generic
+// `0x20..0x70 -> 2 params` arm and emitted nothing, and the advance is unchanged either way. Only
+// the pages that were silently losing their number change.
+//
+// `digits` is the width the widget was configured with (widget+0xA1), used only when the escape
+// asks for natural width. The pad character is NOT a parameter: it is the format byte's 0x20 bit,
+// which the decoder reads off the escape itself -- FUN_003efd00 fills with '0' when it is set and
+// with a space otherwise.
+//
+// THE SCOPE IS CONSUMED BY THE FIRST 0x2D IT REACHES, and disarmed before the decoder's sprite
+// pass. One scope means one field, and a nested decode -- the element-name resolver runs one --
+// can never inherit the value.
+class NumericFieldScope {
+public:
+    NumericFieldScope(int32_t value, int digits);
+    ~NumericFieldScope();
+    NumericFieldScope(const NumericFieldScope&) = delete;
+    NumericFieldScope& operator=(const NumericFieldScope&) = delete;
+};
+
 // ---- decode diagnostics -------------------------------------------------------------------------
 // The decoder STOPS DEAD on a token whose length it does not know -- it must, because guessing an
 // advance desynchronises the rest of the string. The cost is that everything after that byte is

@@ -30,7 +30,13 @@ constexpr uint32_t OFF_W_TEXT  = 0x28;   // widget+0x28  message text base
 constexpr uint32_t OFF_W_PAGE  = 0x8A;   // widget+0x8A  u16 byte offset of the page on screen
 constexpr uint32_t OFF_W_TYPE  = 0xA3;   // widget+0xA3  dispatch type (0 choice-capable, 1 plain)
 constexpr uint32_t OFF_W_STATE = 0xB0;   // widget+0xB0  state word, low byte = mode
-constexpr uint32_t OFF_W_WAIT  = 0x54;   // widget+0x54  park reason: 3 = page break, 0x23 = `0F 23`
+// +0x54 CARRIES A DIFFERENT MEANING PER MODE, and calling it "wait" is what made a live value look
+// like noise: the lift prompt logged `wait=66` and 66 was the selected floor, not a park reason.
+// mode 0/5 -> park reason (3 = page break, 0x23 = the `0F 23` wait escape); mode 4 -> the numeric
+// field's VALUE; mode 2 -> the raw option index. The log line names it by the mode it is in.
+constexpr uint32_t OFF_W_VALUE  = 0x54;
+constexpr uint32_t OFF_W_DIGITS = 0xA1;  // widget+0xA1  mode 4: digit count of the numeric field
+constexpr uint8_t  MODE_NUMERIC = 4;     // widget+0xB0 low byte: an editable number, set by `0F 2D`
 constexpr uint32_t OFF_W_ENDED = 0xC0;   // widget+0xC0  1 = message ended; the call CONSUMES it
 
 constexpr uint32_t OFF_TEXT_BLOCK = 0xD0;   // messageWindow+0xD0 = this text widget
@@ -132,28 +138,44 @@ void LogReject(void* widget) {
 // the cursor's first value on a new message -- so one wording, one interrupt policy and one log line
 // cover every page the game shows. There is no second speaker to race with.
 void EmitPage(void* widget, const uint8_t* base, uint16_t off) {
+    // READ THE WIDGET STATE FIRST. A page can host an EDITABLE NUMBER instead of an option list --
+    // the Draklor lift's "Select destination: __F" -- and the `0F 2D` escape that draws it carries
+    // no digits: the live value is on the widget at +0x54 and the decoder cannot reach it. Opening
+    // the scope around the decode is what puts the floor number into the sentence the player hears.
+    uint8_t type = 0xFF, mode = 0xFF, digits = 0;
+    int32_t value = -1;
+    MemRead::SafeReadU8(widget, OFF_W_TYPE, &type);
+    MemRead::SafeReadU8(widget, OFF_W_STATE, &mode);       // low byte of the state word
+    MemRead::SafeReadU32(widget, OFF_W_VALUE, reinterpret_cast<uint32_t*>(&value));
+    MemRead::SafeReadU8(widget, OFF_W_DIGITS, &digits);
+
     // DecodePages splits on the codec's 0x03 page break, so element 0 is exactly the page sitting at
     // the cursor and everything after it belongs to screens the player has not reached.
     std::vector<std::wstring> pages;
-    GameText::DecodePages(base + off, TEXT_SCAN_MAX, pages);
+    if (mode == MODE_NUMERIC) {
+        // Scoped to this one decode; in every other mode 0x2D decodes exactly as it always has.
+        GameText::NumericFieldScope field(value, digits);
+        GameText::DecodePages(base + off, TEXT_SCAN_MAX, pages);
+    } else {
+        GameText::DecodePages(base + off, TEXT_SCAN_MAX, pages);
+    }
     if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
     const std::wstring& page = pages.front();
 
     // Hand ChoiceReader the message and the cursor BEFORE speaking: an option block on this page
     // (the notice board's bill list, a mid-dialogue Yes/No) has to queue behind the page text rather
     // than cut it off, and NotePage is what arms that.
-    ChoiceReader::NotePage(base, off);
+    //
+    // The numeric field goes with it, so the tick knows which value this page ALREADY said and
+    // speaks only once the player has MOVED it. Two detectors, one utterance -- the same handshake
+    // that keeps the notice board from being spoken twice.
+    ChoiceReader::NotePage(widget, base, off, mode == MODE_NUMERIC, value);
 
-    uint8_t type = 0xFF, mode = 0xFF;
-    int32_t wait = -1;
-    MemRead::SafeReadU8(widget, OFF_W_TYPE, &type);
-    MemRead::SafeReadU8(widget, OFF_W_STATE, &mode);       // low byte of the state word
-    MemRead::SafeReadU32(widget, OFF_W_WAIT, reinterpret_cast<uint32_t*>(&wait));
-
-    char hdr[144];
-    snprintf(hdr, sizeof(hdr), "page[wnd=%p base=%p off=%u type=%u mode=%u wait=%d]: ",
+    char hdr[160];
+    snprintf(hdr, sizeof(hdr), "page[wnd=%p base=%p off=%u type=%u mode=%u %s=%d]: ",
              widget, static_cast<const void*>(base), static_cast<unsigned>(off),
-             static_cast<unsigned>(type), static_cast<unsigned>(mode), static_cast<int>(wait));
+             static_cast<unsigned>(type), static_cast<unsigned>(mode),
+             mode == MODE_NUMERIC ? "value" : "park", static_cast<int>(value));
     Log::WriteW("DIALOGUE", hdr, page);
 
     MessageReader::NoteSpoken(page);   // the shared `t` re-read store -- one store, not a second one

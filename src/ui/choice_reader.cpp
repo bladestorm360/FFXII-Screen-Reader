@@ -24,7 +24,31 @@ constexpr uint32_t RVA_CHOICE_TICK = 0x189980; // FUN_002a9980(widget) -- mid-di
 constexpr uint32_t OFF_W_TEXT   = 0x28;        // widget+0x28 = message text base
 constexpr uint32_t OFF_W_OFFSET = 0x8A;        // widget+0x8A = u16 byte offset (current page)
 constexpr uint32_t OFF_W_CURSOR = 0x58;        // widget+0x58 = i16 cursor index
-constexpr uint32_t OFF_W_COUNT  = 0xA2;        // widget+0xA2 = u8 option count
+constexpr uint32_t OFF_W_COUNT  = 0xA2;        // widget+0xA2 = u8 option count (mode 2)
+
+// ---- the widget's OTHER selection mode: an editable number (see choice_reader.h) ---------------
+constexpr uint32_t OFF_W_STATE  = 0xB0;        // widget+0xB0 = state word; low byte = mode
+constexpr uint32_t OFF_W_VALUE  = 0x54;        // widget+0x54 = i32 selected value (mode 4)
+constexpr uint32_t OFF_W_DIGITS = 0xA1;        // widget+0xA1 = u8 digit count (mode 4)
+constexpr uint8_t  MODE_NUMERIC = 4;           // the `0F 2D` numeric field (2 = the 0x0E list)
+constexpr uint32_t FLAG_CANDIDATES = 0x10000000u;  // state word bit 28: pick-from-list, not a range
+
+// WHERE THE MENU'S OWN DATA LIVES. FUN_002b35a0 (RVA 0x1935A0) configures the field out of the
+// window's inline argument table and nowhere else, so these four slots ARE the menu:
+//
+//     slot 29  how many candidates. >= 1 selects pick-from-a-list; < 1 selects a numeric range.
+//     slot 28  the candidate index the field opens on (clamped to count-1).
+//     slot 30  \ the two bounds of a range. The function orders them and records WHICH SLOT is
+//     slot 31  / the low one in bits 0-5 of widget+0x58 and the high one in bits 6-11.
+//
+// AND THE CANDIDATES THEMSELVES ARE SLOTS 0 .. count-1 -- the function reads the selected value
+// as `table[index]` and then walks `table[0..count-1]` to size the digit width. That is the
+// destination list, and it is why reading widget+0x54 alone can echo the number on screen but can
+// never say what the lift offers.
+constexpr uint32_t ARG_VALUE      = 8;    // entry+8: the int for a type-0 (numeric) slot
+constexpr uint32_t SLOT_INDEX     = 28;
+constexpr uint32_t SLOT_COUNT     = 29;
+constexpr int      MAX_CANDIDATES = 28;   // slots 0..27; 28-31 are the configuration above
 
 typedef uint64_t (*Pfn_ChoiceTick)(void*);
 Pfn_ChoiceTick s_origChoiceTick = nullptr;
@@ -56,6 +80,18 @@ size_t               g_pageOff = 0;        // BYTE OFFSET of the page on screen 
 bool                 g_dispatchCovers = false;
 
 constexpr uint32_t ARG_STRIDE = 0x10;       // FUN_002ac5f0 case 0x2e: args + index*0x10
+
+// What the per-frame tick last SPOKE, and the key its change-check compares against. Declared here
+// rather than as function-local statics because they need a RESET EVENT (ForgetLastCursor) and a
+// SEED (NotePage), both outside the tick. Game thread only -- the tick, NotePage and the reset all
+// run on it.
+//   g_lastCursor  the option-list row (mode 2)
+//   g_lastValue   the numeric field's value (mode 4). -1 is unreachable for a real field -- a floor,
+//                 a quantity and a price are all non-negative -- so it doubles as "nothing seeded".
+void*   g_lastWidget = nullptr;
+int16_t g_lastCursor = -1;
+int32_t g_lastValue  = -1;
+
 
 // A row's trailing `0F 2E <argIndex> 90` names the argument that carries its Status. Read the index
 // out of the row itself rather than assuming it equals the row number -- the escape is the game's
@@ -144,29 +180,37 @@ std::wstring DecodeRow(const uint8_t* p, size_t len) {
 
 // Locate the 0x0E option block and return the codec bytes of option `slot`, or an empty span.
 // Mirrors FUN_003ffdf0's header walk exactly -- see choice_reader.h for the layout.
+//
+// EVERY FALSE RETURN NAMES ITSELF. All seven used to report as "no 0x0E block", which is how a
+// surface the reader had never met (the Draklor lift's numeric field) read as a parse failure for a
+// whole session. `why` is a literal, so LogFail's pointer comparison still tells them apart.
 bool OptionCodec(const std::vector<uint8_t>& buf, int slot, size_t pageOff,
-                 const uint8_t** outPtr, size_t* outLen) {
-    *outPtr = nullptr; *outLen = 0;
-    if (slot < 0) return false;
+                 const uint8_t** outPtr, size_t* outLen, const char** why) {
+    *outPtr = nullptr; *outLen = 0; *why = "unknown";
+    if (slot < 0) { *why = "negative slot"; return false; }
 
     // Start at the page the game says is on screen. Without this the search always returns the FIRST
     // block in the message -- the notice board's mark list -- even when the player is three pages
     // further on, looking at a Yes/No. `pageOff` is the widget's own byte cursor (widget+0x8A), so
     // this is the same position FUN_002a8c50 walks from and cannot drift out of step with the box.
     size_t m = pageOff;
-    if (m >= buf.size()) return false;
+    if (m >= buf.size()) { *why = "page offset past the end of the cached message"; return false; }
 
     // The question text and any column headers precede the marker, so it is never the first byte.
     // Stop at the NEXT page break: a page without a block has no options, and borrowing the next
     // page's would be worse than silence.
     while (m < buf.size() && buf[m] != CTRL_OPTIONS) {
-        if (buf[m] == 0x00 || buf[m] == CTRL_PAGE) return false;
+        if (buf[m] == 0x00 || buf[m] == CTRL_PAGE) {
+            *why = "no 0x0E block on this page (terminator or page break reached first)";
+            return false;
+        }
         ++m;
     }
-    if (m + 5 >= buf.size()) return false;
+    if (m + 5 >= buf.size()) { *why = "0x0E block header runs past the cached message"; return false; }
 
     const int count = buf[m + 1] & 0x7F;
-    if (count <= 0 || count > MAX_OPTIONS || slot >= count) return false;
+    if (count <= 0 || count > MAX_OPTIONS) { *why = "0x0E count byte out of range"; return false; }
+    if (slot >= count) { *why = "slot past the block's own count"; return false; }
     const uint8_t flags = buf[m + 4];
 
     // FUN_003ffdf0: p = m+4; if (flags & 1) p += ceil(count/7); then p += 1.
@@ -177,13 +221,14 @@ bool OptionCodec(const std::vector<uint8_t>& buf, int slot, size_t pageOff,
     // Length-prefixed entries: [len & 0x7F][len bytes]. A 0x00 length ends the REAL list, which is
     // shorter than `count` -- that byte is a capacity (32 on a board with ~10 bills).
     for (int i = 0; i <= slot; ++i) {
-        if (p >= buf.size()) return false;
+        if (p >= buf.size()) { *why = "entry walk ran past the cached message"; return false; }
         const size_t len = buf[p] & 0x7F;
-        if (len == 0) return false;                    // past the last real entry
-        if (p + 1 + len > buf.size()) return false;
+        if (len == 0) { *why = "slot past the list terminator (count is a capacity)"; return false; }
+        if (p + 1 + len > buf.size()) { *why = "entry length runs past the cached message"; return false; }
         if (i == slot) { *outPtr = &buf[p + 1]; *outLen = len; return true; }
         p += 1 + len;
     }
+    *why = "entry walk ended before reaching the slot";
     return false;
 }
 
@@ -271,21 +316,125 @@ void LogFail(void* window, const char* why, int a, int b) {
     Log::Write("READER", m);
 }
 
+// The numeric field's CONFIGURATION, read the way FUN_002b35a0 wrote it. Game thread only.
+struct NumericField {
+    bool    candidates = false;   // widget+0xB0 bit 28: a list of values, not a free range
+    int     count      = 0;
+    int32_t value[MAX_CANDIDATES] = {};
+    int32_t lo = 0, hi = 0;       // range flavour
+    int     index = -1;           // widget+0x58 bits 12-17
+    bool    valid = false;
+};
+NumericField g_field;
+
+// One argument-table entry's integer. The table is INLINE at window+0x1B8, stride 0x10, the value at
+// +8 -- the same layout ResolveArg already walks for the string slots.
+bool ArgValue(void* window, uint32_t slot, int32_t* out) {
+    return MemRead::SafeReadU32(window, OFF_ARG_TABLE + slot * ARG_STRIDE + ARG_VALUE,
+                                reinterpret_cast<uint32_t*>(out));
+}
+
+// Read the whole field, not the number it happens to be showing. Mirrors FUN_002b35a0's own reads.
+bool ReadNumericField(void* widget, NumericField* f) {
+    *f = NumericField{};
+    void* window = static_cast<char*>(widget) - OFF_LIST_BLOCK;
+    if (!IsChoiceWindow(window)) return false;   // never read fields off an unvalidated object
+
+    uint32_t state = 0, packed = 0;
+    if (!MemRead::SafeReadU32(widget, OFF_W_STATE, &state)) return false;
+    if (!MemRead::SafeReadU32(widget, OFF_W_CURSOR, &packed)) return false;
+    f->candidates = (state & FLAG_CANDIDATES) != 0;
+
+    if (f->candidates) {
+        int32_t n = 0;
+        if (!ArgValue(window, SLOT_COUNT, &n) || n < 1) return false;
+        if (n > MAX_CANDIDATES) n = MAX_CANDIDATES;
+        for (int i = 0; i < n; ++i) {
+            if (!ArgValue(window, static_cast<uint32_t>(i), &f->value[i])) return false;
+        }
+        f->count = n;
+        f->index = static_cast<int>((packed >> 12) & 0x3F);
+        if (f->index >= n) f->index = n - 1;    // the same clamp FUN_002b35a0 applies
+    } else {
+        // The BOUND SLOTS ARE NAMED BY THE CURSOR WORD, not fixed at 30 and 31 -- the function swaps
+        // which is which when slot 30 holds the larger number. Read the slot it points at.
+        if (!ArgValue(window, packed & 0x3Fu, &f->lo)) return false;
+        if (!ArgValue(window, (packed >> 6) & 0x3Fu, &f->hi)) return false;
+    }
+    f->valid = true;
+    return true;
+}
+
+// The reader's own line, once per prompt -- what this menu HOLDS, not a hunt for where it lives.
+// (This replaced a discovery instrument that dumped argument slots 28-31 and 64 bytes of page hex.
+// Those four slots are the CONFIGURATION; the destinations are slots 0..count-1, which it never
+// logged -- so it could not have answered the question it was shipped to answer. The decompile
+// states the layout outright and should have been read first.)
+void LogNumericField(void* widget, const NumericField& f, int32_t live, uint8_t digits) {
+    char m[512];
+    int k = snprintf(m, sizeof(m), "numeric field: wnd=%p %s", widget,
+                     f.candidates ? "candidates" : "range");
+    if (!f.valid) {
+        snprintf(m + k, sizeof(m) - k, " -- UNREADABLE (window failed its class check, or the"
+                 " configuration slots faulted); falling back to the live value alone");
+    } else if (f.candidates) {
+        for (int i = 0; i < f.count && k > 0 && static_cast<size_t>(k) < sizeof(m); ++i) {
+            k += snprintf(m + k, sizeof(m) - k, "%s%d%s", i ? ", " : " ",
+                          static_cast<int>(f.value[i]), i == f.index ? "*" : "");
+        }
+        k += snprintf(m + k, sizeof(m) - k, " (index %d of %d)", f.index, f.count);
+    } else {
+        k += snprintf(m + k, sizeof(m) - k, " %d..%d", static_cast<int>(f.lo),
+                      static_cast<int>(f.hi));
+    }
+    if (static_cast<size_t>(k) < sizeof(m)) {
+        // THE CONTROL: in candidate mode the game's own +0x54 must equal the slot the index names.
+        // If it ever does not, the model is wrong and this says so instead of quietly speaking on.
+        const bool agree = !f.valid || !f.candidates ||
+                           (f.index >= 0 && f.index < f.count && f.value[f.index] == live);
+        snprintf(m + k, sizeof(m) - k, " | live=%d digits=%u%s", static_cast<int>(live), digits,
+                 agree ? "" : "  <-- +0x54 DISAGREES WITH THE SLOT THE INDEX NAMES");
+    }
+    Log::Write("READER", m);
+}
+
 } // namespace
 
-void NotePage(const uint8_t* base, size_t byteOffset) {
-    std::lock_guard<std::mutex> lk(g_textMutex);
-    if (base != g_base) {                       // a different message: re-snapshot it
-        g_base = base;
-        g_text.assign(TEXT_SCAN_MAX, 0);
-        const size_t n = base ? CopyCodec(base, g_text.data(), TEXT_SCAN_MAX) : 0;
-        g_text.resize(n);
+void NotePage(void* widget, const uint8_t* base, size_t byteOffset, bool numericField,
+              int32_t value) {
+    {
+        std::lock_guard<std::mutex> lk(g_textMutex);
+        if (base != g_base) {                       // a different message: re-snapshot it
+            g_base = base;
+            g_text.assign(TEXT_SCAN_MAX, 0);
+            const size_t n = base ? CopyCodec(base, g_text.data(), TEXT_SCAN_MAX) : 0;
+            g_text.resize(n);
+        }
+        g_pageOff = byteOffset;
+        g_dispatchCovers = false;   // a new page may be driven by the other detector
+        // The first option focus lands right after this and must not cut the page off -- the notice
+        // board's question and the petitioner Yes/No both arrive as page text, spoken a moment
+        // earlier.
+        g_queueNext = true;
     }
-    g_pageOff = byteOffset;
-    g_dispatchCovers = false;   // a new page may be driven by the other detector
-    // The first option focus lands right after this and must not cut the page off -- the notice
-    // board's question and the petitioner Yes/No both arrive as page text, spoken a moment earlier.
-    g_queueNext = true;
+
+    // SEED THE NUMERIC TICK, so the number the page line is about to speak is not spoken twice. The
+    // caller is DialogueReader on the game thread, which is the thread the tick runs on, so this
+    // lands before any tick that could use it -- no lock, no one-shot flag, no filter. Every LATER
+    // value differs from the seed and is spoken, including a move back to the starting floor.
+    if (numericField) {
+        g_lastWidget = widget;
+        g_lastValue  = value;
+        g_lastCursor = -1;          // the row cursor means nothing in this mode
+
+        // READ THE MENU, not just the number it is showing. This is the prompt-open event, so it
+        // is where the destination list is established -- once, from the game's own argument
+        // table, exactly as FUN_002b35a0 built it.
+        uint8_t digits = 0;
+        MemRead::SafeReadU8(widget, OFF_W_DIGITS, &digits);
+        ReadNumericField(widget, &g_field);
+        LogNumericField(widget, g_field, value, digits);
+    }
 }
 
 bool OnFocus(void* window, int visibleIndex) {
@@ -305,9 +454,9 @@ bool OnFocus(void* window, int visibleIndex) {
     const int slot = AbsoluteIndex(window, visibleIndex, total);
     const uint8_t* codec = nullptr;
     size_t len = 0;
-    if (!OptionCodec(buf, slot, pageOff, &codec, &len)) {
-        LogFail(window, "no 0x0E block on this page / slot past the list terminator",
-                slot, static_cast<int>(pageOff));
+    const char* why = nullptr;
+    if (!OptionCodec(buf, slot, pageOff, &codec, &len, &why)) {
+        LogFail(window, why, slot, static_cast<int>(pageOff));
         return false;
     }
     const std::wstring text = BuildOptionLine(window, codec, len);
@@ -327,11 +476,41 @@ bool IsChoiceWindow(void* owner) {
     return owner && Obj0(owner) == Hooks::ResolveRva(RVA_CHOICE_WND);
 }
 
-// The cursor last spoken, for the per-frame guard below. File-scope rather than function-local
-// statics because they now need a RESET EVENT -- see ForgetLastCursor. `static` keeps them internal
-// to this TU; these names are generic enough to collide otherwise. Game thread only.
-static void*   g_lastWidget = nullptr;
-static int16_t g_lastCursor = -1;
+namespace {
+
+// THE NUMERIC BRANCH of the tick. `widget+0x54` is the value the player is choosing, and
+// FUN_002a9980 writes it in BOTH flavours of the field -- a free range and a pick-from-candidates
+// list -- so this needs no index of its own and never touches the packed spinner state. A TRANSITION
+// DETECTOR on the game's own value, guarding the per-frame FUN_002a9980: the same sanctioned
+// exception the option branch below uses, and for the same reason.
+//
+// The baseline is SEEDED by NotePage with the value the page line already spoke, so opening the
+// prompt says the whole sentence once and each move says the new number. Nothing is suppressed --
+// a move back to the STARTING floor differs from the value last spoken, so it speaks.
+void TickNumericField(void* widget) {
+    int32_t value = -1;
+    if (!MemRead::SafeReadU32(widget, OFF_W_VALUE, reinterpret_cast<uint32_t*>(&value))) return;
+    if (value < 0) return;   // read before the stepper configured the field; not a number to say
+
+    if (widget == g_lastWidget && value == g_lastValue) return;   // nothing moved
+    g_lastWidget = widget; g_lastValue = value;
+    // Drop the OPTION-LIST key as well. The two branches share `g_lastWidget`, and a widget that
+    // has been a numeric field must not carry a stale row key back into mode 2 -- re-entering a
+    // surface has to announce. -1 is not a reachable row, so this can only ever ADD speech.
+    g_lastCursor = -1;
+
+    STALL_SCOPE("ChoiceReader::HookedChoiceTick");
+
+    uint8_t digits = 0;
+    MemRead::SafeReadU8(widget, OFF_W_DIGITS, &digits);
+    // THE DIGITS ARE THE GAME'S -- nothing is composed here. Speaking the bare number is what every
+    // other value row in the mod does (config_reader's volume steps); the words around it, "Select
+    // destination:" and the trailing F, were spoken with the page and are not repeated per step.
+    // The log header reads `numeric-field[<value>/<digits>]`.
+    EmitOption(widget, "numeric-field", value, static_cast<int>(digits), std::to_wstring(value));
+}
+
+} // namespace
 
 // FUN_002a9980(widget): the mid-dialogue choice state machine. PER-FRAME, so it is guarded by a
 // change-check on the cursor -- the sanctioned form of that exception (CLAUDE.md names
@@ -356,6 +535,14 @@ uint64_t HookedChoiceTick(void* widget) {
     // detector where it fires, and it knows the real navigation index.
     { std::lock_guard<std::mutex> lk(g_textMutex); if (g_dispatchCovers) return ret; }
 
+    // ASK THE WIDGET WHICH SELECTION IT IS RUNNING before reading a single field. FUN_002a9980 is
+    // the state machine for both modes and the fields it uses are the SAME BYTES with different
+    // meanings, so reading them without this is how the Draklor lift's digit width (2) was taken for
+    // a two-option list and its packed spinner state for a row cursor. See choice_reader.h.
+    uint8_t mode = 0;
+    if (!MemRead::SafeReadU8(widget, OFF_W_STATE, &mode)) return ret;
+    if (mode == MODE_NUMERIC) { TickNumericField(widget); return ret; }
+
     int16_t cursor = 0; uint8_t count = 0;
     if (!MemRead::SafeReadU16(widget, OFF_W_CURSOR, reinterpret_cast<uint16_t*>(&cursor))) return ret;
     if (!MemRead::SafeReadU8(widget, OFF_W_COUNT, &count) || count == 0) return ret;
@@ -377,8 +564,9 @@ uint64_t HookedChoiceTick(void* widget) {
     buf.resize(n);
 
     const uint8_t* codec = nullptr; size_t len = 0;
-    if (!OptionCodec(buf, cursor, /*pageOff=*/0, &codec, &len)) {   // buf already starts at the page
-        LogFail(widget, "choice widget: no 0x0E block at the widget's own offset", cursor, count);
+    const char* why = nullptr;
+    if (!OptionCodec(buf, cursor, /*pageOff=*/0, &codec, &len, &why)) {  // buf starts at the page
+        LogFail(widget, why, cursor, count);
         return ret;
     }
     void* window = static_cast<char*>(widget) - OFF_LIST_BLOCK;
@@ -392,6 +580,7 @@ uint64_t HookedChoiceTick(void* widget) {
 void ForgetLastCursor() {
     g_lastWidget = nullptr;
     g_lastCursor = -1;
+    g_lastValue  = -1;   // and the numeric field's, for the same reason: the widget address recycles
 }
 
 bool Init() {

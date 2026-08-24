@@ -161,6 +161,20 @@ constexpr uint8_t kSpriteSel = 0x3F, kSpriteP1 = 0x81, kSpriteLo = 0x8A, kSprite
 constexpr uint8_t kMacroSel = 0x2E;
 constexpr int32_t kMacroMax = 99999;
 
+// The NUMERIC ENTRY field. `0F 2D <idx> <fmt>` is the escape the field-message stepper turns into an
+// editable number (see NumericFieldScope in the header); it carries no digits itself, so the value
+// comes from the widget through the scope below. `kFieldMaxDigits` is the renderer's own clamp:
+// FUN_003ffc60 masks the width nibble and FUN_002ae610 caps it at 8.
+constexpr uint8_t kFieldSel = 0x2D;
+constexpr int     kFieldMaxDigits = 8;
+
+// Set only by NumericFieldScope, read only in the decode loop, and both happen on the game thread --
+// thread_local anyway, because the decoder is reached from the input thread too and a value from
+// another thread's page would be a wrong number in the player's ear.
+thread_local bool    g_fieldActive  = false;
+thread_local int32_t g_fieldValue   = 0;
+thread_local int     g_fieldDigits  = 0;
+
 // Marker parked in the Unicode private-use area while decoding, resolved to a word afterwards.
 // Deferring the lookup keeps the decode loop free of std::wstring building and, more importantly,
 // lets the adjacency rule below see the text on BOTH sides of the sprite.
@@ -449,6 +463,45 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 // Out of range means the cached value is not this line's -- say nothing rather than
                 // put a wrong number in the player's ear. The gap reads as it did before.
             }
+            // 0x2D IS THE EDITABLE NUMBER -- the Draklor lift's "Select destination: __F". Unlike
+            // 0x2E it substitutes nothing from the message: the stepper FUN_002a8c50 turns this
+            // escape into a live field on the widget and the player scrolls its value. The reader
+            // opens a NumericFieldScope with that value before decoding the page, which is the only
+            // way a byte-level decoder can know it.
+            //
+            // The width comes from the ESCAPE (`fmt & 0x0F`, 0 = natural) and the pad character from
+            // its 0x20 bit -- FUN_003efd00 memsets to '0' or ' ' and writes the digits right-
+            // aligned. The scope's own digit count is the fallback for a natural-width field, since
+            // that is what the widget was configured with.
+            //
+            // PURELY ADDITIVE, exactly like the branch above: 0x2D already consumed two parameter
+            // bytes and emitted nothing, and it still does whenever no scope is open.
+            //
+            // ONE SCOPE DESCRIBES ONE FIELD, so the first 0x2D CONSUMES it. That is not tidiness:
+            // ResolveSprites below runs a NESTED decode through the element-name resolver, and an
+            // armed field would have been visible to it. Consuming here means the value can only
+            // ever reach the escape the scope was opened for.
+            else if (buf[i + 1] == kFieldSel && g_fieldActive) {
+                g_fieldActive = false;
+                if (g_fieldValue >= 0) {
+                    // Width and pad come from the ESCAPE'S OWN format byte, which is the only
+                    // thing that knows them; the scope's digit count is the fallback for a
+                    // natural-width field. Nothing about the rendering is invented here.
+                    const uint8_t fmt = (i + 3 < n) ? buf[i + 3] : 0;
+                    int width = fmt & 0x0F;
+                    if (width == 0) width = g_fieldDigits;
+                    if (width > kFieldMaxDigits) width = kFieldMaxDigits;
+                    std::wstring digits = std::to_wstring(g_fieldValue);
+                    if (width > 0 && digits.size() < static_cast<size_t>(width)) {
+                        digits.insert(digits.begin(), static_cast<size_t>(width) - digits.size(),
+                                      (fmt & 0x20) ? L'0' : L' ');
+                    }
+                    cur->append(digits);
+                }
+                // A negative value is not a floor, a quantity or a price -- it means the widget was
+                // read before the stepper configured the field. Say nothing rather than a number
+                // the screen does not show.
+            }
             i += 2 + static_cast<size_t>(params);
             continue;
         }
@@ -502,6 +555,13 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         if (glyph) cur->push_back(glyph);
         ++i;
     }
+    // THE NUMERIC FIELD BELONGS TO THE BYTE LOOP AND NOTHING ELSE. ResolveSprites calls out to
+    // the element-name resolver, which decodes master-data strings of its own -- a nested
+    // decode that must never inherit this page's value. Disarming here bounds the field to the
+    // loop even for a page whose escape sits on a LATER page of the same message, where the
+    // consume above never ran.
+    g_fieldActive = false;
+
     // One place, so Decode and DecodePages cannot diverge. Cheap: returns immediately unless the
     // page actually carried a sprite marker.
     for (auto& pg : pages) ResolveSprites(pg);
@@ -571,6 +631,15 @@ void SetElementSpriteResolver(SpriteNameFn fn) {
 Variant GetVariant() { return g_variant.load(std::memory_order_relaxed); }
 
 DecodeBail LastDecodeBail() { return g_bail; }
+
+// Nested scopes are not a case that arises (one page, one field) but restoring rather than clearing
+// costs nothing and keeps a future nesting honest.
+NumericFieldScope::NumericFieldScope(int32_t value, int digits) {
+    g_fieldActive = true;
+    g_fieldValue  = value;
+    g_fieldDigits = digits;
+}
+NumericFieldScope::~NumericFieldScope() { g_fieldActive = false; }
 
 bool IsMostlyPrintable(const std::wstring& s) {
     if (s.empty()) return false;

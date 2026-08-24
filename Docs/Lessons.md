@@ -31,7 +31,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69 |
 | a tester reported something | `TAG:tester` | L-10…L-14 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
@@ -39,7 +39,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -144,6 +144,21 @@ not a conversation.
 **What is genuinely left:** the room identity was never MEASURED in either direction — only the map id
 and the two save-block cells matter, and both come from standing in the room. Related: L-01 (a sample
 is not a population), L-09 (state the scope you measured).
+
+### L-69 A FIELD THAT MEANS DIFFERENT THINGS IN DIFFERENT STATES WILL HAND YOU A PLAUSIBLE WRONG NUMBER
+**Read the state byte BEFORE you read anything the state byte governs. A reused field does not fail
+loudly — it answers, and the answer looks reasonable.**
+**Why:** S163, the Draklor lift. The message widget's `+0xA2` is the option count in mode 2 and the
+digit width of the maximum in mode 4; the lift read **2**, which is exactly what a two-option Yes/No
+reads. `+0x58` is a row cursor in mode 2 and a packed spinner state in mode 4; it moved eleven times,
+so the cursor "worked". `+0x54` is a park reason in mode 0 and the selected value in mode 4; it read
+**66**, and the log printed it under the label `wait=`. Three fields, three plausible numbers, no
+error anywhere — and a whole session spent hunting a `0x0E` block that was never on the page. The
+mode byte was in the same log line the entire time, reading 4 on exactly the two pages that were
+broken and 0 or 1 on every page that worked.
+**Corollaries:** a log LABEL is a claim about meaning, so a field whose meaning varies must be
+printed with the state that fixes it (`mode=4 value=66`, never `wait=66`); and when a documented
+field description has no "in mode N" on it, treat that as unscoped rather than universal (L-09).
 
 ### L-09 STATE THE SCOPE YOU MEASURED, NOT THE SCOPE YOU WERE THINKING ABOUT
 **Why:** S152, within a single session. "Game speed cannot move a frame counter" was verified for
@@ -424,6 +439,23 @@ words. Confirming it would have meant unsolving a finished puzzle. **Turn-by-tur
 entire point of the feature; a statue reporting only solved / not-solved is the feature not working.**
 Weigh the cost of the doubt against the cost of the gap: the 0.98 bar is there to stop wrong
 *assertions*, not to license shipping something that does not do the job.
+
+### L-70 ⟲ AMBIENT STATE SET AROUND A CALL IS VISIBLE TO EVERY CALL THAT CALL MAKES
+**A thread-local opened for one operation belongs to that operation, not to the tree beneath it.
+Before adding one, ask what the callee calls.**
+**Why:** S163. `GameText::NumericFieldScope` hands the decoder a widget's live value so a `0F 2D`
+escape can render it. The scope wrapped `DecodePages` -- and `DecodePages` ends by running
+`ResolveSprites`, which calls `BattleState::ElementName`, which decodes a pool string of its own.
+A nested decode, inside the scope, able to pick up a value that was never its. Fixed by consuming
+the scope at the first escape that uses it and disarming it before the sprite pass -- the field
+belongs to the byte loop, and saying so in code is what makes it true.
+**The `⟲` is earned:** `ElementName` ALREADY carries a `s_resolving` thread-local re-entrancy
+guard, written for exactly this shape when the sprite resolver went in. The project had solved
+this once and I reintroduced it one layer up.
+**How to apply:** an RAII scope over a call is only safe when the call is a leaf. When it is not,
+either consume the state at its single intended use, or bound it to the frame that owns it -- do
+not leave it armed for whatever the callee decides to do. Caught in a self-audit before shipping,
+which is the only reason it is a near miss and not an entry in `debug.md`.
 
 ### L-66 BELT AND BRACES IS ONLY INSURANCE IF THE BACKUP IS MEASURED TO BE MORE RELIABLE
 **A second gate on a second, unmeasured flag is a second failure mode, not redundancy.** Before
