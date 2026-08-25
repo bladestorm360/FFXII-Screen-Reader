@@ -184,7 +184,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 # The version string is bumped by hand at release time and must match Docs\release_procedure.md's
 # Release Records. The git hash is best-effort: a source drop with no .git still builds, it just
 # stamps "nogit".
-set(FFXII_SR_VERSION "0.6" CACHE STRING "Mod version, as it appears in the release zip name")
+set(FFXII_SR_VERSION "0.6.5" CACHE STRING "Mod version, as it appears in the release zip name")
 
 execute_process(
     COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short HEAD
