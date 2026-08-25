@@ -172,6 +172,130 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
 
+## V0.6.5-Sponsor-Build — 2026-08-25
+
+**Built from:** `d5fc11d`. **The DLL's code traces to `8704b7f`** (S162) — the commit after it is the
+build-stamp bump, which changes no behaviour, and `HEAD` at zip time was `2777d61`, a readme commit
+made at the trigger. Nothing in this binary post-dates S162's code. Covers **Sessions 162–164** since
+`V0.6.4-Test-Build`'s `3c2c7fc` — five commits, of which **three carry code**: `e70c76a` (S163, the
+Draklor lift as a numeric field), `b715d99` (S164, class-1 reach) and `8704b7f` (S162, the gamepad
+intercept).
+
+> ⚠ **THIS SPONSOR BUILD SHIPS A FEATURE WITH ZERO PLAY DATA, AND THAT WAS A DELIBERATE USER
+> DECISION.** S162's gamepad intercept has never been played — its own log entry opens "MEASUREMENT
+> BUILD SHIPPED — zero play data yet" and lists three questions it is waiting on, the first of which
+> ends the phase if it fails. It **consumes the field right stick** and the `Controller` row defaults
+> to **On**, so every pad-using sponsor gets that behaviour change. The alternative — cutting from
+> `b715d99` and parking S162 in a stash — was offered at the trigger and declined; the user chose to
+> include it. **If a sponsor reports the field camera ignoring the right stick, that is this feature
+> working as designed, not a regression.** Point them at `F8` → `Controller` → Off, which returns the
+> input path to byte-identical.
+
+**The tree was DIRTY at the trigger, and the dirt was a whole session.** S162 was logged but
+uncommitted and shared the tree — 14 modified files plus `pad_hook.{h,cpp}` and `pad_router.{h,cpp}`.
+Precondition 1 stops the release there. Unlike V0.6.4, where the dirt was this file and committing it
+was obviously right, **this dirt was unplayed code and the decision was the user's**, because a
+sponsor build is the non-tester audience (see the V0.5-Sponsor-build record). Asked, answered
+"include it", committed as `8704b7f`, tree clean before and after the build.
+
+**No shared-doc surgery was needed this time, and it was checked rather than assumed.** S163 and S164
+were already committed, so the working tree's `GameArchitecture.md` / `debug.md` /
+`sessions_151_current.md` changes were S162's alone. Verified by grepping the **staged** diff for the
+other tracks' keywords: four hits, **all four on context lines**, zero on added or removed lines.
+Grepping the diff without separating context from changes would have raised a false alarm.
+
+**THE BUILD STAMP IS FIXED — `FFXII_SR_VERSION` 0.6 → 0.6.5 (`d5fc11d`).** Five releases shipped logs
+opening `Build: V0.6 (<hash>)`; V0.6.4's record flagged it and shipped anyway, which is exactly what
+**L-68** names. This is the fix, and it was made in a commit *before* the build, which is where this
+file says a version bump belongs. `CMakeLists.txt`'s own comment had said "bumped by hand at release
+time" since the stamp landed and had never once been followed. Verified in the shipped binary rather
+than in the source: the DLL contains the strings `0.6.5` and `d5fc11d`, so a sponsor log now opens
+`Build: V0.6.5 (d5fc11d)`.
+
+> **The gotcha that let this rot for five releases, recorded so the next bump does not repeat it:**
+> `FFXII_SR_VERSION` is a **`CACHE STRING`**. Editing `CMakeLists.txt` does **not** change an
+> already-configured `build\CMakeCache.txt`, so the source can say 0.6.5 while every build keeps
+> stamping the old number and nothing looks wrong. The cache entry has to be updated too (or the
+> cache deleted, or `-DFFXII_SR_VERSION=` passed). **Editing the source alone is a silent no-op.**
+
+**The version number was wrong for the THIRD release running, and this time the user pre-authorised
+the correction.** The trigger asked for "0.6.1-Sponsor build (if the version number is wrong, correct
+it sequentially)". `V0.6.1-Shotgun-Build` shipped 2026-08-05, and 0.6.2, 0.6.3 and 0.6.4 are all
+taken, so 0.6.1 would have been the *fifth* release in that range and the fourth collision. Corrected
+to **0.6.5** under the trigger's own instruction — no question needed, unlike V0.6.3 (user said
+"0.5.3", too low) and V0.6.4 (user said "0.6.3", taken the day before). Three for three. **Check the
+last record before taking a version at face value** — and note that the standing instruction in the
+trigger is what made this the cheap case.
+
+**Zip:** `FFXII-Screen-ReaderV0.6.5-Sponsor-Build.zip`, **1,249,698 bytes**, five files, root flat.
+- `dinput8.dll` 894,976 bytes (sha256 `41d4c429…22efb53c`) — up 13,824 from V0.6.4's 881,152; three
+  sessions covering the lift's numeric field, class-1 reach, and the gamepad intercept.
+- `SDL3.dll` 1,748,992 bytes from `build\SDL3-build\Release\` (sha256 `64e52809…b4ac7531`).
+- TTS pair carried over unchanged from `V0.6.4-Test-Build`, verified with a real `cmp`: `Tolk.dll`
+  122,368 (sha256 `c4fb11d3…48197225`), `nvdaControllerClient64.dll` 153,600 (sha256
+  `41c1f5df…b23a0b09`).
+- All four DLLs verified PE machine `8664`.
+
+> **`SDL3.dll` IS NO LONGER BYTE-IDENTICAL, AND THE STREAK ENDING IS NOT A SOURCE CHANGE.** The last
+> five records tracked it as byte-identical (sha256 `056db4a9…fa3a1d19`); this one is not, and the
+> difference was measured rather than waved through. **Exactly 9 bytes differ out of 1,748,992**, and
+> they are three copies of one 4-byte link timestamp: the COFF `TimeDateStamp` at file offset 288,
+> and its echoes in the two debug-directory entries at 1,492,164 (type 13, the `/Brepro`
+> reproducibility marker) and 1,492,192 (type 20). **No section data differs at all** — same size,
+> same source tree, same build. It relinked when S162 added two source files to `CMakeLists.txt` on
+> 2026-08-20, which is the value the stamp now carries. **Do not record this as "SDL3 changed."**
+
+**ReadMe: CHANGED** — 20,759 bytes / 233 lines (sha256 `fd596d59…e475ca8`), against V0.6.4's 20,500 /
+232. One commit touched `README.md` in this range, `2777d61`, and it was made **at the release
+trigger** in response to the key audit below.
+
+**The converter was validated the strong way again.** It was run against `git show 3c2c7fc:README.md`
+— the readme as it stood at the previous release — and its output compared to the shipped
+`Releases\V0.6.4-Test-Build\ReadMe.txt`: **byte-identical, 20,500 bytes both.** That reproduces a
+known-good artifact from its own source before the current one is converted with the same code. Note
+this gate is only as good as its source: because `README.md` had **not** changed between the two
+releases, the same run also proved the pre-edit V0.6.5 ReadMe would have been byte-identical to
+V0.6.4's, which is how the *readme* was cleared while the *key list* still had a hole in it. Output
+audit on the shipped file: zero `#`, zero `*`, zero `](`, zero `&#x20;`, no BOM, CRLF, and **exactly
+one backtick** — line 91's literal `` ` `` key name, the same single survivor as the last five
+releases. The 17 remaining backslashes were each checked and are all content: Windows install paths
+and the `\` route key.
+
+**Readme key audit — ONE GAP FOUND, AND IT WAS FIXED RATHER THAN FLAGGED.** The mod menu settings
+list documented **nine** rows; this build has **ten**. The missing row was **`Controller` (Off/On,
+default On)** — S162's kill switch, and the only documented way a pad player gets back to a stock
+controller. It was fixed in `2777d61` before the zip was cut, using the menu's own wording
+(`ControllerDesc` / `ControllerDescOff`) so the readme and the `O` key say the same thing, and naming
+the right-stick swallow so a sponsor can get from the symptom to the setting. **Fixing rather than
+flagging is L-68 applied at first occurrence instead of third** — and it mattered more than a normal
+omission, because the undocumented switch guards an unplayed feature that is on by default.
+
+> **This gap is a textbook L-67, in the direction the lesson warns about.** Grepping the readme for
+> `Controller` returns **three hits, and all three are `nvdaControllerClient64.dll`**. Grepping for
+> `pad` returns three more, and they are `Notepad` and `Numpad`. A keyword search that stopped at the
+> count — or at the first reassuring hit — would have reported full coverage of a word that appears
+> six times and never once as the setting. **Read every hit, and check what each one actually is.**
+
+**The `o` key was re-audited and is correct.** V0.6.4 shipped a record claiming no gaps while the
+enumerated entry still promised MP that S160 had removed; that entry (line 229) now reads HP as
+numbers, level, statuses and the affinity list, with no MP. The other `MP` hits in the file were
+checked individually — line 138 is the party-status `4` key, which legitimately reads MP. **Both `o`
+descriptions were read, not just the prose one.**
+
+**Flagged, NOT fixed — one line, and the reason it was left.** Auto-walk's entry still says "the mod
+cannot see the stick, so moving the stick does not cancel it". That remains **true of auto-walk** —
+its cancel path reads the keyboard and Phase 1 changed nothing there — but it now sits one line above
+"Whether the mod reads your controller", so the file says both that the mod cannot see the stick and
+that it reads the pad. Left alone deliberately: rewriting an approved paragraph about a feature this
+release does not change is the overcorrection the readme rule was written for. **Revisit when Phase 2
+gives auto-walk the pad.** If it survives the next record, fix it — that is L-68.
+
+**Play-confirmation status.** S163 is play-confirmed on **one** lift only (Draklor 66F North Lift
+Terminal); other lifts, the range flavour and digit-column editing are unverified. S164 is
+play-confirmed 2026-08-25. **S162 is not play-confirmed at all** — see the warning at the top. S152's
+six per-frame changes remain untested and are in every build since `592e142`: on any new nav, beacon,
+menu or dialogue fault, suspect that first rather than this release's three sessions.
+
 ## V0.6.4-Test-Build — 2026-08-14
 
 **Built from:** `3c2c7fc`. **The DLL's code traces to `6bfa74a`** — the two commits after it are
