@@ -39,7 +39,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -439,6 +439,26 @@ words. Confirming it would have meant unsolving a finished puzzle. **Turn-by-tur
 entire point of the feature; a statue reporting only solved / not-solved is the feature not working.**
 Weigh the cost of the doubt against the cost of the gap: the 0.98 bar is there to stop wrong
 *assertions*, not to license shipping something that does not do the job.
+
+### L-71 ⟲ A CORRECTION APPLIED TO ONE MEMBER OF A DIVERGENT PAIR IS NOT APPLIED TO ITS SIBLING
+**When you learn that two things have different layouts, fix EVERY reader of both, not the one that
+raised the alarm. Grep for the discriminator and check each site.**
+**Why:** S164. S76 established that FFXII has two interactable classes with different field layouts and
+warned in those exact words that "reading one class's offsets on the other returns plausible-looking
+floats that are simply wrong". It then made `ReadBandFor` class-aware and left `ReadReachFor` — the next
+function in the same file, reading the same node — running class-3 ellipse arithmetic on every target.
+Eighty-eight sessions later that returned `reach=0.50` for a class-1 terminal, the router looked for
+somewhere to stand within 0.50 m of a point that is 0.69 m off the navmesh, found nothing, and said
+**"No path" about a target the game was offering an ACTION on** — identically from 0.7 m away and from
+48 m away. The header above the struct even documented the model as class-3 (`FUN_0025bad0`) while the
+function below it applied that model unconditionally.
+**The tell:** a file that branches on a discriminator in one place and not in another. `ObjectClass`
+had three call sites; two consulted it and the third, the one that fed the router, did not.
+**And the second half — the answer may be "this class has no such quantity".** The class-1 scorer has
+no radius at all: band, mode bit, cone, then nearest-wins on a bare squared distance. So the fix was not
+to compute the reach differently, it was to stop claiming there is one. A replica whose subject does not
+exist reads as a number, never as an error. Related: L-69 (a field that means different things per
+state), L-02 (the 0.98 bar).
 
 ### L-70 ⟲ AMBIENT STATE SET AROUND A CALL IS VISIBLE TO EVERY CALL THAT CALL MAKES
 **A thread-local opened for one operation belongs to that operation, not to the tree beneath it.

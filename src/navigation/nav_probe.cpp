@@ -166,11 +166,18 @@ void DumpInteractReach() {
         if (!r.valid) {
             Log::Write(kTag, "   ReadReachFor failed (no leader xform or no target xform)");
         } else {
-            snprintf(m, sizeof(m),
-                     "   replica: dist2D=%.3f | ellipsePl=%.3f + extraPl=%.3f + ellipseTg=%.3f + "
-                     "extraTg=%.3f -> reach=%.3f (min=%.3f) gate=%s",
-                     r.dist2D, r.ellipsePlayer, r.extraPlayer, r.ellipseTarget, r.extraTarget,
-                     r.radius, r.radiusMin, r.passes ? "PASS" : "FAIL");
+            if (!r.engineRadius) {
+                snprintf(m, sizeof(m),
+                         "   replica: dist2D=%.3f | CLASS 1 -- the engine applies NO radius to this "
+                         "target (band + cone + nearest-wins); there is nothing to replicate",
+                         r.dist2D);
+            } else {
+                snprintf(m, sizeof(m),
+                         "   replica: dist2D=%.3f | ellipsePl=%.3f + extraPl=%.3f + ellipseTg=%.3f + "
+                         "extraTg=%.3f -> reach=%.3f (min=%.3f) gate=%s",
+                         r.dist2D, r.ellipsePlayer, r.extraPlayer, r.ellipseTarget, r.extraTarget,
+                         r.radius, r.radiusMin, r.passes ? "PASS" : "FAIL");
+            }
             Log::Write(kTag, m);
 
             if (r.haveMeasured) {
@@ -195,10 +202,16 @@ void DumpInteractReach() {
     if (EntityList::GetCurrentTarget(tp, tl, nullptr, &tobj) && tobj && tobj != c.sceneObj) {
         const InteractTarget::Reach fr = InteractTarget::ReadReachFor(tobj);
         if (fr.valid) {
-            snprintf(m, sizeof(m),
-                     "   focused route target: dist2D=%.3f reach=%.3f (min=%.3f) gate=%s "
-                     "-> the route should stop %.2fm from it, not on it",
-                     fr.dist2D, fr.radius, fr.radiusMin, fr.passes ? "PASS" : "FAIL", fr.radiusMin);
+            if (!fr.engineRadius)
+                snprintf(m, sizeof(m),
+                         "   focused route target: dist2D=%.3f CLASS 1 -- no engine radius; the route "
+                         "finishes at the nearest walkable point instead",
+                         fr.dist2D);
+            else
+                snprintf(m, sizeof(m),
+                         "   focused route target: dist2D=%.3f reach=%.3f (min=%.3f) gate=%s "
+                         "-> the route should stop %.2fm from it, not on it",
+                         fr.dist2D, fr.radius, fr.radiusMin, fr.passes ? "PASS" : "FAIL", fr.radiusMin);
             Log::Write(kTag, m);
         }
     }

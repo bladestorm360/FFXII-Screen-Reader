@@ -66,6 +66,15 @@ int s_dropPayload = 0;  // OF THOSE, how many carried a real +0xCC/+0xDC payload
                         // REGRESSION TELL: a story-gated town gate reads zero flags, so if this is
                         // ever non-zero the rule has just deleted something the engine has an action
                         // bound to, and that is the bug that made town gates vanish once already.
+// EVERY DROP NAMES ITSELF, capped -- the same falsifier shape the presence pruner already uses.
+// A bucket COUNT says how many objects the rule deleted; it cannot say WHAT, and `other=` is by
+// construction the bucket holding kinds nobody has characterised. Measured on Draklor 66F: eleven
+// objects in `other`, two of them carrying a real payload id, none of which any diagnostic in the
+// mod has ever printed. Built only on a rescan (edge-triggered on the container mask), never per
+// frame. If the line count ever falls short of the bucket total the shortfall is printed -- a
+// truncated dump that does not say it truncated is how a blinded run reads as a clean negative.
+constexpr size_t kDroppedLineCap = 16;
+std::vector<std::string> s_droppedLines;
 int s_namelessAct = 0;  // KEPT, but nameless while offering an interaction. The tester's model says
                         // this cannot happen ("no objects are interactable that don't have an
                         // icon"), so a non-zero here means our NAME source has a gap, not that the
@@ -456,6 +465,7 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     s_dropKind5  = 0;
     s_dropOther  = 0;
     s_dropPayload = 0;
+    s_droppedLines.clear();
     s_namelessAct = 0;
     s_poolOverlap = 0;
     s_poolOverlapNamed = 0;
@@ -568,6 +578,28 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
                 SafeReadU16(obj, NavRva::SCENEOBJ_ACTION_ID, &aid);
                 SafeReadU16(obj, NavRva::SCENEOBJ_TALK_ID,   &tid);
                 if (aid != 0xFFFF || tid != 0xFFFF) ++s_dropPayload;
+                if (s_droppedLines.size() < kDroppedLineCap) {
+                    uint8_t dReady = 0;
+                    SafeReadU8(obj, NavRva::SCENEOBJ_READY_OFF, &dReady);
+                    FVec3 dPos{};
+                    const bool dHavePos = PlayerState::ReadSceneObjectPos(obj, dPos);
+                    // The event-table signature is the field that says WHAT this is. Kind and
+                    // category are shared by every prop on the map; the handler names are the
+                    // authoring template, and a doorway template does not look like a rect.
+                    char dSig[224];
+                    const int dNames = MapScript::ObjectEventSignature(obj, dSig, sizeof(dSig));
+                    char dl[512];
+                    snprintf(dl, sizeof(dl),
+                             "dropped (nameless, no prompt): [%u:%u] cat=%02X kind=%u en=%u "
+                             "r14=%02X mask=%08X act=%u talk=%u at (%.2f,%.2f,%.2f)%s events(%d): %s",
+                             c, i, catByte, kind,
+                             (kindByte & NavRva::INTERACT_ENABLE_BIT) ? 1u : 0u,
+                             dReady, flags,
+                             static_cast<unsigned>(aid), static_cast<unsigned>(tid),
+                             dPos.x, dPos.y, dPos.z, dHavePos ? "" : " <NO POS>",
+                             dNames, dSig);
+                    s_droppedLines.emplace_back(dl);
+                }
                 continue;
             }
 
@@ -985,6 +1017,19 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // `spared:` line is an object the shipped build was deleting; no `spared:` line anywhere in a
     // session that visits a gate crystal means S153 fixed something else.
     for (const std::string& sl : s_sparedLines) Log::Write("NAV-DIAG", sl.c_str());
+    // ...and so does every object the name-or-interaction rule deleted. `s_dropPayload` is the
+    // alarm; these lines are what it is pointing at.
+    for (const std::string& dl : s_droppedLines) Log::Write("NAV-DIAG", dl.c_str());
+    {
+        const int dropped = s_dropKind1 + s_dropKind5 + s_dropOther;
+        if (dropped > static_cast<int>(s_droppedLines.size())) {
+            char dm[160];
+            snprintf(dm, sizeof(dm),
+                     "dropped: %d more not printed (cap %zu) -- raise kDroppedLineCap to see them",
+                     dropped - static_cast<int>(s_droppedLines.size()), kDroppedLineCap);
+            Log::Write("NAV-DIAG", dm);
+        }
+    }
 
     if (s_charByName > 0 || s_poolKind5 > 0 || s_dropKind1 > 0 || s_dropKind5 > 0 ||
         s_dropOther > 0 || s_namelessAct > 0 || s_poolOverlap > 0 || OddSlotWins() > 0) {

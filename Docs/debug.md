@@ -6630,3 +6630,73 @@ parse bug for a session.
 reading 2 was taken as proof the game had found a `0x0E` header (`choice_reader.h` says that field is
 written from it), which pointed at the page-offset scan as the culprit. It was not — in mode 4 that
 field is never touched by the block walk at all.
+
+## SOLVED — "No path" to a target the game was offering an ACTION on (Session 164, 2026-08-25)
+
+**KEYWORDS: C.D.B. Draklor Laboratory 67th Floor no path off-mesh goalPoly=-1 goal=-1 frontier
+suppressed off-mesh-nothing-in-reach reach 0.50 radiusMin class 1 class 3 gimmick volume
+ReadReachFor ReadBandFor ObjectClass FUN_0025be50 FUN_0025bad0 FUN_003a1960 kNoRadiusApproach
+engineRadius NoteFallback fallbackPoly interaction cylinder terminal console lift**
+
+**Reported (2026-08-25):** on Draklor Laboratory: 67th Floor the interactable `"C.D.B."` answers
+`"No path"`, *"and as you can see from the log, there clearly is a path to it"*. Reproduced from
+across the floor and from directly beside it.
+
+**The log named it in three lines:**
+
+```
+request: interaction band=[-1e9,1e9] reach=0.50
+ends: start=1790 walk=1 | goal=-1 walk=0
+frontier: goal unreachable (off-mesh-nothing-in-reach); ... ending at poly 1775 (107.98,0.00,11.69), 0.7m short
+```
+
+**Root cause, two facts stacked.**
+
+1. **The target's point is OFF the navmesh** (`goal=-1` on every attempt) — a console against a wall.
+   That case is already handled: `PathSearch::NoteFallback` records the first polygon A* pops that the
+   party can stand on and interact from, and the search finishes there.
+2. **The reach it was given was 0.50 m and the nearest walkable point is 0.69 m away** — refused by
+   0.19 m. With no fallback there is no goal at all, so the plan came back `Frontier`, and S96's rule
+   ("partial routes are not spoken") turned that into `"No path"` — the same answer from 0.7 m and from
+   48 m, which is exactly what a target with no reachable goal looks like at every distance.
+
+**Where 0.50 came from — this is the part worth remembering.** `InteractTarget::ReadReachFor` runs the
+**class-3** ellipse arithmetic on every target regardless of class. `"C.D.B."` is class 1 (the same
+`kind=4 flags=0x2134` shape as the Draklor lift terminals), and the class-1 scorer has **no horizontal
+radius in it at all** — see `GameArchitecture.md`, "The class-1 scorer has NO horizontal reach". So
+0.50 was the player's own body radius plus three reads off a layout that node does not use. `ReadBandFor`,
+the function immediately above it in the same file, has branched on class since S76.
+
+**Fixed:** `Reach::engineRadius` (false for class 1, ellipse fields left at zero rather than filled with
+the wrong layout); `nav_commands.cpp` supplies `kNoRadiusApproach = 3.0f` in that case — a sanity bound,
+not a discriminator, because A* pops in distance order. A `route reach: <m> source=<class3-radiusMin |
+class1-no-engine-radius | transition-arrive | none>` line goes in before every request so a bad route can
+be attributed rather than guessed at. **Play-confirmed 2026-08-25.**
+
+**It cannot break a route that works today, and the reason is structural, not empirical:** `IsGoal` is
+tested and breaks BEFORE `NoteFallback` in the A* loop; the fallback is consumed only under
+`reached == kNoPoly`; and the early break on a found fallback is guarded by `goalOffMesh`. The reach only
+ever fires where the old build returned nothing.
+
+### CORRECTED — the `"Direct Lift"` refusal was on 67F, once, from one standing spot
+
+**This was first written up here as *"Direct Lift on 66F still answers No path"*, an open defect, and
+carried into the session log, the memory index and the commit message. Both halves were wrong.** The
+tester caught it: *"direct lift on 66 is not no path, unsure where you got that. I was able to path to
+it just fine."*
+
+**Wrong floor.** The refusal is `drain seq=10` at 04:06:18, which falls between the `mapId=1019`
+announce at 04:05:39 and the next map change at 04:08:42 — the **67th Floor**. Every route taken on 66F
+that session (`seq=1`–`6`, all to North Lift Terminal) came back `plan=Route`.
+
+**Wrong scope.** It happened **exactly once**, from `(80.41,0.00,51.63)` — the same standing spot that
+produced C.D.B.'s `seq=9` and `seq=11`. Three of the log's four Frontier results came from that one
+position. **One refusal from one position is not a property of the target** (L-01), and the tester
+routes to it without trouble.
+
+**What survives, at its real scope:** from that spot the search gave up on an **on-mesh** goal whose own
+oracle line said the mesh connects it to the start — `goal poly 588 is IN the start poly 601's adjacency
+component (1953 polys) -- the mesh connects these two, so this is the SEARCH giving up, not an
+unreachable goal` — after `attempts=4 banned=2` with validation never passing. That is **one observation
+of the breach / repair-ladder path giving up**, not a reproducible defect, and it is untouched by S164.
+Anyone picking it up needs a repro first, and the standing position is the variable to vary.

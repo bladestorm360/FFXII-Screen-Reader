@@ -77,8 +77,18 @@ uint8_t ObjectClass(void* sceneObj);
 // it is only exact for the current relative position. `radiusMin` is the direction-independent lower
 // bound -- min semi-axis of each shape plus both extras -- which is what routing wants, because a cell
 // inside it is interactable from ANY approach angle.
+// THE WHOLE MODEL ABOVE IS CLASS 3, AND `FUN_0025be50` -- the CLASS-1 scorer -- HAS NO RADIUS IN
+// IT AT ALL. Its candidate test is, in order: the vertical band (skipped when `node+0x5C` is set),
+// the mode bit `node+0x60 >> mode`, the facing cone `FUN_003a1bb0`, and then `FUN_003a1960` --
+// which is a bare squared 2D distance kept only to MINIMISE against `DAT_0209a2b0`. Nearest wins;
+// nothing is rejected for being far away. So a class-1 target has no engine reach to replicate,
+// and the four ellipse terms above are read from the class-3 shape layout on a node that does not
+// use it -- the S76 failure, one function away from where S76 already fixed it in ReadBandFor.
+// `engineRadius` says which of the two is in front of you; `radius`, `radiusMin` and `passes` are
+// meaningless when it is false, and are left at zero rather than filled with the wrong layout.
 struct Reach {
     bool  valid     = false;
+    bool  engineRadius = true;  // false = class 1: the engine gates on band+cone, never a radius
     float radius    = 0.0f;   // replica of the engine's reach for the CURRENT relative position
     float radiusMin = 0.0f;   // direction-independent lower bound (safe for goal-cell admission)
     float dist2D    = 0.0f;   // horizontal player->target distance, target position offset applied

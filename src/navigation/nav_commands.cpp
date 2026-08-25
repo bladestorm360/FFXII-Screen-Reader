@@ -35,6 +35,17 @@ namespace {
 constexpr float kExitArriveDist = 3.0f;
 constexpr float kExitArriveDy   = 3.0f;
 
+// How near a target the engine applies NO radius to (class 1 -- see InteractTarget::Reach) the
+// route is allowed to finish. This is a SANITY BOUND, not a discriminator, and the difference
+// matters: A* pops in order of remaining distance to the target, so the first poly inside this
+// bound is already about the nearest walkable point to the object -- the bound only stops the
+// search settling for somewhere absurd. Deliberately the same 3.0 m as kExitArriveDist and for
+// the same S96 reason: when the target has no polygon you can stand on, "walk onto it" is not a
+// goal any search can meet, and refusing to finish nearby produces a FALSE "No path" on a
+// target the player can walk to by hand. Measured case: Draklor 67F "C.D.B.", off-mesh, nearest
+// walkable point 0.69 m away, refused against a 0.50 m radius that was never the engine's.
+constexpr float kNoRadiusApproach = 3.0f;
+
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     bool isTransition = false;   // exits only: the target is the map-jump surface itself
@@ -85,8 +96,25 @@ void RouteToCurrent() {
         reach.radiusMin = kExitArriveDist;
     }
     // radiusMin, not radius: the ellipse radius is direction-dependent, and a goal poly has to be
-    // interactable from whatever angle the route happens to arrive at.
-    const float reachRadius = reach.valid ? reach.radiusMin : 0.0f;
+    // interactable from whatever angle the route happens to arrive at. Unless the engine applies
+    // no radius to this class at all, in which case radiusMin is not a conservative number, it is
+    // the wrong layout read confidently -- and the approach bound above is used instead.
+    const float reachRadius = !reach.valid       ? 0.0f
+                            : reach.engineRadius ? reach.radiusMin
+                                                 : kNoRadiusApproach;
+    // WHICH SOURCE, on the line before the request, so a wrong route can be attributed without
+    // guessing. `class1-no-engine-radius` is the branch this session added; if a "No path" ever
+    // shows up under it, the bound is what to question, not the reach model.
+    {
+        char rm[144];
+        snprintf(rm, sizeof(rm), "route reach: %.2fm source=%s",
+                 reachRadius,
+                 isTransition        ? "transition-arrive"
+                 : !reach.valid      ? "none (reach unreadable -> target's own poly)"
+                 : reach.engineRadius ? "class3-radiusMin"
+                                      : "class1-no-engine-radius");
+        Log::Write("NAV-ROUTE", rm);
+    }
     // seedBeacon=true: `\` is the "lead me there" key, so its route arms the audio beacon.
     if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true, seamGroup);
     else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true, seamGroup);

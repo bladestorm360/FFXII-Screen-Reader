@@ -267,6 +267,38 @@ int ObjectEventNameOffsets(void* object, uint32_t* out, int cap) {
     return n;
 }
 
+int ObjectEventSignature(void* object, char* out, size_t cap) {
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!object) return 0;
+    void* tbl = MemRead::PtrAt(object, 0x48);
+    if (!tbl) return 0;
+    uint32_t count = 0;
+    if (!MemRead::SafeReadU32(tbl, 0, &count) || count == 0 || count > 64) return 0;
+
+    int    written = 0;
+    size_t at      = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        // Resolved through the object's OWN container name pool, which is the only correct route
+        // (the routine-table walk was refuted in S118). An index that will not resolve is written
+        // as `?` rather than skipped: a signature with a hole in it must not silently compare
+        // equal to one without.
+        std::string nm;
+        const std::string one = FiredRoutineName(object, i, nm) ? AsciiSafe(nm) : std::string("?");
+        const size_t need = one.size() + (at ? 1u : 0u);
+        if (at + need + 1 >= cap) {          // out of room -- SAY SO, never truncate silently
+            if (at + 5 < cap) { memcpy(out + at, "|...", 4); at += 4; }
+            break;
+        }
+        if (at) out[at++] = '|';
+        memcpy(out + at, one.data(), one.size());
+        at += one.size();
+        ++written;
+    }
+    out[at] = '\0';
+    return written;
+}
+
 int ObjectContainerId(void* object) {
     if (!object) return -1;
     uint8_t id = 0;

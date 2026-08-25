@@ -3217,6 +3217,34 @@ Discriminator: **`sceneObj+0x03 >> 5`**.
 
 Conf 0.98 — read from `FUN_0025be50` and `FUN_002646c0` directly.
 
+### The class-1 scorer has NO horizontal reach — Session 164 (conf 0.99, every link read)
+
+`FUN_0025be50` (RVA `0x13BE50`) applies four gates to a class-1 candidate, and **not one of them is a
+distance cutoff**:
+
+| order | gate | where |
+|---|---|---|
+| 1 | vertical BAND, skipped when the skip byte is set | `XFORM_V_SKIP_BAND` / `XFORM_V_BAND_UP` / `XFORM_V_BAND_DOWN`, minus the player's pad·scale — the S76 row, already implemented in `ReadBandFor` |
+| 2 | the INTERACTION-MODE bit for the mode being scanned | node `+0x60`, shifted by the mode index (the class-1 sibling of `sceneObj+0x1C`) |
+| 3 | the facing CONE — `FUN_003a1bb0` (RVA `0x281BB0`) | node `+0x50` half-angle, aim point `+0x10`/`+0x18` |
+| 4 | **nearest-wins**, against the running minimum in `DAT_0209a2b0` | `FUN_003a1960` |
+
+`FUN_003a1960` (RVA `0x281960`) is thirty-one bytes and returns a bare **squared 2D distance** in x and
+z. It is compared against nothing but the current best. So a class-1 candidate is **never rejected for
+being far away**: whichever one passes band, mode and cone and is nearest wins.
+
+**THEREFORE `InteractTarget::Reach` DOES NOT DESCRIBE CLASS 1.** Its four ellipse terms come from the
+reach test in `FUN_0025bad0`, which is the **class-3** scorer, and they are read from the class-3 xform
+shape layout. Evaluated on a class-1 node they return the player's own body radius plus three reads off
+a layout that node does not use. Measured on Draklor 67F: the terminal `"C.D.B."` reported `reach=0.50`
+by that route while the engine was offering an ACTION on it. `Reach::engineRadius` now says which of the
+two models is in front of you, and `radius` / `radiusMin` / `passes` are left at zero when it is false.
+
+**What routes to a class-1 target instead:** there is no engine radius to route by, so `nav_commands.cpp`
+supplies `kNoRadiusApproach` (3.0 m) as a **sanity bound, not a discriminator** — A* pops in order of
+remaining distance to the target, so the first polygon inside the bound is already about the nearest
+walkable point to the object. Same value and the same S96 reasoning as `kExitArriveDist`.
+
 ### `FUN_002646c0` (RVA `0x1446C0`) — the engine's own interaction-point getter
 
 Signature is `(obj, outX, outY, outZ)`. It switches on the top 3 bits of the byte at `obj+3`:

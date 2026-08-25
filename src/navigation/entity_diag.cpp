@@ -8,6 +8,7 @@
 #include "navigation/interact_target.h"
 #include "navigation/map_names.h"
 #include "navigation/map_exits.h"
+#include "navigation/map_script.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
@@ -26,6 +27,15 @@ using namespace MemRead;
 namespace EntityDiag {
 
 namespace {
+
+// How many of a container's ANONYMOUS objects the dump will print. Until now it printed none of
+// them: an object with no flags, no name and no gimmick-band id was counted into `plain=` and
+// dropped, so a whole population was invisible to the one tool built to find invisible objects.
+// Draklor 66F is the map that showed the cost -- ten such objects on a floor with ten rooms, none
+// of them ever printed by anything. The cap exists because this population is unbounded in
+// principle (a busy town map's flagless props), and whatever it holds back is reported, never
+// silently dropped.
+constexpr uint32_t kAnonDumpCap = 32;
 
 // ---- ELEVATION DIAGNOSTIC (Session 73) ----------------------------------------------------------
 // The question navigation could not answer: WHICH floor is this? Every floor query in the stack is
@@ -130,7 +140,7 @@ void DumpLocked() {
         uint32_t count = 0;
         if (entries) SafeReadU32(entries, NavRva::ENTRIES_COUNT_OFF, &count);
 
-        uint32_t shown = 0, plain = 0;
+        uint32_t shown = 0, plain = 0, plainPrinted = 0;
         if (entries && (active & 1) && count <= 4096) {
             for (uint32_t i = 0; i < count; ++i) {
                 void* obj = PtrAt(entries, NavRva::ENTRIES_SLOT0_OFF + i * 8);
@@ -140,10 +150,18 @@ void DumpLocked() {
                 int16_t nameIdx = 0;
                 SafeReadS16(obj, NavRva::SCENEOBJ_NAME_IDX, &nameIdx);
                 std::wstring lbl = EntityScan::ResolveObjectName(obj);
-                // Skip the mass of anonymous, flagless props/triggers; dump anything
-                // interactive, named, or in the gimmick band (where the gate must fall).
-                if (flags == 0 && lbl.empty() && !EntityScan::InGimmickBand(nameIdx)) { ++plain; continue; }
-                ++shown;
+                // The anonymous, flagless props and triggers. They are still counted separately --
+                // `plain=` is what tells a busy map from a quiet one -- but they are no longer
+                // thrown away unread, because "the object the mod cannot describe" is exactly the
+                // object a missing-thing investigation is looking for.
+                const bool anon = (flags == 0 && lbl.empty() && !EntityScan::InGimmickBand(nameIdx));
+                if (anon) {
+                    ++plain;
+                    if (plainPrinted >= kAnonDumpCap) continue;
+                    ++plainPrinted;
+                } else {
+                    ++shown;
+                }
 
                 uint8_t catByte = 0, readyByte = 0, kindByte = 0;
                 SafeReadU8(obj, NavRva::SCENEOBJ_TYPE_BYTE, &catByte);   // low5=category, high3=class
@@ -173,6 +191,38 @@ void DumpLocked() {
                          (flags & NavRva::FLAG_ACTION) ? " ACT" : "",
                          nameIdx, nlabel, pos.x, pos.y, pos.z, havePos ? 1 : 0, fl);
                 Log::Write("NAV-DIAG", line);
+
+                // ---- WHAT THE OBJECT IS, as opposed to what it is doing right now ----------------
+                // Two fields, both STATIC map data, and between them they identify an object that
+                // carries no name and offers no prompt:
+                //
+                //   events()  the object's own event-table handler names -- the authoring template
+                //             it was stamped from. `init|touch|touchon|touchoff|SET_RECT|...` is a
+                //             trigger rect; the field-sign doorway template reads differently, and
+                //             S121 promoted a door on exactly this signature.
+                //   evt       the +0xC8 u16[18] event-index array, parallel to the +0x1C mode mask
+                //             (GameArchitecture.md). +0xCC and +0xDC that the object line already
+                //             prints are just its mode-2 and mode-10 slots; the other sixteen have
+                //             never been logged. Only the armed slots are printed -- 0xFFFF means
+                //             "inherit from the map's object record" and would be noise on every line.
+                //
+                // Printed only when there is something to say, so a plain prop costs no line.
+                char sig[224];
+                const int nEv = MapScript::ObjectEventSignature(obj, sig, sizeof(sig));
+                char evt[192] = {};
+                size_t evtAt = 0;
+                for (uint32_t m = 0; m < 18 && evtAt + 16 < sizeof(evt); ++m) {
+                    uint16_t idx = 0xFFFF;
+                    if (!SafeReadU16(obj, 0xC8 + m * 2, &idx) || idx == 0xFFFF) continue;
+                    evtAt += snprintf(evt + evtAt, sizeof(evt) - evtAt, " m%u=%u",
+                                      m, static_cast<unsigned>(idx));
+                }
+                if (nEv > 0 || evtAt > 0) {
+                    char el[448];
+                    snprintf(el, sizeof(el), "      [%u:%u] events(%d): %s | evt:%s",
+                             c, i, nEv, sig, evtAt ? evt : " (none armed)");
+                    Log::Write("NAV-DIAG", el);
+                }
                 // Only for objects the engine would even consider (talk/action flagged): the three
                 // geometric gates, so a candidate the game silently refuses says WHICH gate rejected
                 // it. Ground truth is the chosen-target line logged after this loop.
@@ -191,8 +241,8 @@ void DumpLocked() {
         SafeReadU16(table, NavRva::TBL_GRP0_COUNT_OFF, &g0n);
         char ch[208];
         snprintf(ch, sizeof(ch),
-                 "  container %u: active=%u count=%u shown=%u plain=%u | game spans: grp1(talk+act)=[%u,%u) grp0(act)=[%u,%u)",
-                 c, active & 1, count, shown, plain,
+                 "  container %u: active=%u count=%u shown=%u plain=%u (%u printed) | game spans: grp1(talk+act)=[%u,%u) grp0(act)=[%u,%u)",
+                 c, active & 1, count, shown, plain, plainPrinted,
                  g1s, static_cast<unsigned>(g1s) + g1n, g0s, static_cast<unsigned>(g0s) + g0n);
         Log::Write("NAV-DIAG", ch);
     }

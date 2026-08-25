@@ -1467,3 +1467,75 @@ the surface is not this one.
   decoder that touches every surface.
 - The lift says *"Current location: 68F"* on a map the mod names *"66th Floor"*. Two numbering
   schemes of the game's own; not a mod defect.
+
+## Session 164 — 2026-08-25 — [nav] "No path" to a target the game was offering an ACTION on
+
+**KEYWORDS: C.D.B. Draklor 67th Floor no path off-mesh goal=-1 frontier suppressed reach 0.50
+radiusMin class 1 class 3 ReadReachFor ReadBandFor ObjectClass FUN_0025be50 FUN_003a1960
+engineRadius kNoRadiusApproach NoteFallback side doors ObjectEventSignature dropped nameless
+entity_diag plain anonymous objects event table signature**
+
+**Build:** deployed 2026-08-25, verified by `cmp` against `build\bin\Release\dinput8.dll` rather than
+by the banner (L-62). **Play-confirmed the same day** — tester: *"seems to work."* The post-fix log
+carries the whole verification in two line shapes: `route reach: 3.00m source=class1-no-engine-radius`
+followed by `plan=Route` on every class-1 target, `route reach: 1.60m source=class3-radiusMin` unchanged
+on class-3 NPCs, and **not one `FRONTIER SUPPRESSED` line anywhere in it**.
+
+### What was asked, and what it turned out to be
+
+The session opened on *"get side doors working — there is a type of door in the laboratory that isn't
+showing in the pathfinder"*. **That premise was wrong and the user said so:** the doors do list, once
+the room is entered, and `Door=1` appears in the same log. The real defect was the one named in the
+same breath — a routing refusal on 67F that was blocking progress.
+
+**I had built a whole plan on the doors premise before that correction, on a 10-vs-10 count match
+(ten objects the dump never printed, ten rooms on the floor) that I called arithmetic rather than
+proof and then leant on anyway.** The user's own framing had already disposed of it: *"if you don't
+find doors here, we'll try another floor"* — no negative needed proving, and I was constructing one.
+
+### The defect
+
+`"C.D.B."`, an interactable on Draklor 67th Floor, answered `"No path"` from across the floor and from
+standing beside it — and one second after the refusal the mod spoke `Action: C.D.B.`, i.e. the engine
+was offering the interaction from where the router said there was no way to stand.
+
+Root cause and fix: `Docs\debug.md`, "SOLVED — 'No path' to a target the game was offering an ACTION
+on". In one line: **`ReadReachFor` applies class-3 ellipse arithmetic to every target, and the class-1
+scorer has no horizontal radius at all** — so an off-mesh class-1 target was refused against a 0.50 m
+figure that was never the engine's, missing the nearest walkable point by 0.19 m.
+
+The engine facts behind it are in `GameArchitecture.md`, "The class-1 scorer has NO horizontal reach"
+(conf 0.99): `FUN_0025be50` gates on band, mode bit and cone, then minimises a bare squared 2D distance
+(`FUN_003a1960`, thirty-one bytes). Nearest wins; nothing is rejected for distance.
+
+**The transferable half is `Lessons.md` L-71** — S76 found the two classes, warned in those exact words
+that reading one layout on the other yields plausible wrong floats, fixed `ReadBandFor`, and left
+`ReadReachFor` in the same file unfixed for eighty-eight sessions.
+
+### Shipped
+
+| | |
+|---|---|
+| `MapScript::ObjectEventSignature` | new, shared. An object's `+0x48` event-table handler names joined with `\|`. The authoring template is what identifies an object that carries no name and offers no prompt; a trigger rect does not look like a doorway template. Truncation is reported, never silent. |
+| `EntityDiag::DumpLocked` | stops eliding the anonymous population (`flags == 0`, no name, outside the gimmick band) — capped at 32/container and reported as `plain=N (M printed)`. Every printed object gains a companion line with its event signature and its `+0xC8[18]` armed event slots. |
+| `EntityScan` drop rule | every nameless drop now names itself (slot, cat, kind, `en`, `+0x14`, mode mask, payload ids, position, event signature), capped at 16 with the shortfall printed. `s_dropPayload` was the alarm; these lines are what it points at. |
+| `InteractTarget::Reach` | gains `engineRadius`; `ReadReachFor` returns early for class 1 rather than filling the struct from the wrong layout. `nav_probe` prints "the engine applies NO radius to this target" instead of a fabricated gate verdict. |
+| `nav_commands` | `kNoRadiusApproach = 3.0f` for a target with no engine radius, plus a `route reach: … source=…` line before every request. |
+
+### Open
+
+- **~~`"Direct Lift"` on 66F still answers "No path"~~ — WRONG ON BOTH HALVES, corrected the same day.**
+  It was **67F**, it happened **once**, from the one standing spot that also produced C.D.B.'s two
+  long-range failures, and the tester routes to it fine. I read a map id off the wrong side of an
+  announce line and then wrote a single sample up as a standing defect (L-01) — into `debug.md`, this
+  log, the memory index and the commit message, all four. Full correction in `debug.md`, "CORRECTED —
+  the `Direct Lift` refusal was on 67F, once, from one standing spot". What survives is one observation
+  of the breach / repair-ladder path giving up on an on-mesh goal, needing a repro before it is work.
+- **The 3.0 m approach bound is play-confirmed on one target.** It can in principle land the player
+  somewhere the cone or band will not accept. The `route reach:` line is what to read first if a
+  class-1 route ever ends somewhere useless.
+- **The diagnostic costs work on every rescan** (up to 16 dropped objects resolving event names through
+  the script name pool). Bounded and off the per-frame path, but `[PERF] STALL EntityList::OnFieldFrame`
+  is where it would show.
+- The widened dump and the drop lines are **instruments written to be deleted** (S158, S163). They stay
+  while the Draklor floors are being worked and go when they stop earning their lines.

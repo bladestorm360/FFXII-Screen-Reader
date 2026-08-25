@@ -272,6 +272,20 @@ Reach ReadReachFor(void* sceneObj) {
     const float dx = tx - px, dz = tz - pz;
     r.dist2D = std::sqrt(dx * dx + dz * dz);
 
+    // CLASS 1 HAS NO REACH TO READ. Everything below replicates `FUN_0025bad0`, and
+    // `FUN_0025be50` -- the scorer the engine actually runs on a gimmick/volume -- contains no
+    // radius term: band, mode bit, cone, then minimise a bare squared distance. Running the
+    // class-3 ellipse arithmetic over a class-1 node returned 0.50 m for the Draklor 67F
+    // terminal "C.D.B." -- the player's own body radius plus three reads off a layout that node
+    // does not use -- and the router then declared a target the game was offering an ACTION on
+    // unreachable, because the nearest walkable point was 0.69 m away. `dist2D` is still real
+    // (it is a distance between two points); nothing else here is, so nothing else is filled.
+    if (ObjectClass(sceneObj) == NavRva::SCENEOBJ_CLASS_VOLUME) {
+        r.engineRadius = false;
+        r.valid        = true;
+        return r;
+    }
+
     // Argument order matches the two FUN_003da730 calls: the player's ellipse is evaluated toward the
     // target, the target's toward the player. Same magnitude either way for a circle, not for an
     // ellipse -- so the sign of the delta matters and is kept.

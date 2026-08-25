@@ -130,6 +130,18 @@ bool FiredRoutineName(void* object, uint32_t eventIdx, std::string& out);
 // both sides live in the SAME container: check ObjectContainerId first.
 int ObjectEventNameOffsets(void* object, uint32_t* out, int cap);
 
+// `object`'s event-table handler names, joined with '|' into `out` (printable-ASCII form -- the
+// names are mostly Shift-JIS, so anything outside that range becomes '?'). Returns how many names
+// were written; 0 leaves `out` an empty string. Never reads past the table's own count.
+//
+// WHY THIS IS THE FIELD THAT IDENTIFIES AN OBJECT. An event table names the object's OWN handlers,
+// never the routines those handlers fire (refuted twice -- see debug.md), so the set of names IS
+// the authoring template the object was stamped from, and two objects of one template share it
+// exactly. `init|touch|touchon|touchoff|SET_RECT|...` is a trigger rect; `init|talk|<field-sign
+// words>` is the doorway template S121 promoted a door from. A kind or category byte cannot tell
+// those apart; this can.
+int ObjectEventSignature(void* object, char* out, size_t cap);
+
 // Which script container owns `object` (`object+0x15`, the id `FUN_00263ff0` indexes the handle
 // table with). -1 when unreadable. The map-global script -- the one ReadExitDests parses -- is
 // container 0.
