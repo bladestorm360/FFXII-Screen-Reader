@@ -1304,6 +1304,122 @@ Barheim Passage, Lhusu Mines, Zertinan Caverns or Garamsythe Waterway settles it
 second session to add logging. Delete the block once that log exists.
 
 **Record this as UNVERIFIED, not shipped.**
+
+## Session 162 — 2026-08-20 — [input] The gamepad intercept: where the pad actually enters, and why not one layer lower
+
+**KEYWORDS: controller gamepad pad intercept passthrough XInput XInputGetState XINPUT9_1_0 IAT patch
+import address table pad_hook pad_router PadRouter OnPoll OnGameFrame consumed buttons right stick
+cardinal isolation dominance hysteresis D-pad left stick merged FUN_002498b0 0x1298B0 0x2E77360
+0x2E77368 pad words override block 0x2E773A0 PS2 libpad mask 0xCA0 L1 R1 struck FUN_002b5c90
+DAT_01e0ce10 DAT_009165f0 DAT_0208f574 16 action list mod menu Controller row kill switch
+second read-only-input exception FFPR ControllerRouter survey log flush list PAD**
+
+**MEASUREMENT BUILD SHIPPED — zero play data yet.** Phase 1 of the approved controller plan. The
+build installs the intercept, consumes exactly ONE input, and logs everything else.
+
+### Where the pad enters
+
+`FFXII_TZA.exe` statically imports **`XInputGetState` / `XInputSetState` from `XINPUT9_1_0.DLL`**
+(2 imports, `output/imports.txt`). `GameArchitecture.md` listed only the adjacent `xinput1_3.dll`,
+which **the exe does not import at all** — corrected in the Adjacent DLLs table.
+
+Full four-layer map now in `GameArchitecture.md` § "Input — the four layers": the OS imports, the
+Phyre `PInputDevicePad*` classes, the unified pad block `FUN_002498b0` rebuilds each frame at RVA
+`0x2E77360` (2 pads, stride `0x14`, 8 u16 words + 4 axis bytes), and the game's OWN override block
+at RVA `0x2E773A0` (enable byte, per-word AND-masks, per-word OR-values, axis force bytes).
+
+### THE LAYER DECIDES WHAT IS EXPRESSIBLE — this is the session's real finding
+
+The tempting hook is the unified pad words at `0x2E77368/6A/6C`; `input_tracker.cpp`'s collision
+watch already reads them, and they are where keyboard and pad meet. **That is also why they are the
+wrong layer.** `FUN_002498b0` OR's every sub-device bound to a logical pad into the same 16 bits, so
+**the D-pad and the left stick are the same bits there**. The approved scheme takes the D-pad for
+party slots *specifically because* the left stick doubles for menu navigation — and that distinction
+does not exist one layer down. In `XINPUT_GAMEPAD` they are separate fields.
+
+Not "the low layer is riskier". The design the tester asked for is **unrepresentable** there.
+
+Two supporting reasons, both cheap: an IAT patch costs **zero MinHook trampoline slots** (a tester
+session once ran the pool dry at hook 63 of 66 and silently lost the combat hooks), and
+`XInputGetState` is a documented **two-argument** API, so `L-20` is unpayable.
+
+Rejected and recorded so they are not re-derived: hooking `FUN_002498b0` (game function, wrong
+layer); writing the override block at `0x2E773A0` (owner unproven, the dead-code bar not earned);
+proxying `xinput1_3.dll` (not imported, and the `dinput8` slot is already ours).
+
+### THE GAME HAS NO PAD BINDING TABLE — which is why the scheme has to be played, not read
+
+The plan expected to read the scheme out of the game's own controller glyph table. It is not there.
+`FUN_002b5c90` was read end to end: it fills `DAT_01e0ce10` from **col 0 of the KEYBOARD binding
+banks** through the ordinary glyph-slot lookup, and mentions `DAT_009165f0`, `DAT_00916670` and
+`DAT_0208f574` **nowhere**. `GameArchitecture.md`'s "controller table … with pad-style variants
+indexed by `DAT_0208f574 >> 4 & 3`" is **STRUCK** there, with the evidence.
+
+`FUN_00197710`'s three banks are `[col*0x1c + action]` byte/u32 **DIK codes** across Main/Alt1/Alt2.
+**There is no pad column** — consistent with FFXII rebinding only the keyboard. So the pad scheme is
+**fixed in code, not data-driven**, and no amount of table-reading will yield it. That is what makes
+the shipped survey the primary instrument rather than a cross-check.
+
+Corrected in passing: the fixed action list is **16 entries, not 14** (`FUN_002b5c90` loops `< 0x10`)
+— `idx 14 -> action 0x03`, `idx 15 -> action 0x00`.
+
+### What shipped
+
+- `src\input\pad_hook.{h,cpp}` — IAT patch on `XInputGetState`; own XINPUT_STATE types (the mod
+  links no XInput, same reason `dinput8_proxy.cpp` declares its own DirectInput types); SEH-guarded,
+  and a fault **latches the intercept off for the session** rather than reaching the input thread.
+  Also owns `ReadGamePadWords`, so the three pad-word RVAs now live in ONE place —
+  `input_tracker.cpp`'s collision watch was rewritten onto it.
+- `src\input\pad_router.{h,cpp}` — the FFPR `ControllerRouter` shape (Normal/ModMode/ModMenu),
+  per-index edge detection, right-stick cardinal isolation (arm 16000, release 10000 for hysteresis,
+  dominance 8000), and the survey log.
+- **The context verdict is computed on the GAME thread** (`PadRouter::OnGameFrame`, in `nav_hooks.cpp`
+  beside the beacon and auto-walk) and published stamped; the poll only reads it. `IsFieldNavSafe`
+  and `PartyEngagement` are game-thread reads — `PartyEngagement` walks the actor pool — and calling
+  them from the poll is the mistake `nav_probe` had to be moved off the input thread to fix. The
+  stamp expires at 250 ms, so consumption dies by itself when the field tick stops (AutoWalk's idiom).
+  The gate deliberately does **not** use `MenuState::IsAnyMenuOpen()`; it uses the two predicates the
+  beacon already trusts.
+- **Consumes exactly one input: the right stick, on a live idle field.** Verifiable with no log and
+  no sight — the field camera stops answering the right stick, everywhere else it still does. The
+  D-pad, face buttons and mod mode are deliberately unclaimed until the survey says what is free;
+  assigning one first would be S112 again.
+- **Mod menu `Controller` row (Off / On, default On)** — the kill switch. Off returns `OnPoll` on its
+  first line, so the input path is byte-identical to the mod with no pad support. A pad hook that
+  misbehaved would otherwise leave a pad player unable to play *and* unable to report it.
+- `PAD` added to the **logger flush list** — the survey is this build's whole deliverable and a
+  session ends by quitting, the exact hard exit that once stranded the `PARTY` lines.
+- `dinput8_proxy.cpp` logs any **non-keyboard DirectInput device** and the size of the first state
+  buffer polled on it (80 = DIJOYSTATE, 272 = DIJOYSTATE2). The engine carries
+  `PInputDevicePadDirectInput`; whether this build uses it is now measurable instead of assumed.
+- **CLAUDE.md: the SECOND sanctioned input-write exception**, with bounds. It **consumes only** —
+  it may clear a bit or zero an axis, never set one. That is the category line against Auto-walk.
+
+**FRIDA-FIRST was waived by explicit user instruction** ("this will go straight to c++, no probes"),
+along with the port gate. Recorded here so the audit trail stays truthful, as S100's was. What the
+prototype would have bought is bought by shipping the hook consuming almost nothing.
+
+**Phrasebook: four new rows** (`Controller` plus three sentences). Wording is mine, from the approved
+plan — **flag it to the user before rewording**. "Mod" / "Cancelled" are permitted but **not yet
+added**: they belong to mod mode, which is Phase 2, and an unused row is an invented label waiting to
+be reused for something it was not written for.
+
+### What Phase 1 is waiting on — one play pass, three questions in this order
+
+1. **Passthrough.** Everything except the field right stick behaves as before. A regression here
+   **ends the phase**: set `Controller` to Off in `F8` and report rather than playing on.
+2. **The swallow.** Field right stick no longer moves the camera; off the field it still does.
+3. **The scheme.** Field, party menu, battle, map, license board — press every button and both
+   sticks in each, then read the `PAD survey` lines. `GAME-REACTED` means that control is spoken
+   for; `no-reaction` in every context makes it a free-button candidate.
+
+Read the survey by `L-04`: it dedups per **distinct value**, so an absent line means that value never
+occurred, not that the control was never pressed. Presence is evidence; absence is not.
+
+**The PS2 libpad hypothesis is 0.95 and MAY NOT BE BUILT ON** — `0x20`=RIGHT, `0x80`=LEFT and
+`0xCA0`=`L1|R1|LEFT|RIGHT` match the mask exactly, and the axis order matches too, but coherent is
+not confirmed. The survey promotes or kills it.
+
 ## Session 163 — 2026-08-24 — [menus] The Draklor lift was a number, not a list
 
 **KEYWORDS: Draklor Laboratory 66th Floor North Lift Terminal Select destination floor picker

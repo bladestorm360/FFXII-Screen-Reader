@@ -66,6 +66,11 @@ enum class SettingId : int {
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
     AutoDetail,           // S147: volunteer the detail on highlight instead of on a key. Default Off
+    // The gamepad intercept's master switch. Default ON -- the feature exists to be used -- but it
+    // is a ROW rather than a compile-time constant because a pad hook that misbehaved would leave a
+    // pad player with no way to play and no way to report it. Off returns PadRouter::OnPoll on its
+    // first line, so the input path becomes byte-identical to the mod with no pad support at all.
+    Controller,
     // S132, both visible ONLY while a shout-minigame sequence is actually running (shout_meter.h's
     // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
     PuzzleGuide,          // the spoken meter and the B/N keys.       Default ON  -- it only informs
@@ -100,6 +105,7 @@ bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
 bool AutoDetailOn();       // S147: whether detail is VOLUNTEERED on highlight. Never gates a key
+bool ControllerOn();       // whether the pad intercept may read or consume anything. Input thread
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
 

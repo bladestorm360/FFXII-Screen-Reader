@@ -82,6 +82,13 @@ const Setting kSettings[] = {
       { Id::BeaconOff,         Id::BeaconOn },
       { Id::AutoDetailDescOff, Id::AutoDetailDescOn },
       Id::AutoDetailDesc, "auto_detail", 0, nullptr },
+    // Default ON. Unlike auto-walk this does not DRIVE the game -- it only decides whether the mod
+    // may read the pad and withhold what it claims -- so shipping it on is not the surprise auto-walk
+    // would have been. It is here as the pad player's way back to a stock controller.
+    { Id::SettingController, Kind::Named, 2,
+      { Id::BeaconOff,         Id::BeaconOn },
+      { Id::ControllerDescOff, Id::ControllerDescOn },
+      Id::ControllerDesc, "controller", 1, nullptr },
     // S132, tester's request: the two shout-minigame rows, CONTEXT-GATED to a running sequence.
     //
     // Default ON for the guide: it only ever tells the player something, and a puzzle whose whole
@@ -354,6 +361,10 @@ bool AutoDetailOn() {
 // nothing the instant fill could honestly write.
 bool PuzzleGuideOn() { return EffectiveValue(SettingId::PuzzleGuide) == static_cast<int>(Beacon::On); }
 bool PuzzleSkipOn()  { return EffectiveValue(SettingId::PuzzleSkip)  == static_cast<int>(Beacon::On); }
+
+bool ControllerOn() {
+    return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);
+}
 
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }

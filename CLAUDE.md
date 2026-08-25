@@ -341,6 +341,27 @@ things. Rules 1 and 2 are absolute; only rule 3 changed.
      loss, map change, focus loss, menu open, field-tick stall, and a 15 s no-progress cap —
      it never keeps walking a character the player has lost control of.
 
+  **THE SECOND EXCEPTION — the GAMEPAD INTERCEPT, user-authorized 2026-08-20.** The mod may
+  **CONSUME** pad input: `PadRouter::OnPoll` (`src\input\pad_router.cpp`), reached only from the
+  `XInputGetState` IAT hook in `src\input\pad_hook.cpp`, may clear a button bit or zero a stick
+  axis in the `XINPUT_STATE` the game is about to read. Bounds, all non-negotiable:
+  1. **Consumption only, never injection.** It may clear a bit or zero an axis; it may NEVER set
+     one. This is the category line between it and Auto-walk, and it is what keeps "the mod cannot
+     press a button for you" true.
+  2. **One function.** `PadRouter::OnPoll` is the only code in the mod that writes an
+     `XINPUT_STATE`; nothing else may.
+  3. **The router is fed the PRE-consumption state**, always — every mod-side observation sees the
+     player's real input, exactly as `InputTracker::FeedDInputKeyboard` is fed the pre-injection
+     keyboard buffer.
+  4. **Off means byte-identical, not skipped.** With the `Controller` mod-menu row off, or the pad
+     absent, `OnPoll` returns on its first line and the game's input path is what it was before this
+     file existed. A fault inside it latches the intercept OFF for the session.
+  5. **Game-foreground gated**, like every other dispatch in the mod.
+  6. **What may be consumed is decided on the GAME thread** and published stamped; the verdict
+     expires ~250 ms after the field tick stops, so consumption ends by itself on a map change,
+     pause or stall. Widening consumption to a new control is a normal design change, not a new
+     category — but widening it to *injection* is a new category and needs new permission.
+
   Everything else in this rule stands unchanged: no lock-on presses, no speed changes, and any
   OTHER feature that would *drive* the game still requires **explicit user permission** and a
   design discussion first. (Original rule confirmed Session 44 after a tester speed-jump turned

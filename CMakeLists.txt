@@ -67,6 +67,8 @@ add_library(${PROJECT_NAME} SHARED
     src/audio/audio_engine.cpp
     src/audio/beacon_assets.rc
     src/input/input_tracker.cpp
+    src/input/pad_hook.cpp
+    src/input/pad_router.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
     src/ui/config_reader.cpp

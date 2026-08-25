@@ -5,6 +5,7 @@
 #include "navigation/path_planner.h"
 #include "navigation/audio_beacon.h"
 #include "navigation/auto_walk.h"
+#include "input/pad_router.h"
 #include "navigation/nav_probe.h"
 #include "navigation/entity_list.h"
 #include "navigation/sneak_assist.h"
@@ -165,6 +166,11 @@ uint64_t __fastcall HookedFieldFrame() {
         // AFTER the beacon, so the leg snapshot auto-walk steers by is post-advance -- same-frame
         // fresh, never a corner behind. One relaxed load when idle.
         { STALL_SCOPE("AutoWalk::OnGameFrame"); AutoWalk::OnGameFrame(); }
+        // The pad router's context verdict. It MUST be computed here rather than on the input
+        // poll: IsFieldNavSafe and PartyEngagement are game-thread reads (the latter walks the
+        // actor pool), and the poll thread only ever reads the stamped result. The stamp is what
+        // makes pad consumption expire on its own when this tick stops -- see pad_router.h.
+        { STALL_SCOPE("PadRouter::OnGameFrame"); PadRouter::OnGameFrame(); }
         // The `'` probe drains here rather than running on the input thread: Gate B needs
         // MapQuery::GroundAt, which is a game call. O(1) when nothing is pending.
         NavProbe::OnGameFrame();

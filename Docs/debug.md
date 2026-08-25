@@ -2232,6 +2232,22 @@ the keyboard buffer while engaged, default OFF, with the tracker still fed the P
 Everything else in this audit still holds: no SendInput, no memory writes, nothing swallowed. See
 CLAUDE.md's amended rule for the full boundary list.
 
+**AUDIT UPDATE, Session 162 — a SECOND exception, and it is the opposite direction.** The gamepad
+intercept (`PadRouter::OnPoll`, reached only from the `XInputGetState` IAT hook in
+`src\input\pad_hook.cpp`) may **CONSUME** pad input: clear a button bit or zero a stick axis in the
+`XINPUT_STATE` the game is about to read. It may **never set one** — that is the category line
+against Auto-walk, and it is what keeps "the mod cannot press a button for you" true.
+
+So **"nothing swallowed" above is no longer unqualified**: on the KEYBOARD it still holds absolutely
+(the mod passes that buffer as `const`), and on the PAD the mod now swallows exactly what it claims.
+Do not quote the keyboard sentence as if it covered the pad.
+
+Bounds: one function writes an `XINPUT_STATE` and nothing else does; the router is fed the
+PRE-consumption state; with the `Controller` mod-menu row off or no pad present `OnPoll` returns on
+its first line (byte-identical, not merely skipped); a fault latches the intercept OFF for the
+session; game-foreground gated; and what may be consumed is decided on the GAME thread and published
+stamped, expiring ~250 ms after the field tick stops. Full list in CLAUDE.md.
+
 **KEYWORDS: left ctrl escape toggle battle menu won't open menus locked stuck ctrl sound cue ping
 whoosh Controls.md binding INPUT-DIAG modifiers not the mod** (Session 47) SOLUTION: The tester could
 not open the battle menu and the game acted as though **Ctrl were held** on every keypress. **It is the
@@ -4504,11 +4520,19 @@ the tester; `F4` is the workaround (it toggles Combat verbosity with no arrow ke
 
 ### This is NOT a broken intercept — there is no intercept to fix
 
-Read this before "fixing" it. The mod is **strictly read-only on input** (`CLAUDE.md`; since S100
-with the one recorded Auto-walk exception, which INJECTS movement bits and still never SWALLOWS a
-key — swallowing remains forbidden, and injection is not swallowing): the DirectInput buffer
-arrives at the tracker as `const`, nothing is ever swallowed or rewritten on the read path. The mod
-observes keys; it has never consumed one. `MenuNavCallback`'s `bool` return means only "a mod-side
+Read this before "fixing" it. The mod is **strictly read-only on the KEYBOARD** (`CLAUDE.md`; since
+S100 with the one recorded Auto-walk exception, which INJECTS movement bits and still never SWALLOWS
+a key — injection is not swallowing): the DirectInput buffer arrives at the tracker as `const`,
+nothing is ever swallowed or rewritten on the read path. The mod observes keys on that path; it has
+never consumed one.
+
+> **The word KEYBOARD is doing work in that sentence as of S162, and it did not have to before.**
+> The gamepad intercept CAN swallow — that is the whole point of it — so "swallowing is forbidden"
+> is now true of the keyboard only. This paragraph is about the arrow keys, which are keyboard, so
+> everything below still stands; do not generalise it to the pad, and do not "fix" the pad by
+> pointing at it.
+
+`MenuNavCallback`'s `bool` return means only "a mod-side
 consumer handled this", which suppresses the mod's *own* fallback dispatch — it has never had any
 effect on what the game sees, and was never intended to. The status virtual buffer has behaved this
 way since Session 71.
@@ -6585,6 +6609,7 @@ confirmed from the log of the same session: eleven category switches, each speak
 first row (`Attack` → `Cure, unavailable` → `Protectga` → `Aero, unavailable` → … → `Traveler`), zero
 stale items, zero duplicate `[LICENSE] summary` lines, and the picker class constant right first
 time.
+
 ## SOLVED — the Draklor lift was a NUMBER, not a list (Session 163, 2026-08-24)
 
 **KEYWORDS: Draklor Laboratory 66th Floor North Lift Terminal Select destination floor picker

@@ -125,6 +125,11 @@ const Row kTable[] = {
     EN(L"Whether the extra detail about the highlighted thing is read out on its own, or only when you ask for it."),
     EN(L"Off reads the detail only when you ask: the equipment columns on 4 to 9, and Libra on the describe key."),
     EN(L"On also reads it as you move: the equipment comparison in a shop, and the Libra readout on a targeted enemy. Both still answer the keys as well."),
+    // Gamepad intercept (wording from the approved plan; flag to the user before reword).
+    EN(L"Controller"),
+    EN(L"Whether the mod reads your controller. Off hands the whole pad back to the game."),
+    EN(L"Off passes every button and stick straight to the game, exactly as if the mod had no controller support."),
+    EN(L"On lets the mod use the controller. Anything the mod does not use still reaches the game."),
     // (S106's four sneak-assist rows were removed in S115. The feature became automatic on the
     // danger-table maps, so it has no menu row and no words -- and an unused row here would be an
     // invented label waiting to be re-used for something it was not written for.)

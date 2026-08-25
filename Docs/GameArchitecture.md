@@ -21,12 +21,57 @@ or class structure. **Read it first** before re-discovering.
 
 | DLL | Purpose | Hook surface? |
 |---|---|---|
-| `xinput1_3.dll` | Game ships its own | NO — overwriting breaks the game |
+| `xinput1_3.dll` | Ships beside the game — **and the exe does NOT import it** | NO — overwriting breaks the game |
+| `XINPUT9_1_0.DLL` | **THE PAD PATH.** `FFXII_TZA.exe` statically imports `XInputGetState` + `XInputSetState` from it (2 imports, `output/imports.txt`) | **YES — the mod's IAT hook, `src\input\pad_hook.cpp`** |
 | `dinput8.dll` (post-mod) | FF12 Module Loader (ffgriever, BSD-2) | YES — our injection vector |
 | `d3dcompiler_47.dll` | Microsoft redistributable | NO |
 | `SharpDX.dll`, `SharpDX.DirectInput.dll`, `SharpDX.DXGI.dll` | .NET; used by `FFXII_TZA_GameSetting.exe` | NO |
 | `Steamworks.NET.dll`, `CSteamworks.dll` | .NET Steam wrappers | NO |
 | `steam_api.dll`, `steam_api64.dll` | Steam API | NO |
+
+## Input — the four layers, and which one a mod must hook
+
+Established 2026-08-20 from the import table, the RTTI list and `FUN_002498b0`.
+
+**1. OS layer.** `DINPUT8.DLL` → `DirectInput8Create` (keyboard/mouse; the mod's proxy owns it).
+`XINPUT9_1_0.DLL` → `XInputGetState` / `XInputSetState` (**the pad**).
+
+**2. Phyre device layer** (`output/rtti_classes.txt`): `PInputDevice`, `…Keyboard`, `…Mouse`,
+`…Pad`, `…PadDirectInput`, `…PadSteamController`, `…PadXInput`. A DirectInput pad path **exists in
+the engine**; whether this build ever uses it is being measured through the non-keyboard-device log
+line in `dinput8_proxy.cpp`. Do not record it as dead without that measurement.
+
+**3. The unified pad block — `FUN_002498b0`, RVA `0x1298B0`.** Rebuilt once per frame at Ghidra
+`0x02F97360` (RVA `0x2E77360`): **2 logical pads, stride `0x14`**, each **8 `u16` button words then
+4 signed axis bytes**, with a per-frame deadzone from `FUN_003590a0`. Per pad, word `i` is OR-ed from
+every physical sub-device bound to that logical pad (`FUN_0035f130` gives the count). Axis bytes are
+written in the order `[axis2, axis3, axis0, axis1]`, each as `raw - 0x80` and zeroed inside the
+deadzone. Pad 0's words at `+0x08/+0x0A/+0x0C` (RVA `0x2E77368/6A/6C`) are the ones the game's own
+menus read; the final post-override copies land at `0x2E77388 / 0x2E77390 / 0x2E77398`.
+
+> **THIS LAYER CANNOT TELL A D-PAD FROM A LEFT STICK, AND THAT DECIDES WHERE YOU HOOK.** Every
+> sub-device — pad *and* keyboard — is OR-ed into the same 16 bits, which is exactly what makes the
+> `LogPadOnKey` collision watch work. The cost is that "consume the D-pad but leave the left stick
+> driving menus" is **not expressible here**. In `XINPUT_GAMEPAD` the D-pad bits and `sThumbL*` are
+> separate fields, so the mod intercepts at layer 1. See `src\input\pad_hook.cpp`.
+
+**4. The game's OWN override block**, Ghidra `0x02F973A0` (RVA `0x2E773A0`): an enable byte, a
+suppress-axes byte, four per-word AND-masks (clear bits), three per-word OR-values (force bits; the
+word-1 value is cleared each frame, i.e. one-shot), and four axis force bytes. **The mod does not use
+it** — its owner is unproven and the 100%-CONFIRMED-DEAD bar has not been earned. Recorded so nobody
+re-derives it as a discovery.
+
+### Pad bit layout — the PS2 libpad mask (0.95, NOT yet at the bar)
+
+Two measured values sit in this file already: `held=0x20` = RIGHT and `held=0x80` = LEFT (S70), and
+the inventory mask `0xCA0` = `L1|R1|LEFT|RIGHT`. That resolves to `0x800|0x400|0x080|0x020`, which
+is the PS2 libpad digital mask exactly — `SELECT 0x0001, L3 0x0002, R3 0x0004, START 0x0008,
+UP 0x0010, RIGHT 0x0020, DOWN 0x0040, LEFT 0x0080, L2 0x0100, R2 0x0200, L1 0x0400, R1 0x0800,
+TRIANGLE 0x1000, CIRCLE 0x2000, CROSS 0x4000, SQUARE 0x8000`. The axis order above is PS2's too
+(right X, right Y, left X, left Y), and FFXII TZA is a PS2 port.
+
+**Coherent is not confirmed.** This is 0.95 and may not be built on. The `PAD survey` lines from the
+controller measurement build name each bit from a real press; promote or kill it from those.
 
 ## Locale Detection — CORRECTED APPROACH (2026-05-05)
 
@@ -2319,9 +2364,21 @@ trusting anything below it.**
   `DAT_01f80f90` (RVA `0x1E60F90`): byte DIK codes, `[col*0x1c + action]`, col 0 = keyboard Main
   (`FUN_00197710` kind 0; kind 1 bank `+0x40`; kind 2 u32 bank `+0x60`). DIK→glyph-slot tables
   `DAT_01df1030`/`DAT_01df0e80` (0x6a entries, `FUN_00197790`); selectors `0x60`-`0x6b` alias down
-  via `FUN_002ab8f0` (cases 0x20/0x21/0x23/0x27 config-dependent on `DAT_01e0c2a0/2a4`); controller
-  table `DAT_01e0ce10` built by `FUN_002b5c90` with pad-style variants `DAT_009165f0/00916670`
-  indexed by `DAT_0208f574 >> 4 & 3`. GROUND TRUTH: the 568 palace call prompt (rrp_a02.ebp msgs
+  via `FUN_002ab8f0` (cases 0x20/0x21/0x23/0x27 config-dependent on `DAT_01e0c2a0/2a4`).
+  > **⚠ STRUCK (2026-08-20): "controller table `DAT_01e0ce10` built by `FUN_002b5c90` with
+  > pad-style variants `DAT_009165f0/00916670` indexed by `DAT_0208f574 >> 4 & 3`."**
+  > **Evidence:** `FUN_002b5c90` was read end to end. It fills `DAT_01e0ce10` from **col 0 of the
+  > same keyboard binding banks** the row above describes, through the same glyph-slot lookup
+  > (`FUN_001e0bd0` → `FUN_00197710`, then `FUN_001e0da0` → `FUN_00197790`). It contains **no
+  > reference to `DAT_009165f0`, `DAT_00916670` or `DAT_0208f574` at all** — so whatever selects a
+  > pad style, it is not this function, and `DAT_01e0ce10` is not a pad table.
+  > **What replaced it:** nothing yet, and that is the finding. `FUN_00197710`'s three banks are
+  > indexed `[col*0x1c + action]` and hold **keyboard DIK codes** across the Main/Alt1/Alt2
+  > columns — there is no pad column. Consistent with FFXII rebinding only the keyboard: **the
+  > pad scheme is fixed in code, not data-driven**, which is why it cannot be read out of a table
+  > and has to be measured in play (see the pad survey in `src\input\pad_router.cpp`).
+  > **Also corrected:** the fixed action list is **16 entries, not 14** — `FUN_002b5c90`'s loop
+  > runs `< 0x10`, adding `idx 14 -> action 0x03` and `idx 15 -> action 0x00`. GROUND TRUTH: the 568 palace call prompt (rrp_a02.ebp msgs
   23/24/25/28) is `0f 48 80` -> idx 8 -> action `0x0f` (predicted key: the Battle Menu binding, F).
   Key name from a DIK code: the shipped `KeyCodeToStringId` arithmetic (`config_reader.cpp`,
   replicating `FUN_001e0b00`) + string id. Confirmation probe: `frida\probe_key_bindings.js`.

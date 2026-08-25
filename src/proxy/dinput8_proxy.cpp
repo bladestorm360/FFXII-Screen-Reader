@@ -111,6 +111,27 @@ static std::atomic<bool> g_devPatched{false};
 static void*             g_kbDevices[8] = {};
 static std::atomic<int>  g_kbDeviceCount{0};
 
+// NON-KEYBOARD DirectInput devices, and why we bother.
+//
+// The engine carries a `PInputDevicePadDirectInput` class alongside `PInputDevicePadXInput`
+// (rtti_classes), so a DirectInput pad path EXISTS in PhyreEngine. Whether this build's FFXII ever
+// uses it has never been measured, and "the exe imports XInput" does not answer it -- a DInput pad
+// would arrive through the very CreateDevice call below, not through XInput at all.
+//
+// It costs one comparison to find out: record any device that is not the keyboard, and log the size
+// of the first state buffer the game polls it with. 80 bytes = DIJOYSTATE, 272 = DIJOYSTATE2; a
+// mouse is 16/20. If a joystick-sized poll ever appears here, PadRouter has a second surface to
+// serve and we will know rather than assume.
+static void*             g_otherDevices[8] = {};
+static std::atomic<int>  g_otherDeviceCount{0};
+static std::atomic<bool> g_otherLogged[8]{};
+
+static int OtherDevIndex(void* dev) {
+    int n = g_otherDeviceCount.load(std::memory_order_acquire);
+    for (int i = 0; i < n && i < 8; ++i) if (g_otherDevices[i] == dev) return i;
+    return -1;
+}
+
 static bool IsKeyboardDev(void* dev) {
     int n = g_kbDeviceCount.load(std::memory_order_acquire);
     for (int i = 0; i < n && i < 8; ++i) if (g_kbDevices[i] == dev) return true;
@@ -145,6 +166,19 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
         // tell apart. StallProbe above only speaks above 100 ms and so can never report the normal
         // rate — the gap that left every tier-C constant unmeasurable. See core/frame_probe.h.
         FrameProbe::OnInputPoll();
+    }
+    // One line per non-keyboard device, the first time the game polls it. See g_otherDevices above.
+    if (!IsKeyboardDev(self)) {
+        const int oi = OtherDevIndex(self);
+        if (oi >= 0 && !g_otherLogged[oi].exchange(true)) {
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "non-keyboard DirectInput device polled: idx=%d cbData=%lu%s",
+                     oi, (unsigned long)cbData,
+                     (cbData == 80 || cbData == 272) ? " (JOYSTICK-SIZED -- a DInput pad path is live)"
+                                                     : "");
+            Log::Write("PAD", msg);
+        }
     }
     if (cbData >= 256 && IsKeyboardDev(self)) {
         // Diagnostic (rate-limited to transitions): a sustained keyboard GetDeviceState
@@ -194,6 +228,16 @@ static HRESULT STDMETHODCALLTYPE HookedCreateDevice(void* self, const GUID& rgui
             int idx = g_kbDeviceCount.fetch_add(1);
             if (idx < 8) g_kbDevices[idx] = dev;
             Log::Write("PROXY", "keyboard device created (hotkeys via GetDeviceState hook)");
+        } else {
+            int idx = g_otherDeviceCount.fetch_add(1);
+            if (idx < 8) {
+                g_otherDevices[idx] = dev;
+                char msg[160];
+                snprintf(msg, sizeof(msg),
+                         "non-keyboard DirectInput device created: idx=%d guid=%08lX-%04X-%04X",
+                         idx, (unsigned long)rguid.Data1, rguid.Data2, rguid.Data3);
+                Log::Write("PAD", msg);
+            }
         }
     }
     return hr;

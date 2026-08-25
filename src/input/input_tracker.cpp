@@ -1,4 +1,5 @@
 #include "input/input_tracker.h"
+#include "input/pad_hook.h"
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/mem_read.h"
@@ -183,10 +184,11 @@ void LogPadOnKey(const char* keyName, int slot, bool down) {
     if (slot < 0 || slot >= 4) return;
     if (!down) { s_lastLogged[slot] = 0xFFFFFFFF; return; }
 
-    uint16_t w0 = 0, w1 = 0, w2 = 0;
-    if (!MemRead::SafeReadU16(Hooks::ResolveRva(0x2E77368), 0, &w0) ||
-        !MemRead::SafeReadU16(Hooks::ResolveRva(0x2E7736A), 0, &w1) ||
-        !MemRead::SafeReadU16(Hooks::ResolveRva(0x2E7736C), 0, &w2)) return;
+    // The three RVAs used to be written out here. They now live in ONE place (PadHook), because the
+    // pad router's survey log wants the same read and two copies of an RVA is one copy too many.
+    uint16_t w[3] = {};
+    if (!PadHook::ReadGamePadWords(w)) return;
+    const uint16_t w0 = w[0], w1 = w[1], w2 = w[2];
     if (w0 == 0 && w1 == 0 && w2 == 0) return;          // nothing moved: the key looks free
 
     const uint32_t sig = (static_cast<uint32_t>(w0) << 16) ^ (static_cast<uint32_t>(w1) << 8) ^ w2;

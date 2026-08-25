@@ -211,7 +211,11 @@ void Write(const char* category, const char* message) {
                      strcmp(category, "INTERACT") == 0 ||
                      // NAV-PROBE is the same shape: the whole point of a `'` press is the block it
                      // emits, and it is routinely the last thing before the tester quits.
-                     strcmp(category, "NAV-PROBE") == 0)) {
+                     strcmp(category, "NAV-PROBE") == 0 ||
+                     // The pad survey IS the deliverable of the controller measurement build, and a
+                     // session ends by the player quitting the game -- the exact hard exit that
+                     // stranded the PARTY lines above in an unflushed buffer.
+                     strcmp(category, "PAD") == 0)) {
         fflush(g_logFile);
     }
 

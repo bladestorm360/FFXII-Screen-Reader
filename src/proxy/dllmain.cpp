@@ -6,6 +6,7 @@
 #include "battle/battle_state.h"
 #include "speech/speech.h"
 #include "input/input_tracker.h"
+#include "input/pad_hook.h"
 #include "ui/text_capture.h"
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
@@ -77,6 +78,12 @@ static void DeferredInitImpl() {
     // the Hooks::Init() block below: it installs no hooks, only input callbacks and a settings file,
     // so it must keep working on a session where MinHook fails and the player needs to hear why.
     ModMenu::Init();
+
+    // The gamepad intercept. AFTER ModMenu::Init, because the router asks it whether the Controller
+    // setting is on before it reads or writes anything. Outside the Hooks block below for the same
+    // reason ModMenu and AudioEngine are: it installs no MinHook hook -- it patches one IAT cell --
+    // so it must keep working on a session where MinHook fails.
+    PadHook::Init();
 
     // SDL3 audio for the navigation beacon. Outside the Hooks block for the same reason — it
     // installs no hooks. A failure here is not fatal: AudioEngine::Available() goes false and the
@@ -215,6 +222,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             MenuReader::Shutdown();
             TextCapture::Shutdown();
             Hooks::Shutdown();
+            PadHook::Shutdown();
             InputTracker::Shutdown();
             Speech::Shutdown();
             Log::Shutdown();

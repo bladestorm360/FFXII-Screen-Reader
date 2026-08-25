@@ -146,6 +146,11 @@ enum class Id {
     // user-approved 2026-08-10. What it switches is what gets VOLUNTEERED, never what is reachable:
     // the `4`-`9` shop columns and `o` keep working identically in both modes.
     SettingAutoDetail, AutoDetailDesc, AutoDetailDescOff, AutoDetailDescOn,
+    // Gamepad intercept. The Off/On VALUES reuse BeaconOff/BeaconOn -- they are generic. This row
+    // is the KILL SWITCH for the pad hook: a mod that could break the controller outright is a mod a
+    // pad player cannot report a bug from, so there is always a keyboard route back to a stock pad.
+    // Wording from the approved plan; flag it to the user before rewording.
+    SettingController, ControllerDesc, ControllerDescOff, ControllerDescOn,
     // (S106's four sneak-assist ids were removed in S115 with the setting they named. The feature is
     // automatic on the maps `path_danger.cpp` lists, so it has no menu row and speaks nothing.)
 
