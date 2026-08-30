@@ -65,9 +65,21 @@ od -An -tx2 -j$(( $(od -An -tu4 -j0x3c -N4 "<file>" | tr -d ' ') + 4 )) -N2 "<fi
 will not work. The `libs\x64\` folder there holds `nvdaControllerClient64.dll` only, not Tolk itself.
 
 **ReadMe conversion:** strip Markdown so the file reads cleanly under a screen reader — drop `#`
-heading markers, `**`/`*` emphasis, code-fence ` ``` ` lines, and leading `-` bullet markers;
-convert `[text](url)` to `text (url)`; convert tables to plain columns. No leftover `#` or backticks.
-Save as `ReadMe.txt` (capital R, capital M) in the version directory.
+heading markers, `**`/`*` emphasis, code-fence ` ``` ` lines, and leading `-` and `*` bullet markers;
+convert `[text](url)` to `text (url)`; convert tables to plain columns; unescape `\[` `\-` `\\` `\_`
+and drop the `&#x20;` entity outright. Strip inline code backticks only where they are **paired** — a
+lone backtick is the literal `` ` `` key name and must survive. Then, on every line, **collapse runs
+of spaces to one and strip trailing whitespace**; write CRLF throughout and no BOM. No leftover `#` or
+backticks beyond that single one. Save as `ReadMe.txt` (capital R, capital M) in the version
+directory.
+
+> **The last two rules were undocumented until V0.7, and their absence broke a rebuild.** The
+> space-collapse and the trailing-whitespace strip appeared only in the *audit* sentences of earlier
+> records ("zero doubled spaces"), never here, so a converter written from this paragraph alone comes
+> out 3 bytes wrong on the V0.6.5 artifact — `README.md` carries two lines with a trailing space and
+> one with a doubled space. V0.6.4's record claims this paragraph is sufficient to regenerate the
+> artifact with no undocumented step; it was not. **The validation step below is what caught it, which
+> is the argument for never skipping it.**
 
 **These five files are the entire release.** Do not add:
 
@@ -171,6 +183,130 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
 the only record in the repo that a given zip ever existed.
+
+## V0.7-Test-Build — 2026-08-30
+
+**Built from:** `76f0e66`, the version bump. `HEAD` at zip time was `d2855e6`, a readme commit made at
+the trigger — it changes no code, so nothing in this binary post-dates `6a9476a`. Covers **Sessions
+165–175** since `V0.6.5-Sponsor-Build`'s `9e9a00f` — three commits: `6a9476a` (the S165–S174 catch-up,
+which is where the pad scheme lives), `c61237c` and `9e95399` (S175, dialogue choices).
+
+**What is actually IN this build is smaller than "eleven sessions" suggests.** S165–S171 were
+**reverted in full** by S172 — the cactus line was never a defect, the tester was on the wrong quest
+step — so their only lasting contribution is documentation. The code that ships here is **S173+S174's
+gamepad scheme** and **S175's dialogue-choice rewrite**, on top of the S172 revert that returned
+`src\` to V0.6.5's `9e9a00f`. That is why `dinput8.dll` grew only **512 bytes** across a range this
+wide: S175 deleted about as much as it added — one detector, one cached page, one arbitration flag and
+our copy of the game's slot resolver all went — and the reverted sessions contribute nothing.
+
+> ⚠ **THE README NOW CARRIES THE PAD SCHEME, AND THAT REVERSES A DELIBERATE S174 DECISION. READ THIS
+> BEFORE ASSUMING IT WAS AN OVERSIGHT.** S174's Open section ends: *"README still does not carry the
+> pad scheme, deliberately — one play pass stands between this and it being true for players."* It was
+> written into this build anyway, because **this is a test build and the pad scheme is the thing being
+> tested**: a binding nobody has been told about cannot be exercised, and S174's own blocker was that
+> twenty sessions of the intercept shipped with no pad ever connected. The judgement is that a tester
+> who reads "R1 gives directions", presses it and hears nothing files the report that closes the
+> phase, which is the point of the build. **If this zip is forwarded to a non-tester audience that
+> reasoning does not carry** — see the play-confirmation section below for exactly which of these
+> bindings have never been pressed by anyone.
+
+**The version number was checked against these records rather than taken at face value, and for once
+it was already right.** The trigger said *"prepare a test build according to the latest version
+number. so if 0.6.5, do 0.7"* — a conditional, not an assertion, and the condition held:
+`V0.6.5-Sponsor-Build` (2026-08-25) is the newest record and `0.7` is untaken. That makes four
+releases running where the number was verified before use; the previous three were all wrong (V0.6.3
+"0.5.3", too low; V0.6.4 "0.6.3", taken the day before; V0.6.5 "0.6.1", four behind). **The check is
+cheap and has paid for itself three times in four — keep making it even when the trigger looks
+self-evidently correct.**
+
+**THE BUILD STAMP WAS RIGHT GOING IN, for the first time since it landed.** V0.6.5 fixed the string
+and recorded the trap; this is the first release to benefit from it. `FFXII_SR_VERSION` 0.6.5 → 0.7 in
+`76f0e66`, **with `build\CMakeCache.txt` updated in the same change**, because it is a `CACHE STRING`
+and editing `CMakeLists.txt` alone is a silent no-op. **Verified in the shipped binary, never in the
+source:** `dinput8.dll` holds the null-terminated strings `0.7` (once) and `76f0e66` (once) and **zero
+occurrences of `0.6.5` or `d5fc11d`**, so a V0.7 log opens `Build: V0.7 (76f0e66)`. The comment above
+the line was rewritten in the same commit — it had said "bumped by hand at release time", which
+contradicts this file's own rule that the bump belongs in a commit *before* the trigger, and it never
+mentioned the cache at all. Both now sit where the next person to bump it will read them.
+
+**ReadMe: CHANGED** — 22,903 bytes / 255 lines (sha256 `7495b0ab…73904172`), against V0.6.5's 20,759 /
+233. One commit touched `README.md` in this range, `d2855e6`, made at the trigger in response to the
+key audit below.
+
+**The converter was rebuilt from this file's rules again and validated the strong way — but the rules
+as written were NOT sufficient, and that is the finding worth keeping.** Run against
+`git show 2777d61:README.md` it reproduced the shipped `V0.6.5-Sponsor-Build\ReadMe.txt`
+**byte-identically** — 20,759 bytes both, sha256 `fd596d59…e475ca8` — which is the gate this file asks
+for. It did **not** pass first time: the output was 3 bytes long, across three lines. Two
+transformations the conversion rules never state were needed — **strip trailing whitespace from every
+line**, and **collapse runs of spaces to one**. Both were recoverable only from the *audit* sentences
+of earlier records ("zero doubled spaces"), never from the rules paragraph that is supposed to be
+sufficient on its own. **V0.6.4's record claims "the rules written down here are sufficient to
+regenerate the artifact, with no undocumented step"; that is now falsified, narrowly.** Rather than
+flag it for a future release, step 2's conversion paragraph has been amended to state both rules —
+L-68 applied at first occurrence instead of third.
+
+**Output audit on the shipped file:** zero `#`, zero `*`, zero `](`, zero `&#x20;`, zero doubled
+spaces, no BOM, CRLF on all 255 lines with no bare LF, and **exactly one backtick** — the literal
+`` ` `` key name, the same single survivor as every release since V0.2.1. The **17 backslashes** were
+each read and are all content: the two Windows install paths, and prose references to the `\` route
+key. The count is unchanged from V0.6.5 because the new section names its keys in words wherever it
+can, so it introduced none.
+
+**Readme key audit — ONE GAP, THE LARGEST THIS FILE HAS RECORDED, AND IT WAS FIXED RATHER THAN
+FLAGGED.** S173 and S174 gave the mod an entire second input surface and the readme documented **none
+of it**. Grepping for `Controller` returned the mod-menu row added at V0.6.5 and nothing else;
+grepping for `stick` returned only camera prose and the auto-walk line below it. **Every binding — the
+right stick's four directions, the D-pad's party slots, R1, Back, L3, and the whole of mod mode — had
+nowhere a player could look it up.** Fixed in `d2855e6` with one new `Controller` section under
+Keys → Mod, placed before the mod menu so that menu's `Controller` row can say "described above".
+
+> **The section was written twice, and the first draft is the lesson.** It ran to 30 lines and spent
+> most of them on rationale — why A, B, X and Y are never taken, why a pad button is too scarce to
+> spend on a duplicate toggle, why passthrough is the default. Every one of those sentences is true
+> and every one of them is banned: `CLAUDE.md`'s README rule is keys only, no design justification, no
+> section per feature, and it exists because a tester once called an over-written update *"far, far
+> too many edits"*. The shipped section is 21 lines and carries the bindings alone. **The rationale
+> was already written, in `pad_router.h`, which is where it belongs.**
+
+**The line V0.6.5 flagged and left has been fixed — L-68 working as intended at the second record
+rather than the fourth.** Auto-walk's entry said *"the mod cannot see the stick, so moving the stick
+does not cancel it"*, sitting one line above a setting whose whole subject is the mod reading the pad.
+The **limitation is real and was kept**, verified in the code rather than assumed:
+`AutoWalk::OnDevicePoll` tests the DirectInput keyboard buffer alone (W/A/S/D and the arrows), and
+`grep -rn AutoWalk src/input/` returns only comments — the pad router never calls it — so the stick
+genuinely does not cancel auto-walk. Only the **reason** was false. It now reads that auto-walk
+watches the keyboard alone and that the left stick is passed straight to the game and never read.
+**A true limitation with a false explanation is still a false claim, and the explanation was the whole
+job.**
+
+**Zip:** `FFXII-Screen-ReaderV0.7-Test-Build.zip`, **1,250,666 bytes**, five files, root flat.
+- `dinput8.dll` 895,488 bytes (sha256 `ba44ff8c…61c8bd64`) — up 512 from V0.6.5's 894,976.
+- `SDL3.dll` 1,748,992 bytes (sha256 `64e52809…b4ac7531`) — **byte-identical to V0.6.5**, confirmed by
+  a real `cmp` rather than by matching sizes. The link timestamp that moved at V0.6.5 has not moved
+  again: no source file was added to `CMakeLists.txt` in this range, so it did not relink.
+- TTS pair carried over from `V0.6.5-Sponsor-Build`, verified with `cmp`: `Tolk.dll` 122,368 (sha256
+  `c4fb11d3…48197225`), `nvdaControllerClient64.dll` 153,600 (sha256 `41c1f5df…b23a0b09`).
+- All four DLLs verified PE machine `8664`.
+
+**Play-confirmation status — READ THIS BEFORE ANSWERING A PAD REPORT.**
+- **S175 is play-confirmed** (2026-08-30, user): the dialogue choice reads. But the *surfaces*
+  exercised went unrecorded, so the child-list flavour (`child=1`) is still unwitnessed and the tick's
+  call rate unmeasured. The first V0.7 log should be checked for a `child=1` line and for the `[PERF]`
+  count, which now sits above the change-check and so counts calls rather than emissions.
+- **The pad scheme is mostly UNPLAYED, in S174's own words:** *"Everything above is BUILT, DEPLOYED,
+  UNPLAYED except the right stick and the D-pad."* Confirmed working in the 2026-08-29 log: the right
+  stick driving the pathfinder, the field camera being swallowed as designed, and the D-pad speaking
+  party slots on the field while still moving the game's own cursor in menus. **Never pressed by
+  anyone: R1 in either context, Back and the whole of mod mode, and L3.** That last one matters most —
+  L3 is the escape hatch the readme now points players at, and it has never once been thrown.
+- **Two unexplained pad artefacts are still open.** `L1` and `R1` edges appear in the 2026-08-29 log
+  for buttons the user is certain were never pressed; the survey now prints `idx=` and `raw=`, which
+  will say whether a second pad index or a second held button explains them. **Do not build on either
+  line until that is answered.** The PS2 libpad mask stays at 0.95 and stays unusable.
+- **S152's six per-frame changes are play-confirmed** (2026-08-27) and are no longer the standing
+  first suspect for a new nav, beacon, menu or dialogue fault. On a fault in this build, suspect
+  S173/S174 (input) or S175 (choices) first — they are what changed.
 
 ## V0.6.5-Sponsor-Build — 2026-08-25
 
