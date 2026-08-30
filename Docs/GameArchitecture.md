@@ -238,7 +238,7 @@ readings presented as universal.
 |---|---|---|---|---|---|
 | 0 / 5 | text advancing / parked at a break | park reason (`3` = page break, `0x23` = the `0F 23` wait escape) | — | — | — |
 | 1 | waiting for confirm to close | — | — | — | — |
-| 2 | **option list** (a `0x0E` block) | raw option index | row cursor (i16) | enabled option count | raw option count |
+| 2 | **option list** (a `0x0E` block) | **THE SELECTED SLOT** - hidden-slot-resolved, see below | row cursor (i16), **inline flavour only** | enabled option count | raw option count |
 | 4 | **editable number** (a `0F 2D` field) | **the SELECTED VALUE** | packed spinner state: min slot bits 0-5, max slot bits 6-11, candidate index bits 12-17 | digit count | **digit width of the maximum** |
 | 6 / 7 | selection accepted / measurement scratch | — | — | — | — |
 
@@ -247,6 +247,45 @@ Mode 4 also uses `+0x98` (digit-column cursor, free-entry flavour) and bit 28 of
 range. `FUN_002a5cc0` (RVA `0x185CC0`, the field-dialogue tick) treats modes 2 and 4 as one class on
 confirm — the test is `(state - 2) & ~2`, true only for 2 and 4 — so the game itself regards the
 list and the number as the same kind of interaction.
+
+**AN OPTION LIST HAS TWO FLAVOURS, AND THE DISCRIMINATOR IS BIT 22 OF THE STATE WORD** (S175,
+conf 0.99 - read from three functions, and the offsets are arithmetic-exact).
+
+`FUN_002a5590` lays a `0x0E` block out in one of two ways:
+
+| flavour | how it is built | who owns the highlight | `widget+0x58` | `0x8000` sent |
+|---|---|---|---|---|
+| **inline** | no child window; bit 22 clear | `FUN_002a9980` itself | moves | **no** |
+| **child list** | `FUN_002a5590` creates a list window at `window+0xC0`, then sets **bit 22 (`0x400000`) of `window+0x180`** | that child window | **never moves** | yes |
+
+`window+0x180` **is** `widget+0xB0` (`0xD0 + 0xB0`) - the same state word the mode lives in. Why it
+matters: **`FUN_002a9980`'s mode-2 path tests bit 22 as its first act and returns**, so on a
+child-list prompt the tick writes nothing and the row cursor stays put for as long as the prompt is
+up. A reader keyed on `widget+0x58` is structurally blind to that whole flavour.
+
+**BOTH FLAVOURS RESOLVE THE HIGHLIGHT INTO THE SAME ADDRESS, THROUGH THE SAME HELPER.**
+`FUN_002b2ce0(widget, visibleIndex, count)` walks the per-slot hidden mask at `widget+0x84` and maps
+a VISIBLE row to its ABSOLUTE slot. Both callers store its result:
+
+| flavour | the write |
+|---|---|
+| inline | `FUN_002a9980` ends every mode-2 tick with `widget+0x54 = FUN_002b2ce0(widget, widget+0x58, widget+0xA2)` |
+| child list | `FUN_002a6190` case `0xC`, msg `0x8000`/`0x8001`: `window+0x124 = FUN_002b2ce0(widget, <child's visible index>, window+0x3C7)`, and it stashes the raw visible index at `window+0x3C6` |
+
+and **`window+0x124` IS `widget+0x54`** (`0xD0 + 0x54`). So in mode 2 `widget+0x54` is the absolute
+option slot in **both** flavours, already hidden-slot-resolved by the game. That is why the mod needs
+exactly ONE detector for choices and no longer re-implements `FUN_002b2ce0` itself - shipped in
+`src/ui/choice_reader.cpp` (S175).
+
+Related counts on the window: **`window+0x3C7`** = the block's option count as `FUN_002a5590` parsed
+it from the `0x0E` header; **`window+0x3C8`** = the enabled count (`FUN_002b2d20`).
+
+The mode-2 path has a second early-out before any of this: **`widget+0x5A` greater than zero also
+returns**. Unmeasured; assume nothing runs on a frame where it is set.
+
+WARNING - **the mode gate is load-bearing for any reader of `+0x54`:** in mode 0/5 that field is the
+park reason, so a page break (`3`) reads as "option 3" unless the low byte of `+0xB0` is checked
+first.
 
 **THE NUMERIC FIELD'S PRODUCER (S163, conf 0.99 — read directly from the function).**
 `FUN_002a8c50` hits the codec escape **`0F 2D <idx> <fmt>`**, writes the digit count to `+0xA1`, puts

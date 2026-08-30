@@ -482,21 +482,22 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
         if (LicenseReader::OnDispatchFocus(owner, val))
             return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
 
-        // Field dialogue / choice window (FUN_002a6190): the Hunt notice board and mid-dialogue
-        // option prompts. It does NOT paint through FUN_002d28e0, so the generic content path has
-        // no rows for it -- the options live in a 0x0E block inside the window's own codec string.
-        // Not pane-gated: like the battle command menu this is its own surface, and the probe run
-        // showed focusedPane == owner for it anyway.
-        // Only claims the focus when it actually SPOKE. Returning unconditionally here was a
-        // regression: it cut the generic painted-row path (TextCapture) out of the loop for this
-        // window even when ChoiceReader had nothing to say, so a surface the painter might already
-        // cover went silent because of a reader that failed.
-        // The notice board's navigation. ChoiceReader also runs a per-frame tick for in-dialogue
-        // choices, which send no message at all; whichever detector fires for the current
-        // message/page claims it and the other stands down, and both speak through one choke point.
-        // Claimed either way, so the generic painted-row path never also speaks this window.
+        // Field dialogue / choice window (FUN_002a6190): the Hunt notice board, the gate crystal's
+        // destination list and mid-dialogue option prompts. It does NOT paint through FUN_002d28e0,
+        // so the generic content path has no rows for it -- the options live in a 0x0E block inside
+        // the window's own codec string.
+        //
+        // CLAIMED, BUT NOT READ HERE. ChoiceReader used to run a second detector off this message,
+        // taking the highlight index out of `val`. It is gone: both flavours of option list -- this
+        // one, and the inline kind that sends no message at all -- resolve the highlight into
+        // widget+0x54, so the reader's per-frame tick now covers both from one field. See
+        // ui/choice_reader.h.
+        //
+        // The branch STAYS because claiming the focus is load-bearing on its own: it keeps the
+        // generic painted-row path (TextCapture) off a window whose rows the paint cache does not
+        // hold. Not pane-gated, like the battle command menu -- the probe run showed
+        // focusedPane == owner for it anyway.
         if (ChoiceReader::IsChoiceWindow(owner)) {
-            ChoiceReader::OnFocus(owner, static_cast<int>(static_cast<intptr_t>(val)));
             return s_origDispatch ? s_origDispatch(owner, msg, val) : 0;
         }
 
@@ -847,7 +848,7 @@ bool Init() {
     ok     &= Hooks::InstallTyped(RVA_FOCUS_SET,   &HookedFocusSet,   &s_origFocusSet);  // active-pane entry replay
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
     ok     &= CharSelectReader::Init();   // party-menu character chooser: Party membership + Status vitals
-    ok     &= ChoiceReader::Init();       // mid-dialogue choice widget (polls input, sends no message)
+    ok     &= ChoiceReader::Init();       // the option-list selection tick; see ui/choice_reader.h
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages

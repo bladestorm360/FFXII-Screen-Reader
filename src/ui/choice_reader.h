@@ -3,30 +3,46 @@
 #include <cstdint>
 #include <string>
 
-// The FIELD DIALOGUE / CHOICE window: the Hunt notice board, and any mid-dialogue prompt that
-// offers a cursored list of options.
+// The FIELD DIALOGUE / CHOICE window: the Hunt notice board, the gate crystal's destination list,
+// and any mid-dialogue prompt that offers a cursored list of options.
 //
-// WHY THIS EXISTS: the board was the last silent cursored surface. It is NOT painted through the
-// universal list painter FUN_002d28e0, so TextCapture has no rows for it and the generic content
-// path had nothing to say. The tester's probe run caught it live as window class FUN_002a6190
-// emitting an ordinary FUN_00247510 msg 0x8000 with the row index -- the dispatch MenuReader
-// already hooks. Only the text lookup was missing.
+// WHY THIS EXISTS: these surfaces are NOT painted through the universal list painter FUN_002d28e0,
+// so TextCapture has no rows for them and the generic content path had nothing to say. The options
+// live in a 0x0E block inside the message itself; ui/choice_block.h walks it.
 //
-// WHERE THE OPTIONS LIVE -- derived from FUN_002a5590 + FUN_003ffdf0 and then CONFIRMED against a
-// raw byte dump of a live notice board. The block is inside the MESSAGE the telop setter delivers
-// (NOT on the window: window+0x1A8 reads null here). It follows the question and the three column
-// headers, which is why the message decodes to the innocent-looking
-// "Which bill would you like to read?\nMarkRankStatus" and stops: GameText::ControlLength(0x0E)
-// returns -1, "length unknown -- stop, never guess". FUN_002a5590 locates the same marker with
-// `xmlStrchr(text, 0x0E)` and stores its count byte at window+0x3C7 (observed 32, matching the
-// dump's `a0 & 0x7f`). The block, with `m` pointing at the 0x0E byte:
+// THE GAME LAYS THAT BLOCK OUT IN TWO FLAVOURS, and knowing this is the whole design:
 //
-//     m+0            0x0E
-//     m+1            u8 & 0x7F   option count
-//     m+2, m+3       u8 & 0x7F   (default / selected indices)
-//     m+4            u8 flags    bit0 = a per-option bit table follows
-//     m+5 ...        that table, ceil(count/7) bytes, only when bit0 is set
-//     then           length-prefixed strings: [len & 0x7F][len codec bytes] ..., 0x00 terminates
+//   INLINE      FUN_002a9980 -- the per-frame selection tick -- runs the cursor itself in
+//               widget+0x58 and the window sends NO focus message at all. Nilbasse's "Take me to
+//               Nilbasse.", the gate crystal's Save / Teleport.
+//   CHILD LIST  FUN_002a5590 builds a separate list window at window+0xC0 and then sets bit 22
+//               (0x400000) of the state word. FUN_002a9980's mode-2 path tests that bit FIRST and
+//               returns immediately, so widget+0x58 never moves; the child owns the highlight and
+//               announces it as a FUN_00247510 msg 0x8000. The notice board, the 26 teleport
+//               destinations, and the Archades "Commit this tale to memory." prompt.
+//
+// The bit sits at window+0x180, which is widget+0xB0 (0xD0 + 0xB0).
+//
+// THIS USED TO NEED TWO DETECTORS, and they covered half a surface each: one keyed on widget+0x58
+// (blind to every child-list prompt, because the game itself declines to move that field) and one on
+// the 0x8000 dispatch (which never fires for an inline one), with a stand-down flag arbitrating
+// them. The dispatch detector also read the page from a snapshot DialogueReader pushed in, and a
+// page consisting of NOTHING BUT an option block decodes to no text -- so DialogueReader never
+// pushed it, the snapshot stayed on the previous page, and the reader searched the wrong bytes for
+// as long as the prompt was up. That was the Archades defect: the opening option spoke, no
+// highlight ever did.
+//
+// ONE FIELD COVERS BOTH. Each flavour resolves the highlight through the SAME helper FUN_002b2ce0
+// (the hidden-slot walk) and stores the result in the SAME PLACE:
+//
+//     inline       FUN_002a9980 writes widget+0x54 at the end of every mode-2 tick
+//     child list   FUN_002a6190 (msg 0x8000 / 0x8001) writes window+0x124
+//     and window+0x124 IS widget+0x54    (0xD0 + 0x54 = 0x124)
+//
+// So the reader keys on widget+0x54 -- the absolute option slot, already resolved by the game -- and
+// there is exactly one detector, the per-frame tick, which fires in both flavours. Gone with the
+// second one: the 0x8000 path, its cached message, the arbitration flag, and our re-implementation
+// of FUN_002b2ce0.
 //
 // A ROW IS MULTI-COLUMN: `<Mark> 0x0A <Rank> 0x05 <0F 2E nn 90>` -- confirmed live as `Thextera|I`,
 // `Flowering Cactoid|I`, `White Mousse|V`, `Ring Wyrm|III`. Both 0x0A and 0x05 decode to NOTHING
@@ -34,19 +50,10 @@
 // "ThexteraI". The columns are split here and rejoined with ", ".
 //
 // The trailing `0F 2E nn 90` is the STATUS -- a substitution, not an icon. (STRUCK: an earlier note
-// here called it a per-row icon "carrying no readable status", reasoning that its parameter merely
+// called it a per-row icon "carrying no readable status", reasoning that its parameter merely
 // increments with the row. It increments because it IS the row's argument index. The screenshot
 // showing "Available" on screen is what refuted that.) `nn & 0x7F` is the index into the inline
-// argument table; ResolveArg reads it. The same escape supplies the bill number and status on the
-// detail page (`0F 2E 80 80`, `0F 2E 81 90`), where the second byte distinguishes numeric from
-// string slots.
-//
-// The count byte is a CAPACITY (32 on a board with ~10 bills); the real list ends at the 0x00
-// length terminator, which is what bounds the walk.
-//
-// This is ALSO why the mod only ever spoke the question: GameText::ControlLength(0x0E) returns -1
-// ("length unknown -- stop, never guess"), so Decode halts at the marker. That is still the right
-// behaviour for Decode; the block is parsed here instead, where its layout is known.
+// argument table; ResolveArg reads it.
 //
 // A NOTE ON A STRUCK CLAIM: probe_dialogue_choice.js v1 recorded "a choice arrives as ONE codec
 // string with an embedded 0x0E option block" as REFUTED. That refutation was about the
@@ -54,80 +61,26 @@
 // model is what the game's own parser does. Both can be true; do not re-strike this one.
 namespace ChoiceReader {
 
-// The message on screen and WHICH BYTE OFFSET into it is the page being shown -- both read straight
-// off the widget the game is laying out (`base` = widget+0x28, `byteOffset` = widget+0x8A). Called
-// by DialogueReader, which is the only feeder.
+// Called by DialogueReader when the message box shows a page -- including a page it cannot speak,
+// which is exactly the page an options-only prompt sits on.
 //
-// A message can carry SEVERAL option blocks -- the notice board's mark list is at the top, and the
-// bill detail's "Will you go and speak to the petitioner?" Yes/No is a later page of the very same
-// string -- so the block search has to be scoped to the current page. It is scoped by the game's own
-// cursor: this replaced a NoteMessageText + NotePage(pageIndex) pair where the index was counted
-// from observed keypresses and could drift out of step with the box. The offset cannot drift.
+// It does TWO things and no longer caches anything:
+//   * arms the QUEUE for the next option, so the first one falls in behind the page text the box
+//     just spoke rather than cutting it off;
+//   * seeds the numeric field's baseline with the value that page line already said, so opening the
+//     Draklor lift prompt speaks the whole sentence once and each MOVE speaks the new number.
 //
-// The option block lives in this string; the Status column's values do NOT -- they are substitution
-// arguments read from an inline table on the window itself (see choice_reader.cpp ResolveArg).
-//
-// STRUCK: "the setter's 4th argument is the argument block". It is null on this path, and so is the
-// window+0x1A8 copy FUN_002a35b0 makes of it -- both were measured. The real table is param_7 of
-// FUN_002b32d0, which Ghidra does not render at the call site.
-//
-// `numericField` / `value` describe the OTHER thing a page can host: an EDITABLE NUMBER rather than
-// an option list (see the mode note on HookedChoiceTick below). The page line the caller is about to
-// speak already contains that number, so it is handed over here to SEED the tick's baseline -- the
-// tick then speaks only once the player has moved it. Both run on the game thread, so the seed
-// cannot land after the first tick that would use it.
+// `base` / `byteOffset` are accepted for the caller's convenience and deliberately ignored: the
+// parse reads widget+0x28 and widget+0x8A live, on the frame it speaks. A cached page cannot be
+// current, and a page the feeder declined to speak is one it never refreshed -- both were the same
+// bug.
 void NotePage(void* widget, const uint8_t* base, size_t byteOffset, bool numericField, int32_t value);
 
-// Is this the field dialogue / choice window class (obj[0] == FUN_002a6190)?
+// Is this the field dialogue / choice window class (obj[0] == FUN_002a6190)? MenuReader uses it to
+// keep the generic painted-row path off this window, which the paint cache has no rows for.
 bool IsChoiceWindow(void* owner);
 
-// A row was highlighted (FUN_00247510 msg 0x8000) -- the notice board's navigation. Returns true
-// when it spoke.
-//
-// TWO DETECTORS, ONE SPEAKER. This and the per-frame tick both exist because neither covers both
-// cases: only this one sees the board's navigation index, and only the tick sees an in-dialogue
-// choice (which sends no message). They cannot be told apart by class -- the Yes/No widget IS this
-// window's embedded list block -- so whichever one actually fires for the current message/page
-// claims it, and the other stands down. Both then emit through the SAME choke point, so the
-// queue-vs-interrupt policy and the line format live in one place. An earlier build had them
-// speaking independently with different policies: they raced, and the plainer line won.
-bool OnFocus(void* window, int visibleIndex);
-
-// The MID-DIALOGUE CHOICE widget -- the "Will you go and speak to the petitioner?" Yes/No and the
-// in-conversation option prompts. A DIFFERENT object from the notice board's window, and the reason
-// both were silent: it polls the raw input globals itself inside a per-frame state machine
-// (FUN_002a9980) and emits NO FUN_00247510 message at all, so neither the dispatch hook nor the
-// generic content path ever hears from it.
-//
-// Everything needed is on the widget (FUN_002a8c50:77 gives the first two):
-//     widget+0x28  const uint8_t*  message text base
-//     widget+0x8A  u16             CURRENT BYTE OFFSET into it -- the page position, exactly
-//     widget+0x58  i16             cursor index
-//     widget+0xA2  u8              option count (written by FUN_002a8c50 from the 0x0E header)
-//
-// THE WIDGET HAS TWO SELECTION MODES AND ONLY ONE OF THEM IS A LIST. The low byte of widget+0xB0
-// says which, and FUN_002a9980 is the state machine for both -- which is why one hook covers them:
-//
-//     2   an OPTION LIST, the 0x0E block above. widget+0x58 is the row cursor and widget+0xA2 the
-//         raw option count.
-//     4   an EDITABLE NUMBER -- the Draklor lift's "Select destination: __F". Set by the codec
-//         escape `0F 2D` when the stepper FUN_002a8c50 reaches it, then configured by
-//         FUN_002b35a0 (RVA 0x1935A0), which has exactly one caller in the binary. There is NO 0x0E
-//         block on such a page, and the child option-list window (window+0xC0) is never created.
-//
-// In mode 4 the SAME FIELDS MEAN DIFFERENT THINGS, and that is what cost a session: widget+0xA2 is
-// the digit width of the maximum (2, for floors 66-70) and reads exactly like a two-option list;
-// widget+0x58 is a packed spinner state (min slot / max slot / candidate index, 6 bits each) and
-// changes on every move without ever naming a row. The value the player is choosing is at
-// widget+0x54, and it is authoritative in BOTH flavours the field can take -- a free numeric range
-// and a pick-from-candidates list -- so the reader never has to know which one is running.
-//
-//     widget+0x54  i32  mode 4: the SELECTED VALUE (mode 0/5: park reason; mode 2: raw option index)
-//     widget+0xA1  u8   mode 4: digit count of the field
-//     widget+0x98  u8   mode 4: digit-column cursor (free-entry flavour only)
-//
-// Install() hooks FUN_002a9980 and speaks on CHANGE -- of the row cursor in mode 2, of the value in
-// mode 4. Returns false if the hook fails.
+// Install the selection tick, FUN_002a9980. Returns false if the hook fails.
 //
 // NOTE that FUN_002a9980 is slot 2 of the text dispatch table and exists ONLY on choice-capable
 // widgets (type 0); a plain dialogue box has null there. That is why this tick can drive an option
@@ -136,13 +89,12 @@ bool OnFocus(void* window, int visibleIndex);
 bool Init();
 void Shutdown();
 
-// Drop the remembered option cursor, so the next prompt speaks whatever it opens on.
+// Drop the remembered selection, so the next prompt speaks whatever it opens on.
 //
-// The tick's guard is scoped to the prompt on screen, but it had NO re-arm at all -- the key sat in
-// function-local statics that nothing ever cleared, not even Shutdown. Its comment claimed a rebuilt
-// widget would not match, which assumes the engine hands back a fresh address; menu_reader.cpp:102
-// records that it does not. A re-opened prompt at a recycled address, cursor back at its starting
-// index, matched the stale key and stayed silent.
+// The guard is scoped to the prompt on screen, but it needs a RE-ARM: its comment once claimed a
+// rebuilt widget would not match, which assumes the engine hands back a fresh address, and
+// menu_reader.cpp:102 records that it does not. A re-opened prompt at a recycled address, selection
+// back at its starting slot, matched the stale key and stayed silent.
 //
 // Called from DialogueReader on the game's own end-of-message latch (the box that owned the prompt
 // is finished) and from ForgetLivePages when a list screen opens over it -- events, not polls. This

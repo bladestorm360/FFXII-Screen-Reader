@@ -249,3 +249,19 @@ This file tracks file size and centralization debt. **Frame-rate coupling has it
 (safe), wall-clock (safe) and **frame-counted (broken at any rate but 60 fps)**, and names the three
 live offenders — `path_planner.cpp` and `nav_probe.cpp` `kWaitFrames = 90`, and `audio_beacon.cpp`
 `kStrayFrames = 45`. Written after testers reported problems at higher game speeds and frame rates.
+
+## Session 175 - debt PAID as a side effect, on a real seam
+
+`src\ui\choice_reader.cpp` was **597** lines (over the 500 cap; it had never been listed here).
+It is now **470**, and neither number came from moving code around for the count:
+
+| file | lines | note |
+|---|---|---|
+| `src\ui\choice_reader.cpp` | **470** (was 597) | Under the cap. ~90 lines went with the deleted second detector (`OnFocus`, the cached message, the arbitration flag, `AbsoluteIndex`, `OptionSlotCount`); the rest moved to the new header below. |
+| `src\ui\choice_block.h` *(new)* | 87 | The `0x0E` option-block walk. Pure - no Windows, no `GameText` - which is the point: it is what lets the parse be regression-tested offline, and the 24-check harness that verified S175 includes it directly. |
+| `src\ui\choice_reader.h` | 104 | Under the 150 header cap. |
+
+**The seam was testability, not line count.** That is the only reason this split is worth copying:
+a reader's *parse* is usually pure and its *reads* are not, and cutting there gives a unit you can
+assert against without the game running. `src\ui\menu_reader.cpp` (900) remains the next candidate
+in this directory, and still should not be cut during a bug fix.

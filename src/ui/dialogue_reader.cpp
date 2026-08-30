@@ -159,17 +159,31 @@ void EmitPage(void* widget, const uint8_t* base, uint16_t off) {
     } else {
         GameText::DecodePages(base + off, TEXT_SCAN_MAX, pages);
     }
-    if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) return;
-    const std::wstring& page = pages.front();
-
-    // Hand ChoiceReader the message and the cursor BEFORE speaking: an option block on this page
-    // (the notice board's bill list, a mid-dialogue Yes/No) has to queue behind the page text rather
-    // than cut it off, and NotePage is what arms that.
+    // TELL ChoiceReader THE BOX TURNED A PAGE -- BEFORE the printability bail below, not after.
+    // It arms the queue so the first option falls in behind this page rather than cutting it off,
+    // and seeds the numeric field with the value this line is about to speak so the tick says it
+    // once and then only on a MOVE.
     //
-    // The numeric field goes with it, so the tick knows which value this page ALREADY said and
-    // speaks only once the player has MOVED it. Two detectors, one utterance -- the same handshake
-    // that keeps the notice board from being spoken twice.
+    // ABOVE THE BAIL because a page can carry an option block and NO TEXT OF ITS OWN: Decode stops
+    // dead at the 0x0E marker (ControlLength returns -1, "length unknown -- stop, never guess"), so
+    // such a page decodes to nothing and the bail fires. Below the bail this call was skipped on
+    // exactly the pages a choice prompt opens on -- which is how the Archades "Commit this tale to
+    // memory." prompt came to queue its first option behind a flag left set by the PREVIOUS page.
     ChoiceReader::NotePage(widget, base, off, mode == MODE_NUMERIC, value);
+
+    if (pages.empty() || !GameText::IsMostlyPrintable(pages.front())) {
+        // ONE LINE PER PAGE, not per frame -- the caller only reaches EmitPage when the cursor
+        // moved. It says out loud that the box turned onto a page this reader has nothing to say
+        // about, which is what a bare option block looks like from here; pair it with the
+        // `dialogue-choice[...] child=1` line that should follow within a frame or two.
+        char q[160];
+        snprintf(q, sizeof(q), "page[wnd=%p off=%u mode=%u] carries no speakable text -- noted for"
+                 " the choice reader, not spoken", widget, static_cast<unsigned>(off),
+                 static_cast<unsigned>(mode));
+        Log::Write("DIALOGUE", q);
+        return;
+    }
+    const std::wstring& page = pages.front();
 
     char hdr[160];
     snprintf(hdr, sizeof(hdr), "page[wnd=%p base=%p off=%u type=%u mode=%u %s=%d]: ",

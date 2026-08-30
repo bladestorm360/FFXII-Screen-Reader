@@ -35,7 +35,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | a tester reported something | `TAG:tester` | L-10…L-14 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
-| editing code that already works | `TAG:refactor` | L-27…L-32 |
+| editing code that already works | `TAG:refactor` | L-27…L-32, L-81 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
@@ -288,6 +288,24 @@ Ask "what already does this?" before "how do I do this?". Choke points:
 125 ms and truncated the real one, with nothing in the code looking wrong.
 
 ---
+
+### L-81 TWO DETECTORS THAT EACH COVER HALF A SURFACE ARE NOT REDUNDANCY, THEY ARE A MISSING READ-POINT
+**When one reader needs an arbitration flag to stop it speaking over another, stop tuning the
+arbitration and go find the field the GAME writes in both branches.**
+**Why:** S175. `choice_reader` carried a per-frame tick keyed on the option cursor `widget+0x58` and
+a second detector on the `0x8000` focus dispatch, with a stand-down flag deciding which drove. It
+looked like belt-and-braces. It was not: `FUN_002a5590` lays an option block out in two ways, and
+when it builds a child list window it sets bit 22 of the state word, which `FUN_002a9980` tests and
+returns on -- so `+0x58` NEVER moves for that flavour, and the dispatch never fires for the other.
+Each detector was blind to exactly the half the other saw, and the flag was hiding it. Both flavours
+resolve the highlight through the same helper into the same address (`widget+0x54` IS
+`window+0x124`), so ONE detector on that field covers everything and the second one, its cached
+page, the flag, and a re-implementation of the game's own hidden-slot walk all delete together.
+**The tell:** you are writing code to decide which of your own readers is allowed to speak.
+**Corollary, and the reason this is not L-30:** deleting a path is only safe once you have shown
+where the survivor gets the same fact. Here that was two decompiled functions writing the same
+offset, not a hunch that one reader looked sufficient.
+
 
 ## Anything that makes the mod speak
 `TAG:speech`

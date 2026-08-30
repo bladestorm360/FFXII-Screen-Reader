@@ -1655,3 +1655,92 @@ that reading one layout on the other yields plausible wrong floats, fixed `ReadB
   is where it would show.
 - The widened dump and the drop lines are **instruments written to be deleted** (S158, S163). They stay
   while the Draklor floors are being worked and go when they stop earning their lines.
+
+## Session 175 — 2026-08-30 — [menus] Dialogue choices: two detectors that each covered half a surface, and the one field that covers both
+
+KEYWORDS: dialogue choice options not spoken on highlight Archades Commit this tale to memory child
+list window window+0xC0 bit 22 0x400000 widget+0xB0 widget+0x54 window+0x124 FUN_002b2ce0
+FUN_002a5590 FUN_002a9980 FUN_002a6190 ChoiceReader OnFocus g_dispatchCovers AbsoluteIndex stale
+page NotePage EmitPage printability bail choice_block.h offline harness STALL_SCOPE call count L-81
+
+### The report
+
+A set of dialogue choices was not being read. The player, asked what they heard rather than what was
+on screen: *"commit this tale to memory was spoken as the initially focused option, but neither
+option was spoken on highlight"* — including moving back onto option 0. One question, one sentence,
+and it separated the two readings the log could not (L-77).
+
+### What the log already said
+
+`choice SILENT (no 0x0E block on this page ...) wnd=2D8E9E40 a=0 b=156` — and `156` was the byte
+offset of the page spoken 2.5 s earlier. The reader was scanning the previous page. `2D8E9F10 −
+2D8E9E40 = 0xD0`, so the objects were the ordinary window/widget pair.
+
+### The finding: the GAME splits option lists in two, and each detector saw one half
+
+`FUN_002a5590` builds a **child list window** at `window+0xC0` for some prompts and then sets **bit
+22 of `window+0x180`** — which is `widget+0xB0`. `FUN_002a9980`, the per-frame tick this reader
+hooks, tests that bit as its first act in mode 2 and returns. So `widget+0x58` **never moves** for a
+child-list prompt; the child owns the highlight and announces it as an `0x8000`. And the inline
+flavour sends no `0x8000` at all.
+
+The reader had a detector on each: a tick keyed on `+0x58` and a dispatch reader, with
+`g_dispatchCovers` arbitrating. That looked like belt-and-braces and was not — **neither detector
+could read both flavours, and the flag was hiding it.** The user said so before the decompile did:
+*"if a detector can read both, then it should read both... that's redundant and inefficient."*
+
+The dispatch detector could not even cover its own half. It scanned a snapshot pushed in by
+`NotePage`, and that call sat **below** `EmitPage`'s printability bail — so on a page carrying
+nothing but an option block, which decodes to no text at all, it never ran and the snapshot stayed
+on the previous page.
+
+### The fix is a deletion
+
+Both flavours resolve the highlight through the same helper `FUN_002b2ce0` (the hidden-slot walk)
+into the same address: `FUN_002a9980` writes `widget+0x54` at the end of every inline tick, and
+`FUN_002a6190` writes `window+0x124` on each `0x8000` — **and `window+0x124` IS `widget+0x54`**
+(`0xD0 + 0x54`). One field, already resolved by the game.
+
+So the tick keys on `+0x54` and is the only detector. Deleted with the second one: `ChoiceReader::
+OnFocus`, the cached message and page offset, `g_dispatchCovers`, `AbsoluteIndex` (our own
+re-implementation of `FUN_002b2ce0`, which existed only because the dispatch hook ran *before* the
+game's handler and read the field stale) and `OptionSlotCount`. 597 → 470 lines, back under the
+file-size limit. `menu_reader`'s `IsChoiceWindow` branch **stays** — claiming the focus is
+load-bearing on its own, keeping the generic painted-row path off a window the paint cache has no
+rows for (L-29).
+
+A **mode gate came with it**, and it is load-bearing: `+0x54` is the park reason in mode 0/5, so `3`
+(a page break) would have read as "option 3" on every page turn.
+
+`NotePage` also moved above the printability bail, so a text-less option page still arms the queue
+deterministically instead of inheriting a flag the previous page left set.
+
+### Verification, offline
+
+The `0x0E` block walk moved to `src/ui/choice_block.h` — pure, no Windows, no `GameText` — and a
+scratchpad CMake target asserts **24 checks** over the shapes the corpus records: block on page 0
+behind a question (notice board, teleport list); on a later page (Nilbasse `off=161`); **on a page
+with no text of its own** (this defect); two blocks in one message with each page selecting its own;
+capacity byte larger than the real list; every bounds refusal naming itself. All pass. Built and
+deployed clean.
+
+### Open
+
+- **BUILT, DEPLOYED, UNPLAYED.** Four surfaces need one pass between them: an inline prompt (any
+  gate crystal's Save/Teleport), a child-list prompt (the same crystal's destination list, or the
+  Hunt notice board), the Archades tale prompt, and the Draklor lift's numeric field.
+- **The one thing not provable from the corpus** was the RATE at which `FUN_002a9980` is called
+  while a child-list prompt is up — because `STALL_SCOPE` sat below the change-check and `[PERF]`
+  was counting emissions, not calls. Measured: it fired on the Archades child-flavour widget 140 ms
+  *after* that list opened and was focused, so it is called mid-prompt; and the bit-22 early-out
+  exists precisely because the function is called in that state. The scope is now at the top of the
+  hook, so **the next log states the number** — check it before trusting this reasoning further.
+- `dialogue-choice[...] child=<0|1>` should appear with **both** values across that pass. If `child=1`
+  never appears, the child flavour is not reaching the tick and this design is wrong.
+- **OPEN, deliberately not fixed (L-31):** `DecodePages` drops empty pages, so a blank page at the
+  cursor makes `EmitPage` speak `pages.front()` — a page the player is not on. No log shows it
+  firing; here the options page was the message's last, so the list came back empty. Details in
+  `debug.md`.
+- The log line for the dispatch flavour changes name (`choice[n/N]` → `dialogue-choice[n/N] child=1`)
+  and its index is now the absolute slot rather than the visible row. Identical on any list with no
+  hidden slots; the spoken text is unchanged either way.

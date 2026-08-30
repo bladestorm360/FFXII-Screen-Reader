@@ -2015,6 +2015,75 @@ so don't look for a lock flag.)
 
 ## Solved Problems
 
+### Dialogue choices silent on highlight - SOLVED (Session 175, 2026-08-30)
+
+KEYWORDS: dialogue choice options not spoken on highlight Archades Commit this tale to memory
+child list window window+0xC0 bit 22 0x400000 widget+0xB0 widget+0x54 window+0x124 FUN_002b2ce0
+FUN_002a5590 FUN_002a9980 FUN_002a6190 OnFocus two detectors g_dispatchCovers stale page NotePage
+choice SILENT no 0x0E block on this page notice board gate crystal teleport destinations SOLVED
+
+**Reported:** an Archades conversation where a 2-option prompt read its opening option and then
+nothing. Player, asked what they heard: *"commit this tale to memory was spoken as the initially
+focused option, but neither option was spoken on highlight"* - including moving back onto option 0.
+
+**THE CHAIN OF EVIDENCE, in the order it actually settled things** (L-79 - do this before any
+"the mod cannot see this surface" chase):
+
+1. `FFXII-Screen-Reader-Latest.log` had the answer printed: `choice SILENT (no 0x0E block on this
+   page ...) wnd=2D8E9E40 a=0 b=156`, where `b` is the byte offset scanned - and `156` is the offset
+   of the page spoken **2.5 s earlier**. The reader was searching the previous page.
+2. `2D8E9F10 - 2D8E9E40 = 0xD0`, so window and text widget were the ordinary pair; nothing exotic.
+3. Corpus sweep: exactly two detectors ever emit. `dialogue-choice[...]` (the per-frame tick, keyed
+   on `widget+0x58`) and `choice[...]` (the `0x8000` dispatch). The gate crystal shows BOTH on one
+   window: Save/Teleport via the tick, the 26 destinations via the dispatch. Nothing in the corpus
+   shows either detector covering both.
+4. The decompile said why. See `GameArchitecture.md`: `FUN_002a5590` builds a **child list window**
+   at `window+0xC0` for some prompts and then sets **bit 22 of `window+0x180`** - which is
+   `widget+0xB0` - and `FUN_002a9980` tests that bit first thing in mode 2 and returns. So
+   `widget+0x58` never moves for a child-list prompt, and the dispatch never fires for an inline
+   one. **Each detector was blind to exactly the half the other saw**, and the `g_dispatchCovers`
+   stand-down flag had been hiding it.
+5. Why the dispatch detector could not cover its own half either: it scanned a message snapshot
+   pushed in by `DialogueReader::NotePage`, and that call sat **below** `EmitPage`'s printability
+   bail. A page carrying nothing but an option block decodes to no text at all
+   (`GameText::ControlLength(0x0E)` returns -1), so the bail fired, `NotePage` never ran, and the
+   snapshot stayed on the previous page for as long as the prompt was up.
+
+**The fix is a deletion, not a repair.** Both flavours resolve the highlight through the same helper
+`FUN_002b2ce0` into the same address (`widget+0x54` **is** `window+0x124`), so the per-frame tick
+reads that one field and there is exactly one detector. Gone with the second one: `ChoiceReader::
+OnFocus`, the cached message and its page offset, `g_dispatchCovers`, and `AbsoluteIndex` (our own
+re-implementation of `FUN_002b2ce0`, which existed only because the dispatch hook ran BEFORE the
+game's handler and read `window+0x124` stale). `choice_reader.cpp` 597 -> 470 lines.
+
+**A mode gate had to be added with it.** `+0x54` means different things per mode; in mode 0/5 it is
+the park reason, and `3` (a page break) would have read as "option 3" on every page turn. Only
+modes 2 and 4 are selections.
+
+**Regression evidence, offline.** The `0x0E` block walk moved to `src/ui/choice_block.h` (pure - no
+Windows, no GameText) so it can be built and asserted without the game. 24 checks over the shapes
+the corpus records: block on page 0 behind a question (notice board, teleport list); block on a
+later page behind a question (Nilbasse); **block on a page with no text of its own** (this defect);
+two blocks in one message, each page selecting its own and never the other; capacity byte larger
+than the real list; and each bounds refusal naming itself. All pass.
+
+**Instruments shipped with the fix, both deliberately deletable once read:**
+- `STALL_SCOPE("ChoiceReader::HookedChoiceTick")` moved to the TOP of the hook. It used to sit below
+  the change-check, so `[PERF]` counted **emissions, not calls** - which is why no log in the corpus
+  could say how often the tick runs while a child-list prompt is up, the one question the redesign
+  turned on. It now states the call rate outright.
+- `dialogue-choice[slot/count] child=<0|1>` names which flavour laid the list out, so one grep shows
+  both reaching the same speaker.
+- `[DIALOGUE] page[...] carries no speakable text -- noted for the choice reader, not spoken`, once
+  per page turn, is the direct print of step 5 above.
+
+**OPEN, found in passing and deliberately NOT fixed here (L-31 - no log shows it firing).**
+`GameText::DecodePages` drops empty pages, so when the page at the cursor is blank `EmitPage` speaks
+`pages.front()` - a page the player is not looking at. Unobserved: in this log the options page was
+the LAST page, so the list came back empty and nothing was spoken. A message with a bare option page
+followed by more text would read the wrong screen aloud. The fix would be a public passthrough to
+the existing internal `DecodeToPages` (which keeps the empties) and taking element 0.
+
 Problems that were resolved. Each entry has `KEYWORDS:` + `SOLUTION:`. Check this to
 reuse known-good solutions.
 
