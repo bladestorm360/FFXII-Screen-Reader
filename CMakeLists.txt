@@ -75,6 +75,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/config_reader.cpp
     src/ui/menu_reader.cpp
     src/ui/choice_reader.cpp
+    src/ui/airship_diag.cpp
     src/ui/gambit_reader.cpp
     src/ui/gambit_picker_reader.cpp
     src/ui/ingame_menu_reader.cpp

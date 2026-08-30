@@ -6,6 +6,7 @@
 #include "ui/char_select_reader.h"
 #include "ui/license_reader.h"
 #include "ui/choice_reader.h"
+#include "ui/airship_diag.h"
 #include "ui/gambit_reader.h"
 #include "ui/gambit_picker_reader.h"
 #include "ui/ability_summary_reader.h"
@@ -849,6 +850,7 @@ bool Init() {
     ok     &= IngameMenuReader::Init();   // battle command + target-reticle name hooks
     ok     &= CharSelectReader::Init();   // party-menu character chooser: Party membership + Status vitals
     ok     &= ChoiceReader::Init();       // the option-list selection tick; see ui/choice_reader.h
+    AirshipDiag::Init();                  // LOG-ONLY airship destination probe; delete with its finding
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
@@ -876,6 +878,7 @@ void Shutdown() {
     TextCapture::SetMenuPaintedCallback(nullptr);
     InputTracker::SetDescribeCallback(nullptr);
     ChoiceReader::Shutdown();
+    AirshipDiag::Shutdown();
     IngameMenuReader::Shutdown();
     CharSelectReader::Shutdown();
     BattleTargetReader::Shutdown();
