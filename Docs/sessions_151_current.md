@@ -1726,9 +1726,13 @@ deployed clean.
 
 ### Open
 
-- **BUILT, DEPLOYED, UNPLAYED.** Four surfaces need one pass between them: an inline prompt (any
-  gate crystal's Save/Teleport), a child-list prompt (the same crystal's destination list, or the
-  Hunt notice board), the Archades tale prompt, and the Draklor lift's numeric field.
+- **PLAY-CONFIRMED 2026-08-30 (user): the dialogue choice reads.** The defect is closed.
+- **SCOPE OF THAT ATTESTATION, stated rather than assumed (L-09).** It is "the dialogue choice
+  works" - which surfaces were exercised is not recorded. So the design's central claim, that the
+  per-frame tick reaches the CHILD-LIST flavour as well as the inline one, is confirmed for at
+  least one prompt and not separately for the notice board, the gate-crystal destination list, or
+  the Draklor lift. `dialogue-choice[...] child=<0|1>` in any later log settles the rest for free;
+  do not read this line as covering all four.
 - **The one thing not provable from the corpus** was the RATE at which `FUN_002a9980` is called
   while a child-list prompt is up — because `STALL_SCOPE` sat below the change-check and `[PERF]`
   was counting emissions, not calls. Measured: it fired on the Archades child-flavour widget 140 ms

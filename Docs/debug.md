@@ -2015,7 +2015,11 @@ so don't look for a lock flag.)
 
 ## Solved Problems
 
-### Dialogue choices silent on highlight - SOLVED (Session 175, 2026-08-30)
+### Dialogue choices silent on highlight - SOLVED (Session 175, 2026-08-30), PLAY-CONFIRMED
+
+**PLAY-CONFIRMED 2026-08-30 by the user: "the dialogue choice works".** Which prompts were
+exercised is not recorded, so this closes the defect but does NOT separately attest the notice
+board, the gate-crystal destination list or the Draklor lift - see the S175 session entry.
 
 KEYWORDS: dialogue choice options not spoken on highlight Archades Commit this tale to memory
 child list window window+0xC0 bit 22 0x400000 widget+0xB0 widget+0x54 window+0x124 FUN_002b2ce0
