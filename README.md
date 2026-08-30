@@ -82,7 +82,7 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 
 ### Mod
 
-The mod reserves none of the game's keys. Every mod key is pressed on its own — no Shift, Ctrl or Alt.
+The mod reserves none of the game's keys. Every mod key is pressed on its own — no Shift, Ctrl or Alt. A controller is different — see Controller below.
 
 #### Navigation
 
@@ -204,6 +204,28 @@ It reads all three from anywhere in the Stilshrine, and is silent everywhere els
 
 Two settings appear in the mod menu while you are shouting, and only then. Puzzle guide covers the spoken meter and the two keys, and starts on. Instant success fills the meter on your first shout, and starts off.
 
+#### Controller
+
+The mod reads a plugged-in controller as well as the keyboard. It is on by default. The Controller row in the mod menu below switches it off, and so does clicking the left stick in — L3 — which says "Controller" and the new setting. Off passes every button and stick straight to the game.
+
+L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken.
+
+* Right stick: Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera.
+* D-pad, on the field only: party members one, two, three and your guest, clockwise from Up. Everywhere else, battle included, it stays the game's cursor.
+* R1: turn-by-turn directions to the selected object and the audio beacon. In a fight it gives directions to the enemy your party is targeting instead. It goes to the game in menus and while a targeting cursor is up.
+* Back: mod mode. It says "Mod", the next button is a mod key, and it expires after five seconds. This takes the game's map toggle.
+* L3: the controller off and on switch above.
+
+In mod mode, press Back and then:
+
+* Start: open or close the mod menu. A: describe. B: repeat the last line of dialogue.
+* X: rescan and announce the area. Y: describe the target the game has selected.
+* D-pad: Up License Points, Down your gil, Left and Right older and newer combat log lines.
+* L1: read the current target.
+* Anything else ends mod mode and says "Cancelled".
+
+While the mod menu is open, the D-pad and the right stick move between settings and change them, A reads a description, and B, Start or Back closes it.
+
 #### The mod menu (F8)
 
 F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
@@ -216,8 +238,8 @@ The settings it holds:
 * Target beacon — On or Off. The separate sound that tracks the enemy your party is fighting, described above. On is the default.
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Auto detail — Off or On. Off reads the extra detail only when you ask for it: the equipment comparison on 4 to 9, and Libra on O. On also reads it as you move — the equipment comparison as you go down a shop list, and the Libra readout as you move the target cursor between enemies — after the short line, never instead of it. Both keys keep working either way. Off is the default.
-* Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: the mod cannot see the stick, so moving the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
-* Controller — On or Off. Whether the mod reads your controller. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support.
+* Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: auto-walk watches the keyboard alone for that, and the left stick is passed straight to the game and never read, so pushing the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
+* Controller — On or Off. Whether the mod reads your controller, set out in full under Controller above. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support. Clicking the left stick in changes this setting without opening the menu.
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 
