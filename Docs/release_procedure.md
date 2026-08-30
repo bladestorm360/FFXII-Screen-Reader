@@ -186,10 +186,20 @@ the only record in the repo that a given zip ever existed.
 
 ## V0.7-Test-Build — 2026-08-30
 
-**Built from:** `76f0e66`, the version bump. `HEAD` at zip time was `d2855e6`, a readme commit made at
-the trigger — it changes no code, so nothing in this binary post-dates `6a9476a`. Covers **Sessions
-165–175** since `V0.6.5-Sponsor-Build`'s `9e9a00f` — three commits: `6a9476a` (the S165–S174 catch-up,
-which is where the pad scheme lives), `c61237c` and `9e95399` (S175, dialogue choices).
+> **⚠ THIS ENTRY WAS AMENDED IN PLACE ON 2026-08-30, AND THE ZIP RE-CUT. IT IS NOT THE BUILD FIRST
+> DESCRIBED HERE.** The first V0.7 cut (`76f0e66`, `dinput8.dll` 895,488, sha256 `ba44ff8c…`) was
+> built, zipped and recorded, and then the user reported the private airship destination menu silent
+> and **chose to hold the release until it read**. S176 fixed it, so the zip was re-cut from the
+> newer code. **Amended rather than given a second entry, and that is the rule this file should
+> follow:** the first zip never left this machine, so nothing shipped is being overwritten, and two
+> `## V0.7-Test-Build` entries describing different binaries is exactly how a record stops being
+> usable for tracing a DLL. **The do-not-overwrite guard protects RELEASED artifacts; it is not a
+> reason to keep a record of a build nobody ever received.** The superseded numbers are kept in this
+> banner so a stray copy of the old zip can still be identified.
+
+**Built from:** `7325da4`. **The DLL's code traces to `9e6915d`** (S176, the airship reader) — the
+commit after it is documentation only. `HEAD` at zip time was the commit carrying this record. Covers
+**Sessions 165–176** since `V0.6.5-Sponsor-Build`'s `9e9a00f`.
 
 **What is actually IN this build is smaller than "eleven sessions" suggests.** S165–S171 were
 **reverted in full** by S172 — the cactus line was never a defect, the tester was on the wrong quest
@@ -231,7 +241,13 @@ mentioned the cache at all. Both now sit where the next person to bump it will r
 
 **ReadMe: CHANGED** — 22,903 bytes / 255 lines (sha256 `7495b0ab…73904172`), against V0.6.5's 20,759 /
 233. One commit touched `README.md` in this range, `d2855e6`, made at the trigger in response to the
-key audit below.
+key audit below. **The re-cut did NOT change it**, and the converter was re-run and re-validated
+anyway: byte-identical output, same hash.
+
+**S176 adds NO readme entry, and that is the rule rather than an omission.** The destination map
+reads on its own and the player makes no decision about it, so there is no key to look up —
+`CLAUDE.md`'s "a feature with no key needs NO entry", and this file's own correction of 2026-08-03
+against listing features that read by themselves.
 
 **The converter was rebuilt from this file's rules again and validated the strong way — but the rules
 as written were NOT sufficient, and that is the finding worth keeping.** Run against
@@ -280,8 +296,28 @@ watches the keyboard alone and that the left stick is passed straight to the gam
 **A true limitation with a false explanation is still a false claim, and the explanation was the whole
 job.**
 
-**Zip:** `FFXII-Screen-ReaderV0.7-Test-Build.zip`, **1,250,666 bytes**, five files, root flat.
-- `dinput8.dll` 895,488 bytes (sha256 `ba44ff8c…61c8bd64`) — up 512 from V0.6.5's 894,976.
+**S176 — THE STRAHL DESTINATION MAP, THE REASON THIS BUILD WAS HELD AND RE-CUT.** The private
+airship screen read nothing. **Not a regression** — it is `plan.md`'s unchecked "World map / fast
+travel" under v2-deferred, and `Strahl` appeared zero times in the repo. The V0.7 log showed the mod
+emitting ONE line across the menu's 17.4 s, the unclaimed-pane census naming class RVA `0x4328C0`.
+
+`FUN_005528c0` **never calls `FUN_00247510`**, so the `0x8000` focus dispatch every list reader hangs
+on is not missed there — it is never sent, **because the destinations are a node graph with screen
+coordinates walked by direction and there is no row index for a focus message to carry.** No guard
+added to `menu_reader.cpp` could have reached it; it needed its own reader,
+`src\ui\airship_reader.{h,cpp}`, reading `pane+0x9F40`.
+
+> **Two things from that work worth carrying into the next release.** First, **the unclaimed-pane
+> census line names a suspect in its own text** — "(candidate: the on-screen CONTROLS panel)" is a
+> fixed string in `menu_reader.cpp:767`, not a measurement, and it was wrong here. A corpus sweep
+> settled it instead: the everyday unclaimed panes appear in 20–21 of 21 logs, `0x4328C0` in one log
+> once. **A diagnostic that embeds a guess will have that guess quoted back as a finding.** Second,
+> `TextCapture::DumpRingToLog` was fired for the first time since Session 112 and had **zero
+> callers** — a diagnostic nothing invokes is not insurance, it is dead code that looks like it.
+
+**Zip:** `FFXII-Screen-ReaderV0.7-Test-Build.zip`, **1,252,087 bytes**, five files, root flat.
+- `dinput8.dll` 898,048 bytes (sha256 `2feda3fa…8fd89f81`) — up 3,072 from V0.6.5's 894,976, and
+  2,560 on the withdrawn first cut, which is S176's reader.
 - `SDL3.dll` 1,748,992 bytes (sha256 `64e52809…b4ac7531`) — **byte-identical to V0.6.5**, confirmed by
   a real `cmp` rather than by matching sizes. The link timestamp that moved at V0.6.5 has not moved
   again: no source file was added to `CMakeLists.txt` in this range, so it did not relink.
@@ -290,6 +326,13 @@ job.**
 - All four DLLs verified PE machine `8664`.
 
 **Play-confirmation status — READ THIS BEFORE ANSWERING A PAD REPORT.**
+- **✅ S176 is play-confirmed** (2026-08-30, user: "works") **and the log agrees rather than merely
+  not disagreeing:** `CENSUS nodes=34 named=34 distinct=yes`, 21 destinations spoken and reaching
+  `SPEAK-OUT`, zero `distinct=NO`, zero hook failures. ⚠ **The pane lists the WHOLE WORLD MAP, not
+  flyable ports** — Garamsythe Waterway, Barheim Passage, Henne Mines and Lhusu Mines are all
+  announced. That is the surface, not a defect: the reader speaks whatever marker the cursor lands
+  on and never claims you can fly there. ⚠ One save, one point in the story, so 34 nodes is this
+  save's graph, not the surface's.
 - **S175 is play-confirmed** (2026-08-30, user): the dialogue choice reads. But the *surfaces*
   exercised went unrecorded, so the child-list flavour (`child=1`) is still unwitnessed and the tick's
   call rate unmeasured. The first V0.7 log should be checked for a `child=1` line and for the `[PERF]`
