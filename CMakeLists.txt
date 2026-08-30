@@ -182,10 +182,16 @@ target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 # silent, the only way to work out which build he was running was to COUNT the hook-install lines
 # (43 / 52 / 66 across three logs). Every log now names its own build on line 3.
 #
-# The version string is bumped by hand at release time and must match Docs\release_procedure.md's
-# Release Records. The git hash is best-effort: a source drop with no .git still builds, it just
-# stamps "nogit".
-set(FFXII_SR_VERSION "0.6.5" CACHE STRING "Mod version, as it appears in the release zip name")
+# The version string is bumped by hand and must match Docs\release_procedure.md's Release Records.
+# It is bumped in a commit made BEFORE the release trigger, not during one -- release_procedure.md
+# forbids a build change at release time, and that file's own "bumped at release time" wording is
+# what let this rot. THE BUMP IS NOT DONE UNTIL build\CMakeCache.txt AGREES: this is a CACHE STRING,
+# so editing the line below on its own is a SILENT NO-OP -- an already-configured cache keeps
+# stamping the old number while the source reads the new one, and nothing looks wrong. Update the
+# cache too, or delete it, or pass -DFFXII_SR_VERSION=. That trap shipped V0.6 on five releases.
+# VERIFY THE BUMP IN THE SHIPPED BINARY, never in the source. The git hash is best-effort: a source
+# drop with no .git still builds, it just stamps "nogit".
+set(FFXII_SR_VERSION "0.7" CACHE STRING "Mod version, as it appears in the release zip name")
 
 execute_process(
     COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short HEAD
