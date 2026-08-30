@@ -131,17 +131,17 @@ void RouteToCurrent() {
 // from its live cache. Fresh cache (<=300 ms) => a target is currently selected/locked; otherwise
 // "No target". The NAV-ROUTE lines here + the drain log answer the PRE-SHIP CHECK (does Lock-On
 // keep the object populated, and does the field stay nav-safe in battle-state mode).
-void RouteToLockedTarget() {
+void RouteToActiveTarget() {
     FVec3 tgt; std::wstring label;
     // Gates on the LIVE DAT_0209be80 selection state (not a cache age window) so a held target keeps
     // routing on every press, and re-resolves a fresh position for a moving target.
-    if (!BattleTargetReader::GetLockedTarget(tgt, label)) {
-        Log::Write("NAV-ROUTE", "'p' (route to locked target) pressed: no live locked target -> \"No target\"");
+    if (!BattleTargetReader::GetActiveTarget(tgt, label)) {
+        Log::Write("NAV-ROUTE", "'p' (route to active target) pressed: no live active target -> \"No target\"");
         Speech::Output(Phrase::Get(Phrase::Id::NoTarget));
         return;
     }
     char m[160];
-    snprintf(m, sizeof(m), "'p' (route to locked target) pressed: target acquired at (%.2f,%.2f,%.2f) -> PathPlanner::Request",
+    snprintf(m, sizeof(m), "'p' (route to active target) pressed: target acquired at (%.2f,%.2f,%.2f) -> PathPlanner::Request",
              tgt.x, tgt.y, tgt.z);
     Log::Write("NAV-ROUTE", m);
     PathPlanner::Request(tgt, label);
@@ -187,7 +187,7 @@ bool EquipColumnKey(int n) {
 void OnNavKey(int vk) {
     switch (vk) {
         case VK_OEM_5:      RouteToCurrent();                 break;  // \  turn-by-turn route
-        case 'P':           RouteToLockedTarget();           break;  // p  route to locked battle target
+        case 'P':           RouteToActiveTarget();           break;  // p  route to the active battle target
         case VK_OEM_4:      EntityList::CmdPrev();            break;  // [  previous object
         case VK_OEM_6:      EntityList::CmdNext();            break;  // ]  next object
         case VK_OEM_3:      EntityList::CmdRescan();          break;  // `  rescan + area

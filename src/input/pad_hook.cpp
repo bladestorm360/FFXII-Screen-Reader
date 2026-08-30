@@ -17,6 +17,11 @@ Pfn_XInputGetState  g_orig      = nullptr;
 void**              g_iatSlot   = nullptr;   // the patched IAT cell, for Shutdown
 std::atomic<bool>   g_active{false};
 std::atomic<bool>   g_faulted{false};        // a fault latches the hook off for the session
+// Logged once, on the first poll that actually returns a pad. Without it an empty survey cannot be
+// told apart from a pad that was never plugged in -- and that ambiguity is unreadable in someone
+// else's log, where we cannot ask what was connected. Presence of this line is what makes the
+// survey's silence mean something.
+std::atomic<bool>   g_sawPad{false};
 
 // ERROR_SUCCESS from XInputGetState. Named rather than inlined so the guard below reads as intent.
 constexpr uint32_t kXiOk = 0;
@@ -84,6 +89,12 @@ void** FindImportSlot(const char* dllPrefix, const char* wantFn) {
 uint32_t WINAPI HookedXInputGetState(uint32_t userIndex, PadHook::State* state) {
     const uint32_t hr = g_orig ? g_orig(userIndex, state) : 0x48F /*ERROR_DEVICE_NOT_CONNECTED*/;
     if (hr != kXiOk || !state) return hr;
+    if (!g_sawPad.exchange(true)) {
+        char m[112];
+        snprintf(m, sizeof(m), "controller CONNECTED on index %u -- pad lines below are real data",
+                 userIndex);
+        Log::Write("PAD", m);
+    }
     if (g_faulted.load(std::memory_order_relaxed)) return hr;
 
     __try {

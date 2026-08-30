@@ -69,6 +69,7 @@ add_library(${PROJECT_NAME} SHARED
     src/input/input_tracker.cpp
     src/input/pad_hook.cpp
     src/input/pad_router.cpp
+    src/input/pad_survey.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
     src/ui/config_reader.cpp

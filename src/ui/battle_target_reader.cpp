@@ -78,7 +78,7 @@ int32_t  g_lastHandle   = 0;
 
 // Target cache for the `p`-key route. Written on the render/game thread whenever the target
 // nameplate redraws (HookedSnapshot — EVENT-driven, NOT per-frame); read on the input thread
-// (GetLockedTarget). The `bc` pointer + `handle` are the handle->BtlChr bridge; `p` re-resolves a
+// (GetActiveTarget). The `bc` pointer + `handle` are the handle->BtlChr bridge; `p` re-resolves a
 // FRESH position from `bc` at press time and gates on the LIVE DAT_0209be80 state (not cache age,
 // since the redraw is sparse). `bc`=nullptr => never captured. `pos` is a last-resort fallback.
 struct TargetCache {
@@ -633,7 +633,7 @@ bool ResolveTarget(ResolvedTarget& out) {
 // keys agree on which unit they mean -- which was NOT true between 2026-07-20 and 2026-07-21, when
 // `;` rejected the browsed target that `p` happily routed to. The comment claimed agreement the
 // whole time; it is true again now.
-bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut) {
+bool GetActiveTarget(FVec3& posOut, std::wstring& labelOut) {
     ResolvedTarget t;
     if (!ResolveTarget(t) || !t.havePos) return false;
     // AN ALLY IS ROUTABLE ONLY WHILE YOU ARE ACTUALLY AIMING AT ONE. The user's case for keeping it:

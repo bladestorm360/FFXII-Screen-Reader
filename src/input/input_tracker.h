@@ -31,6 +31,10 @@ void SetLicensePointsCallback(HotkeyCallback cb);
 // it is safe off the game thread. `g` is free in this game's bindings (Docs/Controls.md).
 void SetGilCallback(HotkeyCallback cb);
 
+// S174. Fired (input thread) when the pad's `L3` asks for the intercept off or on; ModMenu
+// registers `ToggleController`. A callback like every other handler here: this file knows no menu.
+void SetControllerToggleCallback(HotkeyCallback cb);
+
 // Callback fired (on the input thread) when the user presses the "re-read last line"
 // key (`t`), while the game window is foregrounded. The message reader registers a
 // handler that repeats the last spoken dialogue/panel line.
@@ -84,6 +88,39 @@ void SetModMenuDescribeCallback(DescribeInterceptCallback cb);
 // read the mod's hotkeys from the same buffer the game polls. Edge-detected;
 // dispatches describe/reread/nav on rising edges (game-foreground only).
 void FeedDInputKeyboard(const unsigned char* dikState);
+
+// ---- DEVICE-INDEPENDENT DISPATCH (Session 173) -------------------------------------------------
+//
+// Post one of the mod's own hotkeys to this tracker's message thread from a device that is NOT the
+// keyboard -- today that means `input/pad_router.cpp`. `vk` is the SAME virtual-key code the
+// keyboard path posts, and it lands in the SAME handler, so a pad button and its key are the same
+// action by construction: there is no second copy of "what `\` does" to drift.
+//
+// Routing matches `DInputEdge` / `DInputMenuNavEdge` exactly -- O/T/U/G to their own handlers, the
+// arrows and Home/End to the virtual-buffer path (Home/End with the combat-log fallback), and
+// everything else to `NavCommands::OnNavKey`, which is where the mod's key switch already lives.
+//
+// EDGE DETECTION IS THE CALLER'S JOB. The keyboard path suppresses auto-repeat before it gets here;
+// the pad router does its own rising-edge work per pad index. This function fires every time it is
+// called.
+//
+// Safe from any thread: it only posts. The foreground gate is the caller's too (the pad router
+// checks `GameForeground()` before it reads anything).
+void DispatchModKey(int vk);
+
+// Speak one phrasebook line from THIS tracker's thread. `phraseId` is a `Phrase::Id` cast to int --
+// passed as an int so the pad router does not have to agree with this header about the enum.
+//
+// It exists so the pad keeps the mod's rule that speech happens on a thread that already speaks.
+// The pad poll runs on the game's input thread, which has never spoken and is not a place to start:
+// the whole reason this tracker owns a message loop is that speech must not run inside an input
+// callback. Phrasebook strings are static, so nothing is allocated or owned across the post.
+void DispatchSpeakPhrase(int phraseId);
+
+// S174: toggle the gamepad intercept, from the pad poll. Only posts, like `DispatchSpeakPhrase`.
+// Not a `DispatchModKey` VK: the Controller row has no keyboard shortcut to name it by. The caller
+// runs it ABOVE its own `ControllerOn()` gate, which would otherwise eat the button that undoes it.
+void DispatchToggleController();
 
 // Wall-clock milliseconds (GetTickCount64) of the last key-down event.
 // 0 if no event has been observed since Init.

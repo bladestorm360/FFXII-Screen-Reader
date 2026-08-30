@@ -31,15 +31,15 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69 |
-| a tester reported something | `TAG:tester` | L-10…L-14 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80 |
+| a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
-| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71 |
+| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -75,14 +75,28 @@ saying "~1.5 s" over a frame counter that meant that only at 60 fps.
 **Why:** S150 read three throttled log lines as measurements and built five wrong inferences on one
 defect. S152 nearly repeated it: `StallProbe::FrameTick` *computes* the frame gap and then discards
 it below 100 ms, so "twenty logs contain five gap lines" means nothing about the frame rate.
+**S174 again, on the ABSENCE side, and this is the form that bites hardest.** The pad survey dedups
+per distinct value. Its `L3` and `R3` lines were missing from the first real pad log, and that was
+read as "the thumb-click bits never reach the mod" -- a hardware diagnosis, stated with confidence,
+carried into a plan. The player had simply not pressed them. **The refutation was two lines above
+the code being read**: *"an absent line means that value never occurred, NOT that the control was
+never pressed. Presence is evidence; absence is not."* Reading the comment on the instrument is not
+the same as applying it to the output.
 
 ### L-05 CHECK WHAT AN INSTRUMENT EMITS, NOT WHAT IT MEASURES
 **Why:** S152. An entire measurement plan ("one play log at 1x and 4x settles it, no code") was
 built on `FrameTick`, which measures exactly the right quantity and then throws it away below a
 threshold. The discard is invisible in the function name and in its header comment.
 
-### L-06 A NEGATIVE RESULT IS ONLY AS GOOD AS THE SHAPE YOU SEARCHED FOR
-**Why:** S147. "Not found anywhere" meant "not found in the shape I assumed".
+### L-06 ⟲ A NEGATIVE RESULT IS ONLY AS GOOD AS THE SHAPE YOU SEARCHED FOR
+**Why:** S147. "Not found anywhere" meant "not found in the shape I assumed". **S166 again, and this
+one cost a whole session:** S165 searched both Westersand map files for the cactus coordinates
+"aligned *and* unaligned, against known-good runtime coordinates as controls" and concluded "the
+coordinates are in none of them". They were in the file the whole time, as ordinary floats. The
+search looked for an **adjacent (x,y,z) triple**, and a script coordinate is not stored as one: the
+float pool is allocated in source order across the whole map, so the cactus's x and z sat eleven and
+twelve entries apart from anything else of its own, and its y was not in the pool at all (it is an
+immediate operand). Controls prove the search RAN; they cannot prove the shape was right.
 
 ### L-07 DON'T MODEL THE VERDICT — READ THE WORD THE VERDICT IS READ FROM
 **Why:** S149. Sessions were spent reconstructing a license-board reachability rule; the game simply
@@ -167,6 +181,139 @@ from inside the sim loop — which is exactly where the open defect turned out t
 
 ---
 
+### L-72 A RECOVERED TABLE'S MACHINE-READABLE COLUMNS OUTRANK ITS HUMAN-READABLE ONES
+**When a dumped table has both a name column and a typed column, and they disagree, the typed column
+is the measurement and the name is a label. Line them up before trusting either.**
+**Why:** S166. `DAT_01efea60` gives every opcode a mnemonic pointer at `+8` AND an operand-KIND field
+at `+2`. The names are indexed one off; the kinds are not. Six names contradict their own kind at
+their own index (`0x50` is called JMP and carries kind 5 = "float constant"; `0x01` is called TAG and
+carries kind 8 = "label"). The kind column also happens to be exactly what a disassembler needs, so
+resolving operands by kind instead of by mnemonic made the tool both correct and shorter.
+**Corollary:** the archive had recorded the same off-by-one a session earlier from a completely
+different argument. Two independent derivations agreeing is what 0.98 looks like.
+
+### L-73 AN ERRATUM RECORDED IS NOT AN ERRATUM APPLIED
+**Writing down that a tool is wrong does not fix the tool. Either fix it in the same pass or the note
+becomes a thing future sessions read AFTER being misled by the code it describes.**
+**Why:** S166. `GameArchitecture.md` already carried "**`notes\athena_opcodes.md` (and
+`tools\ebp_disasm.py`'s `OP` dict) map name-index to opcode DIRECTLY; the real opcode is name-index
++ 1**" — correct, specific, naming both files. Neither file was touched. The next session to open the
+disassembler read the wrong table out of it, and the plan written to fix that disassembler
+(`ebp2_disasm_fix.md`) never cited the erratum at all. **Grep the docs for the FILE you are about to
+trust, not only for the subject you are working on.**
+
+### L-74 INSTRUMENT THE POINT OF USE, NOT THE POINT OF COMPUTATION
+**A diagnostic that prints a value where you WORK IT OUT certifies your arithmetic and nothing else.
+If anything downstream can overwrite the field, only a log line at the point the value is SPOKEN or
+ACTED ON can tell you it survived. Before declaring a resolved value shipped, grep for every writer
+of the field you put it in.**
+**Why:** S166/S167. S166 taught the scan to recover a script-placed object's position from `setrect`
+and proved it with a diagnostic — `nearest "Dynast-Cactoid" 39.20m`, arithmetically perfect, computed
+inside the scan. `EntityList::RefreshPositionsLocked` then re-read the object's transform before every
+command and put `e.pos` back to (0,0,0), because for these objects that read SUCCEEDS and returns the
+origin. **Both lines are in the same log:** the correct 39.20m at scan time, and "South, 574 steps
+(below)" — the distance to the world origin — nine seconds later. The feature was written up as
+working-but-unplayed when it was already measurably half-undone by its own process. Cousin of
+[L-71]: one writer of the field was corrected and its sibling was not.
+
+### L-75 A PERMISSIVE COST MODEL TURNS AN INVALID GOAL INTO A PLAUSIBLE ROUTE, NOT AN ERROR
+**Where a search PRICES an obstacle instead of cutting it, handing it a goal it should have rejected
+produces no failure anywhere -- it produces a confident, speakable, wrong answer. Validate the goal
+before the search, because the search is built not to.**
+**Why:** S168. The router prices terrain the party may not stand on rather than cutting it, and that
+is correct and hard-won (S96 proved cutting over-refuses; it was reverted twice). A script `setrect`
+gave a cactus a Y 10 m under its own ground, `FindPolyAt` has no terrain test and no vertical
+tolerance, so the goal anchored on a bit-23 poly beneath the terrain. Nothing errored. A* simply
+breached its way to a goal it should never have accepted, the corridor paid `terrain=6000`, and the
+mod spoke a five-leg route into a dune face.
+**The tell was in the numbers, not the verdict: SEARCH COST THAT DOES NOT FALL AS YOU APPROACH.**
+Routes to ordinary targets on that map expanded 1-12 polys. Every route to the cactus expanded
+~2680 -- from 240 m away and from 19 m away alike. A goal 19 m off that costs a full-mesh flood is
+not 19 m away in the graph, whatever the distance readout says. Compare cost against distance
+before believing a route.
+**And fix it at the goal, not in the search.** The pricing model was right; the input was wrong. The
+repair went where the script coordinate becomes a world position -- one population, no router edit.
+
+### L-76 WHEN A FIX RESTS ON A PREMISE YOU CANNOT CHECK OFFLINE, SHIP THE LINE THAT NAMES THE BRANCH
+**Do not ship the fix and hope. Ship the fix AND the one log line that says which case you are in,
+with the branches written down in advance. One play then either confirms it or hands you the next
+step already decided -- instead of costing a round trip to find out which.**
+**Why:** S168/S169. The S168 repair assumed a script placement's Y was wrong and a standable floor
+existed at its own (x,z) -- unverifiable offline, because the walkmap blob is relocated at load and
+no extractor reaches it. It shipped with a `placement ground:` line naming both outcomes. The premise
+was FALSE on all four cacti across both maps, the log said so in one line each, and the branch it
+named -- the object occupies its own coordinates, so project into the interaction circle -- was the
+actual fix. **The wrong hypothesis cost one line of log, not a session.**
+The distinction from an instrument-instead-of-a-fix (S163): this SHIPPED THE FIX. The line is what
+makes a wrong premise cheap, not a substitute for repairing anything.
+
+### L-79 AN OBJECT THE GAME HAS NOT PLACED IS NOT A MISSING FEATURE
+**Before building anything to surface an interactable the mod cannot see, establish that the GAME is
+offering it. Script-placed objects are created at a story/quest step, and until then the shell is
+byte-identical to a live one -- same enable bit, same (0,0,0), same event ids. "The mod cannot see it"
+and "it is not there" look exactly alike from the object.**
+**Why:** S166-S171. Six sessions and five builds went into forcing the Westersand cacti to list and
+route, and the tester was simply not on the quest step that places them; the mod was already pulling
+interact prompts correctly. **The first question -- "does the examine prompt appear when you stand
+there?" -- was never asked.** The work then regressed shipped behaviour and was reverted in full.
+**Corollary, and it is the part that made the chase feel justified: AN OFFLINE CORPUS COUNT IS NOT AN
+OBSERVED BENEFIT.** "134 examinable field signs game-wide" came from parsing 769 scripts and was
+quoted in four documents as the payoff. **Not one was ever confirmed listed correctly in play**, while
+what play actually produced was phantom NPCs and mislabelled exits. A number you derived is a
+hypothesis about value; only play makes it a benefit.
+See [L-77] for the one-sentence version of step 1, and `debug.md`'s CHAIN OF EVIDENCE for the order.
+
+### L-80 A CONTROL THAT INVALIDATES AN INSTRUMENT IS A CLAIM, AND NEEDS CHECKING FIRST
+**A pre-registered test of the form "if X reads negative, the instrument is broken" is only as good
+as your belief about X. Verify X before you spend the instrument on it -- otherwise a wrong premise
+does not produce a wrong reading, it produces a confident verdict about the TOOL, which is far more
+expensive because everything measured with it afterwards is discarded too.**
+**Why:** S174. S162 had written the right test in advance: *"If Start and A come back `no-reaction`,
+the instrument is early -- not the game silent."* The first real pad log had `survey Start ctx=field
+... no-reaction`, so the survey was declared broken and its entire output set aside -- in the same
+message that told the user no button could be cleared from it. **Start does not open a menu in FFXII;
+it pauses. Triangle opens the menu.** The control was never verified, and it was checkable in one
+web search or one question. **Then the fallback evidence went the same way**: "one button logged two
+verdicts in one context" turned out to be `pad=0x0080`, which is LEFT in the game's word space, not
+R1 -- a direction being held, read as a reaction to a shoulder. Nothing at all survived, and whether
+the instrument was early is STILL unmeasured.
+Note the asymmetry: the same unchecked premise could as easily have CERTIFIED a broken instrument.
+**And note what the two errors have in common -- both decoded a number by assuming what it referred
+to.** Start's meaning was assumed; `0x0080`'s bit layout was assumed. The survey now prints the raw
+XInput word beside the game's word so the correspondence is read, not inferred.
+See [L-01] for the one-sample version and [L-06] for the negative-result version.
+
+### L-78 A RISK YOU CAN STATE PRECISELY ENOUGH TO WRITE DOWN IS NOT COVERED BY WRITING IT DOWN
+**An Open-section caveat is not a mitigation. If you can name the failure mode, the object it will
+hit and the filter it will pass through, you know enough to guard it or to not ship -- and shipping
+it with a note means the note is what future sessions read AFTER the tester hits it.**
+**Why:** S166 shipped the script-placement reader with this in its own Open section: *"a
+script-placed sign standing near a doorway record could take a tag a real door would have had."*
+Six sessions later the tester reported labelled exits reading "Sign 1" / "Sign 2" -- that exact
+failure, in those words. A second caveat in the same section ("a gated-off sign will still be listed
+and walking there finds nothing") also came true verbatim and cost four more builds. **Both were
+precise enough to be tests.** The whole line was reverted in S172.
+Sibling of [L-73]: an erratum recorded is not an erratum applied. Same shape, one level up -- there
+the note was about a TOOL, here about your own unshipped bug.
+
+### L-77 IF THE PERSON PLAYING THE SAVE CAN ANSWER IT IN A SENTENCE, ASK THEM
+**Some unknowns are not measurements at all -- they are facts about the player's own game state:
+which quest step they are on, what they have already done, what they are carrying. Building a reader
+for one of those is the expensive way to learn something a question answers instantly, and it puts a
+map-specific gate into the mod that does not belong there.**
+**Why:** S171. A script-placed field sign is gated on a quest flag, and the symptom -- routed there,
+no prompt -- is exactly what a gated-off sign looks like. I shipped a build to read the object's live
+prompt bits. The user: *"the mod doesn't need to be trying to read quest flags. what you should have
+done instead was just asked me if we are on the correct step of the quest."* Reverted the same
+session.
+**The test that separates this from L-76:** L-76 is for a premise about the GAME'S DATA that only a
+running build can reach. This is a premise about the PLAYER'S SAVE, and the player is right there.
+**Before instrumenting, ask whether a human already knows the answer.** Note this is NOT the "never
+ask the user to find something in the world" rule inverted -- asking someone to read a quest step
+from their own journal costs them one sentence; asking them to locate an object they cannot see is
+the thing the mod exists to do for them.
+
+
 ## Tester reports
 `TAG:tester`
 
@@ -185,14 +332,33 @@ the defect sits on a hook driven from *inside* the sim loop, where the call rate
 **Put the uncertainty in the rounding, not in refusing the number.** Detail:
 `feedback_tester_measurement_is_evidence.md`.
 
-### L-13 THE LOG CORPUS IS `<game>\x64\logs\` — `Tester Logs\` IS NOT
-Ours is the default evidence and is always readable. A tester log is opened only on a reported issue
-**and** an explicit pointer from the user, and never mixed into a corpus-wide count.
+### L-13 ⛔ NEVER LOOK IN `Tester Logs\` — ASK FOR IT, DO NOT GO FINDING IT
+`<game>\x64\logs\` is the corpus: ours, always readable, where every sweep and every count starts.
+`Tester Logs\<name>\` and `Saves\<name>\` are **off limits** — not listed, not grepped, not
+`find`-ed through, not even "to see what is there". The single key is **the user saying, in this
+conversation, to use a specific tester log**; a tester having reported something is NOT that key.
+Once handed one it is the authority for that defect, and its numbers still never mix into a
+corpus-wide count.
 **Why:** S147 reached for the wrong corpus, found nothing, and concluded a defect was "not
-measurable from any archived log". It was sitting in nineteen of our own twenty.
+measurable from any archived log". It was sitting in nineteen of our own twenty. **And 2026-08-25:
+a tester report about a missing interactable opened with `ls "Tester Logs/Dylan"`, a project-wide
+`find`, and a sweep of `Saves\Dylan\`** — *"those are not from our machine and for some reason
+you keep getting confused there."* The old wording ("a report **and** a pointer") kept being read
+as "the report satisfies half of it, so I may go and look." It does not. Detail:
+`feedback_read_the_testers_own_log.md`; rule text in `CLAUDE.md`.
 
-### L-14 NEVER ASK THE USER TO READ THE SCREEN
-The user is blind. Detail: `feedback_never_ask_user_to_read_screen.md`.
+### L-14 ⛔ NEVER ASK THE USER TO DO ANYTHING THAT NEEDS SIGHT — READING A SCREEN, OR FINDING AN OBJECT
+The user is blind. **Locating an object in the game world is what this mod EXISTS to do**, so
+asking them to walk to it, stand next to it, face it or count it — in order to produce a
+diagnostic about why the mod cannot find it — demands the very capability whose absence is the
+bug. Fair to ask: a keypress **from wherever they already are**, loading a save, entering a map by
+name, or what they HEARD. Not fair: *"stand next to the cactus and press `'`"*.
+**Instead:** answer it offline first (L-08), or ship an instrument that captures the data
+passively on a rescan or map load, with no positioning required.
+**Why:** the original screen-reading case, and 2026-08-25 — a session chasing an interactable the
+nav list could not see signed off with *"stand next to it and press `'` — ground truth, no
+guessing"*. Reply: *"I can not just magically walk up to the cactus and interact with it to get your
+log."* Detail: `feedback_never_ask_user_to_read_screen.md`; rule text in `CLAUDE.md`.
 
 ---
 
@@ -305,7 +471,6 @@ page, the flag, and a re-implementation of the game's own hidden-slot walk all d
 **Corollary, and the reason this is not L-30:** deleting a path is only safe once you have shown
 where the survivor gets the same fact. Here that was two decompiled functions writing the same
 offset, not a hunch that one reader looked sufficient.
-
 
 ## Anything that makes the mod speak
 `TAG:speech`

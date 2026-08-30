@@ -131,6 +131,12 @@ void CycleSetting(SettingId id);
 // surprise and the repeated spoken value is how the player hears they are at the end.
 void Adjust(SettingId id, int delta);
 
+// S174: `L3` on the pad. Flips the Controller row and speaks "Controller, <value>" — name included,
+// which no other adjust path does. It is the escape hatch, so it must work in BOTH directions: the
+// pad router runs it from a prologue ABOVE its own `ControllerOn()` gate, or turning the intercept
+// off would take the only pad button that could turn it back on. Input thread only, via WM_PADCTRL.
+void ToggleController();
+
 // (`SetSilently` was removed in Session 115 along with the sneak-assist toggle, its only caller. It
 // set a value without speaking it, for automatic changes the player did not ask for. If that need
 // comes back, `git show` this session -- but do not re-add it speculatively: with no caller it is a

@@ -1656,6 +1656,937 @@ that reading one layout on the other yields plausible wrong floats, fixed `ReadB
 - The widened dump and the drop lines are **instruments written to be deleted** (S158, S163). They stay
   while the Draklor floors are being worked and go when they stop earning their lines.
 
+## Session 165 — 2026-08-25 — NO ENTRY WAS WRITTEN
+
+⚠ **Recorded here by Session 166 so the gap is visible, not to narrate work I did not do.** S165 left
+uncommitted changes in the tree (`entity_scan` spawn watch + the class-1 admission fix, `entity_diag`
+additions, `nav_rva` `SCENEOBJ_EVENT_ARRAY`/`RECORD_PTR` constants, CLAUDE.md's "never ask the user to
+find something in the world" rule, Lessons.md edits) and the plan
+`FFXII-Decompile\notes\ebp2_disasm_fix.md`, and wrote no session entry. Its findings are recorded where
+they belong — the ruled-out placement sources are in `debug.md` under Session 166, and the plan
+document carries its own account. **Do not reuse 165**, same rule as 110.
+
+## Session 166 — 2026-08-26 — [nav] The interactable with no position: objects the SCRIPT places
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: EBP2 ebp_disasm container blob file+0x10 0x80 routine table blob+0x18 instruction count
+record+0x0c float pool blob+0x24 id pool blob+0x20 message index tagged constant entry table +0x48
+pointer identity mode table 18 modes setrect setwh recttocircle showfieldsign fieldsignmes
+Dynast-Cactoid サボテン アタリ ハズレ ＦＳ配置 wdl_a03 wdl_a05 map 347 349 Shimmering Horizons Windtrace
+Dunes 常駐監督 getquestscenarioflag 0x35 0x28 0x32 quest gate opcode off by one operand kind column
+DAT_01efea60 CALL CALLPOPA 0x58 0x5d script_place.cpp PlacementForObject PlacementCaption signed
+immediate int16**
+
+**Build:** built + deployed 2026-08-26, clean, no warnings. **NOT PLAYED.** Nothing in this session has
+been in front of a player; see Open.
+
+### What was asked
+
+*"Fix the EBP2 disassembler according to your documented plan, then properly disassemble the map data
+for Shimmering Horizon and Windtraced Dunes and get the interactible cactus properly detectible by the
+mod's pathfinder."* All three done.
+
+### 1. The disassembler
+
+`FFXII-Decompile\tools\ebp_disasm.py` read `file+0x18` as a routine table. That field is the MESSAGE
+table — `ebp_msg_decode.py` reads the same field for that purpose and gets English out of it — and the
+tool then brute-forced a "code base" to make the resulting garbage decode. **There is no code base to
+find.** The `.ebp` FILE is a container; the runtime script blob starts at `file + u32(file+0x10)`
+(`0x80` everywhere), and every offset in the script header is relative to THAT base.
+
+**The mod had it right from live memory the whole time.** `map_script_internal.h` has said
+`hdr+0x18 -> ROUTINE TABLE [u32 count][0x30 records]` and `hdr+0x4c -> NAME POOL` since Session 58. The
+offline tool and the runtime reader were describing one structure at two different bases and neither
+noticed for fourteen months.
+
+Two further corrections, both worth more than the base fix:
+
+* **`record+0x0c` is an INSTRUCTION COUNT**, which makes a linear decode exact — no flow-following, no
+  "scan until it stops looking like code", no `CODE_SPAN_MAX` guess. **1124 files, 26514 routines, zero
+  short decodes and zero bad landings.** The old file's "~15 routines drift ~2 bytes (unidentified
+  size-2 op)" was an artefact of the wrong base; there is no size-2 opcode. Opcode `0x63` is real and
+  size-3, so the ceiling moved from `0x62`.
+* **The VM's mnemonic table is indexed one off** — and `GameArchitecture.md` ALREADY SAID SO, in the
+  Session 145 errata, naming both `athena_opcodes.md` and `ebp_disasm.py`'s `OP` dict. Neither was
+  fixed, the plan written to fix the disassembler never cited it, and I re-derived it from scratch.
+  That is `Lessons.md` **L-73**. The re-derivation used a second independent source — the table's own
+  operand-KIND column at record `+2`, which is not shifted and contradicts six names at their own index
+  — so the two arguments now corroborate each other, and operand resolution is driven by that column
+  rather than by per-opcode guesses.
+
+The falsifier the plan set — reproduce the live routine-name pool — passed on the first correct parse:
+36 routines on 347 with the two cactus routines at [10]/[11], 31 on 349 with them at [9]/[10], and the
+`routine index == handle slot` bijection holding on both. A live log from the day before confirms it a
+third time (`unspawned [0:10]`/`[0:11]` with `act=2` on map 347).
+
+### 2. The cactus
+
+**The object has no position and never will.** The MAP SCRIPT places it: routine `ＦＳ配置` calls
+`setrect` with literal coordinates from the float-constant pool at `blob+0x24`. `setrect` sets the
+script's interaction rect; nothing writes the scene object's transform.
+
+**Proven from our own log, not argued:** `x64\logs\FFXII-Screen-Reader-2026-08-25_15-30-55.log` has
+`[0:10]` and `[0:11]` on map 347 at (0,0,0) continuously from before the map announce to eight seconds
+after the player was standing at (219.14, 48.92, 370.26) — script long since run, transform node all
+zeros bar the cone and band. **The S165 spawn watch could never have fired on these.**
+
+| map | slot | routine | position | radius | caption |
+|---|---|---|---|---|---|
+| 347 Shimmering Horizons | 10 | `サボテン_ハズレ２` | (401.25, 72, 381.80) | 6.5 | Dynast-Cactoid |
+| 347 | 11 | `サボテン_ハズレ３` | (411.50, 76, 412.25) | 6.5 | Dynast-Cactoid |
+| 349 Windtrace Dunes | 9 | `サボテン_アタリ_砂塵` (winner) | (176.80, 48, 305.30) | 6.5 | Dynast-Cactoid |
+| 349 | 10 | `サボテン_ハズレ_砂塵` | (191.70, 50, 274.60) | 6.5 | Dynast-Cactoid |
+
+S165's reading — "that rules out proximity streaming and points at a **state gate**" — was right, and
+the gate is now named: both maps' `常駐監督` routine runs the placements only while story progress
+`>= 1540` and `getquestscenarioflag(0x35) == 0x28`; the winner's `talk` sets it to `0x32` and removes
+both signs.
+
+**Not a special case.** 290 routines across the 769 map scripts place themselves with a literal
+`setrect`, and 134 are examinable field signs (`showfieldsign` and a mode-2 `talk` binding coincide
+exactly, 134/134): "Bottle of Spirits" (14), "Faint Glow" (12), "Mysterious Glint" (11), "Sparkling
+Light" (10), "Notice Board" (5), "Batahn's Technicks" (5), "Quiet Shrine" (4), "Pilika's Diary",
+"Suspicious-looking Wall", "The Moogles Eight". Every one was invisible to the mod for this one reason.
+
+### Shipped
+
+| | |
+|---|---|
+| `navigation/script_place.{h,cpp}` | new. Walks the loaded blob's routine table, decodes each routine by its own instruction count, and returns every `setrect` placement with its radius, its field-sign flag and its `fieldsignmes` message index. `PlacementForObject` joins object to routine by **pointer identity** — a scene object's `+0x48` IS its routine's entry table — after checking the object's own container id. `PlacementCaption` decodes the caption from the container's message table, stepping back `0x80` only when the 'EBP2' magic AND `container+0x10 == 0x80` both hold. |
+| `EntityScan` origin drop | asks the script before dropping. Read lazily on the first origin object with a bound script, so a map with none never touches the script. The `unspawned` line now says how many placements were read, and the `new routes:` summary gains "N PLACED FROM THE SCRIPT's setrect (of M placements on this map)". |
+| entity label | a placed object with no npcdic name takes its `fieldsignmes` caption — "Dynast-Cactoid", not the category word. |
+| `tools/ebp_disasm.py` | rewritten. Correct base, exact decode, natives named, message text and float/ID constants inlined, entry points and interaction modes printed, `--summary` mode. |
+| `notes/EBP2_DBG_format.md`, `notes/athena_opcodes.md` | the false `+0x18` routine-table claim, the four wrong routine counts, the "code base 0x0fb4 / 24-of-42" status and the "static decode stalls, needs the loader" section are all struck with the corrections beside them. |
+| `notes/ebp2_disasm_fix.md` | closed: the plan's questions answered in the plan's own order. |
+
+### Open
+
+- **⚠ A SCRIPT PLACEMENT CAN BE GATED OFF, AND NOTHING ON THE OBJECT SAYS SO.** Same enable bit, same
+  (0,0,0), same `act=2` whether the placement routine ran or not, so a gated-off sign will still be
+  listed and walking there finds nothing. Shipped anyway because the previous state was a permanent
+  blind spot under every game state. **Closing it means finding where `reqenable`/`showfieldsign` land
+  at runtime — NOT reading quest flag `0x35`**, which is one map pair's gate, not a rule.
+- **UNPLAYED, all of it.** Whether the cactus is listed, named, and ROUTABLE (the walkmap at
+  (401,381) / (176,305) has never been asked for a path) is unmeasured. One press of `'` on either
+  Westersand map settles all three from wherever the player is standing.
+- **The doorway tag now has more candidates.** `TagDoorwaysAndDropSignTwins` gives each group-0 sign
+  record to its nearest non-NPC object; a script-placed sign standing near a doorway record could take
+  a tag a real door would have had. Not observed on 347 (its sign records are 60+ units from both
+  cacti); the filter logs every declined pairing, which is where it would show.
+- **The exit reader still guesses its last routine's span** (`CODE_SPAN_MAX`) and logs "this map loses
+  an exit" when the guess misses. `record+0x0c` is the answer there too; not changed this session
+  because that path is play-confirmed and the cactus work did not need it.
+
+## Session 167 — 2026-08-26 — [nav] The script placement the per-command refresh put back to the origin
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: Dynast-Cactoid cactus Westersand map 347 Shimmering Horizons 574 steps below no path
+goalPoly -1 tgt=(0,0) nearDist 418.7 frontier suppressed RefreshPositionsLocked e.pos fixed flag
+sceneObj+0xB8 ReadSceneObjectPos script_place setrect second writer entity_list entity_scan L-74**
+
+**Build:** built + deployed 2026-08-26, clean, no warnings. **The fix itself is NOT PLAYED** — see Open.
+
+### What was asked
+
+Session 166 shipped the script-placement reader unplayed. The user played it and reported: the cacti
+**do** show in the interactables list for the first time, but read **574 steps away with no path**.
+
+### The diagnosis — the log had all of it
+
+`x64\FFXII-Screen-Reader-Latest.log`, map 347, player at (219.14, 48.92, 370.26):
+
+- `[SPEAK-OUT] Dynast-Cactoid 1. South, 574 steps (below)` — and `Dynast-Cactoid 2` said **the same
+  574**, for an object 32 m away from the first.
+- 574 × `g_unitsPerStep` 0.75 = **430.2 m**, and √(219.14² + 370.26²) = **430.2**. That is the
+  distance to the **world origin**.
+- "(below)" for two objects at y = 72/76, i.e. 23 m **above** the player.
+- `[NAV-ROUTE] stats ... startPoly=1660 goalPoly=-1 endPoly=1791 expands=2951 nearDist=418.7m` and
+  `tgt=(0.0,0.0)`. **The planner printed the goal.** No inference was needed for any of this.
+
+**The cause is a SECOND WRITER of `e.pos`.** `EntityScan` resolved the `setrect` position correctly —
+the scan-time diagnostic in the same log proves it, `nearest "Dynast-Cactoid" 39.20m` from a sign at
+(406.94,·,343.02), which is right to the centimetre for a cactus at (401.25,·,381.80).
+`EntityList::RefreshPositionsLocked` then re-read `sceneObj+0xB8` before every command and put `e.pos`
+back. **The guard there is a FAILED read, and this read does not fail — it succeeds and returns
+(0,0,0)**, which is the entire reason the script has to place these objects. S166's position survived
+less than a frame.
+
+### The fix
+
+A script-placed entity is now marked **`fixed`**, whose documented contract was already exactly this:
+"fixed world pos, do not refresh via +0xB8". One line, plus the two comments that claimed `fixed`
+meant "no scene node".
+
+| | |
+|---|---|
+| `entity_scan.cpp` | `if (placed) e.fixed = true;` beside `e.pos = pos`, with the measurement that identified it |
+| `entity_scan.h` | the `fixed` field now documents TWO populations — no scene node (exits, map-jumps, item drops), and a scene node whose transform reads (0,0,0) forever (script placements) |
+| `entity_list.cpp` | `RefreshPositionsLocked`'s comment now says why a failed-read test cannot catch this case |
+
+The scene pointer deliberately stays set, so the stale-entity pruner, `IsInteractionAvailable` and the
+doorway/sign filter all keep working on these objects. `CollectPositionsByNameIdx` skips `fixed`
+entries, which is correct here — a script-placed sign has no npcdic name to be collected by, and that
+function re-reads the transform anyway.
+
+### The lesson — L-74
+
+**Instrument the point of USE, not the point of computation.** S166 proved the placement was read with
+a diagnostic that ran inside the scan. It certified the arithmetic and could not see the overwrite.
+**The correct 39.20 m and the wrong "574 steps" are nine seconds apart in the same log file**, and the
+feature was written up as working-but-unplayed while already measurably half-undone. Cousin of L-71:
+one writer of the field was corrected, its sibling was not.
+
+### Open
+
+- **⚠ THE FIX IS UNPLAYED, and "No path" is NOT yet refuted.** `goalPoly=-1` says the goal was not on
+  the walkmap — which is trivially true of (0,0,0) and says **nothing** about (401.25, 72, 381.80).
+  The next play is the first time the pathfinder is asked the real question. **Read `goalPoly` on the
+  `stats` line:** ≥ 0 = the cactus snapped onto the navmesh and any later failure is genuine routing;
+  `-1` again = the placement's y does not snap and the goal needs projecting onto the mesh first.
+  Worth knowing in advance: y = 72 is an `int16` immediate, while the field signs 39 m away sit on
+  terrain reading 64–68.
+- **The gated-off placement problem is untouched** and still reads exactly as S166 left it: nothing on
+  the object distinguishes "placed" from "gated off", so a sign whose routine never ran is still
+  listed. Unchanged by this session.
+- **The build stamp lies about the hash while S165–S167 are uncommitted.** This session's log opens
+  `Build: V0.6.5 (9e9a00f) compiled Aug 25 2026 10:54:21` — `9e9a00f` is HEAD, and HEAD has not moved
+  because none of this is committed; the `compiled` string is stale for the incremental-build reason
+  in L-62. It was briefly read as "the tester is on the old build". **It is not.** The behaviour in the
+  log (the `script placements:` NAV-DIAG line, the `PLACED FROM THE SCRIPT's setrect` summary) exists
+  only in the new code.
+
+## Session 168 — 2026-08-27 — [nav] The goal was on ground the party may not stand on
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: Dynast-Cactoid Westersand 347 goalPoly 2389 eff 0x07841000 bit 23 terrain refused
+corridor pays terrain=6000 expands 2680 REVERSAL 135 setrect reference height FindPolyAt
+FindStandablePolyAt FindPolyAtImpl requireStandable ResolvePlacementsToGround nav_mesh entity_scan
+price not a cut S96 ankle-deep water L-75**
+
+**Build:** built + deployed 2026-08-27, clean, no warnings. **NOT PLAYED.**
+
+### What was reported
+
+S167's position fix worked — the route was real and the player followed it ~200 m across the
+Shimmering Sands. Then: *"it stops after getting a certain way through the desert and refuses to
+proceed… suddenly stopped telling me I could go north, when I couldn't."*
+
+### The tell: search cost that does not fall as you approach
+
+Same log, same map. Ordinary targets expanded **1, 5, 3, 2, 12, 2** polys. Every route to the cactus
+expanded **~2680 — from 240 m away and from 19 m away alike.** A goal 19 m off that costs a full-mesh
+flood is not 19 m away in the graph, whatever the distance readout says.
+
+### The cause, in the router's own words
+
+```
+ends:  start=2474 eff=0x00240000 walk=1 | goal=2389 eff=0x07841000 walk=1 | class=0
+cost:  corridor pays terrain=6000 (terrain > 0 => crosses ground the party's class may not stand on)
+costed: ... refused eff-flags: 0x07841000 x1001  0x0F841000 x1090 ...
+REVERSAL: leg 3 -> 4 turns 135 deg -- the polyline doubles back; the route geometry is wrong
+```
+
+**The goal poly had bit 23 set** — the leader's terrain refusal — and that exact flag word was the
+most-refused in the search. The poly the player was standing on had it clear.
+
+**And nothing errored, which is the whole lesson.** Terrain refusal is a PRICE, never a graph cut —
+correct, and hard-won: S96 made it a cut, refused 399/690 prims on map 311 including ankle-deep water
+the tester walks through, and cost an exit; it has been reverted twice. So A* did not reject the goal.
+It **breached** its way there, paid 6000, doubled the polyline back 135°, and the mod spoke it as a
+five-leg route into a dune face. `Lessons.md` **L-75**.
+
+**Why the goal was there:** `setrect` gives the interaction volume's REFERENCE height, not a ground
+height — which this project established itself in S166 and then handed straight to the router.
+`FindPolyAt` takes the containing floor NEAREST the Y given, with no terrain test and no vertical
+tolerance, so y=72 selected a poly ~10 m under the terrain the player was standing on.
+
+### The fix — at the goal, not in the router
+
+The pricing model is right; the input was wrong.
+
+| | |
+|---|---|
+| `nav_mesh.{h,cpp}` | new `FindStandablePolyAt(x, yHint, z)` — the floor at (x,z) the LEADER CAN STAND ON, nearest `yHint`. `FindPolyAt` and it now share ONE cell walk (`FindPolyAtImpl`) differing only by a flag, so the two notions of "the floor here" cannot drift. Bit 23 is read from the effective flags rather than by calling the engine: the scan is memory-only by policy, the same reason `IsInteractionAvailable` replicates `FUN_002675c0` instead of calling it. |
+| `entity_scan.cpp` | `ResolvePlacementsToGround` — once per map over every script placement. (x,z) is authoritative and never moves; only Y moves, only onto a standable floor at that same (x,z), only within 25 m. Nothing standable → left exactly as the script wrote it. |
+
+### Non-regression — established, not asserted
+
+The user's requirement was explicit: *"be careful not to cause any regressions in the pathfinder…
+do not simply tell me to test for regression."* So:
+
+- **`FindPolyAt` is statement-identical to its old body** — 29 executable statements, mechanically
+  diffed against `HEAD`, zero differences. With `requireStandable=false` both new guards are no-ops.
+- **`FindStandablePolyAt` has exactly one caller in the tree**, and it runs only on script placements
+  — a population that did not exist in the entity list before S166.
+- **The new query can never refuse a route.** It only PREFERS a standable floor over a refused one at
+  the same (x,z); with nothing to prefer it returns `kNoPoly` and its caller changes nothing.
+  **Deliberately not the S96 lever** — that made bit 23 a graph cut inside `Walkable`. Nothing here
+  touches `Walkable`, and no route is declined on terrain grounds by this change.
+- **No log format moved**, so the project's own working-route-invariance check (diffing the funnel and
+  stats lines across logs) still applies to every route in the archive.
+
+### Open
+
+- **UNPLAYED.** The correction rests on a standable floor existing at the cactus's own (x,z), and that
+  is a runtime-only fact — the walkmap blob is relocated at load time, so it cannot be read offline.
+  **The build states which case it is** in a `[NAV-DIAG] placement ground:` line per placement on map
+  entry. `-> walkable y=…` = corrected, and `expands` / `corridor pays terrain=` / `REVERSAL` are the
+  three numbers that confirm it. `KEPT -- NO floor…` = the cactus has no standable point of its own,
+  and the next step is the router's existing `goal == kNoPoly` cylinder route (the 6.5 m radius is
+  already read from `setwh`; `ClosestPointOnPoly` exists for exactly this).
+- **The 25 m bound is a judgement, not a measurement.** It is there so a correction can never jump to
+  another storey; the case that motivated it needs 10.3 m. If a placement is ever declined by it, the
+  log says so with the actual distance, which is the number that would justify changing it.
+- The gated-off placement problem (S166) and the `CODE_SPAN_MAX` exit-reader guess are untouched.
+
+## Session 169 — 2026-08-27 — [nav] The object occupies its own coordinates
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: Dynast-Cactoid Westersand 347 349 placement ground NO floor standable setrect setwh
+radius 6.5 recttocircle interaction circle NearestStandable ResolvePlacementsToGround ring search
+goal poly 45 2389 eff 0x07841000 bit 23 polys=2 portals=1 hard block route around obstacle L-76**
+
+**Build:** built + deployed 2026-08-27, clean, no warnings. **NOT PLAYED.**
+
+### What was reported
+
+*"still not working. tried the ones on windtraced dunes as well… hard block on the character. the
+pathfinder has to route around whatever is in the way, not route through it. likely a dune or another
+uninteractible cactus or some other obstacle."* Restated mid-session: **no regressions in the rest of
+the pathfinder.**
+
+### The instrument refuted my own hypothesis in one line
+
+S168 shipped its fix together with the line that would say whether its premise held. First play:
+
+```
+placement ground: routine 10 at (401.25,381.80) script y=72.00 KEPT -- NO floor the leader can stand on
+placement ground: routine 11 at (411.50,412.25) ... KEPT -- NO floor ...
+placement ground: routine  9 at (176.80,305.30) ... KEPT -- NO floor ...     (map 349)
+placement ground: routine 10 at (191.70,274.60) ... KEPT -- NO floor ...     (map 349)
+```
+
+**No standable floor at a cactus's own (x,z) at ANY height, on any of the four.** The Y was never it.
+
+**What S168 got right and keeps:** the goal poly is terrain-refused, refusal is a PRICE not a cut, so
+nothing errors and the mod speaks a route it should have rejected — L-75, now confirmed on two maps
+with the *same flag word* `0x07841000`.
+
+**What S168 got wrong:** the cause. Not a Y selecting an under-terrain poly. **The object occupies its
+own coordinates.** `setrect` gives an interaction VOLUME — a centre and a radius — and the centre is
+where the cactus is, which is exactly where you cannot stand. The user said this before I proved it.
+
+### The endgame at three metres (map 349)
+
+Player (177.65, 47.39, 302.62), goal (176.80, 48.00, 305.30):
+
+```
+ends: start=133 eff=0x00100000 walk=1 | goal=45 eff=0x07841000 walk=1
+mesh: polys=2 portals=1 corners=2       <- start and goal ADJACENT
+firstLeg=(176.8,305.3)                  <- the single leg drives straight at the centre
+validate: ... volHit=1 volWalked=1 OK   |  corridor march: CLEAR over 2 hop(s)
+```
+
+Validation passed it, the march called it clear, the character hit the cactus and stopped dead 2.8 m
+short, and the mod repeated **"North 4."** forever.
+
+### The fix — project the goal out of the object, into its own interaction circle
+
+`setwh` already gave the mod the radius and it already logged it — `r=6.50 circle` on all four — as a
+field explicitly marked *"diagnostics only; no caller consumes it."* Now one does.
+`ResolvePlacementsToGround`, once per map:
+
+1. **centre standable** → take its floor height;
+2. **centre not standable** → **nearest standable point within the interaction circle** (16
+   directions, 1 m rings, out to the radius). The goal becomes ground the party can stand on, so A*
+   routes **around** the obstacle rather than pricing through it, and the player still lands inside
+   the circle where the examine prompt is;
+3. **nothing standable in range** → left exactly as the script wrote it, i.e. the prior behaviour.
+
+Cached per map (the ring is up to 96 mesh queries per placement); the map id is stamped only once the
+mesh was actually up, so a scan that ran too early retries instead of caching a miss.
+
+### Non-regression — established, not asserted
+
+- **NOT ONE ROUTER FILE IS MODIFIED.** `path_search`, `path_planner`, `path_funnel`, `path_corridor`,
+  `path_validate`, `path_march`, `path_repair`, `path_surface_goal`, `nav_reach`, `nav_footprint`,
+  `map_query` — all clean, verified against `git status`. The search, its costs, its funnel and its
+  validation are byte-identical.
+- **`FindPolyAt` is statement-identical** — 29 statements, mechanically diffed against `HEAD`, zero
+  differences.
+- **`FindStandablePolyAt` has exactly two callers**, both inside `ResolvePlacementsToGround`, which
+  runs only on script placements — a population that did not exist before S166.
+- **It can never refuse a route.** Not wired into `Walkable`, cannot decline a crossing; it only picks
+  where a placement's own goal point sits. **Deliberately not the S96 lever.**
+- The only thing that changes is a script-placed sign's position, and only from a point the party
+  cannot stand on to one it can.
+
+### Open
+
+- **UNPLAYED.** The `placement ground:` line names the branch outright: `STANDS`, `is NOT standable …
+  goal moved to (x,y,z), N.NNm out`, or `KEPT — no standable ground anywhere within`. The third would
+  mean the disc really is solid and the answer is a wider search or an honest "No path".
+- **The stand point is nearest the CENTRE, not nearest the player** — deterministic and stable across
+  rescans, which the announced bearing needs. On the far side of an obstacle the route just goes
+  around, which is correct and only longer.
+- **Whether `setwh`'s 6.5 is a radius or a diameter is still unestablished** (S166 left `setwh` args
+  3-4 unidentified). It is used only as a SEARCH BOUND and the search takes the nearest hit, so a
+  factor of two changes how far out it looks and nothing else.
+
+## Session 170 — 2026-08-27 — [nav] There is no interact component to find; the rect is it
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: interact component field-sign +0x70 table destIdx doorway class1 FUN_0025be50 no engine
+radius nearest wins cone 6.28 band -1.00 0.50 setwh extent 6.5 radius or width NearestStandable
+0.75 step hug the object NAV-DIAG log only never spoken**
+
+**Build:** built + deployed 2026-08-27, clean, no warnings. **NOT PLAYED.**
+
+### What was asked
+
+*"you need to find the interact component for the cactus and route the player to that then… the
+pathfinder should just be routing to the cactus interact component anyway, not unwalkable terrain."*
+Plus: the `Not standable…` wording must not be spoken.
+
+### The speech point — it never was speech
+
+`placement ground:` is `Log::Write("NAV-DIAG", …)`. Log only, no speech path anywhere in the resolver.
+The strings quoted back in conversation were log lines. Nothing changed; nothing needed to.
+
+### Is there an interact component? Asked properly — no.
+
+Three independent checks, and it matters because "route to the component" is only actionable if one
+exists:
+
+- **The engine's field-sign `+0x70` table is not it.** 18 records on map 347, 12 on map 349, every one
+  a `destIdx` 1-3 area/doorway sign. Nearest cactus to any record: **33-88 m**. The mod already dumps
+  this on `'` and every line reads `TOO FAR, unclaimed`.
+- **The scene object carries no volume.** S165 checked the map-data record, the `*(obj+0x40)`
+  descriptor and all 64 node floats. The class-3 ellipse semi-axes read 0.01 (unused); the only live
+  interaction fields are the cone `6.28` — a full circle, so facing is unconstrained — and the band
+  `-1.00 / 0.50`.
+- **A class-1 target has no engine reach.** `interact_target.h` already records it from the decompile:
+  `FUN_0025be50` gates on the vertical band, the mode bit, the facing cone, then a bare squared
+  distance kept only to MINIMISE. **Nearest wins; nothing is rejected for being far away.** Hence the
+  mod's own `route reach: 3.00m source=class1-no-engine-radius`.
+
+**So the interact component IS the script's rect** — `setrect`'s centre plus `setwh`'s extent, read
+since S166 as `r=6.50 circle`. There is no second object. Routing to it means routing to walkable
+ground inside that volume, which is what S169 built and this session tightened.
+
+### Change
+
+`NearestStandable` now steps by **0.75 m — one player step** — instead of 1 m, and takes the first
+hit, so the goal hugs the object as closely as the walkmap allows. That matters because `setwh`'s
+args 3-4 are still unidentified: whether 6.5 is a radius or a full width is open, and the nearest hit
+is inside the volume on either reading. `maxR` is now only how far it keeps looking, not a target.
+
+### Non-regression
+
+Unchanged from S169 and re-verified: **not one router file is modified**; `FindPolyAt` is
+statement-identical to its old body (29 statements, mechanically diffed vs `HEAD`);
+`FindStandablePolyAt` has exactly two callers, both in `ResolvePlacementsToGround`, which runs only on
+script placements. The new query is not wired into `Walkable` and cannot decline a crossing.
+
+### Open
+
+- **UNPLAYED.** `placement ground:` names the branch and now also prints how far out the goal landed.
+- **Whether `setwh`'s 6.5 is a radius or a diameter is still open** and is the one loose thread here.
+  It bounds only the search, so it cannot put the goal outside the volume, but establishing it would
+  let the mod state the real interaction range. `setrect` args 4-6 and `setwh` args 3-4 are the
+  remaining unknowns from S166.
+
+## Session 171 — 2026-08-27 — [nav] Routing fixed; the prompt is a DIFFERENT problem, and the mod never asked
+
+> ## ⛔ REVERTED IN FULL BY SESSION 172 (2026-08-27)
+> The tester was **not on the correct quest step**, so there was no defect to fix, and this
+> work regressed shipped behaviour (phantom NPCs in Rabanastre; labelled exits relabelled
+> "Sign 1"/"Sign 2"). **`src/` is back to V0.6.5 `9e9a00f`. Nothing below is in the tree.**
+> Read it as a record of a wrong turn, not as documentation of the mod. See Session 172.
+
+
+**KEYWORDS: Cactoid right next to you 3.00m out interact prompt kind 4 IsInteractionAvailable
+entity_classify 233 short-circuit returns true SCENEOBJ_FLAGS_OFF 0x1C FLAG_ACTION 0x004 FLAG_TALK
+0x400 FUN_0025ad10 FUN_0025ae00 gated placement quest 0x35 0x28 S166 open hole placement prompt probe**
+
+**Build:** built + deployed 2026-08-27, clean, no warnings.
+
+> ## ⛔ THE PROBE IN THIS ENTRY WAS REVERTED THE SAME SESSION, AT THE USER'S DIRECTION
+> *"the mod doesn't need to be trying to read quest flags. what you should have done instead was
+> just asked me if we are on the correct step of the quest."* Correct: the placement gate is a
+> QUEST-STATE question, and the person playing the save can answer it in one sentence. Shipping a
+> build to discover it was the wrong instrument entirely — the cheapest measurement here was a
+> QUESTION. `Lessons.md` **L-77**. What survives below is the `entity_classify.cpp:233` kind-4
+> finding, which is real and verified; the `placement prompt:` probe is gone from the tree.
+
+### Routing is fixed, and the log agrees with the user
+
+*"I am able to path to the cactus now but it's not the interact prompt, just open terrain."*
+
+```
+placement ground: routine 9 at (176.80,305.30) is NOT standable -- the OBJECT occupies its own point
+                  -> goal moved to (174.68,47.80,303.18), 3.00m out, the closest walkable ground
+                     inside the 6.50 interaction volume
+[SPEAK-OUT] Dynast-Cactoid 1. right next to you
+```
+
+The player stood at (175.26, 47.63, 302.63) — **3.08 m from the cactus centre**, inside the interaction
+volume under either reading of `setwh`'s 6.5. **The S169/S170 routing work is done.** What is left is
+that the game is not offering an interaction at a spot that is inside the sign's own circle.
+
+### Why the mod never noticed — `entity_classify.cpp:233`
+
+```
+if (kind != KIND_ACTION_GIMMICK && kind != KIND_TALK_TARGET) return true;   // 5 and 1
+```
+
+**A script-placed field sign is KIND 4.** `IsInteractionAvailable` therefore returns `true` on its
+second line without evaluating a single gate — not the enable bit, not the model-loaded bit, not the
+class byte, not the payload id. **For this entire population `available` is a DEFAULT, not a
+measurement**, and the comment above that line ("a decorative sign is not story-gated, it is simply
+not interactive") is exactly the case that turns out to be wrong for kind 4.
+
+Object bytes confirm the kind: `obj+0x0E = 0xB4` on both maps' cacti — low nibble 4, enable bit
+`0x10` set.
+
+### The likely cause is the hole S166 shipped knowingly
+
+S166's own Open section: *"A SCRIPT PLACEMENT CAN BE GATED OFF, AND NOTHING ON THE OBJECT SAYS SO.
+Same enable bit, same (0,0,0), same act=2 whether the placement routine ran or not, so a gated-off
+sign will still be listed and **walking there finds nothing**."* That is the reported symptom
+verbatim. Both maps place their cacti only while story progress >= 1540 and quest `0x35` reads `0x28`;
+the winner's `talk` sets it to `0x32` and removes both.
+
+### What shipped: the line that answers it
+
+`sceneObj+0x1C` is where the question is answerable WITHOUT a map-specific quest flag — NavRva already
+documents `FLAG_ACTION 0x004` / `FLAG_TALK 0x400` as *"what kind of interaction it offers RIGHT NOW"*,
+set and cleared by `FUN_0025ad10` / `FUN_0025ae00` and going to zero while an object is disabled. One
+line per script placement per scan, bounded to 4, log-only:
+
+```
+placement prompt: routine 9 "サボテン_アタリ_砂塵" kind=4 enable=0x.. ready=0x.. type=0x..
+                  +0x1C=0x........ action=? talk=? act.id=? talk.id=? -> the game IS/is NOT
+                  offering an interaction here
+```
+
+### Why a MEASUREMENT and not a gate
+
+Gating `available` on those bits is the obvious fix and it is **deliberately not shipped yet**: it is
+not established whether they are PROXIMITY-driven. `FUN_0025ad10`/`FUN_0025ae00` set 0x400 and clear
+0x004 "when an object enters talk mode", which may mean the bits are only live near the player. If so,
+refusing to list an object whose bits are clear would hide the cactus **from any distance** — which is
+the feature. **One reading settles it; a wrong guess costs the whole population.** (L-76 is the rule
+that says ship the line; L-63 is the one that says a bad gate is worse than no gate.)
+
+### Open
+
+- **The reading decides the next step, and both branches are already written down.** `is NOT offering`
+  while the player is standing in the circle ⇒ the sign is gated off, and the fix is to mark
+  script placements unavailable so the existing story-gate filter hides them (`F5` still shows all).
+  `IS offering` ⇒ the sign is live and the prompt needs something else — facing, or a closer stand
+  point — and the 3.08 m stand distance is the next thing to shorten.
+- `IsInteractionAvailable`'s kind-4 short-circuit is now documented as a **known gap**, not a rule.
+- Nothing in the router changed this session; S169/S170's non-regression argument stands untouched.
+
+## Session 172 — 2026-08-27 — [nav] REVERTED: the whole cactus / script-placement line (S165–S171)
+
+**KEYWORDS: revert script_place S165 S166 S167 S168 S169 S170 S171 quest 0x35 0x28 wrong step
+phantom NPCs Rabanastre exits relabelled Sign 1 Sign 2 doorway tag collision entity_postscan 194
+origin drop 134 field signs L-77 ask the player**
+
+**Build:** full clean rebuild + deploy 2026-08-27. `src/` is byte-identical to HEAD `9e9a00f`
+(V0.6.5-Sponsor-Build). `git diff HEAD -- src/ CMakeLists.txt` is empty.
+
+### Why
+
+**There was no defect.** The tester was **not on the correct quest step.** These field signs only
+exist while quest `0x35` reads step `0x28` — the winner's own `talk` sets it to `0x32` and removes
+all of them — so the cactus genuinely had no interact component to route to. Every build from S166
+onward chased a symptom whose cause was save state. **The mod was already pulling interact prompts
+correctly.** In the user's words: *"cacti may not have needed interactible changes at all."*
+
+**And it regressed shipped, play-confirmed behaviour:**
+
+- **Phantom NPCs in Rabanastre and elsewhere.** S166 stopped dropping objects at the world origin
+  when a script placement matched, admitting a population the scan had always correctly filtered.
+- **Labelled exits became "Sign 1" / "Sign 2" / "Interactables".** `entity_postscan.cpp:194` labels a
+  `doorway`-tagged object as Sign, and that line never changed — **more objects were taking doorway
+  tags.** S166 wrote this risk into its own Open section and shipped anyway: *"a script-placed sign
+  standing near a doorway record could take a tag a real door would have had."* **A risk you can
+  state precisely enough to write down is not covered by writing it down.**
+
+Two measurements from the final session say the same thing:
+
+- **The projection never reached the router.** The resolver logged goal `(194.70,49.92,274.60)` at
+  06:29:08; the route request at 06:30:57 — *after* it — used the raw centre `(191.70,50.00,274.60)`.
+  Route requests that ever used a projected point: **zero.** Dead weight exactly where it was meant
+  to act.
+- **Blast radius far beyond the cacti.** `placement ground:` fired across many maps, including five
+  stacked placements at one coordinate — a population-wide change made to chase two objects.
+
+### What was reverted
+
+`git checkout HEAD -- src/navigation/ CMakeLists.txt` plus deleting the untracked
+`script_place.{h,cpp}`. Every uncommitted hunk under `src/navigation/` belonged to this line
+(verified hunk by hunk, including `sneak_assist.cpp`'s `EntityDiag::OnEventFire` tap and
+`entity_postscan.cpp`'s comment-only change), so nothing unrelated was lost. Gone: `script_place.*`,
+the origin-drop placement branch, `PlacementCaption` labelling, the `e.fixed` pin,
+`FindStandablePolyAt` / `FindPolyAtImpl`, `ResolvePlacementsToGround` / `NearestStandable`, the S165
+spawn watch and `entity_diag` additions, `AsciiSafe` / `FiredRoutineName`, and the `nav_rva.h` event
+-array constants. **`FindPolyAt` is back to its own committed body.**
+
+**The full 1080-line diff and both deleted files are preserved** at
+`<scratchpad>/cactus_line_S165_S170.patch` (session-local — copy it somewhere durable if this is ever
+revisited).
+
+### Kept deliberately
+
+- **`FFXII-Decompile/tools/ebp_disasm.py`** — different directory, not the mod, cannot cause a game
+  regression, and independently correct: 1124 files, 26514/26514 routines decode clean.
+- **`CLAUDE.md`'s "never ask the user to find, reach, or aim at something in the world"** (S165) — a
+  standing accessibility rule, unrelated to cactus behaviour.
+- **`Lessons.md` L-73…L-77** — the reasoning holds independently of the code, and **L-77 is the
+  lesson this whole episode exists to teach.**
+
+### What actually appeared — corrected by the user, and my write-up had it wrong twice
+
+I recorded the regression as "field signs" and the loss as "134 field signs game-wide". **Both were
+wrong.**
+
+- **What appeared was NOT field signs.** It was *"mostly phantom NPCs with no interaction component
+  and unlabelled exits that should have been labelled."*
+- **The 134 figure was an OFFLINE COUNT** derived by parsing 769 map scripts — `showfieldsign` and a
+  mode-2 `talk` binding coinciding. **Not one of them was ever confirmed listed correctly in play.**
+  Recording it as a lost capability dressed an unmeasured number as a benefit. The measured effect of
+  this line of work is the regressions, and nothing else.
+
+**The named case: the SOUTH GATE from Rabanastre Bazaar read as "Sign 2".** That is the worst kind of
+wrong, because *the destination was resolvable the whole time* — the exit had a name available and got
+a generic mod word instead.
+
+### The chain of evidence for the exit relabelling — it was already on the record
+
+1. `doorway` is assigned by `TagDoorwaysAndDropSignTwins` from **a single 2.5 m nearest-wins proximity
+   test** against the `+0x70` field-sign table. One distance, one winner per record.
+2. **That test has a recorded prior failure in BOTH directions on this exact map.** `entity_postscan.cpp`
+   carries it from Session 92: *"the Rabanastre gate crystal was tagged a doorway (false positive),
+   while **"South Gate" and "Lowtown", the map's two actual portals, were not** (false negatives)."*
+3. S166 admitted a **new population of candidate objects** — script placements, previously dropped at
+   the origin — into that same nearest-wins pool, and S168–S170 then moved them onto walkable ground,
+   i.e. *closer to real doorways*.
+4. More candidates inside 2.5 m ⇒ a record claims the wrong object ⇒ the real portal loses its tag.
+5. `ApplyFallbackLabels` labels what is left with the generic word, duplicate numbering turns that into
+   "Sign 1" / "Sign 2", and a portal with a perfectly good destination never speaks its name.
+6. **S166 wrote step 3's risk into its own Open section and shipped it anyway** (L-78).
+
+**The rule that follows:** an exit whose destination resolves must NEVER fall back to a generic word.
+The `Sign` fallback exists for one authorised case — the North End sign the game itself renders as
+"???" — not for a portal that has a name.
+
+### If this is ever revisited
+
+Start from the saved patch and the S166 entry, and **the first question is the doorway-tag collision,
+not the placement parse.** The parse was never the weak link; the 2.5 m nearest-wins test was, and it
+was documented as fragile four sessions before this line of work began.
+
+## Session 173 — 2026-08-28 — [input] The pad scheme, wired whole: one dispatch, three surfaces, and a menu that needs no detector
+
+**KEYWORDS: controller gamepad pad scheme mod mode L3 latch R3 route D-pad party slots right stick
+context gated describe o key Start mod menu F8 InputTracker DispatchModKey DispatchSpeakPhrase
+WM_PADSAY virtual key dispatch centralization PadRouter OnPoll ModModeKeyFor consume mask eatStick
+Phrase ModMode ModCancelled pad connected log line survey frame lag caveat XInputGetState
+Controls.md pad section S152 per-frame play-confirmed S149 tutorial repeat play-confirmed**
+
+**Two confirmations arrived first, and both close standing items.** The tester reports the **six
+S152 per-frame conversions working fine**, so that build stops being the standing first suspect for
+any nav / beacon / menu / dialogue fault. **The S149 tutorial button-prompt repeat is gone** —
+corroborated independently: `end latch idled` appears **zero times** in all three of our own
+2026-08-27 logs on V0.6.5 (`9e9a00f`), and its instrument is now retirable. The user also settled the
+open S152 sub-question by disposing of it: **the game-speed hypothesis was disproven** — the tester
+played at a higher speed and the per-frame fix held, so the fix is speed-agnostic and the
+`textWalk … /frame` reading was never the thing to chase. No log of that run exists and none is
+needed.
+
+### The measurement that was never going to arrive
+
+Before writing a line: **20 logged sessions carry `gamepad intercept installed`, and NOT ONE carries
+a `survey` line.** Every other `[PAD]` line in the whole corpus is the DirectInput device logger
+reporting the **mouse** (`guid=6F1D2B60` is `GUID_SysMouse`; `cbData=20` is `DIMOUSESTATE2`, neither
+of the joystick sizes it was shipped to look for). No pad had ever been connected in any run we hold.
+
+S162 parked Phase 2 behind that survey. **Phase 2 was therefore parked behind a measurement nobody
+was in a position to take** — the user plays on a keyboard, and the only other holders of the build
+are sponsors nobody had asked. The user's call was to build the whole scheme and test it in one pass,
+which is the correct trade once the blocking evidence is understood to be unobtainable at the price
+being paid for it. **FRIDA-FIRST stays waived**, as in S162, by the same explicit instruction.
+
+### The scheme, and the two bindings the user specified
+
+**`o` is context-gated, not modal** (the user's instruction, and it is the better design): right
+stick **Up** reads the description wherever one could be read — a menu, a message box, a battle with
+a target under the cursor — and falls back to previous category on a plain idle field, which is the
+one surface where the description key has nothing to answer and the pathfinder has everything. It is
+the ONLY direction that changes meaning. **The mod menu is mod mode + Start**, also the user's call.
+
+Everything else follows from one rule: **A, B, X and Y are never bound in normal play.** They are the
+game's core verbs, and a mod that eats one is a mod the player cannot play through. So the pathfinder
+took the right stick, the party took the D-pad, the route took R3, and everything that would have
+wanted a face button went behind the modifier.
+
+**Mod mode is a LATCH, not a hold.** L3 says "Mod"; the next button spends it. The left stick is the
+movement stick, so holding L3 while pressing anything else is a genuinely awkward grip — and one
+button at a time is the whole ergonomic argument for a pad. **Every exit speaks**: "Cancelled" on an
+unmapped button, on L3 pressed twice, and on the 5-second timeout. A silent mode is a mode a blind
+player is stuck in without knowing it, which is what `Controls.md`'s "no mode to get stuck in" rule
+was written against. The two words were APPROVED with the S162 plan and deliberately withheld until
+the mode existed; this is the sanctioned moment to add them.
+
+### THE MENU DETECTOR THAT DID NOT HAVE TO BE WRITTEN
+
+"Is a game menu open" looked like the hard part, and `MenuState::IsAnyMenuOpen()` is unusable (1
+write, 0 clears). It needed no new predicate at all: **`OnGameFrame` stops being called when the
+field tick stops, and the party menu is one of the places it stops (S157).** The 250 ms context stamp
+S162 shipped for map changes and stalls therefore expires by itself and the context falls to
+`Unknown` — so "we are in a menu" arrives free, from a mechanism already built for a different
+reason. A stale-verdict timer and a menu detector turn out to be the same instrument.
+
+### What gets consumed is decided by CONTEXT, not by button
+
+On a live field the mod takes the right stick, the D-pad and R3 outright. **In a menu it takes
+nothing and merely listens**: the D-pad is dispatched to the Status and Clan Primer buffers as an
+arrow key AND passed straight through, so the game's own cursor still moves. That is not a
+compromise — it is what the keyboard already does, since the mod cannot swallow a key at all. Both
+devices now behave identically on the same screen, which is the property that makes the pad scheme
+explainable in one sentence per surface.
+
+The mod's own settings menu is the exception: it is a modal overlay, so there the pad IS taken.
+
+### One dispatch, and the pad owns no behaviour
+
+`InputTracker::DispatchModKey(vk)` posts the SAME thread messages the keyboard path posts, routed by
+the same rules (`O`/`T`/`U`/`G` to their handlers, arrows and Home/End to the virtual-buffer path
+with the combat-log fallback on Home/End, everything else to `NavCommands::OnNavKey`). **A pad button
+and its key are the same action by construction** — there is no second copy of "what `\` does" to
+drift, and a future mod key is reachable from the pad by adding one row to a table in `pad_router`.
+
+`InputTracker::DispatchSpeakPhrase(id)` exists for the same discipline on the other side: the pad
+poll runs on the game's input thread, which has never spoken and is not a place to start — the whole
+reason the tracker owns a message loop is that speech must not run inside an input callback. Phrase
+strings are static, so nothing is allocated or owned across the post.
+
+### Also shipped
+
+- **A `controller CONNECTED on index N` log line**, once, on the first poll that returns a pad.
+  Without it an empty survey cannot be told apart from a pad that was never plugged in — and that
+  ambiguity is unreadable in someone else's log, where we cannot ask what was connected.
+### A SETTING WITH A MOD-MENU ROW GETS NO PAD BUTTON (user's rule, same day)
+
+The first cut of mod mode put combat verbosity on L1 and the audio beacon on R1, copying the
+keyboard's `F4` / `F11` shortcuts. **The user struck both:** *"any toggles don't need mod specific
+functions. they can be toggled from the mod menu or the keyboard."*
+
+The reasoning generalises past those two. Every surviving mod-mode entry **asks the mod something or
+moves somewhere** — a readout, a route, a step through the log. A switch is different in kind: it is
+already two presses away behind Start, and the menu **says what it changed and what the new value
+does**, which a bare toggle press does not. A keyboard shortcut for the same switch costs nothing
+because keys are plentiful; a pad button is scarce, and a duplicate route to a switch is not what to
+spend one on. The rule pre-emptively excludes `F5`, `F7` and the volumes too, and it is why the pad
+scheme has exactly one settings entry: Start.
+
+**L1 and R1 are left UNMAPPED rather than refilled.** An unmapped button in mod mode says
+"Cancelled", which is a truthful answer; inventing a use for a newly free button is how a scheme
+grows bindings nobody asked for.
+
+- **The survey stays**, now measuring what the game does with what we do NOT take. **One caveat
+  recorded, unmeasured, from reading the code:** it reads the game's pad words on the same poll that
+  is still returning the press, so a fresh press may be read one frame before the game has acted on
+  it. **If Start and A also come back `no-reaction`, the instrument is early — not the game silent.**
+  That is the first thing to check on the first real log.
+
+### What this is waiting on — one pass, in this order
+
+1. **Passthrough.** A, B, X, Y, Start, Back, L1, R1 and the left stick behave exactly as before,
+   everywhere. A regression here ends the pass: `Controller` to Off in `F8` and report.
+2. **The field.** Right stick cycles objects and categories instead of turning the camera; D-pad
+   speaks party members; R3 routes.
+3. **The menus.** Right stick Up describes; the D-pad still moves the game's own cursor.
+4. **Mod mode.** L3 says "Mod"; Start opens the settings menu; an unmapped button says "Cancelled".
+
+`Docs/Controls.md` carries the scheme. **README deliberately does NOT yet** — it describes the mod as
+it is for players, and one play pass stands between this and that being true.
+
+**Open:** `pad_router.cpp` is 418 lines and the house rule plans a split at 400. The natural seam is
+the scheme tables out to their own translation unit; not done this session because moving them before
+the bindings survive contact would be moving something that is still changing.
+
+## Session 174 — 2026-08-29 — [input] The pad scheme after its first play pass, and a config gauge that was never unreadable
+
+**KEYWORDS: controller gamepad pad scheme play pass R1 route active target Back Select mod mode
+latch L3 kill switch ControllerOn ToggleController WM_PADCTRL DispatchToggleController
+SetControllerToggleCallback pad_survey.cpp one poll late GAME-REACTED no-reaction survey L-04
+absence GetActiveTarget rename locked target lock-on L2 D-pad field only Battle Speed config gauge
+EnumD6B0 partytop_4_c HasPerOptionLabels GaugeReadout OfJoiner sel count 0xD2 TZA pad controls**
+
+### The play pass
+
+First run of the S173 scheme, on the user's own pad (`FFXII-Screen-Reader-Latest.log`, 2026-08-29 —
+the first log in the project's history with a real `[PAD] controller CONNECTED on index 0` line).
+
+**Confirmed working:** the right stick drives the pathfinder (`R-stick-Left -> previous object ([)
+ctx=field`), the field camera is swallowed as designed, the D-pad speaks party slots
+(`D-pad Up -> party 1 (4) ctx=field`), and in menus the D-pad dispatches a buffer arrow *and* still
+moves the game's cursor (86 lines, `ctx=unknown`).
+
+**Mod mode never armed** — and the reason was not a defect. See both corrections below.
+
+### Two wrong readings, both mine, both corrected by the user
+
+**1. `L-04 ⟲`, on the absence side.** The log had zero `L3` and zero `R3` survey lines. The survey
+loops all 16 button bits on every rising edge, before any binding logic, so I concluded the
+thumb-click bits never reach the mod — a hardware diagnosis, stated with confidence, carried into a
+plan. **The user had simply not pressed them.** The refutation was sitting two lines above the code
+I was reading: *"an absent line means that value never occurred, NOT that the control was never
+pressed."* Recorded as a recurrence on L-04.
+
+**2. `L-80`, new.** S162 pre-registered the right test — *"if Start and A come back `no-reaction`,
+the instrument is early"* — and `survey Start ctx=field ... no-reaction` was in the log, so I
+declared the survey broken and set its whole output aside. **Start does not open a menu in FFXII; it
+pauses. Triangle opens the menu.** The control was never verified and was checkable in one question.
+
+**Then the fallback evidence went the same way.** I fell back on "`R1 ctx=unknown` logged both
+`no-reaction` and `GAME-REACTED pad=0x0080` — a sample race". `0x0080` in the game's word space is
+**LEFT** (S70, measured); R1 is `0x0800`. That line is a direction being held while a shoulder bit
+rose — the layer-3 D-pad/left-stick merge — and says nothing about R1. **Nothing survives. Whether
+the old sampling was early is still unmeasured**, and the one-poll-late change stands on S162's
+a-priori argument alone, which is fine but is not the same thing.
+
+**Both errors have the same shape: a number decoded by assuming what it referred to.** Start's
+meaning was assumed; `0x0080`'s bit layout was assumed.
+
+### The survey never printed the word that provoked it — fixed
+
+The user then established that **L1, L2, R1, R2, L3 and R3 were never pressed in that session at
+all** (face buttons, D-pad, right stick, Start and Back only). The log nonetheless carries `L1` and
+`R1` edges. Nothing in a survey line could tell a stray bit from a chord from a second device,
+because the line named one button and printed only the GAME's word.
+
+`survey` lines now carry **`idx=`** (the XInput user index) and **`raw=`** (the whole XInput button
+word at the edge). That settles three separate things at once on the next log: whether the stray
+shoulder edges come from another pad index, what else was held when a button was surveyed, and — the
+one that matters most — **a bit-for-bit correspondence between XInput's word and the game's**, from
+real presses.
+
+**That last one bears on the PS2 libpad mask (0.95) in `GameArchitecture.md`.** This log does not
+promote it; it points the other way. D-pad presses produced game words of `0x0100`/`0x0200`/`0x0400`/
+`0x0800`, which that layout calls **L2/R2/L1/R1** — buttons nobody touched. The log cannot say
+whether the layout is wrong, the words are not the direct digital mask, or the samples are merged
+with the left stick. `raw=` is what makes that answerable instead of guessable.
+
+### What FFXII actually does with a pad — established, and now in GameArchitecture.md
+
+The scheme had been designed for a year against an unknown. It is not unknown: L1 is Speed mode, L2
+is zoom and then **lock-on**, L3 the area map, R2 map zoom and then hold-to-flee, R3 recentre camera,
+Select the map, Start pause, Triangle the party menu. **R1 is the only control with no field job at
+all**, and its one battle job — switching the target list to Reserve — needs a targeting cursor up,
+which the router already classifies `FieldBusy` and passes through.
+
+### The scheme, revised
+
+- **R1 is the route key, and the second context-gated control** after the stick's Up. Field: route +
+  beacon (`\`). Battle: route to the **active target** (`p`). The user's instruction, and it is the
+  point of the change: `p` had been buried in mod mode, two presses deep behind a latch nobody was
+  going to reach mid-fight. Both routes are now one press in the context that wants them.
+- **Mod mode moved L3 → Back/Select.** A stick click cannot be reached without taking the thumb off
+  the stick it is steering with, which is why the mode went a whole session untried. Costs the game's
+  map toggle, taken knowingly. Back inside mod mode is now the cancel gesture that L3-twice was, and
+  the readout it used to carry (`;`) moved to L1.
+- **L3 is the intercept kill switch, both ways.** `ModMenu::ToggleController` speaks "Controller,
+  Off" — name included, unlike every other adjust path, because L3 is the one setting a resting thumb
+  flips by accident. It runs from a prologue ABOVE the `ControllerOn()` gate: a switch below its own
+  gate can only be thrown once. **Amendment recorded in CLAUDE.md and GameArchitecture.md** — "off
+  returns on the first line" is now "off writes nothing"; the byte-identical bound is on the WRITE.
+- **D-pad party slots are field-only**, no longer field-or-battle. A fight is always one command menu
+  away and party slots are not worth costing the player that cursor.
+- **The survey reads the game's words one poll LATE**, S162's own prescribed fix, so `no-reaction`
+  starts meaning something. Split out to `src/input/pad_survey.cpp` — it answers what the GAME does
+  with a control, which is a different question from what the mod makes it mean, and `pad_router.cpp`
+  had crossed the 500-line rule. **That closes S173's open split item**, on a better seam than the
+  tables it proposed.
+- **`GetLockedTarget` → `GetActiveTarget`** (and the two `NAV-ROUTE` log strings). The name meant the
+  L2 hold-to-face lock-on to a reader who did not already know better, and it cost this session's
+  reasoning. `audio_clips.h` had the right word (`ActiveTarget`) all along.
+
+### Battle Speed: the value was never unreadable, only unspoken
+
+Reported as "not reading, nothing on highlight or on change". The log named the cause in one line:
+
+```
+config row REFUSED (no per-option labels -- not an enum): row=...2CE24C40 class=0x23D6B0 kind=2
+sel=5 bytes=[70 61 72 74 79 74 6F 70 5F 34 5F 63]
+```
+
+`class=0x23D6B0` is `ValueRow::EnumD6B0`; the bytes are ASCII **`partytop_4_c`**, a sprite name. The
+row is drawn as **gauge blocks**, so every option decodes to the same bytes and S148's
+`HasPerOptionLabels` guard correctly refused to speak mojibake — and then had nothing else to say.
+
+**But `sel=5` was in the refusal line the whole time.** `SelectedIndex` finds the selected child by
+its flag bit and had always been right; what was missing was a way to render it. `GaugeReadout` now
+counts the blocks instead of decoding them — `sel+1` of the count at `row+0xD2`, joined with the
+phrasebook's existing `OfJoiner`, so no new string was invented. Scoped to D6B0/DB40, the two classes
+that carry a count; E770 has none and still refuses, because a bare index with no range is a number
+the player cannot act on. The log line survives, reworded to say which branch it took — a row that
+lands there and is *not* a gauge is the next defect.
+
+**Same fix on the change path**, with the assumption stated in the code: `nv` is taken to be the
+display index, which is already load-bearing for the working enum rows of this class but is
+unverified for a gauge. If a change speaks a number the highlight then contradicts, that line is the
+one to drop.
+
+### Open
+
+- **Everything above is BUILT, DEPLOYED, UNPLAYED** except the right stick and the D-pad.
+- The next survey is the first one worth reading, and now for a second reason: `raw=` makes the
+  XInput ↔ game-word correspondence readable. Press L1, L2, R1, R2, Start, Back, L3, R3 deliberately,
+  on the field and in a fight, so each `raw=` has exactly one bit set.
+- **`L1` and `R1` edges appear in the 2026-08-29 log for buttons the user is certain were never
+  pressed.** Unexplained. `idx=` will say whether they came from a second pad index; `raw=` will say
+  what else was down. Do not build on either line until that is answered.
+- **The PS2 libpad mask stays at 0.95 and stays unusable.** It was to be promoted or killed from
+  survey lines; the first real log fails to promote it.
+- README still does not carry the pad scheme, deliberately — one play pass stands between this and
+  it being true for players.
+
 ## Session 175 — 2026-08-30 — [menus] Dialogue choices: two detectors that each covered half a surface, and the one field that covers both
 
 KEYWORDS: dialogue choice options not spoken on highlight Archades Commit this tale to memory child

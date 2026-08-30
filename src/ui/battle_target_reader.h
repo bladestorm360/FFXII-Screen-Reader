@@ -29,20 +29,24 @@ namespace BattleTargetReader {
 bool Init();
 void Shutdown();
 
-// On-demand read of the current locked/selected battle target's live world position + name, for
-// the `p`-key route (nav_commands). Gates on the LIVE game target-selection state (DAT_0209be80
-// gate + selected handle read at call time) — NOT on cache age — then re-resolves a fresh position
-// from the cached target. Returns false when no target is currently selected/locked (or not in
+// On-demand read of the ACTIVE battle target's live world position + name, for the `p`-key route
+// (nav_commands) and the pad's R1 in combat. Gates on the LIVE game target-selection state
+// (DAT_0209be80 gate + selected handle read at call time) — NOT on cache age — then re-resolves a
+// fresh position from the cached target. Returns false when there is no active target (or not in
 // battle), INCLUDING when the selected unit has died. Thread-safe (called from the input thread;
 // all reads SEH-guarded).
-bool GetLockedTarget(FVec3& posOut, std::wstring& labelOut);
+//
+// "ACTIVE", NOT "LOCKED" (renamed S174). This was `GetLockedTarget`, and the name cost a session:
+// it reads the target the game is acting on, which needs no battle menu open and is NOT the L2
+// hold-to-face LOCK-ON. `audio_clips.h` had the right word for it (`ActiveTarget`) all along.
+bool GetActiveTarget(FVec3& posOut, std::wstring& labelOut);
 
 // `;` — speak the ACTIVE COMBAT TARGET's status (name + vitals): the target the leader is committed
 // to acting on. **SILENT in every other case** — no commitment, a merely browsed cursor, or out of
 // battle entirely. It does NOT say "No target"; it says nothing (user instruction, release 0.1).
 //
 // OUT OF BATTLE THIS KEY DOES NOTHING. That is the point of it — do not "restore" a field-cursor
-// readout or a spoken no-target message. Note this is a NARROWER contract than GetLockedTarget
+// readout or a spoken no-target message. Note this is a NARROWER contract than GetActiveTarget
 // above, which still accepts a browsed target for routing; the two callers differ deliberately.
 // Same liveness rules and formatting as the automatic target-change announcement.
 // Thread-safe (input thread).

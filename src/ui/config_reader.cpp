@@ -4,6 +4,7 @@
 #include "core/game_text.h"
 #include "core/logger.h"
 #include "core/mem_read.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <cstdint>
@@ -125,12 +126,51 @@ bool HasPerOptionLabels(void* row, ValueRow kind) {
     return memcmp(a, b, la) != 0;
 }
 
-// One line per distinct row, so a cursor parked on the offender cannot flood the file. What the next
-// session needs to fix this properly is all here: the class pointer (the builder address stored at
-// row+0 by FUN_00244f50 -- FUN_0023ed80's type switch maps type -> builder, and type 10 ->
-// FUN_0023e400 is a SEVENTH builder ClassifyValueRow does not know), the kind it matched, the
-// selected index, and the bytes that were being decoded as a label.
-void LogRefusedRow(void* row, ValueRow kind, int sel) {
+// Its own function because a std::wstring may not live in a __try scope -- the same split every
+// other guarded read in this file uses (see the note at the top).
+bool ReadOptionCount(void* row, int* out) {
+    if (!row || !out) return false;
+    __try {
+        *out = *reinterpret_cast<uint8_t*>(reinterpret_cast<char*>(row) + OFF_ROW_CCOUNT);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+// GAUGE ROWS READ AS A NUMBER (S174). A row with no per-option labels still knows perfectly well
+// WHICH option is selected -- `SelectedIndex` finds it by the child's flag bit, and the refusal log
+// has been printing it as `sel=` all along. What was missing was never the value; it was a way to
+// say it. So the blocks get counted instead of decoded: "6 of 6".
+//
+// SCOPED TO D6B0/DB40 ON PURPOSE. Those two carry an option COUNT at row+0xD2, which is what makes
+// "of 6" true rather than invented. E770 has no count field, so it keeps refusing -- a bare index
+// with no range would be a number the player cannot act on ("speed 6" of how many?).
+//
+// A count that reads as 0, or as something absurd, degrades to the bare position rather than
+// printing a range we do not believe. Same instinct as FormatSlider's max==0 guard.
+std::wstring GaugeReadout(void* row, ValueRow kind, int sel) {
+    if (sel < 0) return std::wstring();
+    if (kind != ValueRow::EnumD6B0 && kind != ValueRow::EnumDB40) return std::wstring();
+    int count = 0;
+    if (!ReadOptionCount(row, &count)) count = 0;
+
+    // `sel` is a 0-based display index; the gauge the player sees is 1-based.
+    std::wstring out = std::to_wstring(sel + 1);
+    if (count > 0 && count <= 32 && sel < count) {
+        out += Phrase::Get(Phrase::Id::OfJoiner);
+        out += std::to_wstring(count);
+    }
+    return out;
+}
+
+// One line per distinct row, so a cursor parked on the offender cannot flood the file. What a future
+// session needs is all here: the class pointer (the builder address stored at row+0 by FUN_00244f50
+// -- FUN_0023ed80's type switch maps type -> builder, and type 10 -> FUN_0023e400 is a SEVENTH
+// builder ClassifyValueRow does not know), the kind it matched, the selected index, and the bytes
+// that were being decoded as a label.
+//
+// It stayed after S174 gave gauges a readout, because "took the gauge path" is exactly what a future
+// log needs to show -- a row that lands here and is NOT a gauge is the next defect.
+void LogGaugeRow(void* row, ValueRow kind, int sel, bool spoke) {
     static void* s_seen[8] = {};
     for (void* p : s_seen) if (p == row) return;
     for (void*& p : s_seen) if (!p) { p = row; break; }
@@ -145,8 +185,9 @@ void LogRefusedRow(void* row, ValueRow kind, int sel) {
     for (size_t i = 0; i < len && i < 16; ++i) snprintf(hex + i * 3, 4, "%02X ", raw[i]);
     char m[256];
     snprintf(m, sizeof(m),
-             "config row REFUSED (no per-option labels -- not an enum): row=%p class=%p kind=%d "
-             "sel=%d bytes=[%s]",
+             "config row has no per-option labels (gauge, not an enum) -- %s: row=%p class=%p "
+             "kind=%d sel=%d bytes=[%s]",
+             spoke ? "read as a NUMBER" : "REFUSED, no option count",
              row, cls, static_cast<int>(kind), sel, hex);
     Log::Write("READER", m);
 }
@@ -243,7 +284,11 @@ std::wstring RowValue(void* row) {
             return ControlsBindingValue(row);
         default: {                      // E770 / D6B0 / DB40 enums
             const int sel = SelectedIndex(row, kind);
-            if (!HasPerOptionLabels(row, kind)) { LogRefusedRow(row, kind, sel); return std::wstring(); }
+            if (!HasPerOptionLabels(row, kind)) {
+                std::wstring gauge = GaugeReadout(row, kind, sel);
+                LogGaugeRow(row, kind, sel, !gauge.empty());
+                return gauge;                                   // empty => still refused, still silent
+            }
             return OptionLabel(row, kind, sel);
         }
     }
@@ -257,9 +302,15 @@ std::wstring RowValueAtNewValue(void* row, int nv) {
         if (!ReadSlider(row, &val, &max)) return std::wstring();
         return FormatSlider(static_cast<uint32_t>(nv), max);   // nv is the new gauge value
     }
-    // Same refusal as RowValue: this path is where the defect was MEASURED (two different `nv`,
-    // identical bytes), so it must not keep speaking what the other path now declines to.
-    if (!HasPerOptionLabels(row, kind)) return std::wstring();
+    // Same fork as RowValue. This path is where the defect was MEASURED (two different `nv`,
+    // identical bytes), so it must not keep speaking what the other path declines to -- and now that
+    // gauges have a readout it must not stay silent where the other path speaks either.
+    //
+    // `nv` IS ASSUMED TO BE THE DISPLAY INDEX, exactly as the enum line below already assumes for
+    // this same row class. That assumption is play-proven for the enum rows ("Battle Mode: Wait");
+    // for a gauge it is not, so if a change speaks a number the highlight then contradicts, this is
+    // the line to drop -- the value would simply ride the next paint instead.
+    if (!HasPerOptionLabels(row, kind)) return GaugeReadout(row, kind, nv);
     return OptionLabel(row, kind, nv);                          // nv is the new option index
 }
 

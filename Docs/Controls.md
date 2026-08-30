@@ -483,3 +483,112 @@ Worth stating plainly because it will be tempting: the Equipment screen's automa
 autodetail already existing. It is one line about one character on a screen whose whole purpose is
 that comparison. Autodetail is the general "volunteer the detail everywhere" switch, and the shop
 is what it is for.
+
+## Controller — the pad scheme (Session 173, revised 174)
+
+> **STATUS: the right stick and the D-pad are PLAY-CONFIRMED; the rest is built and untried.** The
+> first play pass (2026-08-29) confirmed the pathfinder stick, the swallowed field camera and the
+> party slots. Everything below them changed after that pass and has not been played yet.
+
+**What FFXII itself uses a pad for**, which is what the scheme had to be built around:
+
+| Button | Field | Battle |
+|---|---|---|
+| L1 | Speed mode (x2 / x4) | Speed mode |
+| L2 | Toggle zoom | **Lock on to target** |
+| L3 | Show area map | Show area map |
+| **R1** | *nothing* | Selects **Reserve** in the target list |
+| R2 | Zoom the map and the license board | Hold to run from enemies |
+| R3 | Recentre the camera | Recentre the camera |
+| Select | Display map | Display map |
+| Start | Pause | Pause |
+| Triangle | Party menu | Party menu |
+
+**R1 is the only control the game leaves free on the field**, which is why the route lives there.
+The mod claims three things the game does use — Select's map, L3's area map, and the D-pad — and
+each was a deliberate trade. The `Controller` row in the `F8` menu, or **L3**, turns the whole thing
+off and hands the pad back untouched.
+
+The pad reaches the mod through an `XInputGetState` intercept, and **it can only take an input away
+from the game, never press one** — see the second input-write exception in `CLAUDE.md`. Anything not
+listed here arrives at the engine exactly as it would with no mod installed.
+
+**Nothing is bound to A, B, X or Y in normal play.** Those are the game's own verbs, and a mod that
+eats one is a mod you cannot play through. Everything that would have wanted a face button lives
+behind the modifier instead.
+
+### Normal — no modifier
+
+| Control | Does | Same as |
+|---|---|---|
+| Right stick Up | **In a menu, a message box or a battle: reads the description** — and Libra on a targeted enemy. **On the open field: previous category** | `o` / `-` |
+| Right stick Down | Next category | `=` |
+| Right stick Left | Previous object | `[` |
+| Right stick Right | Next object | `]` |
+| D-pad (field only) | Party status — **clockwise from Up: member 1, 2, 3, then the guest** | `4` `5` `6` `7` |
+| D-pad (anywhere else, combat included) | Walks the Status Attributes page and an open Clan Primer entry, exactly as the arrow keys do. The game still gets the press | Arrow keys |
+| R1 (field) | Route to the current selection, and start the audio beacon | `\` |
+| R1 (battle) | Route to the **active target** | `p` |
+| Back / Select | Mod mode — says **"Mod"** | — |
+| L3 (left stick click) | Switch the pad intercept off or on — says **"Controller, Off"** | `F8` → Controller |
+
+> **Right stick Up is the one control that changes meaning, and it is the only one.** On a plain
+> idle field the description key has nothing to answer and the pathfinder has everything, so Up
+> cycles the category there. Anywhere a description could be read, it reads it.
+
+> **R1 is the other control that changes meaning.** Out of combat it routes to whatever the stick
+> has selected; in a fight it routes to the target you are already acting on. Both are one press,
+> in the context where each is wanted. With a targeting cursor up the mod does not take R1 at all,
+> so the game keeps its Reserve switch.
+
+> **The D-pad is only taken on the open field — never in combat.** Everywhere else it is dispatched
+> to the mod *and* passed straight through, so the game's own cursor still moves. That is what the
+> arrow keys already do, since the mod cannot swallow a key. A fight is always one command menu
+> away, and party slots are not worth costing you that cursor.
+
+> **L3 hands the whole pad back, and hands it back again.** It works whether the intercept is on or
+> off — a switch you could only throw once would leave you at the keyboard to undo it. While the
+> intercept is off the mod reads that one button and nothing else, and changes nothing the game sees.
+
+### Mod mode — press Back, then one button
+
+Back says **"Mod"**. The next button is a mod command and the mode ends. Anything unmapped — Back
+again included — says **"Cancelled"**, and so does five seconds of silence, so there is no mode to
+get stuck in.
+
+> It moved off L3 in Session 174. A stick click cannot be reached without taking your thumb off the
+> stick you are steering with, which is why the mode went a whole session without being tried once.
+
+| Button | Does | Same as |
+|---|---|---|
+| Start | Open the mod's settings menu | `F8` |
+| A | Describe / Libra | `o` |
+| B | Re-read the last line of dialogue | `t` |
+| X | Rescan, and say the area name | `` ` `` |
+| Y | Describe the current selection | `/` |
+| D-pad Up | License Points | `U` |
+| D-pad Down | Party gil | `g` |
+| D-pad Left / Right | Combat log: older / newer | `,` `.` |
+| L1 | Target readout | `;` |
+
+> **No setting has a pad button of its own, with one exception.** Combat verbosity, the audio
+> beacon, the availability filter, autodetail and the volumes are all changed in the settings menu,
+> which is Back then Start —
+> and the menu says what it changed and what the new value does. The keyboard shortcuts for them are
+> unchanged. A pad has few buttons and none of them is worth spending on a second route to a switch.
+>
+> The exception is the `Controller` switch on L3, and only because it is the way out: reaching the
+> pad's own off switch through a menu you drive with the pad is circular.
+
+### The mod menu, from the pad
+
+While the mod's settings menu is open it owns the pad: D-pad or right stick moves between settings
+and changes the focused one, **A** reads its description, **B**, **Start** or **Back** closes it. Everything
+the pad has no direct binding for is reachable this way — the availability filter, autodetail, the
+volumes, and the `Controller` switch itself.
+
+### What has no pad binding
+
+`F6` (label from the clipboard), `'` (the diagnostic probe), `8` and `9` (equipment columns 5 and 6),
+and `B` / `N` (the Bhujerba shout minigame). The first two are development keys; the rest are
+keyboard-only for now rather than deliberately excluded.

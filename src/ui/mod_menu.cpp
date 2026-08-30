@@ -315,6 +315,7 @@ bool Init() {
     Load();                                     // seeds defaults, then overlays the stored file
     InputTracker::SetModMenuNavCallback(&OnMenuNavKey);
     InputTracker::SetModMenuDescribeCallback(&OnDescribe);
+    InputTracker::SetControllerToggleCallback(&ToggleController);
     g_initialized = true;
     for (int i = 0; i < kCount; ++i) LogState("initialized", i);
     return true;
@@ -324,6 +325,7 @@ void Shutdown() {
     if (!g_initialized) return;
     InputTracker::SetModMenuNavCallback(nullptr);
     InputTracker::SetModMenuDescribeCallback(nullptr);
+    InputTracker::SetControllerToggleCallback(nullptr);
     g_open.store(false, std::memory_order_relaxed);
     g_initialized = false;
 }
@@ -386,7 +388,9 @@ void Toggle() {
 
 void CycleSetting(SettingId id) { Adjust(id, +1); }
 
-void Adjust(SettingId id, int delta) {
+// The one place a setting's value ever changes. `speakName` picks between the two readouts below;
+// everything else about the mutation is identical, which is why this stayed a single function.
+static void AdjustImpl(SettingId id, int delta, bool speakName) {
     const int i = static_cast<int>(id);
     if (i < 0 || i >= kCount) return;
     const Setting& s = kSettings[i];
@@ -409,8 +413,18 @@ void Adjust(SettingId id, int delta) {
     }
     // The value alone, not the setting name: F4 is a dedicated key whose meaning the player already
     // knows, and inside the menu they just heard the name. Short enough to use mid-fight.
-    Speech::Output(ValueOf(i), true);
+    Speech::Output(speakName ? NameAndValue(i) : ValueOf(i), true);
 }
+
+void Adjust(SettingId id, int delta) { AdjustImpl(id, delta, /*speakName=*/false); }
+
+// S174: the pad's own kill switch, bound to L3. It speaks the NAME as well as the value, unlike
+// every other adjust path. `F4` is a key the player chose to press knowing what it means, and inside
+// the menu they just heard the row's name a moment ago -- but L3 sits under a thumb that is resting
+// on the movement stick, so it is the one setting that gets flipped by accident. "Off" alone would
+// leave a blind player guessing WHICH thing just went off, at the exact moment their pad changed
+// behaviour. "Controller, Off" costs one word and answers it.
+void ToggleController() { AdjustImpl(SettingId::Controller, +1, /*speakName=*/true); }
 
 // (`SetSilently` lived here until Session 115. It set a value without speaking it -- the one caller
 // was sneak assist's auto-off on a map change -- and went with the toggle that needed it. `Adjust`

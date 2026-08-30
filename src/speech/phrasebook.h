@@ -151,6 +151,12 @@ enum class Id {
     // pad player cannot report a bug from, so there is always a keyboard route back to a stock pad.
     // Wording from the approved plan; flag it to the user before rewording.
     SettingController, ControllerDesc, ControllerDescOff, ControllerDescOn,
+    // S173: mod mode -- the pad's modifier. Both words were APPROVED with the S162 plan and
+    // deliberately withheld until the mode existed, so this is the sanctioned moment to add them.
+    // "Mod" is spoken on arming and "Cancelled" whenever the mode ends without running a command
+    // (the modifier pressed twice, an unmapped button, or the arm timing out). A blind player must
+    // be able to hear which of the two pads they are holding, so BOTH transitions speak.
+    ModMode, ModCancelled,
     // (S106's four sneak-assist ids were removed in S115 with the setting they named. The feature is
     // automatic on the maps `path_danger.cpp` lists, so it has no menu row and speaks nothing.)
 

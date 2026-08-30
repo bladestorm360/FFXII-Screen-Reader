@@ -130,6 +130,10 @@ const Row kTable[] = {
     EN(L"Whether the mod reads your controller. Off hands the whole pad back to the game."),
     EN(L"Off passes every button and stick straight to the game, exactly as if the mod had no controller support."),
     EN(L"On lets the mod use the controller. Anything the mod does not use still reaches the game."),
+    // S173: mod mode. One word each on purpose -- these interrupt whatever is being read, and they
+    // are heard many times a session.
+    EN(L"Mod"),
+    EN(L"Cancelled"),
     // (S106's four sneak-assist rows were removed in S115. The feature became automatic on the
     // danger-table maps, so it has no menu row and no words -- and an unused row here would be an
     // invented label waiting to be re-used for something it was not written for.)

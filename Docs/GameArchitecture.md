@@ -73,6 +73,63 @@ TRIANGLE 0x1000, CIRCLE 0x2000, CROSS 0x4000, SQUARE 0x8000`. The axis order abo
 **Coherent is not confirmed.** This is 0.95 and may not be built on. The `PAD survey` lines from the
 controller measurement build name each bit from a real press; promote or kill it from those.
 
+> **⚠ THE FIRST REAL PAD LOG (2026-08-29) DOES NOT PROMOTE IT — IT POINTS THE OTHER WAY.** D-pad
+> presses produced game words of `0x0100`, `0x0200`, `0x0400` and `0x0800`, which this layout calls
+> **L2, R2, L1 and R1** — buttons the player was not touching. Either the layout is wrong, or these
+> words are not the direct digital mask, or the samples are contaminated by the D-pad/left-stick
+> merge. **The log cannot distinguish those**, because the survey printed the game's word without
+> printing the XInput word that provoked it. S174 added `raw=` and `idx=` to every survey line for
+> exactly this: the next log gives a bit-for-bit correspondence from real presses, and that is what
+> promotes or kills this table. **Until then it stays at 0.95 and stays unusable.**
+
+### What FFXII TZA itself does with a pad (2026-08-29)
+
+Established from the published control scheme, NOT from the binary — there is no pad binding table
+in the exe to read (see the STRUCK claim about `FUN_002b5c90` above: it reads column 0 of the
+KEYBOARD banks and the pad is not rebindable at all). Sources: ff12sector.com/ff12_controls.php and
+Neoseeker's Basics page. **The mod's whole pad scheme is built around this table**, so a correction
+to it is a correction to `src\input\pad_router.cpp`.
+
+| Button | Field | Battle |
+|---|---|---|
+| L1 | Speed mode (x2 / x4) | Speed mode |
+| L2 | Toggle zoom | **Lock on to target** (hold to face it) |
+| L3 | Show area map | Show area map |
+| **R1** | *nothing* | Selects **Reserve** in the target list |
+| R2 | Zoom the map and the license board | Hold to run from enemies |
+| R3 | Recentre the camera | Recentre the camera |
+| Select | Display map | Display map |
+| Start | **Pause** — it does NOT open a menu | Pause |
+| Triangle | Party menu | Party menu |
+| Cross | Confirm / talk / inspect | Battle menu, confirm |
+| Circle | Cancel | Cancel |
+| Square | Talk | Battle menu |
+
+**R1 is the only control with no field job**, which is why the mod's route key lives there. Its one
+battle job needs a targeting cursor up, which the router classifies `FieldBusy` and passes through.
+
+> **"Lock-on" and "active target" are different things, and the distinction is load-bearing.** The
+> LOCK-ON is L2, held, and makes the character face a target; the mod never touches it. The ACTIVE
+> TARGET is what the game is acting on, needs no battle menu open, and is what `;` speaks and `p`
+> routes to. `BattleTargetReader::GetLockedTarget` was renamed `GetActiveTarget` in S174 because the
+> old name had already cost one session's reasoning.
+
+> **The survey's `no-reaction` verdict does not clear a button, and its `GAME-REACTED` does not
+> convict one either.** In the first real pad log the single `GAME-REACTED` on `R1` read
+> `pad=0x0080` — LEFT in this word space, not R1 (`0x0800`). It was a direction being held while the
+> shoulder bit rose, which is the D-pad/left-stick merge doing exactly what layer 3 always does.
+> **A survey line is only evidence when the game word's moving bit corresponds to the control named**,
+> and that comparison was not possible until S174 added `raw=`.
+
+### Amendment to the intercept's "off" guarantee (S174)
+
+`CLAUDE.md`'s second input-write exception said `PadRouter::OnPoll` "returns on its first line" with
+the `Controller` row off. It now returns on the FOURTH: foreground check, edge bookkeeping, the `L3`
+kill-switch test, then the gate. **The guarantee that matters is unchanged** — with the intercept off
+the mod writes nothing, so the `XINPUT_STATE` the game reads is byte-identical to an unmodded run.
+What changed is that the mod still READS one bit while off, which is what lets `L3` switch it back
+on. A switch that could only be thrown once is not an escape hatch.
+
 ## Locale Detection — CORRECTED APPROACH (2026-05-05)
 
 Original plan: scan the binary for `en-US`/`ja-JP`/etc. literals and find the
@@ -1317,13 +1374,180 @@ have a proper .ebp/.dbg disassembler (or once the FF12 VM Script
 Decompiler from Nexus mod 124 is available), we can read these
 functions in source-level form.
 
-### Next steps (script layer)
-1. Write `.ebp`+`.dbg` disassembler (Python; has enough format info from
-   strings and offsets — pair with bytecode opcode discovery).
-2. Find the .ebp interpreter function in `FFXII_TZA.exe`. It will
-   reference the `EBP2` magic at startup.
-3. Hook the interpreter from the C++ mod — every script call becomes
-   observable, including `fsttl_newgamestart` for the title screen.
+### ~~Next steps (script layer)~~ — 1 DONE 2026-08-26 (Session 166), 2 done (Session 48), 3 not needed
+
+1. ✅ **`FFXII-Decompile\tools\ebp_disasm.py` decodes the whole shipped corpus** — 1124 files,
+   26514 routines, zero decode failures, with natives named, message text resolved and float/ID
+   constants inlined. See below and `FFXII-Decompile\notes\ebp2_disasm_fix.md`.
+2. ✅ The VM is `FUN_0025e4c0` (RVA `0x13E4C0`), opcode table `DAT_01efea60`.
+3. Not needed for anything shipped: the mod reads the LOADED BLOB directly (exits, and now script
+   placements), which is cheaper than hooking the interpreter and cannot perturb it.
+
+## THE FIELD-SCRIPT BLOB, in full — Session 166
+
+Everything the mod reads out of a map's compiled script hangs off ONE base, and until this session
+the offline tool and the runtime reader were using two different ones. **The `.ebp` FILE is a
+container; the runtime script blob starts at `file + u32(file+0x10)` = `0x80` on all 1124 shipped
+scripts, and every offset in the script header is relative to THAT base.** `map_script_internal.h`
+had it right from live memory since Session 58; the offline tool was reading `file+0x18` (the
+MESSAGE table) as a routine table for fourteen months.
+
+```
+blob+0x00  u32 0x8000000b        format version in the low byte
+blob+0x18  u32 -> ROUTINE TABLE  [u32 count][count x 0x30 records]
+blob+0x20  u32 -> ID POOL        [u32 count][u32 tagged: 0x01xxxxxx = message index,
+                                             0x03xxxxxx = name-pool offset]
+blob+0x24  u32 -> FLOAT POOL     [u32 count][f32] -- EVERY literal coordinate a script uses
+blob+0x4c  u32 -> NAME POOL      CP932, NUL-terminated
+blob+0x54  u32 -> arrivals        (HDR_JUMP_TABLE)
+blob+0x84  u32 -> arrivals+edges  (HDR_ARRIVE_TABLE)
+
+routine record, 0x30 bytes:
+  +0x00 nameOff | +0x04 ? | +0x08 codeOff (blob-relative) | +0x0c INSTRUCTION COUNT
+  +0x10 -> ENTRY TABLE [u32 count][(u32 nameOff, u32 codeOff) x count], codeOff routine-relative
+  +0x14 -> LABEL TABLE [u32 count][u32 off x count], routine-relative
+  +0x18 -> MODE TABLE  [u16 18][u16 entryIdx x 18]  -- the 18 interaction modes, 0xffff = unbound
+  +0x1c ? | +0x20 (routineIndex << 16)
+```
+
+Three consequences worth having:
+
+* **`+0x0c` makes a linear decode EXACT.** Decode that many instructions from `codeOff` and you land
+  byte-for-byte on the next routine in code order — no flow-following, no "scan until it stops
+  looking like code", and no `CODE_SPAN_MAX` guess for the last routine on a map (which the exit
+  reader still makes, logging "this map loses an exit" when it misses).
+* **A scene object's `+0x48` IS its routine's ENTRY TABLE.** Same `[u32 count][8-byte records]`, same
+  name-pool offsets. That is why `ObjectEventSignature` prints `SET_RECT|touch|touchon|touchoff` and
+  `talk|フィールドサインＯＮ|…`: they are the ROUTINE'S ENTRY NAMES, not anything about the object.
+  **Object -> routine is therefore a pointer identity**, not an inference from authoring order or a
+  slot index. (The slot index does also equal the routine index — verified on maps 347 and 349 across
+  every object — but the pointer is what the mod joins on.)
+* **The mnemonic names recovered from `DAT_01efea60` are indexed one off** (opcode N behaves as the
+  name at N-1). ⚠ **THIS WAS ALREADY IN THIS FILE** — see "Two errata in the RE archive, both
+  corrected" in the Session 145 block, which derived it from `PUSHV` having to be the first
+  operand-carrying opcode and listed the corrected values. It was recorded and then not applied:
+  `notes\athena_opcodes.md` and `tools\ebp_disasm.py`'s `OP` dict still carried the direct mapping
+  until this session, and the erratum said so in as many words. Session 166 re-derived it from a
+  second, independent place — the table's own operand-KIND column at record `+2`, which is NOT
+  shifted and contradicts six names at their own index — and has now FIXED both files.
+  So the native-call opcodes are `CALL` (0x58) / `CALLPOPA` (0x5d), and a CALLACT-only scan finds
+  nothing, exactly as S145 warned. `map_script_internal.h` calls `0x5D` `OP_CALLACTPOPA`; the byte
+  value is play-confirmed and only the name is wrong.
+
+### OBJECTS THE SCRIPT PLACES — why some interactables read (0,0,0) forever
+
+> ⛔ **THE MOD NO LONGER READS ANY OF THIS.** The reader built on it (`script_place.{h,cpp}`, the
+> origin-drop branch, `FindStandablePolyAt`) was **reverted in full in Session 172** — the defect it
+> chased was a quest step the tester had not reached, and it regressed phantom NPCs and exit labels.
+> The FACTS below are measured and correct; they are documentation of the GAME, not of the mod.
+
+
+**A scene object at the world origin is TWO populations, not one.** One is a reserve slot the map
+never spawned. The other has a real world position that is never written to the object at all,
+because the SCRIPT places it: the routine bound to the object calls the `setrect` native with
+literal coordinates out of the float pool at `blob+0x24`.
+
+Map 349 Windtrace Dunes, routine 9 `サボテン_アタリ_砂塵`, entry `ＦＳ配置`:
+
+```
+PUSHF F[11]=176.8 ; PUSHII 48 ; PUSHF F[12]=305.3 ; PUSHII 1 ; PUSHII 1 ; PUSHII 0 ; CALLPOPA setrect
+PUSHF F[13]=6.5   ; PUSHF F[13]=6.5 ; PUSHII 4 ; PUSHII 4    ; CALLPOPA setwh
+CALLPOPA reqenable(2) ; CALLPOPA recttocircle ; ... ; CALLPOPA fieldsignicon(2)
+PUSHI I[36]=msg 0 "Dynast-Cactoid" ; CALLPOPA fieldsignmes ; CALLPOPA showfieldsign
+```
+
+**PROVEN, not inferred, that the object never gets the position:**
+`x64\logs\FFXII-Screen-Reader-2026-08-25_15-30-55.log` has `[0:10]` and `[0:11]` on map 347 at
+(0,0,0) continuously from 13:09:38.9 (before the map announce) to 13:09:49.4, with the player
+standing at (219.14, 48.92, 370.26) — eight seconds in, the script long since run, transform node
+all zeros bar the cone (6.28) and band (-1.00/0.50). The Session 165 spawn watch can never fire on
+these.
+
+**THE TRANSFORM READ SUCCEEDS.** It does not fail, error, or return garbage — it returns a clean
+(0,0,0). Any consumer that guards with "did the read fail?" will therefore overwrite a recovered
+position with the origin and never notice. This cost a whole play session: `RefreshPositionsLocked`
+put both cacti back to (0,0,0) before every command, so they announced the distance to the world
+origin (574 steps) and routed there (`goalPoly=-1`). The list entry must be flagged as having a
+FIXED position; a read-failure test is not a substitute. See debug.md and `Lessons.md` L-74.
+
+**Scale:** 290 routines across the 769 map scripts place themselves this way, and **134 of them are
+examinable field signs** — `showfieldsign` and a mode-2 `talk` binding coincide exactly, 134/134.
+Their captions are ordinary English: "Bottle of Spirits" (14), "Faint Glow" (12), "Mysterious Glint"
+(11), "Sparkling Light" (10), "Notice Board" (5), "Batahn's Technicks" (5), "Quiet Shrine" (4),
+"Dynast-Cactoid" (4), "Pilika's Diary", "Suspicious-looking Wall", "The Moogles Eight". Every one was
+invisible to the mod for this one reason. `navigation/script_place.cpp` reads it at runtime.
+
+**The caption comes from the CONTAINER, not the blob.** No blob header field points at the message
+table — it lives at `container+0x18`, i.e. `blob - 0x80`. That step-back is CHECKED, never assumed:
+the 'EBP2' magic at `container+0` and `u32(container+0x10) == 0x80` must both hold, or the object is
+still listed at its real position with no name.
+
+**A script placement is gated, and the gate is in the map's `常駐監督` ("resident supervisor")
+routine.** On both Westersand cactus maps, identically:
+`if (v0 >= 1540 && (0x00350000 | getquestscenarioflag(0x35)) == 0x00350028) { REQEW each cactus's
+ＦＳ配置 }` — so the signs exist while quest 0x35 reads step 0x28, and the winner's `talk` ends with
+`setquestscenarioflag(0x35, 0x32)` plus a `REQ` of the other cactus's `ＦＳ終了`, which removes both.
+⚠ **The mod does not read that gate**, and nothing on the object distinguishes "placed" from "gated
+off" — see debug.md. Listing a gated-off sign is a false lead; not listing any of them was the
+previous state.
+
+### A PLACEMENT'S POINT IS THE OBJECT, AND THE OBJECT IS THE ONE PLACE YOU CANNOT STAND
+
+**Measured on all four `Dynast-Cactoid` placements across both Westersand maps: there is NO floor the
+leader can stand on at a placement's own (x,z), at any height.** `setrect` + `setwh` + `recttocircle`
+define an interaction VOLUME — a centre and a radius (6.5 on all four) — and the centre is where the
+object is. Anything that routes to a placement must route to a point *in the circle*, never to the
+centre.
+
+⚠ **`IsInteractionAvailable` CANNOT ANSWER FOR THESE OBJECTS.** A script-placed field sign is
+**kind 4** (`obj+0x0E = 0xB4` on all four cacti — low nibble 4, enable bit set), and
+`entity_classify.cpp` returns `true` on its second line for anything that is not kind 1 or kind 5. So
+`available` is a DEFAULT for this whole population, never a measurement, and a placement that is
+GATED OFF is listed exactly like a live one. The field that does answer it is `sceneObj+0x1C`
+(`FLAG_ACTION 0x004` / `FLAG_TALK 0x400`, "what it offers RIGHT NOW"); whether those bits are
+proximity-driven is UNMEASURED, so nothing is gated on them. ⚠ **A gated-off placement is a QUEST-STATE
+question — ASK the person playing the save; do not build a reader for it.**
+
+**THERE IS NO SEPARATE INTERACT COMPONENT TO ROUTE TO — the rect IS it.** Established three ways:
+the engine's field-sign `+0x70` table holds only `destIdx` 1-3 area/doorway signs (18 records on map
+347, 12 on 349; nearest cactus to any of them 33-88 m); the scene object's node carries no volume
+(class-3 ellipse semi-axes read 0.01, unused — its only live fields are the cone `6.28`, a full
+circle, and the band `-1.00/0.50`); and a CLASS-1 target has no engine reach at all — `FUN_0025be50`
+gates on band, mode bit and cone, then keeps a bare squared distance only to MINIMISE, so **nearest
+wins and nothing is rejected for being far away** (see `interact_target.h`). Routing "to the interact
+component" therefore means routing to walkable ground INSIDE the script's rect.
+
+Left uncorrected the centre still routes, which is the trap. `NavMesh::FindPolyAt` has no terrain
+test, so it returns the poly under the object; terrain refusal is a PRICE and never a graph cut, so
+A* does not object either. Map 349, player 2.8 m away: goal poly 45 `eff=0x07841000` (bit 23 set),
+ADJACENT to the player's own poly (`polys=2 portals=1`), one leg straight at the centre, `validate …
+OK`, `corridor march: CLEAR` — and the character hit the cactus and stopped. Map 347's goal poly
+carries the identical flag word. `NavMesh::FindStandablePolyAt` and
+`EntityScan::ResolvePlacementsToGround` are the reconciliation. See debug.md and `Lessons.md` L-75.
+
+### `setrect`'s y IS NOT A GROUND HEIGHT — it is the interaction volume's reference height
+
+Measured on map 347: the two cacti carry y = 72 and 76 while the walkable terrain the player stands
+on at that end of the map reads 82–86, and the engine's own field-sign records 39 m away sit at
+64–68. **The rect's y and the floor under it are simply different numbers**, and nothing in the
+script relates them.
+
+⚠ **This is real but it is NOT what broke routing to the cacti** — see the section above: their
+centres have no standable floor at any height, so lifting the y could never have helped. Consequence
+for anything that ROUTES to a placement: `NavMesh::FindPolyAt` takes the containing floor NEAREST the
+y it is handed, with no terrain test and no vertical tolerance, so a rect y that sits under the
+terrain selects a poly the leader may not stand on (bit 23). Because terrain refusal is a
+PRICE and never a graph cut, that does not fail — the search breaches to reach its own goal and the
+route comes out unwalkable. Reconcile a placement's y against the walkmap before routing to it;
+`NavMesh::FindStandablePolyAt` is that query and `EntityScan::ResolvePlacementsToGround` is where it
+happens. See debug.md and `Lessons.md` L-75.
+
+### `setrect`'s y is a SIGNED immediate
+
+`setrect(x, y, z, …)` takes each component as either a float-pool index (`PUSHF`) or an immediate
+(`PUSHII`), and the immediate is **int16**. Three placements in the corpus encode a small negative
+directly in the operand (`grm_f01`'s boss-trigger rect has y = `0xFFFA`); read unsigned they come out
+as 65530 instead of -6. Caught by a corpus-wide plausibility sweep, not by the two-map sample.
 
 ## Damage / Heal / Status Event Funnel
 

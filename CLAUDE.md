@@ -225,6 +225,53 @@ things. Rules 1 and 2 are absolute; only rule 3 changed.
   the mod. When running diagnostics or testing, assume the mod DLL is installed and
   active unless the user explicitly says they removed it.
 
+#### NEVER ASK THE USER TO FIND, REACH, OR AIM AT SOMETHING IN THE WORLD (CRITICAL)
+
+**The user is blind. Locating an object in the game world is the thing this mod EXISTS to
+do. Asking them to do it by hand, in order to produce a diagnostic about why the mod
+cannot do it, is circular** -- it demands the capability whose absence is the bug.
+
+Never write, in any form:
+
+- *"stand next to the cactus and press `'`"*
+- *"walk up to it and interact"*
+- *"face the object, then..."*
+- *"go to where the chest is and tell me what you hear"*
+- *"count the chests on the map"*
+- *"find X and check whether..."*
+
+**These are not requests for a measurement. They are requests for the deliverable.** If the
+mod could get the player to the object, there would be no ticket.
+
+**What IS fair to ask for**, because the mod already makes it reliable:
+
+- press a key (`'`, `` ` ``, `F5`, a category cycle) **wherever they already are**
+- load a save, or enter a map by name -- the exit list gets them there
+- re-run with a new build, and report what they HEARD
+- confirm a count the mod itself spoke
+
+**What to do instead, in order of preference:**
+
+1. **Answer it offline.** The decompile archive, the map data, `npcdic_names.csv`, the VBF
+   extraction and the walkmap are all readable without the game running. Most "where is
+   this object" questions are map-data questions (L-08).
+2. **Ship a PASSIVE instrument** -- one that captures the data from wherever the player
+   happens to be standing, on a rescan or a map load, with no positioning required. The
+   treasure census and the handle-table dump are the shape to copy.
+3. **Only then** ask for a keypress, and say plainly that it works from anywhere.
+
+**Why (2026-08-25):** a session investigating an interactable the nav list could not see
+ended by proposing *"stand next to it and press `'` -- ground truth, no guessing"*. The
+user's reply: *"I can not just magically walk up to the cactus and interact with it to get
+your log."* Correct, and the same session had already spent two builds on objects that
+turned out to be degenerate placeholders. **The instinct to reach for a play measurement is
+what needs checking**: ask whether the question is decompile-answerable FIRST (L-08), and if
+a play measurement really is required, make the instrument come to the player.
+
+This is the same rule as **L-14 NEVER ASK THE USER TO READ THE SCREEN**, one level up: not
+just "do not ask them to see", but "do not ask them to do anything that requires sight",
+and above all not the very thing the feature under repair is supposed to give them.
+
 ### Code quality, layout, and centralization
 
 - **NO DEDUPLICATION OF SPEECH.** Do not add a "same as last time, stay quiet" check,
@@ -354,8 +401,12 @@ things. Rules 1 and 2 are absolute; only rule 3 changed.
      player's real input, exactly as `InputTracker::FeedDInputKeyboard` is fed the pre-injection
      keyboard buffer.
   4. **Off means byte-identical, not skipped.** With the `Controller` mod-menu row off, or the pad
-     absent, `OnPoll` returns on its first line and the game's input path is what it was before this
+     absent, `OnPoll` WRITES NOTHING, so the `XINPUT_STATE` the game reads is what it was before this
      file existed. A fault inside it latches the intercept OFF for the session.
+     **Amended S174:** it used to return on its *first* line; it now returns on the fourth, after the
+     foreground check, edge bookkeeping and the `L3` kill-switch test. The mod therefore still READS
+     one bit while off — that is what lets `L3` switch it back on, and a switch that can only be
+     thrown once is not an escape hatch. The byte-identical bound is on the WRITE and is unchanged.
   5. **Game-foreground gated**, like every other dispatch in the mod.
   6. **What may be consumed is decided on the GAME thread** and published stamped; the verdict
      expires ~250 ms after the field tick stops, so consumption ends by itself on a map change,
@@ -480,23 +531,37 @@ never built; do not reintroduce it, and do not "restore" an open key.
 own play sessions. Every routine analysis starts here, sweeps here, and counts here. Reading it is
 always permitted (see the Exception above).
 
-**`Tester Logs\<name>\` is NOT part of normal analysis.** A tester-submitted log may be opened only
-when **BOTH** hold:
-1. a tester has reported an issue, **and**
-2. the user has **explicitly pointed at a log in that folder** for that issue.
+**`Tester Logs\<name>\` IS OFF LIMITS. DO NOT OPEN IT, DO NOT LIST IT, DO NOT GREP IT, DO NOT
+`find` THROUGH IT — NOT EVEN TO SEE WHAT IS IN THERE.** There is exactly one condition under which
+a file in that folder may be read: **the user has explicitly told you, in the current conversation,
+to use a specific tester log.** Nothing else unlocks it — not a tester report, not a stuck
+investigation, not "the answer might be in there", not a sweep that happens to include it. **The
+user will tell you when a tester log is in play. Until those words exist, that directory does not
+exist.**
 
-It is never swept "to see what's there", never grepped speculatively, and **never mixed into a
-corpus-wide count** — a tester's build, settings and install are not ours, so a number taken from
-their log cannot be compared with one taken from ours. When a tester-only defect needs their log,
-**ask for the pointer**; do not go looking. (This complements
-`feedback_read_the_testers_own_log.md`: when the user DOES point you at one, that log is then the
-authority for that defect — the rule here is about which corpus you reach for unprompted.)
+The same prohibition covers every other tester-supplied artifact: `Saves\<name>\`, tester crash
+dumps, tester screenshots, anything a tester sent. **THOSE FILES ARE NOT FROM THIS MACHINE.** Their
+build, their settings, their install, their save state and their story progress are all unknown, so
+anything read out of them is a fact about someone else's box being smuggled into reasoning about
+ours. A number taken from a tester artifact is **never** mixed into a corpus-wide count.
+
+**When a tester reports something and you think you need their log: ASK. Do not go looking.** The
+correct move is one sentence — *"is there a tester log for this, and where?"* — and then wait. Once
+the user DOES point you at one, that log becomes the authority for that defect
+(`feedback_read_the_testers_own_log.md`); this rule is only about what you reach for unprompted.
 
 **Why (Session 147):** a session investigating a reachability regression reached for `Tester Logs\`
 first, found nothing relevant, and concluded the defect was "not measurable from any archived log".
 It was measurable — the contradiction was sitting in nineteen of our own twenty dev logs the whole
 time. Reaching for the wrong corpus did not just waste the search; it produced a confident wrong
 answer and nearly cost the session its actual finding.
+
+**Why the rule got HARDER (2026-08-25):** a session opened on a tester report, and the very first
+moves were `ls "Tester Logs/Dylan"`, a recursive `find` across the whole project, and a sweep of
+`Saves\<name>\` — hunting for a dump nobody had said was there. **This keeps happening.** The
+two-condition wording above was read as "a tester reported something, so condition 1 is met, so I
+may go and look", which is exactly backwards: the report is what makes the folder tempting, not what
+makes it permitted. **Hence the flat ban. The only key is the user's explicit say-so.**
 
 - **ALWAYS** check logs first when debugging — read the mod log before theorizing.
 - **ALWAYS** log all diagnostic data to external file. Every significant runtime decision

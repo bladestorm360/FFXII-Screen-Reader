@@ -6390,6 +6390,11 @@ in 140 ms at area load. It is NOT a restoration of the S52 content-setter reader
 `end latch idled 64x on wnd=…`. Presence proves the loop was real; **absence on the reported
 tutorial box means this diagnosis is wrong** and needs re-testing on the tester's build.
 
+**PLAY-CONFIRMED 2026-08-27 (user, relaying the tester): the repeat at a tutorial button prompt is
+gone.** Corroborating: `end latch idled` appears **zero times** in all three of our own 2026-08-27
+sessions on V0.6.5 (`9e9a00f`). The diagnosis stands and the instrument may be retired the next time
+`dialogue_reader.cpp` is opened for other reasons — it has now served its purpose.
+
 **PLAY-CONFIRMED (same session), and the spoken word is `available`, not `can learn`.** The user:
 *"license board works perfectly, even announces the game's own 'insufficient license points' when
 failing to learn."* That settles the one thing left open — the not-enough-LP popup is
@@ -6798,3 +6803,410 @@ component (1953 polys) -- the mesh connects these two, so this is the SEARCH giv
 unreachable goal` — after `attempts=4 banned=2` with validation never passing. That is **one observation
 of the breach / repair-ladder path giving up**, not a reproducible defect, and it is untouched by S164.
 Anyone picking it up needs a repro first, and the standing position is the variable to vary.
+
+## SOLVED — the interactable the mod could see but could never place (Session 166, 2026-08-26)
+
+## ⇒ BEFORE CHASING "THE MOD CANNOT SEE THIS INTERACTABLE" — THE CHAIN OF EVIDENCE
+
+**Read this before writing a line of code. It exists because six sessions (S166–S171) were spent
+forcing an object to appear that the game had not placed, and the work regressed shipped behaviour.**
+
+### Step 1 — IS THE GAME OFFERING IT AT ALL?
+
+**An object the mod cannot see may simply not be there yet.** Field signs, dig spots, quest props and
+most script-placed interactables are created by the map script at a specific story/quest step, and
+until that step the object exists as an inert shell: same enable bit, same `(0,0,0)`, same event ids
+as a live one. **Nothing on the object distinguishes "placed" from "not placed."**
+
+- **If the examine prompt does not appear when the player is standing there, the mod has nothing to
+  surface. STOP — there is no defect.**
+- The Westersand `Dynast-Cactoid` case: placed only while quest `0x35` reads step `0x28`; the winner's
+  own `talk` sets it to `0x32` and removes them all.
+
+### Step 2 — ASK THE PLAYER WHAT QUEST STEP THEY ARE ON (`Lessons.md` L-77)
+
+**One sentence, and it is free.** Do NOT build a quest-flag reader, and do NOT add a runtime probe to
+discover it — that is a map-specific gate that does not belong in the mod, and the person playing the
+save already knows the answer. This is not the "never ask the user to find something in the world"
+rule inverted: reading a step from their own journal costs them a sentence; locating an unseen object
+is the thing the mod exists to do for them.
+
+### Step 3 — ONLY NOW ask why the mod cannot see something the game IS offering
+
+And if the answer requires admitting a new population of objects into the entity list, go to the
+guard below before writing it.
+
+---
+
+## ⇒ ADMITTING A NEW POPULATION INTO THE ENTITY LIST — THE MANDATORY GUARD
+
+Anything that makes the scan keep objects it used to drop **must** be checked against these, because
+they are shared, fragile and already have recorded failures:
+
+| what it collides with | why it is fragile |
+|---|---|
+| **`TagDoorwaysAndDropSignTwins`** — the `doorway` tag, and therefore the whole Door/Shop split | **a single 2.5 m NEAREST-WINS proximity test** against the `+0x70` table. One extra candidate inside 2.5 m steals a record from a real portal. **Session 92 caught it wrong in BOTH directions on Rabanastre — the gate crystal a false positive, and "South Gate" and "Lowtown", the map's two actual portals, false negatives.** |
+| **`ApplyFallbackLabels`** | anything left unnamed takes a generic word. A stolen doorway tag turns a real exit into "Sign 1" / "Sign 2". |
+| **the origin drop** | objects at `(0,0,0)` are dropped for a reason. Keeping them admits unspawned shells as phantom NPCs with no interaction component. |
+
+**THE HARD RULE: an exit whose destination resolves must NEVER fall back to a generic word.** The
+`Sign` fallback is for the one authorised case — the North End sign the game itself renders as "???"
+— never for a portal that has a name. **If a labelled exit starts reading "Sign N", a new candidate
+has stolen its `+0x70` record; look there first.**
+
+**And do not settle for writing the risk down.** S166 stated the doorway collision precisely in its
+own Open section and shipped anyway; the tester hit that exact failure on the South Gate six sessions
+later (`Lessons.md` L-78).
+
+---
+
+> ## ⛔ THE WHOLE CACTUS LINE WAS REVERTED — Session 172, 2026-08-27
+>
+> **There was no defect. The tester was not on the correct quest step.** These field signs exist only
+> while quest `0x35` reads step `0x28`, so the cactus genuinely had no interact component; the mod was
+> already pulling interact prompts correctly. Everything from S166 to S171 chased a symptom whose
+> cause was save state.
+>
+> **It also regressed shipped behaviour**, which is why it is out rather than parked:
+> phantom NPCs in Rabanastre and elsewhere (the origin-drop change admitted a population the scan had
+> always correctly filtered), and labelled exits relabelled "Sign 1"/"Sign 2" — more objects taking
+> doorway tags, which is **precisely the risk S166 wrote into its own Open section and shipped
+> anyway**: *"a script-placed sign standing near a doorway record could take a tag a real door would
+> have had."* A risk you can state that precisely is not covered by writing it down.
+>
+> `src/` is byte-identical to V0.6.5 `9e9a00f`. `script_place.{h,cpp}`, the origin-drop branch,
+> `FindStandablePolyAt`, `ResolvePlacementsToGround` and the S165 diagnostics are all gone; the 1080-
+> line diff is saved at `<scratchpad>/cactus_line_S165_S170.patch`. **134 script-placed field signs
+> game-wide are invisible again — an accepted cost.** If revisited, the first question is the
+> doorway-tag collision, not the placement parse.
+>
+> What follows is kept as the record of the investigation. **None of it describes the mod as it is.**
+
+**The report:** Dalmasca Westersand carries `Dynast-Cactoid` cacti you examine to dig for a buried
+item. The mod's scan ADMITTED them — they carry a bound ACTION script, `act=2` — and then dropped
+every one of them, on every map, silently until Session 165 added the `unspawned` line. Nothing in
+the Interactables list, nothing to route to, and the user cannot walk over and check by hand.
+
+**Session 165 ruled out, each against a control that would have shown the answer had it been there:**
+the object's map-data record, the descriptor at `*(obj+0x40)`, all 64 floats of its transform node,
+and literal `(x,y,z)` triples in the map files. The position is in none of them, and its reading —
+"that rules out proximity streaming and points at a **state gate**" — was right.
+
+**The cause: the object never has a position, and never will.** The MAP SCRIPT places it, by calling
+the `setrect` native with literal coordinates out of the script's own float-constant pool at
+`blob+0x24`. `setrect` sets the script's interaction rect; nothing writes the scene object's
+transform, so reading the object gives (0,0,0) forever.
+
+**MEASURED, not argued.** `x64\logs\FFXII-Screen-Reader-2026-08-25_15-30-55.log`: `[0:10]` and
+`[0:11]` on map 347 sit at (0,0,0) continuously from 13:09:38.9 — before the map-347 announce — to
+13:09:49.4, with the player standing at (219.14, 48.92, 370.26). Eight seconds in, the script long
+since run, and the transform node is all zeros bar the cone (6.28) and band (-1.00/0.50). **That kills
+"it has not spawned yet" for these two objects**, and it means the Session 165 spawn watch could
+never have fired on them.
+
+Reading it needed the offline disassembler to work first; `FFXII-Decompile\notes\ebp2_disasm_fix.md`
+is the account of what was wrong with it.
+
+### The fix
+
+`navigation/script_place.cpp`. Before dropping an origin object the engine is offering an interaction
+on, ask the script where it is: walk the routine table, decode each routine (exactly `record+0x0c`
+instructions — no guessing), and take `setrect`'s (x, y, z). The object is joined to its routine by
+**pointer identity** — a scene object's `+0x48` IS its routine's entry table inside the blob — so no
+authoring order and no slot arithmetic is involved. Its LABEL comes from the same routine's
+`fieldsignmes`, decoded from the container's message table with the mod's own codec.
+
+Positions recovered (all four cross-checked against the maps' own arrival tables for plausibility):
+
+| map | slot | routine | position | radius | caption |
+|---|---|---|---|---|---|
+| 347 Shimmering Horizons | 10 | `サボテン_ハズレ２` | (401.25, 72, 381.80) | 6.5 | Dynast-Cactoid |
+| 347 | 11 | `サボテン_ハズレ３` | (411.50, 76, 412.25) | 6.5 | Dynast-Cactoid |
+| 349 Windtrace Dunes | 9 | `サボテン_アタリ_砂塵` (winner) | (176.80, 48, 305.30) | 6.5 | Dynast-Cactoid |
+| 349 | 10 | `サボテン_ハズレ_砂塵` | (191.70, 50, 274.60) | 6.5 | Dynast-Cactoid |
+
+**Not a special case:** 290 routines across the 769 map scripts place themselves with a literal
+`setrect`, and 134 are examinable field signs — "Bottle of Spirits", "Notice Board", "Quiet Shrine",
+"Batahn's Technicks", "Pilika's Diary", "Suspicious-looking Wall". Every one was invisible for this
+reason.
+
+### ⚠ OPEN — a script placement can be GATED, and nothing on the object says so
+
+The placement runs only if the map's `常駐監督` routine lets it. On both cactus maps, identically:
+
+```
+if (v0 >= 1540 && (0x00350000 | getquestscenarioflag(0x35)) == 0x00350028)
+    REQEW each cactus's ＦＳ配置 entry
+```
+
+and the winner's `talk` ends with `setquestscenarioflag(0x35, 0x32)` plus a `REQ` of the other
+cactus's `ＦＳ終了`, which removes both signs. **The mod does not read that gate.** Since the object
+looks identical either way — same enable bit, same (0,0,0), same `act=2` — a placement whose routine
+never ran will still be listed, and walking there finds nothing.
+
+Deliberately shipped anyway: before this, the object was never listed under ANY game state, so a
+gated-off false lead replaces a permanent blind spot rather than a working feature. **What would
+close it:** find where `reqenable` / `showfieldsign` land at runtime, and require that evidence
+before using the placement. Do NOT close it by reading quest flag `0x35` — that number is one map
+pair's gate, not a rule, and hard-coding it is exactly the map-specific keying this reader forbids.
+
+### PLAYED 2026-08-26 — listed and named ✅, position undone by the per-command refresh ❌
+
+First play on map 347. Two of the three questions above came back yes immediately: **both cacti are
+listed, and both speak as "Dynast-Cactoid"** — the first time either has ever appeared. The third
+came back no, and the same log says why.
+
+**The symptom:** both cacti announced `Dynast-Cactoid N. South, 574 steps (below)`, and the route key
+answered `No path`.
+
+**The arithmetic, which is what identifies it — player at (219.14, 48.92, 370.26):**
+
+| observation | what it means |
+|---|---|
+| 574 steps × `g_unitsPerStep` 0.75 = **430.2 m** | √(219.14² + 370.26²) = 430.2 — the distance to the **world origin** |
+| **both** cacti said 574 | they are 32 m apart; one number for two objects is one shared position |
+| "(below)" | the cacti are at y = 72/76, i.e. 23 m **above** the player |
+| `tgt=(0.0,0.0)  goalPoly=-1` | the planner's own line. The goal was the origin, off the navmesh |
+| `nearDist=418.7m`, `expands=2951` | A* flooded the map toward a goal it could never reach |
+
+**The cause — a second writer of the field.** `EntityScan` resolved the placement correctly; the
+scan-time diagnostic in the SAME log proves it (`sign g0[5] ... nearest "Dynast-Cactoid" 39.20m`,
+which is exactly right for a sign at (406.94,·,343.02) and a cactus at (401.25,·,381.80)).
+`EntityList::RefreshPositionsLocked` then re-reads `sceneObj+0xB8` before every command and
+overwrites `e.pos`. **For these objects that read does not fail — it SUCCEEDS and returns (0,0,0)**,
+which is the whole reason the script had to place them. The resolved position survived less than a
+frame, and every consumer downstream (bearing, steps, route goal, beacon) got the origin.
+
+**The fix:** a script-placed entity is marked `fixed`, whose contract is already exactly this —
+"fixed world pos, do not refresh via +0xB8". The scene pointer stays set, so the stale-entity pruner,
+`IsInteractionAvailable` and the doorway/sign filter all keep working on the object; only the
+position refresh is skipped. `fixed` previously implied "no scene node at all" (exits, map-jumps,
+item drops); it now covers two populations and the field comment in `entity_scan.h` says so.
+
+That the diagnostic was right and the announcement was wrong **in the same log** is `Lessons.md`
+**L-74**: an instrument at the point of computation certifies the arithmetic and cannot see a
+downstream overwrite.
+
+### PLAYED 2026-08-27 — routed 200 m, then broke in the last 19 m ❌ FIXED (unplayed)
+
+The position fix worked: `Northwest, 243 steps (above)` and a real 23-leg route, which the player
+followed from (219.14, 48.92, 370.26) to about (383, 82, 383) — the far side of the Shimmering Sands.
+Then it fell apart. The mod kept saying "North" into ground the player could not walk, replanned 15
+times, recorded 3 blocked spots, and never arrived.
+
+**The tell is the search cost, not the verdict.** Same log, same map, same session:
+
+| target | player distance | `expands` |
+|---|---|---|
+| ordinary targets (seq 3,4,6,7,8,9) | 2–11 steps | **1, 5, 3, 2, 12, 2** |
+| Dynast-Cactoid, from 240 m | 240 m | 2940 |
+| Dynast-Cactoid, from **19 m** | 19 m | **2684** |
+| Dynast-Cactoid, from 14 m | 14 m | 2679 |
+
+**The cost never falls as the player approaches.** A goal 19 m away that costs a full-mesh flood is
+not 19 m away in the graph.
+
+**The cause, stated by the router's own lines:**
+
+```
+ends:  start=2474 eff=0x00240000 walk=1 | goal=2389 eff=0x07841000 walk=1 | class=0
+cost:  corridor pays terrain=6000 (terrain > 0 => crosses ground the party's class may not stand on)
+costed: ... refused eff-flags: 0x07841000 x1001  0x0F841000 x1090 ...
+REVERSAL: leg 3 -> 4 turns 135 deg -- the polyline doubles back; the route geometry is wrong
+```
+
+The goal poly's effective flags are `0x07841000` — **bit 23 set**, the leader's terrain refusal — and
+that exact word is the most-refused flag in the search. The start poly the player was standing on
+reads `0x00240000`, bit 23 clear. **The goal was on ground the party may not stand on.**
+
+Nothing errored, and that is the point. **Terrain refusal is a PRICE, never a graph cut** — correct
+and hard-won (S96 proved cutting over-refuses: 399/690 prims on map 311, and it cost an exit; it has
+been reverted twice). So A* did not report an unreachable goal. It breached its way there, paid
+`terrain=6000`, produced a corridor that doubled back 135°, and the mod spoke it. See `Lessons.md`
+**L-75**.
+
+**Why the goal was there:** `setrect` gives the interaction volume's REFERENCE height, not a ground
+height — a fact this project established itself in S166 and then fed straight to the router.
+`NavMesh::FindPolyAt` takes the containing floor NEAREST the Y it is handed, with no terrain test and
+no vertical tolerance, so y=72 selected a poly ~10 m under the terrain the player was standing on.
+
+**The fix — at the goal, not in the router.** The pricing model is right; the input was wrong.
+
+| | |
+|---|---|
+| `nav_mesh.{h,cpp}` | new `FindStandablePolyAt(x, yHint, z)`: the floor at (x,z) the **leader can stand on**, nearest `yHint`. `FindPolyAt` and it now share ONE cell walk (`FindPolyAtImpl`) differing only by a flag, so they cannot drift into two notions of "the floor here". Terrain refusal is decided from the effective flags' bit 23 rather than by calling the engine, because the scan is memory-only by policy — the same reason `IsInteractionAvailable` replicates `FUN_002675c0` instead of calling it. |
+| `entity_scan.cpp` | `ResolvePlacementsToGround` runs once per map over every script placement: (x,z) is authoritative and never moves, only Y moves, and only onto a standable floor at that same (x,z) within 25 m. No such floor → the placement is left exactly as the script wrote it, i.e. the behaviour that shipped before. |
+
+**Non-regression, established rather than assumed:**
+
+- `FindPolyAt` is *statement-identical* to its previous body — 29 executable statements, mechanically
+  diffed against `HEAD`, zero differences; with `requireStandable=false` both new guards are no-ops.
+- `FindStandablePolyAt` has exactly **one** caller in the whole tree, and that caller only ever runs
+  on script placements — a population that did not exist in the entity list before S166.
+- The new query can never refuse a route. It only *prefers* a standable floor over a refused one at
+  the same (x,z); with nothing to prefer it returns `kNoPoly` and the caller changes nothing. **This
+  is deliberately not the S96 lever** — that made bit 23 a graph cut in `Walkable` and refused
+  ankle-deep water the player walks through. Nothing here is wired into `Walkable`, and no route is
+  ever declined on terrain grounds by this change.
+- The funnel/stats log formats are untouched, so the project's own working-route-invariance check
+  (diffing those lines across logs) still applies.
+
+### PLAYED 2026-08-27 (2nd) — the Y hypothesis was WRONG, and the instrument said so in one line
+
+S168 shipped the Y correction together with the one diagnostic that would say whether its premise
+held. It did not. All four cacti, both maps, first play:
+
+```
+placement ground: routine 10 at (401.25,381.80) script y=72.00 KEPT -- NO floor the leader can stand on
+placement ground: routine 11 at (411.50,412.25) ... KEPT -- NO floor ...
+placement ground: routine  9 at (176.80,305.30) ... KEPT -- NO floor ...      (map 349)
+placement ground: routine 10 at (191.70,274.60) ... KEPT -- NO floor ...      (map 349)
+```
+
+**There is no standable floor at a cactus's own (x,z) at ANY height.** The Y was never the problem.
+
+**What S168 got right, and it still stands:** the goal poly is terrain-refused, and because refusal is
+a PRICE and never a cut, nothing errors — A* breaches to its own goal and the mod speaks the result.
+That is `Lessons.md` **L-75** and it is confirmed twice over, on two maps, with the *same flag word*.
+
+**What S168 got wrong:** the cause of the refusal. It was not a Y that selected an under-terrain poly.
+**The object occupies its own coordinates.** `setrect` gives an interaction VOLUME — a centre and a
+radius — and the centre is where the cactus IS, which is precisely the one place the party cannot
+stand.
+
+**Map 349 shows the endgame at three metres**, player at (177.65, 47.39, 302.62), goal (176.80, 48.00,
+305.30):
+
+```
+ends: start=133 eff=0x00100000 walk=1 | goal=45 eff=0x07841000 walk=1
+mesh: polys=2 portals=1 corners=2          <- start and goal are ADJACENT
+firstLeg=(176.8,305.3)                     <- the one leg drives straight at the centre
+validate: ... volHit=1 volWalked=1 ... OK
+corridor march: CLEAR over 2 hop(s)
+```
+
+Validation passed it, the march called it clear, and the character hit the cactus and stopped dead
+2.8 m short while the mod repeated "North 4." forever. Map 347's goal poly carries the identical
+`0x07841000`.
+
+### Where the interact component actually is — asked and answered
+
+The obvious next question is whether the cactus has an engine-side interaction object with a real
+position to route to, instead of a geometric guess. **It does not**, and three independent checks say
+so:
+
+- **The engine's field-sign `+0x70` table is NOT it.** 18 records on map 347, 12 on map 349, all
+  `destIdx` 1-3 area/doorway signs; the nearest cactus to any of them is **33-88 m** away. The mod
+  already dumps this table on `'` and every record reads `TOO FAR, unclaimed`.
+- **The scene object carries no volume.** S165 checked its map-data record, the `*(obj+0x40)`
+  descriptor and all 64 floats of the transform node. The node's class-3 ellipse semi-axes read 0.01
+  — i.e. unused — and its only live interaction fields are the cone (`6.28`, a full circle, so facing
+  is unconstrained) and the band (`-1.00 / 0.50`).
+- **A class-1 target has no engine reach to route to.** `interact_target.h` records this from the
+  decompile: `FUN_0025be50` gates on the vertical band, the mode bit `node+0x60 >> mode`, the facing
+  cone, and then a bare squared distance kept only to MINIMISE — **nearest wins; nothing is rejected
+  for being far away.** That is why the mod logs `route reach: 3.00m source=class1-no-engine-radius`.
+
+**So the interact component IS the script's rect** — `setrect`'s centre plus `setwh`'s extent, which
+the mod has read since S166 (`r=6.50 circle` on all four cacti). There is no second object to find.
+Routing to the interact component therefore means routing to *walkable ground inside that volume*,
+which is what the fix below does.
+
+### The fix — route to the interact volume, not to the object's own point
+
+`setwh` already gives the mod the radius and it already reads it: `r=6.50 circle` for all four cacti,
+a field that until now was marked *"diagnostics only — no caller consumes it."* Now it does.
+`ResolvePlacementsToGround` resolves each placement once per map:
+
+1. **centre standable** → take its floor height (a rect's Y is a reference height, not ground);
+2. **centre not standable** → take the **closest walkable ground inside the interaction volume**
+   (16 directions, rings one player step apart, first hit wins). The goal becomes ground the party can
+   actually stand on, so A* routes **around** the obstacle instead of pricing its way through, and the
+   player lands as near the object as the walkmap allows. Hugging matters because `setwh`'s args 3-4
+   are still unidentified, so whether 6.5 is a radius or a full width is open — the nearest hit is
+   inside the volume on either reading;
+3. **nothing standable in range** → leave the placement exactly as the script wrote it — the
+   behaviour that shipped before any of this existed.
+
+The ring search is up to 96 mesh queries per placement, so the result is cached per map and reused
+across rescans; the map id is only stamped once the mesh was actually up, which is what makes a scan
+that ran too early retry rather than cache a miss.
+
+**Non-regression, established rather than asserted** (the user's standing requirement — *"causing
+regression is unacceptable"*, restated as *"no regressions in the rest of the pathfinder"*):
+
+- **Not one router file is modified.** `path_search`, `path_planner`, `path_funnel`, `path_corridor`,
+  `path_validate`, `path_march`, `path_repair`, `path_surface_goal`, `nav_reach`, `nav_footprint`,
+  `map_query` — all clean. The routing algorithm, its costs, its funnel and its validation are
+  byte-identical.
+- **`FindPolyAt` is statement-identical to its old body** — 29 executable statements, mechanically
+  diffed against `HEAD`, zero differences.
+- **`FindStandablePolyAt` has exactly two callers**, both inside `ResolvePlacementsToGround`, which
+  runs only on script placements — a population that did not exist in the entity list before S166.
+- **The new query can never refuse a route.** It is not wired into `Walkable` and cannot decline a
+  crossing; it only chooses *where a placement's own goal point sits*. **Deliberately not the S96
+  lever**, which made bit 23 a graph cut and refused ankle-deep water the player walks through.
+- Only the position of a script-placed field sign changes, and only ever from a point the party
+  cannot stand on to one it can.
+
+### ⚠ OPEN
+
+- **`placement ground:` is `Log::Write("NAV-DIAG", …)` — LOG ONLY, never spoken.** It is a
+  developer line and no player hears it; there is no speech path anywhere in the resolver.
+- **Unplayed.** The `placement ground:` line now names the branch outright: `STANDS`, `is NOT
+  standable … goal moved to (x,y,z), N.NNm out`, or `KEPT — no standable ground anywhere within`.
+  The first two are the fix working; the third means the disc really is solid and the answer is a
+  wider search or an honest "No path".
+- **The stand point is chosen nearest the CENTRE, not nearest the player** — deterministic and stable
+  across rescans, which the announced bearing needs. If it lands on the far side of the obstacle the
+  route simply goes around, which is correct, just longer.
+- Whether `setwh`'s 6.5 is a radius or a diameter is still unestablished (S166 left args 3-4 of
+  `setwh` unidentified). It is used here only as a SEARCH BOUND, and the search takes the nearest hit,
+  so a factor of two would change how far out it is willing to look and nothing else.
+
+---
+
+## SOLVED 2026-08-29 (S174) — Config "Battle Speed" spoke its label and no value
+
+**Symptom (user, from their own log):** on the game's Config screen, `Battle Speed` announced the row
+name and nothing else — silent on highlight *and* on a left/right change. Every other row on the same
+screen ("Battle Mode: Wait", "Controls", "Graphics Settings") read correctly.
+
+**The log had already named the cause**, one line, at the moment the row was highlighted:
+
+```
+[READER] config row REFUSED (no per-option labels -- not an enum): row=...2CE24C40
+         class=0x23D6B0 kind=2 sel=5 bytes=[70 61 72 74 79 74 6F 70 5F 34 5F 63]
+```
+
+- `class=0x23D6B0` → `FUN_0023d6b0` → `ValueRow::EnumD6B0` (`kind=2` ✓).
+- The bytes are ASCII **`partytop_4_c`** — a sprite name, not codec text.
+
+The row is drawn as **gauge blocks**, so walking to "the selected option's label" lands on a texture
+id that is the SAME for every option. S148's `HasPerOptionLabels` guard caught that correctly (it
+refuses a row whose option 0 and option 1 decode identically) and stopped the mojibake it was written
+to stop — `Battle Speed: æÏèêïêäæÍUÍÒ`. It then had nothing else to offer, so the row went silent.
+
+**What made it a five-minute fix instead of an RE session: `sel=5` was in the refusal line.**
+`SelectedIndex` locates the selected child by its flag bit and had been right the whole time. The
+value was never unreadable — it was unspoken. `ConfigReader::GaugeReadout` now counts the blocks
+rather than decoding them: `sel + 1` of the option count at `row+0xD2`, joined with the phrasebook's
+existing `Phrase::Id::OfJoiner`, so nothing new was invented to say it.
+
+**Scope of the fallback:** `EnumD6B0` / `EnumDB40` only. Those two carry the count at `OFF_ROW_CCOUNT`
+(`0xD2`), which is what makes "of 6" true rather than guessed. `EnumE770` has no count field and keeps
+refusing — a bare index with no range is a number the player cannot act on.
+
+**The diagnostic stayed**, reworded from `REFUSED` to name which branch it took, with the same 8-row
+dedup. A row that reaches it and is *not* a gauge is the next defect, and this log line is how it will
+be found. Only one row took the path in the reported log.
+
+**⚠ Carried, stated in the code:** on the value-change path `RowValueAtNewValue` assumes `nv` is the
+display index. That assumption is already load-bearing for the working enum rows of this same class,
+but it is unverified for a gauge. If a change ever speaks a number the highlight then contradicts,
+drop that line and let the value ride the next paint.
+
+**Not the same defect as S163's Draklor lift**, though it rhymes (a field whose meaning depends on
+state). That one is the field-message/choice widget family (`+0xB0` mode byte, `+0xA2` digit width);
+this is the config row-widget family (`FUN_0023xxxx`), which has no mode byte and dispatches purely
+on the class pointer at `row+0`. Do not carry offsets between them.

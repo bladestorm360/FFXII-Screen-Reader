@@ -3,6 +3,8 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/mem_read.h"
+#include "speech/speech.h"
+#include "speech/phrasebook.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -26,6 +28,13 @@ constexpr UINT WM_MENUNAV   = WM_APP + 8;   // arrows + Home/End -> virtual-buff
                                             // wParam = VK; lParam = 1 if a combat-log fallback applies
                                             // (Home/End), 0 otherwise (arrows).
 constexpr UINT WM_GIL       = WM_APP + 9;   // `g` -> speak party gil total (field / shop / menus)
+constexpr UINT WM_PADSAY    = WM_APP + 10;  // wParam = Phrase::Id -> speak it from THIS thread. The
+                                            // pad poll must not speak on the game's input thread;
+                                            // see InputTracker::DispatchSpeakPhrase in the header.
+constexpr UINT WM_PADCTRL   = WM_APP + 11;  // S174: `L3` -> flip the Controller row. Its own message
+                                            // rather than a DispatchModKey VK: the Controller row
+                                            // has no keyboard shortcut, so reusing the key table
+                                            // would mean inventing a phantom key to name it by.
 
 // Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
 // working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
@@ -45,6 +54,7 @@ InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
 InputTracker::HotkeyCallback g_lpCb = nullptr;
 InputTracker::HotkeyCallback g_gilCb = nullptr;
+InputTracker::HotkeyCallback g_ctrlToggleCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
 InputTracker::MenuNavCallback g_menuNavCb = nullptr;
 // First refusal on arrows/Home/End and on `o` — see the header. Both decline while the mod menu is
@@ -307,6 +317,15 @@ DWORD WINAPI InputThread(LPVOID) {
         } else if (m.message == WM_GIL) {
             InputTracker::HotkeyCallback cb = g_gilCb;
             if (cb) cb();
+        } else if (m.message == WM_PADSAY) {
+            // A phrasebook line the pad router asked for (mod mode entered / cancelled). Interrupts,
+            // because it is an answer to a button the player pressed a moment ago.
+            Speech::Output(Phrase::Get(static_cast<Phrase::Id>(m.wParam)), true);
+        } else if (m.message == WM_PADCTRL) {
+            // `L3` -> the pad intercept's own kill switch. A callback like every other handler here:
+            // this file knows no reader and no menu, and the pad must not make it the exception.
+            InputTracker::HotkeyCallback cb = g_ctrlToggleCb;
+            if (cb) cb();
         } else if (m.message == WM_MENUNAV) {
             // Arrows + Home/End -> virtual-buffer nav (status screen). Offer to the buffer first; for
             // Home/End (lParam != 0) fall through to the combat-log nav path when it declines.
@@ -390,12 +409,47 @@ void Shutdown() {
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 void SetLicensePointsCallback(HotkeyCallback cb) { g_lpCb = cb; }
 void SetGilCallback(HotkeyCallback cb) { g_gilCb = cb; }
+void SetControllerToggleCallback(HotkeyCallback cb) { g_ctrlToggleCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
 void SetModMenuNavCallback(MenuNavCallback cb) { g_modMenuNavCb = cb; }
 void SetPrimerNavCallback(MenuNavCallback cb) { g_primerNavCb = cb; }
 void SetModMenuDescribeCallback(DescribeInterceptCallback cb) { g_modMenuDescribeCb = cb; }
+
+// See the header. The routing below is deliberately the SAME shape as DInputEdge/DInputMenuNavEdge:
+// if a key ever changes handler, both devices change with it because there is only one table.
+void DispatchModKey(int vk) {
+    if (!g_threadId) return;
+    switch (vk) {
+        case 'O': PostThreadMessageW(g_threadId, WM_DESCRIBE,   0, 0); break;
+        case 'T': PostThreadMessageW(g_threadId, WM_REREAD,     0, 0); break;
+        case 'U': PostThreadMessageW(g_threadId, WM_LICENSEPTS, 0, 0); break;
+        case 'G': PostThreadMessageW(g_threadId, WM_GIL,        0, 0); break;
+        // Arrows: virtual-buffer nav with NO fallback -- outside a buffer the mod does nothing.
+        case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT:
+            PostThreadMessageW(g_threadId, WM_MENUNAV, static_cast<WPARAM>(vk), 0);
+            break;
+        // Home/End: the buffer first, then the combat log when it declines (lParam = 1).
+        case VK_HOME: case VK_END:
+            PostThreadMessageW(g_threadId, WM_MENUNAV, static_cast<WPARAM>(vk), 1);
+            break;
+        // Everything else is a nav-key: NavCommands::OnNavKey owns the mod's whole key switch.
+        default:
+            PostThreadMessageW(g_threadId, WM_NAVKEY, static_cast<WPARAM>(vk), 0);
+            break;
+    }
+}
+
+void DispatchSpeakPhrase(int phraseId) {
+    if (!g_threadId) return;
+    PostThreadMessageW(g_threadId, WM_PADSAY, static_cast<WPARAM>(phraseId), 0);
+}
+
+void DispatchToggleController() {
+    if (!g_threadId) return;
+    PostThreadMessageW(g_threadId, WM_PADCTRL, 0, 0);
+}
 
 void FeedDInputKeyboard(const unsigned char* dik) {
     if (!dik || !g_threadId) return;
@@ -467,7 +521,7 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic
     DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true);  // /  describe
     DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true);  // ;  target status
-    DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true);  // p  route to locked target
+    DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true);  // p  route to the active target
     DInputEdge('4',           g_extraDown[6],(dik[DIK_4]          & 0x80) != 0, true);  // 4  party slot 1 status
     DInputEdge('5',           g_extraDown[7],(dik[DIK_5]          & 0x80) != 0, true);  // 5  party slot 2 status
     DInputEdge('6',           g_extraDown[8],(dik[DIK_6]          & 0x80) != 0, true);  // 6  party slot 3 status
