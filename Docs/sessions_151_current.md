@@ -2679,3 +2679,117 @@ deployed clean.
 - The log line for the dispatch flavour changes name (`choice[n/N]` → `dialogue-choice[n/N] child=1`)
   and its index is now the absolute slot rather than the visible row. Identical on any list with no
   hidden slots; the spoken text is unchanged either way.
+
+## Session 176 — 2026-08-30 — [menus] The Strahl destination map: a node graph that could not send a focus index
+
+KEYWORDS: airship, Strahl, private airship, destination, world map, fast travel, FUN_005528c0,
+RVA 0x4328C0, unclaimed pane, node graph, pane+0x9F40, node+0x48, hook arity, S129, V0.7 held
+
+**The defect.** The private airship destination screen read nothing. Boarding, the desk conversation
+and the Yes/No prompts all worked; the map itself was silent for the whole 17.4 s it was up.
+
+**It was never a regression, and the release was held for it at the user's decision.** `plan.md:251`
+carries `- [ ] World map / fast travel` under `## v2 (deferred)`, and `Strahl` / `airship` appeared
+zero times in the repo. V0.7-Test-Build was already built, zipped and recorded when the report came
+in; asked whether to ship it and take this as its own session, the user chose to hold.
+
+### What the log proved, before any code was written
+
+The V0.7 log (`Build: V0.7 (76f0e66)`) emitted exactly ONE non-PERF line across the menu's lifetime:
+
+```
+[READER] unclaimed pane: obj0 RVA=0x4328C0 win=000000002BF70B40 -- no reader spoke for it
+```
+
+No focus, no rows, no speech. **`field tick 1.4/s` against `render 58.5 fps`** confirmed a modal menu
+really was up, so the mod was running and had nothing to say.
+
+**The log line's own parenthetical is a hardcoded guess and it was wrong here.** It reads
+"(candidate: the on-screen CONTROLS panel)" — a fixed string in `menu_reader.cpp:767`, not a
+measurement. Settled by sweeping all 21 logs in the corpus: the everyday unclaimed panes appear in
+20–21 logs each, while **`0x4328C0` appears in exactly one log, once**, 1.5 s after boarding was
+confirmed, and stays the focused pane until the leave prompt. **A diagnostic that names a suspect in
+its own message will be believed; this one names it in every log it ever prints.**
+
+**The user answered the discriminating question in one sentence (L-77):** the cursor moved and the
+game made its own cursor sound. So the events existed and simply never travelled the mod's path —
+which ruled out "nothing happened" and ruled out S151's wrong-addressee shape, since the
+`focus msg on a NON-cursor pane` diagnostic is keyed on `val` precisely so a walking cursor cannot be
+throttled away, and it fired once in the whole log, for the leave popup.
+
+### The root cause: there is no index to send
+
+`FUN_005528c0` (obj[0] RVA `0x4328C0`) **never calls `FUN_00247510`** — zero hits in 661 lines, and no
+`case 0xc`, the notify category `FUN_002a6190` uses. The `0x8000` dispatch every list reader in this
+mod hangs on is not missed here, **it is never sent**.
+
+**Because the destinations are a NODE GRAPH, not a list.** Markers with screen coordinates and four
+neighbour links, walked by direction. There is no row index, so there is nothing for a focus message
+to carry, and no guard added anywhere in `menu_reader.cpp` could have made one arrive. **The whole
+list-reading architecture is the wrong shape for this surface** — which is why this got its own
+reader rather than a gate in an existing one.
+
+Layout, derived offline then confirmed by a live census — full table in `GameArchitecture.md`:
+`pane+0x118` head, `node+0x140` next, `node+0x39` id, `+0x3C/+0x3E` screen xy, `+0x54` gating flags,
+`+0x130` render flags, `pane+0x9F40` the hovered node, `pane+0x120` the hover committed on input.
+
+**The pane's size corroborated the cursor offset before it was ever read.**
+`FUN_00244f50(0xa020, FUN_005528c0, ...)` allocates 0xA020 bytes, which is what puts `+0x9F40` inside
+the object at all. The same call site gave the pane's home: manager `DAT_02ca8f38` + `0x160`.
+
+### The census answered the one thing the decompile could not
+
+The pane resolves exactly two text ids (`0x4B45`, `0x4FF`) and both feed a static sub-panel — nothing
+per-node. So the whole node record was dumped rather than guessed at (`GameArchitecture.md`'s own
+rule: dump the WHOLE record before inventing a model), and it read cleanly:
+
+- `+0x10/+0x18/+0x20/+0x28/+0x30` are the neighbour **NODES**, and they match the four ids at
+  `+0x40..+0x43` exactly — the directional graph, confirmed from two directions at once.
+- **`+0x48` was the only pointer leading anywhere else** (a `0x2CA6xxxx` address, unaligned, the shape
+  of this game's packed codec text), mirrored at `+0x88`.
+
+34 nodes, ids `0x01..0x23` with `0x0D` absent. The hover trail logged 19 clean cursor moves, so
+`pane+0x9F40` is confirmed as the live detector.
+
+**`TextCapture::DumpRingToLog` was fired for the first time since it was written.** Built in Session
+112, it had **zero callers** — a diagnostic that has never once run is not an instrument, it is dead
+code that looks like insurance. It returned only the stale desk dialogue, because the census fires at
+pane construction and the destination text had not been drawn yet. Useful negative: the names do not
+come through the resolvers TextCapture hooks.
+
+### The reader, and why it will not speak on trust
+
+`src\ui\airship_reader.{h,cpp}`, hooking `FUN_005528c0`. It reads the pane's own fields; it joins no
+dispatch chain, because there is no dispatch.
+
+**`+0x48` was identified from ONE dumped record, and one record cannot tell a per-node name from a
+shared placeholder** — they look identical until you compare records. So the census requires the
+decoded names to be printable AND **distinct** before `g_namesTrusted` is set; failing that the
+reader stays silent and says so in the log. **An unproven field earns no speech, and speaking one
+wrong name on all 34 markers would be worse than the silence being fixed.** A node whose name does
+not decode is passed over in silence, which is also what separates the graph's intermediate waypoints
+from its real destinations.
+
+**The detour takes four parameters where the decompile shows two.** Ghidra infers a parameter list
+from what a body USES, not from the ABI — and in this very call graph the base handler decompiles as
+`FUN_005c5230(void)` and is called with two arguments one line later. **Over-declaring is safe on
+x64** (extras ride in R8/R9, a two-argument callee never looks); under-declaring is the S129 shop
+crash. Recorded because the temptation is to copy the decompiled signature verbatim.
+
+### Open
+
+- **PLAY-CONFIRM GATE: nobody has heard this speak.** The distinctness check decides at runtime
+  whether it says anything at all, so the first log settles it: `CENSUS ... distinct=yes` plus
+  `speak=` lines means it works; `distinct=NO` means `+0x48` is not the name field and the record
+  dump is the place to look next.
+- **The flag semantics are UNMODELLED and deliberately unused.** `node+0x54` gates visibility per
+  mode (mode 6 tests bit 3, mode 2 tests bit 2) and `node+0x130` bit 3 hides. The reader ignores both
+  and filters on "has a decodable name" instead. **The cursor demonstrably stops on `render=0x08`
+  nodes** (ids 0x10, 0x1A, 0x1C, 0x1E in the trail), so "hidden" does not mean "not reachable" and
+  modelling it from one session would be guessing.
+- Only ONE boarding, ONE save, ONE point in the story. Which destinations are unlocked shapes the
+  graph, so 34 nodes is this save's number, not the surface's.
+- `FUN_00551230()` (msg `0x23` to `DAT_02ca8f38`, RVA `0x2B88F38`) returns a mode the pane branches
+  on; modes 2/3/6 seen. Not read by the mod. Unmeasured.
+- **V0.7 must be re-cut** — see `release_procedure.md`. The zip and its committed record pin
+  `Built from 76f0e66` and hashes that are now stale.

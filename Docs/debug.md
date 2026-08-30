@@ -7210,3 +7210,47 @@ drop that line and let the value ride the next paint.
 state). That one is the field-message/choice widget family (`+0xB0` mode byte, `+0xA2` digit width);
 this is the config row-widget family (`FUN_0023xxxx`), which has no mode byte and dispatches purely
 on the class pointer at `row+0`. Do not carry offsets between them.
+
+## The private airship destination map was silent because it cannot send a focus index (Session 176)
+
+**Symptom.** Boarding the Strahl, the destination screen read nothing. The route to the desk, the desk
+conversation and the board / leave Yes-No prompts all worked.
+
+**NOT a regression — the surface had never been built.** `plan.md:251` `- [ ] World map / fast travel`
+under `## v2 (deferred)`; `Strahl` and `airship` appeared zero times in the repo. Establish this
+before treating a silent surface as a defect: **"the mod stopped reading X" and "the mod never read
+X" need different work, and only one of them is a bug.**
+
+**Diagnosis.** `FUN_005528c0` (obj[0] RVA `0x4328C0`) **never calls `FUN_00247510`** and has no
+`case 0xc`. The `0x8000` focus dispatch every list reader hangs on is never sent — because the
+destinations are a **node graph** with screen coordinates walked by direction, so **there is no row
+index for a focus message to carry.** No guard added in `menu_reader.cpp` could have fixed this.
+
+**Fix.** `src\ui\airship_reader.{h,cpp}` — hooks the pane's own handler and reads `pane+0x9F40`, the
+hovered node, with a change-check guarding that per-frame tick. Layout in `GameArchitecture.md`.
+
+### Tried & Failed / recorded so it is not repeated
+
+- **The `unclaimed pane` log line names a suspect in its own text, and it was wrong here.** It prints
+  "(candidate: the on-screen CONTROLS panel)" — a fixed string in `menu_reader.cpp:767`, not a
+  measurement. **A diagnostic that embeds a guess will have that guess quoted back as a finding.**
+  Settled by a corpus sweep instead: the everyday unclaimed panes appear in 20–21 of 21 logs, while
+  `0x4328C0` appears in **one log, once**, timed to the boarding. **Rarity plus timing is the test,
+  not the sentence the log prints.**
+- **`TextCapture::DumpRingToLog` had ZERO callers since Session 112.** It was written to diagnose
+  exactly this class of problem and had never once run. **A diagnostic nothing invokes is not
+  insurance, it is dead code that looks like insurance** — and its first run returned only stale
+  dialogue, because it fires at pane construction before the surface's own text is drawn.
+- **Do not copy a decompiled signature into a detour.** Ghidra infers parameters from body usage, not
+  the ABI: in this call graph the base handler decompiles as `FUN_005c5230(void)` and is called with
+  two arguments one line later. The detour takes **four** and forwards four. Over-declaring is safe
+  on x64 (extras ride in R8/R9); under-declaring is the S129 shop crash.
+
+### Open
+
+- **NOT PLAY-CONFIRMED.** The reader decides at runtime whether to speak at all: the census requires
+  the names decoded from `node+0x48` to be printable and DISTINCT, because that field was identified
+  from a single dumped record and **one record cannot tell a per-node name from a shared
+  placeholder.** First log settles it — `distinct=yes` plus `speak=` lines, or `distinct=NO`.
+- `node+0x54` / `+0x130` flag semantics unmodelled and unused; the cursor stops on nodes the render
+  flag calls hidden, so they are not a selectability filter.

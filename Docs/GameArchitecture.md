@@ -6303,3 +6303,69 @@ nothing reads on it**; the dump is how it gets tested or killed.
   for this puzzle and survives only as a cheap census.
 - **Not the class-5 globals.** `class 5 +0x086` / `+0x088` flip `0→1` on map 600, but at **Ancient
   Door** opens, minutes before any statue interaction. Do not mis-attribute them.
+
+## Private airship (Strahl) destination map — Session 176 — CENSUS-CONFIRMED
+
+**The class is `FUN_005528c0`, obj[0] RVA `0x4328C0`.** On these panes obj[0] IS the message handler
+pointer, so the class identity and the handler address are one address — which is why the
+unclaimed-pane census in `menu_reader.cpp` reports the class by that RVA, and why hooking that RVA
+hooks exactly this pane. Same convention as `0x186190` → `FUN_002a6190`, the field-dialogue window.
+
+**⚠ IT NEVER CALLS `FUN_00247510`.** Zero hits in 661 lines, and no `case 0xc` — the notify category
+`FUN_002a6190` uses. **The universal `0x8000` focus dispatch is not missed on this surface, it is
+never sent**, so no reader hung off that dispatch can ever see it.
+
+**The reason is the shape: the destinations are a NODE GRAPH, not a list.** Markers carry screen
+coordinates and four neighbour links and the cursor is walked between them by direction. **There is
+no row index, so there is nothing for a focus message to carry.** Every list idiom in the mod is the
+wrong shape for it.
+
+Allocated by `FUN_00244f50(0xa020, FUN_005528c0, ...)` — **0xA020 bytes**, which is what puts the
+cursor field at `+0x9F40` inside the object — and stored at manager `DAT_02ca8f38` + `0x160`
+(`DAT_02ca8f38` RVA `0x2B88F38`; case `0x18` clears that slot).
+
+### Pane fields
+
+| offset | meaning |
+|---|---|
+| `+0x118` | node list head |
+| `+0x120` | the hovered node, committed on input (case `0xA`/`0xB` copies `+0x9F40` here) |
+| `+0x138` | a `0x1C0`-byte sub-panel (class `FUN_00553ae0`), labels from text ids `0x4B45` and `0x4FF` |
+| `+0x9F40` | **THE HOVERED NODE** — the live cursor; 19 clean moves logged in one boarding |
+
+### Node fields
+
+| offset | meaning |
+|---|---|
+| `+0x10`, `+0x18`, `+0x20`, `+0x28`, `+0x30` | the neighbour **NODES** — they resolve to the ids at `+0x40..+0x43` |
+| `+0x39` | id byte. One save showed 34 nodes, ids `0x01..0x23` with `0x0D` absent |
+| `+0x3C` / `+0x3E` | screen x / y (i16) |
+| `+0x40..+0x43` | the four neighbour ids, matching the pointers above |
+| **`+0x48`** | **the destination NAME, packed codec text. `+0x88` mirrors it.** See the caveat below |
+| `+0x54` | gating flags — mode 6 tests bit 3, mode 2 tests bit 2 |
+| `+0x130` | render flags; bit 3 set = hidden |
+| `+0x140` | next node |
+
+**⚠ `+0x48` IS IDENTIFIED FROM ONE DUMPED RECORD AND IS NOT YET PLAY-CONFIRMED.** It was the only
+pointer on the record that did not lead to a sibling node, and it has the shape of this game's packed
+codec text (unaligned, `0x2CA6xxxx`). **One record cannot distinguish a per-node name from a shared
+placeholder** — they decode identically until you compare records — so `airship_reader.cpp` requires
+the decoded names to be printable and DISTINCT before it will speak, and logs `distinct=NO` if they
+are not. Do not promote this to fact until a log shows `distinct=yes`.
+
+**⚠ THE FLAG SEMANTICS ARE UNMODELLED.** `+0x54` and `+0x130` bit 3 are read and logged but not acted
+on. **The cursor demonstrably stops on nodes whose render flag says hidden** (ids `0x10`, `0x1A`,
+`0x1C`, `0x1E` in the 2026-08-30 trail), so "hidden" does not mean "not reachable", and modelling it
+from a single session would be guessing. The reader filters on "has a decodable name" instead, which
+is also what separates intermediate waypoints from real destinations.
+
+**Mode:** `FUN_00551230()` sends msg `0x23` to `DAT_02ca8f38` and returns the pane's mode; the handler
+branches on 2, 3 and 6, and the mode selects which `+0x54` bit gates a node. Not read by the mod.
+Unmeasured.
+
+**The node count is per-save.** Which destinations are unlocked shapes the graph, so 34 is the number
+for the save that produced this census, not a property of the surface.
+
+**Text on this pane does NOT come through the resolvers `TextCapture` hooks.** The pane calls
+`FUN_002f9860` exactly twice, both for the static sub-panel above. A ring dump taken at pane
+construction returned only the preceding desk dialogue.
