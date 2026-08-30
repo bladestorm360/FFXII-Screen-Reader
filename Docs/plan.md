@@ -248,7 +248,7 @@ NPC-trigger path needs Phase 4 first.
 - [ ] Gambit editor accessibility
 - [x] Shop: Buy/Sell/Bazaar item name + price + inventory on highlight, quantity selector (qty/total + 1x/10x step), and `g` gil key — Session 69
 - [x] License Board grid navigation (nodes, status, LP cost, `o` detail — Session 53)
-- [ ] World map / fast travel
+- [x] World map / fast travel — the private airship destination map speaks each marker (Session 176)
 - [ ] Hunts (marks)
 - [ ] Bazaar combinations
 

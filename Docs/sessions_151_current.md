@@ -2778,10 +2778,24 @@ crash. Recorded because the temptation is to copy the decompiled signature verba
 
 ### Open
 
-- **PLAY-CONFIRM GATE: nobody has heard this speak.** The distinctness check decides at runtime
-  whether it says anything at all, so the first log settles it: `CENSUS ... distinct=yes` plus
-  `speak=` lines means it works; `distinct=NO` means `+0x48` is not the name field and the record
-  dump is the place to look next.
+- **✅ PLAY-CONFIRMED 2026-08-30 (user: "works"), and the log agrees rather than merely not
+  disagreeing:** `CENSUS pane=... nodes=34 named=34 distinct=yes`, 21 destinations spoken and reaching
+  `SPEAK-OUT`, zero `distinct=NO`, zero hook failures. The names settle the identity question that the
+  call graph could not: Rabanastre, Nalbina Fortress, Ozmone Plain, Balfonheim Port, The Ridorana
+  Cataract. **THE SUREST EVIDENCE OF WHAT A PANE IS WAS THE TEXT IT HELD, NOT THE CALLS THAT REACH
+  IT** — two sessions of call-graph work put identity at 0.95; one line of its own contents put it
+  at 0.99.
+- **The runtime distinctness gate replaced a second play pass and was the right trade.** The
+  alternative was to ship a probe, wait for a boarding, read it, then ship the reader and wait again.
+  Instead the reader shipped able to prove its own key field, so one boarding returned either the
+  feature or the diagnosis. **When a probe and the fix read the SAME field, the fix can carry the
+  probe's test and the round trip disappears** — but only because failing the test meant silence,
+  which is what the surface already did. **That trade is only available when the failure mode is the
+  status quo.**
+- **⚠ The pane lists the WHOLE WORLD MAP, not flyable ports.** Garamsythe Waterway, Barheim Passage,
+  Henne Mines, Lhusu Mines. Not a defect and not modelled — see the flags item below.
+- **NO README ENTRY, deliberately.** The map reads on its own and the player makes no decision about
+  it, so there is no key to look up — `CLAUDE.md`'s rule that a feature with no key needs no entry.
 - **The flag semantics are UNMODELLED and deliberately unused.** `node+0x54` gates visibility per
   mode (mode 6 tests bit 3, mode 2 tests bit 2) and `node+0x130` bit 3 hides. The reader ignores both
   and filters on "has a decodable name" instead. **The cursor demonstrably stops on `render=0x08`

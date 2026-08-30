@@ -6346,12 +6346,21 @@ cursor field at `+0x9F40` inside the object — and stored at manager `DAT_02ca8
 | `+0x130` | render flags; bit 3 set = hidden |
 | `+0x140` | next node |
 
-**⚠ `+0x48` IS IDENTIFIED FROM ONE DUMPED RECORD AND IS NOT YET PLAY-CONFIRMED.** It was the only
-pointer on the record that did not lead to a sibling node, and it has the shape of this game's packed
-codec text (unaligned, `0x2CA6xxxx`). **One record cannot distinguish a per-node name from a shared
-placeholder** — they decode identically until you compare records — so `airship_reader.cpp` requires
-the decoded names to be printable and DISTINCT before it will speak, and logs `distinct=NO` if they
-are not. Do not promote this to fact until a log shows `distinct=yes`.
+**✅ `+0x48` IS THE DESTINATION NAME — PLAY-CONFIRMED 2026-08-30, and it confirms the class identity
+with it.** The census read **34 of 34 nodes named, `distinct=yes`**, and the names are unmistakable:
+Rabanastre, Garamsythe Waterway, Nalbina Fortress, Barheim Passage, Dalmasca Estersand … Balfonheim
+Port, The Ridorana Cataract. 21 were spoken in that pass and reached `SPEAK-OUT`. Identity of
+`0x4328C0` as the world-map destination pane rises to **0.99** on the strength of its own contents —
+**the surest confirmation of what a pane IS turned out to be the text it holds, not the call graph
+that reaches it.**
+
+The runtime distinctness gate that earned this is still in `airship_reader.cpp` and should stay: it
+cost nothing once the field was right, and it is what made shipping a single-record identification
+safe. `+0x88` mirrors `+0x48` on every node.
+
+**⚠ THE LIST IS THE WHOLE WORLD MAP, NOT A LIST OF FLYABLE PORTS.** It carries Garamsythe Waterway,
+Barheim Passage, Henne Mines and Lhusu Mines — places no airship lands. Whatever marks a destination
+as an actual landing point is in the flags below, and it is NOT modelled.
 
 **⚠ THE FLAG SEMANTICS ARE UNMODELLED.** `+0x54` and `+0x130` bit 3 are read and logged but not acted
 on. **The cursor demonstrably stops on nodes whose render flag says hidden** (ids `0x10`, `0x1A`,

@@ -7248,9 +7248,13 @@ hovered node, with a change-check guarding that per-frame tick. Layout in `GameA
 
 ### Open
 
-- **NOT PLAY-CONFIRMED.** The reader decides at runtime whether to speak at all: the census requires
-  the names decoded from `node+0x48` to be printable and DISTINCT, because that field was identified
-  from a single dumped record and **one record cannot tell a per-node name from a shared
-  placeholder.** First log settles it — `distinct=yes` plus `speak=` lines, or `distinct=NO`.
+- **✅ PLAY-CONFIRMED 2026-08-30 — SOLVED.** `CENSUS nodes=34 named=34 distinct=yes`, 21 destinations
+  spoken and reaching `SPEAK-OUT`, zero `distinct=NO`, zero hook failures. `node+0x48` is the name.
+  **The runtime distinctness gate is what made it safe to ship a field identified from one record,
+  and it cost nothing when the field was right** — cheaper than the second play pass it replaced.
+- **⚠ The pane lists the WHOLE WORLD MAP, not flyable ports** — Garamsythe Waterway, Barheim Passage,
+  Henne Mines and Lhusu Mines are all in it. The reader speaks whatever marker the cursor lands on,
+  which is right for a map cursor; it does not claim you can fly there. If a player asks why an
+  unreachable place is announced, that is this, and the answer is in the unmodelled flags.
 - `node+0x54` / `+0x130` flag semantics unmodelled and unused; the cursor stops on nodes the render
   flag calls hidden, so they are not a selectability filter.
