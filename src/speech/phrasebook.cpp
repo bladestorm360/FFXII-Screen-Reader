@@ -118,8 +118,14 @@ const Row kTable[] = {
     EN(L"Off never moves the character."),
     EN(L"On walks the route automatically after the route key. Combat, menus, or your own movement stop it instantly."),
     EN(L"Auto-walk stopped."),
-    // (S130's six Text-glyphs rows were removed in S147. The font variant is DETECTED from the
-    // loaded atlas now, so there is no row to name and nothing for the player to decide.)
+    // S130's rows, restored verbatim S177 -- except the row NAME, renamed by the user from
+    // "Text glyphs" to "Diacritics override". Flag the wording to the user before rewording.
+    EN(L"Diacritics override"),
+    EN(L"Which font the game is running. Set this to match your install, or accented letters will be read as the wrong letter."),
+    EN(L"Standard"),
+    EN(L"Polish translation"),
+    EN(L"Standard is the unmodified game, in any language it shipped in."),
+    EN(L"Polish translation is the PL fan patch, which reuses accented letter slots for Polish ones."),
     // S147: autodetail. User-approved 2026-08-10; flag the wording to the user before rewording.
     EN(L"Auto detail"),
     EN(L"Whether the extra detail about the highlighted thing is read out on its own, or only when you ask for it."),

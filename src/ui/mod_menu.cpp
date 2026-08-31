@@ -4,6 +4,7 @@
 #include "input/input_tracker.h"
 #include "speech/phrasebook.h"
 #include "speech/speech.h"
+#include "core/game_text.h"          // S177: the restored glyph-variant row pushes SetVariant here
 #include "navigation/shout_meter.h"
 
 #include <windows.h>
@@ -89,6 +90,15 @@ const Setting kSettings[] = {
       { Id::BeaconOff,         Id::BeaconOn },
       { Id::ControllerDescOff, Id::ControllerDescOn },
       Id::ControllerDesc, "controller", 1, nullptr },
+    // S130, RESTORED S177 at the user's instruction after S147 removed it -- same two values, same
+    // default, same settings key. Default STANDARD, which is every unmodified install in all twelve
+    // languages -- a fan patch is the exception and its player is the one who knows they installed
+    // it. The key stays `text_glyphs`, so a tester who had this set before S147 deleted it gets
+    // their own choice back on upgrade rather than a fresh default.
+    { Id::SettingTextGlyphs, Kind::Named, 2,
+      { Id::TextGlyphsStandard,     Id::TextGlyphsPolish },
+      { Id::TextGlyphsDescStandard, Id::TextGlyphsDescPolish },
+      Id::TextGlyphsDesc, "text_glyphs", 0, nullptr },
     // S132, tester's request: the two shout-minigame rows, CONTEXT-GATED to a running sequence.
     //
     // Default ON for the guide: it only ever tells the player something, and a puzzle whose whole
@@ -304,15 +314,26 @@ bool OnDescribe() {
     return true;
 }
 
-// (S130's ApplyTextGlyphs was removed in S147 along with the row it pushed. The glyph variant is
-// no longer a setting to apply -- GameText detects it from the loaded font atlas itself, on its own
-// schedule, and the menu has nothing to say about it.)
+// Push the glyph-variant setting into the decoder. Called from Init (so a stored value applies before
+// the first string the mod ever decodes) and from Adjust (so a change takes effect immediately,
+// without a restart -- the player needs to HEAR the difference to know they picked right).
+//
+// S130 called this on EVERY adjust and justified it as harmless -- "two atomic stores and a 256-entry
+// copy". That justification lapsed in S177: `SetVariant` now also arms or disarms the autodetector,
+// so running it when an unrelated row moved would rebuild the table to stock and re-arm detection
+// every time the player nudged a volume. Gated on the row from here on.
+// GameText owns the table; this only tells it which one.
+void ApplyTextGlyphs() {
+    const int v = g_values[static_cast<int>(SettingId::TextGlyphs)].load(std::memory_order_relaxed);
+    GameText::SetVariant(v == 1 ? GameText::Variant::PolishPatch : GameText::Variant::Standard);
+}
 
 } // namespace
 
 bool Init() {
     if (g_initialized) return true;
     Load();                                     // seeds defaults, then overlays the stored file
+    ApplyTextGlyphs();                          // before any reader can decode a string
     InputTracker::SetModMenuNavCallback(&OnMenuNavKey);
     InputTracker::SetModMenuDescribeCallback(&OnDescribe);
     InputTracker::SetControllerToggleCallback(&ToggleController);
@@ -410,6 +431,7 @@ static void AdjustImpl(SettingId id, int delta, bool speakName) {
         g_values[i].store(next, std::memory_order_relaxed);
         Save();
         LogState("set", i);
+        if (id == SettingId::TextGlyphs) ApplyTextGlyphs();   // see the note on the function
     }
     // The value alone, not the setting name: F4 is a dedicated key whose meaning the player already
     // knows, and inside the menu they just heard the name. Short enough to use mid-fight.

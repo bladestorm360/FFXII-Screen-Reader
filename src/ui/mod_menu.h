@@ -71,6 +71,16 @@ enum class SettingId : int {
     // pad player with no way to play and no way to report it. Off returns PadRouter::OnPoll on its
     // first line, so the input path becomes byte-identical to the mod with no pad support at all.
     Controller,
+    // S130's row, RESTORED S177 at the user's instruction: which font atlas the decoder maps
+    // bytes through. Two values, Standard and Polish translation, exactly as it always was --
+    // only the spoken NAME changed, to "Diacritics override". It sits LAST of the always-visible
+    // rows so every existing row keeps the position the player already knows.
+    //
+    // ⚠ IT OUTRANKS AUTODETECTION IN ONE DIRECTION ONLY. `Polish translation` forces the variant
+    // and stands the detector down; `Standard` -- the default, and what every untouched install
+    // carries -- means "no override" and hands the question back to detection. Reading value 0 as a
+    // decision would force stock on everyone and the detector would never fire. See `SetVariant`.
+    TextGlyphs,
     // S132, both visible ONLY while a shout-minigame sequence is actually running (shout_meter.h's
     // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
     PuzzleGuide,          // the spoken meter and the B/N keys.       Default ON  -- it only informs
@@ -82,12 +92,12 @@ enum class SettingId : int {
 // nothing left for a player to choose. A settings file still carrying `sneak_assist=1` is harmless:
 // `Load()` ignores keys it does not know, by design.
 //
-// REMOVED Session 147: `TextGlyphs`. S130 added it on the belief that a fan translation could not be
-// detected -- true of the DISK (the Polish patch repacks the archive in place and leaves no marker),
-// but not of the LOADED FONT, which is the thing the setting was actually describing. The patch
-// changes ten advance widths in `font00.dat`, and `GameText::DetectVariant` reads them back from the
-// game's own font manager, so the mod now knows which atlas it is reading without being told. A
-// stale `text_glyphs=1` in an existing settings file is harmless for the same reason as above.
+// ~~REMOVED Session 147: `TextGlyphs`.~~ **RESTORED Session 177, unchanged** -- see the row in the
+// enum above. S147 removed it on the grounds that detection had replaced it. Detection turned out
+// never to have worked (two wrong constants, five releases), and because a mis-mapped font reads as
+// ordinary text rather than as an error, nothing could show that -- so the row that HAD worked was
+// deleted in favour of one that never had. It is back exactly as S130 shipped it: two values, same
+// default, same `text_glyphs` key, only the spoken name changed to "Diacritics override".
 
 // Loads the persisted settings and registers the input callbacks. Safe to call before Speech is up.
 bool Init();

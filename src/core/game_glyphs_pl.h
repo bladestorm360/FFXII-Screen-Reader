@@ -24,12 +24,24 @@
 // files (both 46,876 bytes) differ in EXACTLY 20 bytes — ten records, each with its duplicated
 // advance pair at +0x0C/+0x10 changed, and nothing else. That is a deterministic fingerprint.
 //
-//   slot  60  61  62   84  85  86   98  117 118  179
+//   slot  59  60  61   83  84  85   97  116 117  178      (byte = slot + 0x20)
 //   stock 21  21  21   22  22  22   24  19  36   36
 //   PL    20  24  24   17  18  18   20  11  11   11
 //
+// ⚠ These ordinals were one too high from S147 until Session 177, which is why detection never once
+// fired in the field. Note what the CORRECTED row says: slot + 0x20 gives 0x5B 0x5C 0x5D 0x73 0x74
+// 0x75 0x81 0x94 for eight of the ten, and those are precisely the bytes overridden below. The
+// advance-width fingerprint and the letter mapping are two independent recoveries of the SAME ten
+// repainted slots, so each one checks the other -- put them side by side before trusting either.
+//
 // `GameText::DetectVariantOnce` reads them back through the game's own font manager. There is no
 // setting and no ModMenu row any more — the mod knows which table it is holding without being told.
+//
+// ⚠ AMENDED S177 on both halves. The detection was WRONG (see the fingerprint note above) and had
+// never once fired, and the ModMenu row is BACK as `Diacritics override` — not because detection
+// cannot work, but because when it fails it fails into the default answer, silently, on a surface a
+// blind player cannot check. Detection is still the default and still authoritative; the row is the
+// escape hatch. See `GameText::Override`.
 //
 // The METHOD below is unaffected and still stands: the character metadata really does still name the
 // stock letters, so the MAPPING had to come from the patch's own translated text. Only the "you must

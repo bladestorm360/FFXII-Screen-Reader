@@ -139,9 +139,12 @@ enum class Id {
     // and on route loss -- player-initiated stops and self-announcing ones (arrival cue, combat,
     // map transition) stay silent per the silence-is-normal rule.
     SettingAutoWalk, AutoWalkDesc, AutoWalkDescOff, AutoWalkDescOn, AutoWalkStopped,
-    // (S130's six Text-glyphs ids were removed in S147 with the setting they named. Which font
-    // atlas this install runs is now DETECTED from the loaded font itself -- see GameText::
-    // DetectVariant -- so there is nothing left for the player to pick and nothing to say about it.)
+    // S130's font-atlas row, RESTORED S177 after S147 removed it -- same six ids, same order,
+    // same wording, with ONE edit: the row is now spoken as "Diacritics override" (the user's
+    // name for it, 2026-08-31). The two VALUE words are its own rather than reusing Off/On:
+    // this is not a feature being switched on. Flag any further reword to the user.
+    SettingTextGlyphs, TextGlyphsDesc,
+    TextGlyphsStandard, TextGlyphsPolish, TextGlyphsDescStandard, TextGlyphsDescPolish,
     // S147: autodetail. The Off/On VALUES reuse BeaconOff/BeaconOn -- they are generic. Wording
     // user-approved 2026-08-10. What it switches is what gets VOLUNTEERED, never what is reachable:
     // the `4`-`9` shop columns and `o` keep working identically in both modes.

@@ -5767,10 +5767,18 @@ ten changed records changed only their *advance width*. So the file that is auth
 stock install is actively wrong for this one, and every repurposed slot still claims the stock
 letter it used to draw.
 
-**Autodetection is not available.** `instaluj.bat` repacks the archive in place
+~~**Autodetection is not available.**~~ `instaluj.bat` repacks the archive in place
 (`ff12-vbf.exe -r ff12data ..\FFXII_TZA.vbf`) and patches `FileSizeTable_US.fst`. No loose file, no
-marker, no version string. Hence a mod-menu row (**Text glyphs — Standard / Polish translation**,
-default Standard) rather than a probe.
+marker, no version string. ~~Hence a mod-menu row (**Text glyphs — Standard / Polish translation**,
+default Standard) rather than a probe.~~
+
+**STRUCK (S147, and the strike re-affirmed S177).** The premise is right about the DISK and the
+conclusion does not follow: what needs identifying is not a file but **which atlas the game loaded**,
+which is in memory as soon as the font manager exists. The marker is in this very paragraph — "ten
+changed records changed only their *advance width*" IS a deterministic fingerprint.
+`GameText::DetectVariantOnce` reads it back, the `Text glyphs` row is gone, and there is nothing for
+the player to pick. ⚠ **The detection as first written did not work** — two wrong constants meant it
+never fired on any build from V0.6.3 to V0.7; fixed S177, see the BACKLOG item below.
 
 **How the mapping was recovered:** decode the patch's own shipped `ps2data` text with the STOCK
 table and read the Polish. A repurposed slot shows up as a stock letter standing in a position
@@ -5842,18 +5850,66 @@ auto-walk. It needs its own session with play evidence.
 Four items, all deferred at the tester's direction. Each is written up so the next session starts
 from evidence rather than from a re-investigation.
 
-### 1. The Polish diacritics fix is NOT working
+### 1. ~~The Polish diacritics fix is NOT working~~ — SOLVED (Session 177), TWO WRONG CONSTANTS
 
-**The tester reports the S130 glyph work did not solve accented-character reading on the
-PL_ff12_v1.3 fan patch.** `project_s130_minhook_ceiling_and_glyph_table.md` and the
-`GameArchitecture.md` glyph section are marked as findings, **not** as a solved problem.
+~~**The tester reports the S130 glyph work did not solve accented-character reading on the
+PL_ff12_v1.3 fan patch.** Check whether the **Text glyphs** mod-menu setting is actually on
+`Polish` in their `mod_settings.txt`; whether the mapping is applied on the read path their text
+actually takes; and whether more slots moved than the 144 bytes S130 recovered.~~
 
-Start from the TESTER's build and the TESTER's own log, never the dev machine — that is the standing
-rule and it is exactly the trap this one sets, because the dev machine has no fan patch installed.
-Check in order: whether the **Text glyphs** mod-menu setting is actually on `Polish` in their
-`mod_settings.txt`; whether the mapping is applied on the read path their text actually takes; and
-whether more slots moved than the 144 bytes S130 recovered. Several claims in that section may need
-STRIKING rather than extending.
+**STRUCK 2026-08-30.** The investigation plan above is obsolete in every particular: S147 deleted
+the `Text glyphs` setting, the mapping was correct, and no additional slots moved. **The glyph table
+was never the problem — variant DETECTION was, and it had never once fired on any build.** Both
+faults are in `game_text.cpp`'s `DetectVariantOnce`, both date to S147, and both shipped in every
+release from **V0.6.3 through V0.7**:
+
+1. **`RVA_FONT_MGR` was `0x1EE11F8`; the font manager is `DAT_01f811f8`, i.e. RVA `0x1E611F8`.** A
+   transposed 6/E. The old value resolves to ABS `0x020011F8`, an unrelated global. Because that read
+   is only a non-null "is the manager up yet" gate and is never dereferenced, it did not crash — it
+   just gated detection on a garbage word.
+2. **Every entry of `kFpSlot` was one too high** — `60,61,62,84,85,86,98,117,118,179` where the
+   records are `59,60,61,83,84,85,97,116,117,178`. Counted from one against a zero-based file.
+
+Either fault alone is sufficient: the scan reads the wrong ten records, no vector matches, and the
+code logs `font atlas UNRECOGNISED` and settles on `Standard` — which is also the correct answer for
+every non-Polish install, so nothing anywhere looked wrong (**L-83**).
+
+**How it was settled, entirely offline and with no tester artifact:** both `font00.dat` files are in
+the repo tree (`PL_ff12_v1.3\…\font\us\` and `FFXII-Decompile\extracted\…\font\us\`). Byte-diffing
+them gives 20 differing bytes in 10 records, and each record states **its own ordinal at `+0x00`**.
+`FUN_002ac2f0` shows the argument to `FUN_0017f8c0` is `codec byte − 0x20`, which fixes the index
+space. Cross-check: eight of the ten corrected ordinals map to bytes `kGlyphPolish` already
+overrides; under the old ordinals one mapped to `0x5E`, which the patch never touched (**L-82**).
+
+**Also fixed:** a no-match no longer latches. "Manager not up yet" and "loaded but unrecognised" were
+indistinguishable, so one early call could pin a Polish install to English glyphs for the whole
+session — with no manual override left to escape through. It now retries up to 64 times before
+settling, and logs the give-up once at the cap.
+
+**Confidence 0.99** on both constants (the RVA is `FUN_001b5fa0`'s literal return, and the base
+convention `abs = RVA + 0x120000` holds across ~25 constants in this codebase; the ordinals are a
+direct file measurement corroborated by an independently derived table). **Play-confirmation on a
+Polish install is still OPEN** — nobody on this machine runs the fan patch. The one line that
+settles it is `[TEXT] font atlas DETECTED: Polish fan patch` in the tester's log.
+
+**AND S130's TOGGLE IS BACK** (same session, user's instruction), **restored from `367b10f^`, not
+rebuilt**: `SettingId::TextGlyphs`, two values, `text_glyphs` key, default 0 — byte-identical to the
+original, with only the spoken label changed to **`Diacritics override`**. (My first attempt
+reimplemented it as a new three-value row with a new key; the user caught it. The invented key would
+have orphaned every tester's existing `text_glyphs=1` — see **L-84**.)
+
+**How it arbitrates with detection**, which S130's toggle never had to contend with — the user's
+rule, implemented inside `SetVariant` so the call site stays original:
+- **`Polish translation`** forces the variant and stands the detector **down**.
+- **`Standard`** — the default, and what every untouched install carries — means **"no override"**,
+  not "force stock": it rebuilds to stock and **re-arms** the detector.
+
+The asymmetry is what lets a two-valued row do the job of three: value 0 is not a decision, it is
+what a player who never opened the menu has, so reading it as one would force stock on everyone and
+detection would never fire. Deferring is free because detection's own fallback IS Standard.
+
+**KEYWORDS: Polish diacritics detection font atlas RVA_FONT_MGR kFpSlot off-by-one DetectVariantOnce
+DAT_01f811f8 FUN_0017f8c0 advance width fingerprint Diacritics override SetVariantOverride S177**
 
 ### 2. MP cost of magicks — BATTLE MENU ONLY
 

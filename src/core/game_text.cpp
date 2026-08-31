@@ -46,12 +46,24 @@ void BuildGlyphTable(Variant v) {
 //
 // THE FINGERPRINT, measured by diffing the two `font00.dat` files byte for byte (both 46,876 bytes):
 // they differ in EXACTLY 20 bytes, in 10 records, and every one of those 20 is an advance width
-// (the file stores it twice per record, at +0x0C and +0x10). S130 saw this and wrote it down --
+// (the file stores it twice per record, at +0x18 and +0x1C -- S147 said +0x0C/+0x10, also wrong, and
+// harmless only because nothing reads the file). S130 saw this and wrote it down --
 // "the patch adjusts ten advance widths" -- without noticing that ten adjusted widths ARE the marker.
 //
-//   slot  60  61  62   84  85  86   98  117 118  179     (record ordinal == slot; byte = slot+0x20)
+//   slot  59  60  61   83  84  85   97  116 117  178     (record ordinal == slot; byte = slot+0x20)
 //   stock 21  21  21   22  22  22   24  19  36   36
 //   PL    20  24  24   17  18  18   20  11  11   11
+//
+// ⚠ SESSION 177 -- THE ORDINALS ABOVE WERE EVERY ONE OF THEM ONE TOO HIGH, and that alone was enough
+// to make detection fail on every build since V0.6.3. Re-measured by diffing the two files directly:
+// records are 0x24 bytes on a base of 0x28, each storing its OWN ordinal at +0x00, and the twenty
+// changed bytes fall in records 59/60/61/83/84/85/97/116/117/178 -- not 60/61/62/... The VALUES were
+// right; only the indices were counted from one. The check that catches this without any font file
+// to hand: `byte = slot + 0x20`, and eight of the ten corrected bytes (0x5B 0x5C 0x5D 0x73 0x74 0x75
+// 0x81 0x94) are EXACTLY the slots `kGlyphPolish` overrides -- the patch re-cut the advance of the
+// slots it repainted. Under the old ordinals one of them was 0x5E, which the patch never touched.
+// The mod's own glyph table, derived years earlier from translated text, disagreed with this list
+// and nobody put the two side by side.
 //
 // HOW THIS READS THEM WITHOUT KNOWING THE STRUCT. `FUN_0017f8c0(slot)` hands back the loaded record,
 // but it comes out of a std::map (`FUN_001fdec0` is a red-black-tree lookup returning `node+0x24`),
@@ -67,11 +79,15 @@ void BuildGlyphTable(Variant v) {
 // install in all twelve languages -- so an unrecognised font can only ever leave behaviour where it
 // already was, never make it worse.
 constexpr int      kFpSlots = 10;
-constexpr uint32_t kFpSlot [kFpSlots] = { 60, 61, 62, 84, 85, 86, 98, 117, 118, 179 };
+constexpr uint32_t kFpSlot [kFpSlots] = { 59, 60, 61, 83, 84, 85, 97, 116, 117, 178 };
 constexpr uint32_t kFpStock[kFpSlots] = { 21, 21, 21, 22, 22, 22, 24,  19,  36,  36 };
 constexpr uint32_t kFpPolish[kFpSlots] = { 20, 24, 24, 17, 18, 18, 20,  11,  11,  11 };
 
-constexpr uint32_t RVA_FONT_MGR    = 0x1EE11F8;  // DAT_01f811f8 -- the font manager (FUN_001b5fa0)
+// ⚠ SESSION 177: this was 0x1EE11F8 from S147 until now -- a transposed 6/E that resolved to ABS
+// 0x020011F8, an unrelated global. Every other absolute in this codebase is ABS - 0x120000
+// (`_DAT_01f83530` -> 0x1E63530 sits on the same page and gets it right), and FUN_001b5fa0 is
+// literally `return DAT_01f811f8;`, so the only correct RVA is 0x01f811f8 - 0x120000.
+constexpr uint32_t RVA_FONT_MGR    = 0x1E611F8;  // DAT_01f811f8 -- the font manager (FUN_001b5fa0)
 constexpr uint32_t RVA_GLYPH_REC   = 0x5F8C0;    // FUN_0017f8c0(slot) -> loaded glyph record
 constexpr uint32_t kRecScan        = 0x24;       // bytes of the record we are willing to look at
 
@@ -84,6 +100,14 @@ void* GlyphRecord(uint32_t slot) {
 }
 
 std::atomic<bool> g_variantDetected{false};
+
+// Tries spent on a loaded-but-unmatched atlas before settling for standard. Only the no-match path
+// consumes one; "manager not up yet" and "record unreadable" re-arm without counting, exactly as
+// they always did, because those are not answers at all.
+// Atomic since S177: the game thread bumps it inside the detector, and the input thread clears it
+// from `SetVariantOverride` when the player selects Automatic.
+constexpr int kMaxTries = 64;
+std::atomic<int> g_detectTries{0};
 
 void DetectVariantOnce() {
     if (g_variantDetected.exchange(true)) return;         // one attempt per process, whatever it finds
@@ -126,9 +150,24 @@ void DetectVariantOnce() {
         return;
     }
 
-    // No vector matched. Print what was actually there -- this is the one line that turns "detection
-    // failed" into a fix, and without it the next session would be re-deriving the fingerprint.
-    char b[320];
+    // No vector matched. RE-ARM rather than latch, up to a bounded number of tries.
+    //
+    // WHY THIS IS NOT "TRY AGAIN AND HOPE". The two states this cannot tell apart are "the atlas is
+    // loaded and is one we do not recognise" and "the atlas is not fully loaded YET", and they want
+    // opposite handling: the first is final, the second is a question asked too early. Latching
+    // picked the wrong one of those permanently, and because S147 also removed the player's manual
+    // override, a single early call left a Polish install reading English glyphs for the whole
+    // session with no way back. A bounded retry costs ten map lookups on at most kMaxTries decoded
+    // strings and cannot loop: after the cap it stays standard, which is where it would have been.
+    if (g_detectTries.fetch_add(1, std::memory_order_relaxed) + 1 < kMaxTries) {
+        g_variantDetected.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    // Print what was actually there -- this is the one line that turns "detection failed" into a
+    // fix, and without it the next session would be re-deriving the fingerprint. Logged only at the
+    // cap, so a font that simply loads late does not write kMaxTries identical lines.
+    char b[1024];   // 10 slots x 9 words each: 320 truncated this after two slots.
     int n = snprintf(b, sizeof(b), "font atlas UNRECOGNISED (staying standard). slot values:");
     for (int i = 0; i < kFpSlots && n > 0 && n < static_cast<int>(sizeof(b)); ++i) {
         n += snprintf(b + n, sizeof(b) - n, " [%u]", kFpSlot[i]);
@@ -624,9 +663,38 @@ void SetElementSpriteResolver(SpriteNameFn fn) {
     g_spriteResolver = fn;
 }
 
-// (S130's SetVariant went with the mod-menu row in S147. Nothing outside this file chooses the
-// variant any more -- DetectVariantOnce reads it off the loaded atlas. Re-adding a setter would put
-// back the way a wrong answer could be persisted and then trusted forever.)
+// S130's setter, restored S177 -- same signature, same one call site, and the same two values the
+// row always had. What is new is only how it ARBITRATES with the detector S147 added, and the rule
+// is the user's: the row wins only when it is set to Polish.
+//
+//   PolishPatch -- an explicit "my install is the fan patch". Force it and stand the detector DOWN,
+//                  because a choice a later autodetect could silently overwrite is not a choice.
+//   Standard    -- the default, and the value every untouched install carries. Treat it as "no
+//                  override", NOT as "force stock": rebuild to stock now, then hand the question
+//                  back to the detector, which answers again on the next decoded string.
+//
+// THE ASYMMETRY IS THE WHOLE POINT, and it is what lets one two-valued row do the job of three.
+// `Standard` at value 0 cannot be read as a decision -- it is what a player who has never opened
+// this menu has -- so treating it as one would force stock on every install and the detector would
+// never fire for anyone. Detection's own fallback is Standard anyway, so deferring costs nothing:
+// the only outcome that changes is the one where detection finds the Polish atlas and is right.
+void SetVariant(Variant v) {
+    g_variant.store(v, std::memory_order_relaxed);
+    BuildGlyphTable(v);
+
+    if (v == Variant::PolishPatch) {
+        g_variantDetected.store(true, std::memory_order_relaxed);      // forced; detector stands down
+        Log::Write("TEXT", "glyph variant FORCED: Polish fan patch (detection off)");
+        return;
+    }
+
+    // Re-arm. Clearing the try COUNT as well as the latch matters: a player who switched to Polish
+    // and back is asking to be told again, and re-arming a detector that had already spent its 64
+    // tries would answer with one that has given up.
+    g_detectTries.store(0, std::memory_order_relaxed);
+    g_variantDetected.store(false, std::memory_order_relaxed);
+    Log::Write("TEXT", "glyph variant: standard, detection armed");
+}
 
 Variant GetVariant() { return g_variant.load(std::memory_order_relaxed); }
 

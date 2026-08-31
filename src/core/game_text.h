@@ -25,13 +25,23 @@ namespace GameText {
 // LOADED, and that is in memory. The patch changes ten advance widths in `font00.dat` and nothing
 // else, which is a deterministic fingerprint; `DetectVariantOnce` in the .cpp reads them back
 // through the game's own font manager and locates the advance field by matching rather than by
-// assuming a struct layout. There is no setting and no mod-menu row any more.
+// assuming a struct layout. ~~There is no setting and no mod-menu row any more.~~
 enum class Variant : uint8_t { Standard = 0, PolishPatch = 1 };
 
-// Which atlas the running game is using. DETECTED, never set: nothing outside game_text.cpp chooses
-// this. A relaxed atomic, written once on the first decode after the font manager exists and read
-// on the game thread inside the decode loop.
+// Which atlas the running game is using. A relaxed atomic, written on the first decode after the
+// font manager exists and read on the game thread inside the decode loop.
 Variant GetVariant();
+
+// S130's setter, RESTORED S177 at the user's instruction after S147 deleted it. The row it belongs
+// to is `Diacritics override` in the mod menu -- the same two values it always had. Stores the
+// variant and rebuilds the glyph table, so a change takes effect on the next line spoken rather than
+// the next launch. Called from ModMenu (Init, and the one Adjust choke point) and nowhere else.
+//
+// IT ARBITRATES WITH THE DETECTOR, ASYMMETRICALLY: `PolishPatch` forces and stands detection down;
+// `Standard` means "no override" and re-arms detection rather than forcing stock. The .cpp carries
+// the reasoning -- the short version is that value 0 is what an untouched install has, so it cannot
+// be read as a decision without killing detection for everyone.
+void SetVariant(Variant v);
 
 // Decode a NUL-terminated codec byte string into a wide string. Reads at most
 // `maxBytes` codec bytes. SEH-guarded (the source struct can be transient);

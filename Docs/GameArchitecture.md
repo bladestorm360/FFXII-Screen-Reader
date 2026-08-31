@@ -1615,6 +1615,37 @@ text-render path FFXII actually uses on PC. Two-layer architecture:
 | `0x95FA0` | `0x1B5FA0` | `FUN_001b5fa0` — font-scene singleton getter. **28 callers** in the decompile = candidate set of text producers. |
 | `0xC8580` | `0x1E8580` | `FUN_001e8580` — 3,572-byte vertex dispatcher. Iterates `font-scene-ctx + 0x70` (31 slots × 56 bytes each), allocates `DynGeoFontText*` instances for non-empty slots, feeds them per-glyph vertex data. |
 
+### Glyph-record lookup, and the loaded-atlas fingerprint (S147, CORRECTED S177)
+
+| RVA | ABS | Symbol / role |
+|---|---|---|
+| — | `0x1F811F8` | `DAT_01f811f8` — the font manager pointer. **RVA `0x1E611F8`.** `FUN_001b5fa0` above is nothing but `return DAT_01f811f8;`, so this is the singleton it hands out. ⚠ shipped as `0x1EE11F8` from S147 to S177 — a transposed 6/E resolving to an unrelated global; see `debug.md`. |
+| `0x5F8C0` | `0x17F8C0` | `FUN_0017f8c0(slot)` → the loaded glyph record. Thin wrapper: font manager → `FUN_001e9860`, which bounds-checks `slot` against a u32 remap table, maps it to a key, and red-black-tree looks it up (`FUN_001fdec0`, returns `node+0x24`). **So the in-memory record layout is the LOADER's, not the file's.** |
+
+**`slot` is the record ordinal, i.e. `codec byte − 0x20`** — not the byte, and not 1-based. Measured
+at the call site: the plain-character path in `FUN_002ac2f0` derives its glyph index by subtracting
+0x20 from the codec byte and passes exactly that to `FUN_0017f8c0`.
+
+**`font00.dat` on-disk layout** (all four locales, 46,876 B for `us`): records are **0x24 bytes on a
+base of 0x28**; `+0x00` is the record's own ordinal, `+0x04` the UTF-8 character code, `+0x18` and
+`+0x1C` a duplicated advance width, `+0x20` a `0xFFFFFFFF` terminator.
+
+**The Polish fan patch (PL_ff12_v1.3) is identifiable from the loaded atlas alone.** Its `font00.dat`
+is the same size as stock and differs in **exactly 20 bytes** — the advance pair of ten records, and
+nothing else:
+
+| ordinal | 59 | 60 | 61 | 83 | 84 | 85 | 97 | 116 | 117 | 178 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| byte (`+0x20`) | 5B | 5C | 5D | 73 | 74 | 75 | 81 | 94 | 95 | D2 |
+| stock advance | 21 | 21 | 21 | 22 | 22 | 22 | 24 | 19 | 36 | 36 |
+| PL advance | 20 | 24 | 24 | 17 | 18 | 18 | 20 | 11 | 11 | 11 |
+
+Eight of those ten bytes are exactly the slots `game_glyphs_pl.h` overrides — the patch re-cut the
+advance of the slots it repainted, so the letter mapping and the width fingerprint are two
+independent recoveries of one set and **check each other** (L-82). `GameText::DetectVariantOnce`
+reads the ten records back and locates the advance field by scanning record offsets for the one where
+all ten match a known vector, rather than assuming where the loader put it.
+
 ### Layer 2: per-instance render
 
 The `DynGeoFontText*Instance` family is **post-rasterization geometry submission** — by the time these methods run, the source string has already been converted to glyph quads. Five classes:

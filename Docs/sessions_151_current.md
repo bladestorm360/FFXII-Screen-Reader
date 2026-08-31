@@ -2807,3 +2807,117 @@ crash. Recorded because the temptation is to copy the decompiled signature verba
   on; modes 2/3/6 seen. Not read by the mod. Unmeasured.
 - **V0.7 must be re-cut** — see `release_procedure.md`. The zip and its committed record pin
   `Built from 76f0e66` and hashes that are now stale.
+
+---
+
+## Session 177 — 2026-08-30 — [text] Polish diacritics: the glyph table was never the problem, detection was
+
+**KEYWORDS: Polish diacritics spolszczenie PL_ff12_v1.3 fan translation font atlas detection
+DetectVariantOnce RVA_FONT_MGR DAT_01f811f8 FUN_0017f8c0 FUN_001b5fa0 FUN_002ac2f0 kFpSlot
+off-by-one advance width fingerprint font00.dat record ordinal L-82 L-83 backlog item 1**
+
+**Trigger:** the Polish tester reported diacritics broken again after the last release.
+
+### What was wrong — two constants, both from S147, both shipped since V0.6.3
+
+`kGlyphPolish` (S130) was correct and complete. So was the decode path. **Variant detection had
+simply never fired**, on any build, for anyone.
+
+1. **`RVA_FONT_MGR = 0x1EE11F8`** — the font manager is `DAT_01f811f8`, so the RVA is `0x1E611F8`.
+   A transposed 6/E; the old value resolves to ABS `0x020011F8`. It never crashed because that read
+   is only a non-null "manager up yet?" gate and is never dereferenced.
+2. **`kFpSlot` off by one on all ten entries** — `60,61,62,84,85,86,98,117,118,179` where the file's
+   records are `59,60,61,83,84,85,97,116,117,178`. Counted from one against a zero-based file.
+
+Either alone is fatal: the scan reads the wrong records, nothing matches, and it settles on
+`Standard`. Which is the right answer for every non-Polish install, so nothing looked broken.
+
+### How it was settled — offline, no tester artifact, no game running
+
+Both `font00.dat` files were already in the tree (`PL_ff12_v1.3\…\font\us\`, and stock under
+`FFXII-Decompile\extracted\…\font\us\`). Diffing them: 20 differing bytes, 10 records, records are
+0x24 bytes on base 0x28 and **each states its own ordinal at `+0x00`** — so the ordinals are read,
+not counted. `FUN_002ac2f0` derives the argument to `FUN_0017f8c0` as `codec byte − 0x20`, fixing
+the index space. `FUN_001b5fa0` is literally `return DAT_01f811f8;`.
+
+**The cross-check that should have caught this in S147**, and the session's main lesson (**L-82**):
+the ten repainted slots had been recovered TWICE by different routes — as a letter mapping in S130
+and as a width fingerprint in S147 — and `byte = slot + 0x20` connects them. Evaluated, the
+corrected ordinals put eight of ten on bytes `kGlyphPolish` overrides; the old ones put one on
+`0x5E`, which the patch never touched. The two tables sat in adjacent files disagreeing for thirty
+sessions because nobody multiplied them out.
+
+### Also changed — the failure mode itself (L-83)
+
+A no-match used to latch permanently, and "manager not up yet" was indistinguishable from "loaded and
+unrecognised". One early call could pin a Polish install to English glyphs for the session — and
+**S147 had removed the `Text glyphs` manual override in the same change that added the detection**,
+so there was no escape hatch and no way for the mod to report the fault. It now retries up to 64
+times before settling, logs the give-up once at the cap, and the diagnostic buffer went 320 → 1024 B
+(it truncated after two of ten slots, so the one line that would diagnose a future failure was
+useless).
+
+### State
+
+- Built and deployed; **verified in the binary**, not just the source: correct RVA present once, old
+  typo absent, corrected slot vector present, old vector absent.
+- **PLAY-CONFIRMATION OPEN.** No fan patch on this machine. The line that settles it is
+  `[TEXT] font atlas DETECTED: Polish fan patch` in the tester's log; `font atlas UNRECOGNISED`
+  followed by ten slot vectors means the record layout moved and the values in that line are the fix.
+- Confidence 0.99 on both constants. Struck the obsolete `debug.md` BACKLOG item 1 (its whole
+  investigation plan — check `mod_settings.txt`, check the read path, look for more moved slots —
+  was wrong in every particular) and the S130 "autodetection is not available" paragraph.
+
+### Follow-up the same session — the S130 toggle is BACK, restored not rebuilt
+
+*"put the toggle back in as well just as a safety in case autodetect fails, just rename it something
+like Diacritics override"*.
+
+**First attempt was wrong and the user caught it: I designed a new three-value row (Automatic /
+Standard / Polish, new `diacritics` key, new `SetVariantOverride` API) when a working, play-confirmed
+two-value row was sitting in git one commit before detection landed** (`367b10f^`). ⇒ **WHEN A
+FEATURE IS BEING "RESTORED", GO READ THE COMMIT — reimplementing from the description is not
+restoring** (`L-84`). The rebuild also cost a real bug: the invented `diacritics` key would have
+orphaned every tester's existing `text_glyphs=1`.
+
+What actually shipped is S130's row, unchanged: `SettingId::TextGlyphs`, two values, `text_glyphs`
+key, default 0, `ApplyTextGlyphs`, `GameText::SetVariant(Variant)` — the row, the call sites and the
+six phrasebook entries are byte-identical to `367b10f^`. **Only the spoken label changed**, from
+"Text glyphs" to "Diacritics override".
+
+### The arbitration — the user's rule, and it needs no third value
+
+Both mechanisms now want to set the variant at startup, which S130's toggle never had to contend
+with. The user's rule: *"toggle should only win if it's set to on, detection must win if set to off
+or detection will never fire."* Implemented inside `SetVariant`, so the call site stays original:
+
+- **`PolishPatch`** — an explicit "my install is the fan patch". Forces it and stands the detector
+  **down**; a choice a later autodetect could silently overwrite is not a choice.
+- **`Standard`** — the default, and what every untouched install carries. Means **"no override"**,
+  not "force stock": rebuild to stock now, then **re-arm** the detector (clearing the try COUNT as
+  well as the latch) so it answers again on the next decoded string.
+
+**The asymmetry is what lets one two-valued row do the job of three.** Value 0 cannot be read as a
+decision — it is what a player who has never opened this menu has — so treating it as one would force
+stock on every install and the detector would never fire for anyone. Deferring costs nothing because
+detection's own fallback IS Standard; the only outcome that changes is the one where detection finds
+the Polish atlas and is right.
+
+**One deliberate deviation from S130**, and it is forced by the above: `ApplyTextGlyphs` was called on
+EVERY adjust, justified as harmless ("two atomic stores and a 256-entry copy"). That lapsed — the
+setter now arms/disarms the detector, so an unrelated volume nudge would rebuild to stock and re-arm
+detection. It is gated on the row now.
+
+**Also, honestly:** a scratch write-helper (`open(p,'w').write(f(s))`) truncated `mod_menu.cpp` to
+zero bytes — Python opens for write, and so truncates, before evaluating the replacement. Recovered
+whole with `git checkout --`; no work lost, and it is an argument for `git status` staying clean
+between steps.
+
+### State
+
+- Built, deployed, verified in the binary: corrected RVA and slot vector present, row label present,
+  `text_glyphs` key present, both new log lines present.
+- README: the mod-menu bullet describes two values, not three.
+- **Still unconfirmed in play on a Polish install** — but the failure is now recoverable without a new
+  build, and the log distinguishes the paths: `glyph variant FORCED: Polish fan patch (detection off)`
+  vs `font atlas DETECTED: Polish fan patch` vs `font atlas UNRECOGNISED`.

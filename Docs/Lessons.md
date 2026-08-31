@@ -34,8 +34,8 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
-| adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26 |
-| editing code that already works | `TAG:refactor` | L-27…L-32, L-81 |
+| adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83 |
+| editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75 |
@@ -418,6 +418,40 @@ Full inventory: `Docs/PerFrameAudit.md`.
 ### L-26 RVA-FIRST, NO FISHING; RESOLVE NATIVES BY BEHAVIOUR, NEVER CALL ONE
 Ghidra decompile uses ABS: **abs = RVA + 0x120000**. Detail: `feedback_rva_first.md`,
 `feedback_resolve_natives_by_behaviour.md`, `feedback_verify_rva_arithmetic.md`.
+⚠ **S177: this subtraction was done wrong in shipped code and nobody caught it for thirty sessions**
+-- `DAT_01f811f8` was written as RVA `0x1EE11F8` instead of `0x1E611F8`, a transposed 6/E resolving
+to an unrelated global. **Knowing the rule is not applying it. Re-do the arithmetic on every new
+constant, and sanity-check it against a NEIGHBOURING constant already in the file** (`_DAT_01f83530`
+-> `0x1E63530` sits on the same page and would have flagged this instantly).
+
+---
+
+### L-83 A DETECTOR WHOSE FAILURE MODE IS ITS DEFAULT ANSWER CANNOT BE SEEN TO FAIL
+**If "could not tell" and "it is the ordinary case" produce the same behaviour, the feature is
+untestable from the outside: a total failure is indistinguishable from a correct negative, and it
+will be reported as a regression by a user, not by you. Give the two outcomes different observable
+consequences -- a positive log line for the identification AND one for the give-up -- and never let
+an early, retryable failure latch the default in permanently.**
+**Why:** S177. Font-atlas detection answered "standard" for every install, Polish included, because
+of two wrong constants. Standard is also what ~everyone legitimately runs, so nothing looked wrong
+anywhere: no crash, no silence, no wrong-looking log -- just a Polish tester whose diacritics were
+gone. **Worse, S147 had removed the manual `TextGlyphs` override in the same change that added the
+detection**, so the one path that could have exposed the fault, or worked around it, was gone.
+Detection had never once fired in the field and the mod had no way to say so.
+**Three things this asks for, all cheap:** (1) log the POSITIVE identification, not just the
+failure, so its absence in a log is itself evidence; (2) distinguish "not ready yet" from "loaded and
+unrecognised" and only let the second one be final -- a bounded retry, because asking too early is a
+different fact from asking and being told no; (3) **think twice before deleting a manual override in
+the same change that automates it.** Ship the automation, keep the escape hatch one release longer,
+and let a log confirm the automation actually fires before the fallback goes.
+**What S177 did about it:** the row is back, and S147's objection (*"a wrong answer could be
+persisted and then trusted forever"*) was answered not by removing the row but by making the override
+**asymmetric**. The row wins only in the direction that is unambiguously a decision: `Polish
+translation` forces and disables detection, while `Standard` -- the value every untouched install
+carries -- means "no override" and re-arms the detector. **A default value is not a decision, and
+reading it as one is what turns an override into a silent override of everything.** Note this needs
+no third "Automatic" value; the two-valued row already carries the distinction, because one of its
+values is also the detector's own fallback.
 
 ---
 
@@ -471,6 +505,50 @@ page, the flag, and a re-implementation of the game's own hidden-slot walk all d
 **Corollary, and the reason this is not L-30:** deleting a path is only safe once you have shown
 where the survivor gets the same fact. Here that was two decompiled functions writing the same
 offset, not a hunch that one reader looked sufficient.
+
+---
+
+### L-82 WHEN YOU RECOVER THE SAME THING TWICE BY DIFFERENT ROUTES, PUT THE TWO LISTS SIDE BY SIDE
+**Two independent derivations of one underlying object are a free correctness check, and the check
+only happens if you actually perform it. Write down the relation that ought to connect them and
+evaluate it. If you never do, the second derivation is not corroboration -- it is a second chance to
+be wrong that nobody spends.**
+**Why:** S177. The Polish fan patch repaints ten font slots, and this project had recovered those ten
+slots TWICE: once as a letter mapping (`kGlyphPolish`, derived in S130 from the patch's translated
+text) and once as an advance-width fingerprint (`kFpSlot`, derived in S147 from the font file). The
+relation connecting them is one line -- `byte = slot + 0x20`, and S147 wrote that relation down in
+its own comment. Evaluating it turns `kFpSlot`'s 60/61/62/84/85/86/98 into bytes 0x5C 0x5D 0x5E 0x74
+0x75 0x76 0x82, and only three of those appear in `kGlyphPolish`; the corrected ordinals give 0x5B
+0x5C 0x5D 0x73 0x74 0x75 0x81, and eight of ten land exactly on overridden bytes. **Every ordinal was
+one too high -- counted from one against a zero-based file -- and detection therefore never fired on
+any build from V0.6.3 to V0.7.** The disagreement sat in two adjacent files, in the same namespace,
+for thirty sessions.
+**The tell:** you are about to hand-transcribe a list of indices out of a file, and a table derived
+some other way already describes the same set. Cross-multiply before you ship, not after a report.
+**Corollary:** re-deriving from the RAW ARTIFACT is cheap when the artifact is on disk. Both
+`font00.dat` files were sitting in the repo tree the whole time; the diff that settled this took one
+command and needed no game running.
+
+---
+
+### L-84 RESTORING A FEATURE MEANS READING THE COMMIT, NOT REIMPLEMENTING THE DESCRIPTION
+**When the task is "put back the thing we removed", the deleted code is the specification. Go get it
+-- `git log -S`, `git show <commit>^:<path>` -- before writing a line. A reimplementation from the
+description is a NEW feature wearing the old name, and it silently discards every decision the
+original had already made and every hour of play that confirmed them.**
+**Why:** S177. Asked to restore the glyph-variant toggle S147 deleted, I designed a fresh three-value
+row with a new settings key and a new setter API -- while the working, play-confirmed two-value row
+sat in git one commit before detection landed. The user's correction: *"you already had a toggle for
+this before we removed it and it absolutely was confirmed working. so if you built something new you
+did it wrong."* The rebuild was not merely wasted: the invented `diacritics` settings key would have
+orphaned every tester's existing `text_glyphs=1`, silently resetting the choice of the one player the
+work was for. What actually shipped is the original row byte-for-byte, with the spoken label renamed.
+**The tell:** you are writing a phrasebook entry, an enum, or a settings key for something that
+demonstrably existed before. Approved wording, tested defaults and a persisted key are all
+recoverable; recreating them from memory changes them.
+**What legitimately stays new:** only what the intervening code forces. Here that was the arbitration
+with the detector S147 added, which the original never had to contend with -- see L-83. Say which
+part is restored and which is new, and why.
 
 ## Anything that makes the mod speak
 `TAG:speech`
