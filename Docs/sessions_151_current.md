@@ -2992,6 +2992,16 @@ body) go instead to `FUN_003f4060` -> the obtain toast, which already speaks. Fu
     does use up one of the census's 12 class slots per session. Not changed, since the feature is
     play-confirmed as shipped.
   - This hunt had no key item, so the list-B handoff to the toast was not exercised in this payout.
-    That path is the toast the mod has always read.
-- The second opener, `FUN_003f47e0` <- `FUN_0057a4e0` (a menu), is unidentified and has not been
-  played. `queststartwindow` (`0x386`) has not been traced.
+- **The remaining items, with the user's own read on each (2026-09-15).** These are the player's
+  knowledge of the game, not RE, so none of them is promoted into `GameArchitecture.md` as fact:
+  - **Key-item payout — expected to read, low risk.** The user expects a key item to read if it goes
+    through the normal reward window. It goes to `FUN_003f4060` -> the obtain toast
+    `FUN_0035e070`. That toast is the one the mod has always spoken, and it has already spoken a key
+    item (`"You obtain a Wind Globe!"`, 2026-08-27 log). **Not re-tested on a hunt payout.**
+  - **Second opener `FUN_003f47e0` <- `FUN_0057a4e0` — per the user, most likely hunts turned in at the
+    Clan Centurio hunt board** rather than to the petitioner. It opens the same sequencer, so the same
+    panel and the same reader. **Not played.** If it is silent there, the first thing to check is
+    whether a `[REWARD]` line appears at all.
+  - **`queststartwindow` (native `0x386`) — per the user, most likely the window shown when a hunt is
+    ACCEPTED.** It may already read through an existing surface, or it may not matter. **Not traced,
+    and not a priority.** Only a report that it is silent reopens it.

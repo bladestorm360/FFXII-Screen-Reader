@@ -6486,4 +6486,9 @@ re-dispatches on `id >> 12` through `FUN_00309440`'s table. That is how the toas
 table above is measured, not just derived.
 
 **Second opener:** `FUN_003f47e0` <- `FUN_0057a4e0` (a menu window) opens the same sequencer, with a
-title from `FUN_0057a300`. It is unidentified and has not been played. It speaks the same way.
+title from `FUN_0057a300`. **Identity NOT established by RE.** The user's expectation is that this
+is the payout for hunts turned in at the Clan Centurio hunt board. It speaks through the same reader
+but has not been played.
+
+**`queststartwindow`** (native `0x386`) has not been traced. The user's expectation is that it is the
+window shown when a hunt is accepted, and they do not consider it a priority.

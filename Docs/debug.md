@@ -2944,6 +2944,15 @@ implement from a guess; find the surface first.**
 > "Sickle-Blade"]`, then a single `SPEAK-OUT`. It is followed by a harmless log-only `[READER]
 > unclaimed pane: obj0 RVA=0x2D4330`, because the menu census cannot see readers outside
 > `menu_reader`.
+>
+> **Still unplayed, with the user's expectations noted:**
+> - **A key-item payout** should read. Key items route to the obtain toast, which already speaks key
+>   items.
+> - **The menu opener `FUN_0057a4e0`** is likely the Clan Centurio hunt-board turn-in. It uses the
+>   same reader.
+> - **`queststartwindow`** is likely hunt acceptance. It has not been traced and is low priority.
+>
+> Check any silence report on these against a `[REWARD]` / `[MSGTEXT] item:` line first.
 
 > ⛔ **S178: THE S147 "STRIKE" BELOW IS ITSELF STRUCK. S72 WAS RIGHT.** The panel is **not**
 > `FUN_0035e070`. It is **`FUN_003f4330`**, opened by the script native **`questresultwindow`**
