@@ -3005,3 +3005,69 @@ body) go instead to `FUN_003f4060` -> the obtain toast, which already speaks. Fu
   - **`queststartwindow` (native `0x386`) — per the user, most likely the window shown when a hunt is
     ACCEPTED.** It may already read through an existing surface, or it may not matter. **Not traced,
     and not a priority.** Only a report that it is silent reopens it.
+
+## Session 179 — 2026-09-15 — [nav] Doors by script evidence, and the Unreachable filter (UNPLAYED)
+
+**KEYWORDS: door category interactables gim_door big_door setmapidfloor FUN_003792e0 material override bank
+bit 23 script-closed raw vs effective ReachGate unreachable filter mod menu row default off closed floor
+penalty kClosedFloorPenalty door_binding map_script_routines entry table pointer identity +0x48 Mirror of
+the Soul 185 Acolyte's Burden 186 lift false hide escape mode beacon**
+
+**Three reports from the user's own log (build `aa52d71`):**
+1. Ancient Doors list as Doors on The Acolyte's Burden but as Interactables on Mirror of the Soul. Rule
+   given: anything with destination data is a Door, globally.
+2. A route to a reachable door kept losing its path. Per the user, another door was partly in the way.
+   They asked for an unreachable filter (behind a door, across water), as a toggle, with Off leaving
+   pathing exactly as it is.
+3. In escape mode the ROUTE beacon should always resume.
+
+**What the log and the offline disassembly showed** (full chain in `debug.md` S179, facts in
+`GameArchitecture.md` "In-map doors close the FLOOR…"):
+- 186's doors are `big_door_01..03`, each with a real `mapjump`. They listed as Doors only because each
+  sat near a `+0x70` arrow.
+- 185's four "Interactables" are `gim_door01..04`. They have **no destination**. Each closes its own
+  floor at load with `setmapidfloor(N, class, 0)` and opens it on talk with state 1.
+- That native writes the walkmap MATERIAL override bank (class 0 -> bit 23), which the mod already
+  applies. The failing route's goal read `eff=0x0FA07000` (door 3's material) and the stuck spot sat
+  on door 4.
+- Census over 769 scripts: 824 routines call it, including magic walls, rocks, carts, elevators and one
+  NPC. Calling it is not the same as being a door.
+
+**User decisions (asked, answered):** in-map doors go in Doors; add the direct `mapjump` rule too; with
+the filter on, unreachable entries are hidden entirely; Phase 1 now, closed-door work next. (The
+closed-door work turned out to be this session's finding, so both landed together.)
+
+**Shipped (clean build, NOT deployed — the game was running; NOT played):**
+- `map_script_routines.{h,cpp}`: per-routine entry-table address plus `setmapidfloor(N,0,1)` mask;
+  `ScriptFingerprint()`.
+- `door_binding.{h,cpp}`: `Object -> Door` by routine `mapjump`, or by an opened floor id within 3 m.
+  Called from `BuildLocked` after `TagDoorwaysAndDropSignTwins`.
+- `reach_gate.{h,cpp}`: a third flood that refuses only script-closed polys (raw bit clear, effective
+  bit set). Verdicts are Reachable / BehindClosedFloor / Disconnected / Unknown; enemies are never
+  judged. `Annotate` runs in `RescanLocked` and logs every verdict change.
+- `F8` row `Unreachable filter`, key `unreachable_filter`, default Off. On: `PassesFiltersLocked`
+  hides BehindClosedFloor/Disconnected, and A* adds 20000 per closed poly (start's and goal's own
+  material exempt). Off: the list filter line is never true and not one crossing is priced
+  differently.
+- Phrasebook: 4 rows appended at the end. The wording is new, so flag it to the user. README: one
+  bullet.
+- `NavReach::ContainsPoly` accessor, read-only.
+
+**Escape mode (item 3): built.** A background decompile search found the flag through the community
+"NoFleeingStatePtr" address. It is `u16` RVA `0x21ABE1A` bit 0, set and cleared by `FUN_00366870` /
+`FUN_003667e0` from the Left Ctrl toggle / pad-hold latch in `FUN_00253c70`, and read by the game's
+own menu lock `FUN_003669d0`. I re-read the latch, both writers, the reader and every other writer of
+the word before building on it. `AudioBeacon` skips its combat branch while the flag is set, and logs
+`escape mode ON/off`.
+
+**Falsifiers for the next log:**
+- `reach-gate: closed sample poly … raw=… eff=…` must show the class bit clear in raw.
+- `door-binding: map N -- … U unbound` must show U = 0.
+- ~~Any `-> Door` on a lift, cart or switch~~ **USER: lifts/carts under Doors are fine.** Reachable things
+  hidden while the row is On are accepted for now; the player toggles the row off.
+- `[BEACON] escape mode ON` must appear on the first Left Ctrl in a fight, and `off` on the second.
+
+**Lesson:** `L-86`. Two research passes concluded from the docs' prim table that closed doors are
+invisible to the mod. The door's own script said otherwise in one disassembly.
+
+**Closed out on the user's instruction:** committed, pushed, deployed. Unplayed at close.

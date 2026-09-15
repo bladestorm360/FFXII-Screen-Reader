@@ -1024,7 +1024,8 @@ confirmation: it was only ever a workaround for the missing filter, and it carri
 party, which is what happens once a flee actually breaks away — so the beacon resumes on its own.
 Known deviation: it resumes when the escape **succeeds**, not when the player **toggles** it, so
 while toggled-to-flee but still being chased the state stays engaged. Accepted as shipped; finding
-the real Escape flag is a follow-up, not a prerequisite.
+the real Escape flag is a follow-up, not a prerequisite. **FOUND S179:** `u16` RVA `0x21ABE1A` bit 0 (GameArchitecture.md "Escape (flee) mode"); the route
+beacon now resumes while it is set.
 
 Implementation: `src\battle\battle_state.cpp`, `PartyEngaged()`. Consumer:
 `src\navigation\audio_beacon.cpp`.

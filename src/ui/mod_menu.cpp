@@ -99,6 +99,12 @@ const Setting kSettings[] = {
       { Id::TextGlyphsStandard,     Id::TextGlyphsPolish },
       { Id::TextGlyphsDescStandard, Id::TextGlyphsDescPolish },
       Id::TextGlyphsDesc, "text_glyphs", 0, nullptr },
+    // S179. Default OFF: the user's own condition -- currently working paths must not change unless
+    // the player switches this on. OFF is byte-identical listing and routing (reach_gate.h).
+    { Id::SettingUnreachable, Kind::Named, 2,
+      { Id::BeaconOff,          Id::BeaconOn },
+      { Id::UnreachableDescOff, Id::UnreachableDescOn },
+      Id::UnreachableDesc, "unreachable_filter", 0, nullptr },
     // S132, tester's request: the two shout-minigame rows, CONTEXT-GATED to a running sequence.
     //
     // Default ON for the guide: it only ever tells the player something, and a puzzle whose whole
@@ -387,6 +393,12 @@ bool PuzzleSkipOn()  { return EffectiveValue(SettingId::PuzzleSkip)  == static_c
 
 bool ControllerOn() {
     return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);
+}
+
+// S179. Read from the input thread (the list filter) and the game thread (the router's closed-floor
+// price), with the same relaxed-atomic discipline as the rows above.
+bool UnreachableFilterOn() {
+    return EffectiveValue(SettingId::UnreachableFilter) == static_cast<int>(Beacon::On);
 }
 
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }

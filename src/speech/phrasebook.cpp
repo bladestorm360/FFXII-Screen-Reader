@@ -180,6 +180,12 @@ const Row kTable[] = {
     EN(L"counterclockwise"),
     EN(L"once"),
     EN(L"twice"),
+
+    // S179: Unreachable filter row -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"Unreachable filter"),
+    EN(L"Whether things you cannot walk to right now are listed, such as places behind a closed door or across water."),
+    EN(L"Off lists everything and routes exactly as before."),
+    EN(L"On hides what is out of reach until you can reach it, and routes steer around closed doors."),
 };
 
 #undef EN

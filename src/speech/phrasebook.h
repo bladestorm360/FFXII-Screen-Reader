@@ -219,6 +219,11 @@ enum class Id {
     Statue, StatueSolved, StatueNotSolved, StateUnknown,
     Clockwise, Counterclockwise, Once, Twice,
 
+    // S179: the Unreachable filter row. The user asked for the toggle in those words ("some sort of
+    // unreachable filter ... it has to be a toggle"); the Off/On VALUES reuse BeaconOff/BeaconOn.
+    // Appended at the END so no earlier positional row shifts. Flag any reword to the user.
+    SettingUnreachable, UnreachableDesc, UnreachableDescOff, UnreachableDescOn,
+
     Count
 };
 

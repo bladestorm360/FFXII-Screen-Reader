@@ -7,6 +7,56 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### OPEN, UNPLAYED (S179) — doors listed as Interactables, and a route that died on a half-closed door
+
+KEYWORDS: door category interactables Ancient Door Pilgrim's Door gim_door setmapidfloor material override
+bank bit 23 script-closed raw vs effective Mirror of the Soul map 185 Acolyte's Burden map 186 big_door
+routine pointer identity +0x48 entry table unreachable filter ReachGate closed floor penalty blocked spot
+
+**Reported (2026-09-15, own log, build `aa52d71`):** Acolyte's Burden lists its Ancient Doors under Doors,
+Mirror of the Soul lists its under Interactables. The user's rule: anything with destination data is a
+Door. Separately, a route to a door on 185 kept losing its path; the cause, per the user, was another
+door partly in the way.
+
+**Diagnosis, from the log and the offline script disassembly:**
+- 186's three doors ARE `big_door_01..03`, each calling `mapjump` to a named map; they were Doors only
+  because each happened to sit near a `+0x70` arrow (`CLAIMED -> doorway`). The `event-exit … matches 0
+  container-0 object(s)` lines show the S119 name-offset join never fires, as `REFUTED TWICE` below says.
+- 185's four uncategorised doors are `gim_door01..04` (slot = routine 13-16). **None has a destination**:
+  no `mapjump`, no field-sign events, no `+0x70` record. They open in place, via `setmapidfloor`
+  (GameArchitecture.md "In-map doors close the FLOOR through the material bank").
+- The route: `ends: … goal=1007 eff=0x0FA07000` (door 3's own closed floor), `corridor pays terrain=8000`,
+  refused flags include `0x0FA09000` (door 4, material 4), then `blocked: recorded (136.7,25.5,160.7)`,
+  which is door 4's position. The corridor bought its way through a shut door at the flat 2000-per-poly
+  terrain price.
+- **What was wrong in the project's model:** it held that a closed door is a `>= 0x5000` dynamic prim
+  and that nothing the mod reads can see it. For these doors the closed state is in the effective flags
+  the mod already computes. The distinguishing test is RAW bit clear + EFFECTIVE bit set.
+
+**Shipped (S179), all unplayed:**
+1. `DoorBinding::PromoteDoors`: `Object -> Door` when the object's own routine calls `mapjump` (reusing
+   ReadExitDests' acceptance), OR opens a floor id found within 3 m of the object. Runs on every map.
+   The in-map rule was the user's choice ("in-map doors -> Doors"). **Risk, named so it can be tested
+   (L-78):** a lift or cart that opens its own platform passes both tests. Every promotion logs
+   `door-binding: … -> Door: routine[N] "<name>", <why>`; a lift in that list is the falsifier.
+2. `ReachGate` + mod-menu row `Unreachable filter`, **default OFF**. A third flood refuses script-closed
+   polys only; verdicts are logged either way (`reach-gate: "<label>" … WOULD HIDE`). With the row ON, the
+   list hides BehindClosedFloor/Disconnected, and A* adds `kClosedFloorPenalty` 20000 per closed poly,
+   exempting the start's and goal's own closed material. **Known false-hide risk with the row ON:**
+   floors joined only by a lift or teleport are separate mesh components.
+
+3. **Escape mode resumes the ROUTE beacon** (user's rule). `BattleState::EscapeModeOn()` reads bit 0 of
+   `u16` RVA `0x21ABE1A`; `AudioBeacon::OnGameFrame` skips the combat branch while it is set. Logged as
+   `[BEACON] escape mode ON/off (engaged=…, objective=…)`. S92's "resumes when the escape succeeds"
+   deviation is closed by this.
+
+**User rulings (2026-09-15, same session):** a lift or cart listed under Doors is FINE, so it is not a
+defect and needs no fix. A reachable thing hidden by the filter is acceptable for now: the player turns
+the row off. Neither is a falsifier any more; do not "fix" either without a new report.
+
+**Falsifiers to read first in the next log:** `reach-gate: closed sample poly … raw=… eff=…` (raw bit must
+be clear); `door-binding: map N -- … unbound` (must be 0); any `-> Door` on a lift/cart/switch.
+
 ### RULE VIOLATION (S160, corrected S161) — a Frida probe that asked whether an offset was right
 
 KEYWORDS: frida discovery probe fishing probe_traps.js confirmation not discovery RVA guess

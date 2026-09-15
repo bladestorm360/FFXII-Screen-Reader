@@ -190,6 +190,17 @@ void Invalidate() {
 bool Ready()     { return g_ready.load(std::memory_order_acquire); }
 int  CellCount() { return g_count.load(std::memory_order_acquire); }
 
+bool ContainsPoly(int32_t poly, bool* answered) {
+    std::shared_ptr<const std::unordered_set<int32_t>> snap;
+    {
+        std::lock_guard<std::mutex> lk(g_pubMutex);
+        snap = g_published;
+    }
+    const bool have = snap && !snap->empty();
+    if (answered) *answered = have;
+    return have && snap->count(poly) != 0;
+}
+
 bool Reachable(const FVec3& p, float tolerance) {
     std::shared_ptr<const std::unordered_set<int32_t>> snap;
     {

@@ -53,4 +53,9 @@ bool ReachableStrict(const FVec3& p, float tolerance);
 // Diagnostics: cells in the reachable set (0 until the fill starts).
 int CellCount();
 
+// ANY THREAD. Is `poly` in the published PERMISSIVE component? `*answered` is false when no set is
+// published yet, and the return is then meaningless. Read-only; changes nothing about this module --
+// ReachGate uses it to tell "only through a closed floor" from "not connected at all" (S179).
+bool ContainsPoly(int32_t poly, bool* answered);
+
 } // namespace NavReach

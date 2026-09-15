@@ -115,6 +115,9 @@ struct Entity {
     uint16_t     slot      = 0xFFFF;
     uint16_t     actionId  = 0xFFFF;   // sceneObj+0xCC (0xFFFF = inherit from the map's object record)
     uint16_t     talkId    = 0xFFFF;   // sceneObj+0xDC
+    // ReachGate::Verdict, set by ReachGate::Annotate on every rebuild (S179). 0 = Unknown, which no
+    // filter ever hides. Only the `Unreachable filter` row makes the list act on it.
+    uint8_t      reach     = 0;
 };
 // Sanity bound on an exit's distance from the player -- rejects garbage positions. Shared with the
 // per-area diagnostic dump so both use one number.

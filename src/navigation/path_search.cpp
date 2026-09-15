@@ -10,6 +10,8 @@
 #include "navigation/path_repair.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/player_state.h"
+#include "navigation/reach_gate.h"
+#include "ui/mod_menu.h"
 #include "core/logger.h"
 
 #include <windows.h>
@@ -97,6 +99,14 @@ constexpr float kIdenticalStopTol = 0.5f;
 // not ask for (S100: the 311<->321 auto-walk bounce). Same tier as a physical block: avoided
 // whenever any alternative exists, still crossable when it is genuinely the only way.
 constexpr float kForeignSeamPenalty = 2000.0f;
+// A FLOOR A SCRIPT HAS CLOSED (S179) -- only while the `Unreachable filter` row is ON. Such a poly is
+// already TerrainRefused and pays kTerrainPenalty like any bit-23 ground, and that flat 2000 was not
+// enough: Mirror of the Soul's route to its second Ancient Door paid terrain=8000 to cut through door 4's
+// closed floor, and the player stuck on it (`blocked: recorded (136.7,25.5,160.7)`). Unlike static
+// bit-23 ground (ledges under good exits, S96), a script-closed floor is a door that is shut, so an
+// alternative is worth ten times more. STILL A PRICE: a goal whose only approach is through a closed
+// door still routes and still says so. The target's own closed floor is exempt (reach_gate.h).
+constexpr float kClosedFloorPenalty = 20000.0f;
 
 // A portal a later attempt should avoid, because the taut path through it turned out not to be
 // walkable. Scoped to ONE request -- never cached across presses, because the obstacle may be a door
@@ -227,6 +237,20 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // S100 tester round's 311<->321 bounce. Priced, never cut, and the goal's own seam is exempt
     // by construction.
     const int goalGroup = (!goalOffMesh) ? NavMesh::MapJumpGroup(goal) : 0;
+    // S179: closed floors priced hard, ONLY with the Unreachable filter row on. Off, `closedAware` is
+    // false and not one crossing below is priced differently. The closed floor the TARGET or the
+    // PLAYER stands on is exempt by material id -- routing to a shut door ends on its own shut floor,
+    // and every approach to it would otherwise pay the same penalty for nothing.
+    const bool closedAware = ModMenu::UnreachableFilterOn();
+    uint32_t closedExemptMats = 0;
+    int refClosed = 0;
+    if (closedAware) {
+        for (const PolyId q : { start, goal }) {
+            if (q == kNoPoly || !ReachGate::ScriptClosed(q)) continue;
+            uint32_t qr = 0, qe = 0;
+            if (NavMesh::PolyFlags(q, qr, qe)) closedExemptMats |= 1u << ((qr >> 13) & 0x1F);
+        }
+    }
 
     // ---- THE GOAL SURFACE, observed but never obeyed ------------------------------------------
     // `seamPolys` is the map-jump surface the target belongs to, or null for everything that is not
@@ -412,8 +436,14 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                     // every approach is flooded still resolves, it just pays.
                     ++refTerrain;
                     uint32_t nr = 0, ne = 0;
-                    if (NavMesh::PolyFlags(n, nr, ne)) NoteRefusedFlags(ne);
+                    const bool haveFlags = NavMesh::PolyFlags(n, nr, ne);
+                    if (haveFlags) NoteRefusedFlags(ne);
                     penT += kTerrainPenalty;
+                    if (closedAware && haveFlags && !((closedExemptMats >> ((nr >> 13) & 0x1F)) & 1u) &&
+                        ReachGate::ScriptClosed(n)) {
+                        ++refClosed;
+                        penT += kClosedFloorPenalty;
+                    }
                 }
                 // A FOREIGN TRANSITION SURFACE IS A TELEPORT, NOT A FLOOR (Session 100 tester
                 // round: the replanned Lowtown route cornered ON the No. 10 Channel seam and
@@ -916,6 +946,14 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                  refNoPoly, refUnwalkable, refTerrain, refForeignSeam, refEdge, refBanned,
                  refBlocked, NavMesh::g_tightCrossings, NavMesh::g_volumeCrossings,
                  best.penTerrain, best.penOther, fl);
+        Log::Write("NAV-ROUTE", m);
+    }
+    if (closedAware && (refClosed > 0 || closedExemptMats != 0)) {
+        char m[176];
+        snprintf(m, sizeof(m),
+                 "closed-floor: %d crossing(s) priced +%.0f each (exempt material mask 0x%X: the "
+                 "start's / goal's own closed floor) -- Unreachable filter ON",
+                 refClosed, kClosedFloorPenalty, closedExemptMats);
         Log::Write("NAV-ROUTE", m);
     }
 

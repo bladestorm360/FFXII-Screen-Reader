@@ -266,6 +266,9 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
 - [x] Autodetail (`F7` + `F8` row, default Off) — shop comparison and Libra volunteered on highlight
 - [x] Polish glyph mapping detected automatically from the loaded font atlas; `Text glyphs` row removed
 - [~] Exit reachability: instrumented (`terrain=` / `strict=`), fix deferred to the measurement
+- [~] **Unreachable filter** (S179, `F8` row, default Off) — hides entities behind a script-closed floor or
+      not mesh-connected; routes price closed doors hard when On. Built, UNPLAYED
+- [~] **Doors by script evidence** (S179) — routine calls `mapjump`, or opens the closed floor it stands in. UNPLAYED
 - [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there
 - [ ] **Killed enemies never leave the entity list** (reported in play 2026-08-10). No HP test in the

@@ -8,6 +8,7 @@
 #include "navigation/sneak_assist.h"
 #include "navigation/nav_blocked.h"
 #include "navigation/nav_reach.h"
+#include "navigation/reach_gate.h"
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
 #include "navigation/path_directions.h"
@@ -212,6 +213,7 @@ void OnMapTeardown() {
     g_epoch.fetch_add(1, std::memory_order_acq_rel);   // any pending request is now stale
     NavMesh::Invalidate();                             // drop the cached walkmap arrays for the dead map
     NavReach::Invalidate();                            // and the reachable-set answer built on it
+    ReachGate::Invalidate();                           // and the unreachable filter's own component
     MapQuery::InvalidateMapJumpSurfaces();             // and the seams, which are walkmap geometry too
     // The beacon's leg corners are coordinates on the map being torn down. It would notice via the
     // epoch on its next frame anyway, but stopping here cuts a ping mid-transition instead of
@@ -278,6 +280,9 @@ void OnGameFrame() {
             MapQuery::PrimeMapJumpSurfaces(MapNames::CurrentMapId(),
                                            g_epoch.load(std::memory_order_acquire));
             NavReach::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
+            // S179: the unreachable filter's own flood -- separate state, so NavReach above (and the
+            // exit filter built on it) is untouched by it.
+            ReachGate::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
             // Breadcrumb the walked path. Piggybacks on the position read this block already does, and
             // is the only measurement we have of where a transition ACTUALLY fires -- see nav_trace.h.
             NavTrace::OnFieldFrame(MapNames::CurrentMapId(), pp);

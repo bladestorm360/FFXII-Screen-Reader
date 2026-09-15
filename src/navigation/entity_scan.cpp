@@ -10,6 +10,7 @@
 #include "navigation/map_script.h"
 #include "navigation/exit_scan.h"
 #include "navigation/item_scan.h"
+#include "navigation/door_binding.h"
 #include "navigation/treasure_state.h"
 #include "navigation/path_march.h"     // GroundY -- a trap record carries no Y of its own
 #include "speech/phrasebook.h"         // CatTrap -- the trap label is a mod word, not a game string
@@ -919,6 +920,9 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     DropShadowRegistrations(out);
     // Doorway tagging + sign-twin removal, while the list is still just handle-table objects.
     TagDoorwaysAndDropSignTwins(out, detail);
+    // S179: an interactable whose own routine jumps to a map, or opens the closed floor it stands in,
+    // is a Door -- on every map, including the ones TagDoorways returns early on (no +0x70 table).
+    DoorBinding::PromoteDoors(out);
     // Category words LAST, so `doorway` is set by the time an unnamed sign is named. Anything still
     // unlabelled here is an object the game refused to name that is nonetheless offering a prompt.
     ApplyFallbackLabels(out);

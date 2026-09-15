@@ -191,6 +191,15 @@ struct Engagement {
 // the OR, how long a commitment lingers, and why the commitment side filters to a LIVING Faction::Foe.
 Engagement PartyEngagement();
 
+// ---- escape mode (S179) --------------------------------------------------------------------------
+// The party's ESCAPE (flee) mode -- Left Ctrl toggles it, holding the pad's flee button holds it. Bit 0
+// of the u16 at RVA 0x21ABE1A (DAT_022cbe1a): set by FUN_00366870 and cleared by FUN_003667e0, the
+// two branches FUN_00252b60 takes on the request latch FUN_00253c70 builds from both inputs, and read
+// by the game's own menu lock FUN_003669d0. Every writer of the word belongs to escape. Answers the
+// moment the mode is switched, not when the flight succeeds -- which is what PartyEngagement cannot.
+// Pure memory read; game thread (the beacon's field tick).
+bool EscapeModeOn();
+
 // ---- the committed target (what the character is actually acting on) ---------------------------
 // NOT the browse cursor at P+0x9FD8, which only follows the highlight -- confirmed live: the
 // cursor moved across two enemies while the commitment held on a third.

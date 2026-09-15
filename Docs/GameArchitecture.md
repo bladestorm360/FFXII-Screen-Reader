@@ -3506,6 +3506,65 @@ eff = (value[C] & mask[C]) | (in & ~mask[C])
 questions; the mod now replicates each where it belongs. This is also how a script opening a gate
 changes walkability without touching geometry.
 
+### Escape (flee) mode — the game's own flag (Session 179)
+
+**`u16` at RVA `0x21ABE1A` (`DAT_022cbe1a`), bit 0 = escape mode on**, bit 2 = the engage ramp has
+finished (the party is actually fleeing). Read by `BattleState::EscapeModeOn()`.
+
+- **Input latch:** `FUN_00253c70` (RVA `0x133C70`), once per game frame via `FUN_00314020` ->
+  `FUN_00253c50`. The keyboard binding (column 0, action 9 — Left Ctrl) TOGGLES `DAT_020927e0` (RVA
+  `0x1F727E0`) on its rising edge, with the previous key state in `DAT_020927e4`. The pad path holds
+  it while pad-0 word `DAT_02f97360 & 0x200` is down and clears it on release; `DAT_01e0c2b4` (RVA
+  `0x1CEC2B4`) records which input latched it (1 = pad).
+- **Dispatch:** `FUN_00252b60(request, 0)` forces the request to 0 on event flags (`FUN_002e0fa0`
+  bits 0x40/0x200/0x400), on a wipe (`FUN_00237260`), or when `DAT_020927cc == 1`. It then calls
+  `FUN_00366870` (set bit 0, start sound 0x52, count ramp `+0x18` up to `DAT_022cbe08`, then set bit 2)
+  or `FUN_003667e0` (clear bits 0/2/3/5/6, sound 0x2A).
+- **Readers:** `FUN_003669d0` returns 0 / 1 ramping / 2 engaged, and is the menu lock. The
+  flight itself is driven by `DAT_01e0c2b8 == 0` (`FUN_00253b90`: `FUN_002ffcf0` refuses party
+  actions, `FUN_00234590` cancels them). **Do not use `0x1CEC2B8` for "escape"**: a script disabling
+  battle zeroes it too.
+- **Every writer of the word is escape:** the two functions above, `FUN_00366950` (bit 0x40),
+  `FUN_00366990` (bit 0x10, the sound handle) and `FUN_00366960` (restores the whole word: `0x25`
+  = on and engaged, or 0).
+
+Conf: bit 0 = escape on, **0.98 statically**. Every writer and the game's own menu-lock reader agree.
+Found through the community "NoFleeingStatePtr" address in `notes\community_rvas.csv` (absolute, not
+RVA). **Not yet play-confirmed**: the beacon logs `escape mode ON/off` on every change, so one toggle
+in a fight settles it. This supersedes the "finding the real Escape flag is a follow-up" note in
+`combat_system.md` §7.1.
+
+### In-map doors close the FLOOR through the material bank — `setmapidfloor` (Session 179)
+
+**An in-map gimmick door is not (only) a dynamic prim — it switches its own floor off.** Measured on
+Sochen Cave Palace: Mirror of the Soul (map 185, `rui_a02`), where four doors `gim_door01..04` sit at
+routine = slot 13-16. Each routine, on init, calls `setmapidfloor(N, c, 0)` for script classes
+`c ∈ {0,7,1,2,3,4,9}` and `setmapidwall(N, 5/6, 0)`, door `N` = 1..4; its `talk` entry plays the door
+animation and repeats every call with state `1`, then `reqdisable`s itself.
+
+| piece | fact | conf |
+|---|---|---|
+| script call | `setmapidfloor(id, class, state)` = native `0x00FE`, compiled `4f <id> 4f <class> 4f <state> 5d fe 00` (name via the validated S63 delta) | 0.98 |
+| handler | `FUN_003792e0` (RVA `0x2592E0`): class `0/1/2/3/7/9` -> bit `23/25/26/27/24/12` of **material bank entry `id`** (`DAT_0209a3e0[id]`); state `<0` clears the override (`FUN_0026e850`), state `>=0` forces the bit to `(state == 0)` (`FUN_0026e880`). Group-bank twin `FUN_00379430` writes `id+0x40`; wall twin `FUN_003795a0` writes `id+0x20`, bits 31/30 | 0.98 |
+| identity of 0xFE -> `FUN_003792e0` | NOT read from the native table (slot `0x1EEEC38` is zero in `native_raw.txt` — the table shape there is unexplained). Established instead by two independent agreements: the handler's class switch equals the script's class list exactly, and the live flags below | 0.98 |
+| live confirmation | route to door 3 (`[0:15]`): goal poly eff `0x0FA07000` = material 3, bits 23-27 set; door 4's floor refused as `0x0FA09000` (material 4); the player stuck at `(136.7,25.5,160.7)`, on door 4 | measured |
+
+**Consequence — the test the mod uses (`ReachGate::ScriptClosed`):** a poly is closed by a script when
+the party class's refusal bit is **clear in RAW flags and set in EFFECTIVE flags**. Raw bit 23 alone is
+static map data (ledges and out-of-bounds ground under exits that route fine, S96/S147) and must never
+be read as "closed". The premise is checked on every flood by the `reach-gate: closed sample poly … raw=
+… eff=…` line: a sample with the raw bit SET would falsify the test.
+
+**Scope, stated as measured:** one map's four doors plus a 769-script census. The census found **824
+routines** calling `setmapidfloor`, including talk-triggered magic walls (118), fake walls, rocks, gates,
+a remote switch, carts, 14 elevators and one NPC — so *calling it* is not *being a door*. The `+0x5000`
+dynamic-prim row in the prim table below is not struck: other doors and platforms may still use it.
+What is struck is the assumption that a closed door is invisible to everything the mod reads.
+
+**Object -> routine for container 0** is joined by pointer identity (`sceneObj+0x48` == blob + routine
+record `+0x10`), `MapScript::RoutineIndexOfObject`. The `door-binding: map N -- … bound by entry-table
+identity (slot==routine on K), U unbound` line reports whether it holds on each map.
+
 ### CSR is four layers
 
 `index = layer * (cellCount + 1) + cell`, layer 0..3, per `FUN_0022f830`. Layer 0 = floor polys,

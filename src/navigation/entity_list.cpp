@@ -10,7 +10,9 @@
 #include "navigation/player_state.h"
 #include "navigation/map_query.h"
 #include "navigation/map_names.h"
+#include "navigation/reach_gate.h"
 #include "ui/menu_state.h"
+#include "ui/mod_menu.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "core/game_text.h"
@@ -149,6 +151,10 @@ int RescanLocked() {
     // have already been through them once.
     EntityScan::ApplyPlayerLabels(fresh);
     EntityScan::NumberDuplicateLabels(fresh, detail);
+    // S179: a reachability verdict on every entry, carried ones included. Removes nothing -- the
+    // filter below acts on it only when the `Unreachable filter` row is on, and the verdicts are
+    // logged either way.
+    ReachGate::Annotate(fresh);
 
     g_lastScanMs = now;
     g_entities.swap(fresh);
@@ -205,6 +211,10 @@ void RefreshPositionsLocked(const FVec3& playerPos) {
 bool PassesFiltersLocked(const Entity& e) {
     if (g_currentCategory != Category::All && e.category != g_currentCategory) return false;
     if (g_availability == Availability::Gated && e.available) return false;
+    // S179, the `Unreachable filter` row (default OFF). Off: this line is never true, so the list is
+    // exactly what it was. On: hides what ReachGate judged behind a script-closed floor or not
+    // connected at all; an Unknown verdict is never hidden.
+    if (ModMenu::UnreachableFilterOn() && ReachGate::Hides(e.reach)) return false;
     return true;
 }
 

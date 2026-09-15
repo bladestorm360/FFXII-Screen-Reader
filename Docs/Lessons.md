@@ -31,7 +31,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83 |
@@ -176,6 +176,21 @@ checked out against `action_binding_tables.txt` and a two-hop call graph.
 **The tell:** the evidence for the identity is a list of things the candidate HAS. Nothing on the
 list is a thing the alternative would lack. Related: L-64 (a strike carries the same bar as the
 claim it strikes), L-06 (a search is only as good as its shape).
+
+### L-86 A MECHANISM RECORDED FOR A CLASS OF OBJECT IS A HYPOTHESIS ABOUT EACH MEMBER. READ THE MEMBER'S SCRIPT
+**Before declaring "the mod cannot see X", open the script of the specific X in front of you and list
+what it CALLS. A doc row that says "doors are dynamic prims" describes one mechanism some doors use,
+not the mechanism this door uses.**
+**Why:** S179. Two research passes concluded, correctly from the docs, that nothing the mod reads sees a
+closed door: the prim table files doors under `>= 0x5000`, and no query for those is at the bar. One
+offline disassembly of the door routine the log had already named (`gim_door01`) showed
+`setmapidfloor` ×7. That native writes the walkmap material override bank, which the mod has applied
+through `EffectiveFlags` since S96. The door had been in the mod's own flags the whole time. The log
+even printed them: `goal … eff=0x0FA07000`, material 3, on a route to door 3.
+**The tell:** the reasoning runs from a CATEGORY NAME ("door") to a mechanism, and never touches the
+one member whose routine name is on the screen. Related: L-06 (the shape you searched for), L-85
+(identity is decided by the feature that differs), L-01 (a sample is not a population — the census of
+824 callers is what stopped this becoming "every setmapidfloor caller is a door").
 
 ### L-69 A FIELD THAT MEANS DIFFERENT THINGS IN DIFFERENT STATES WILL HAND YOU A PLAUSIBLE WRONG NUMBER
 **Read the state byte BEFORE you read anything the state byte governs. A reused field does not fail

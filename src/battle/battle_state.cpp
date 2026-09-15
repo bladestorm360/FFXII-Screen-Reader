@@ -439,6 +439,15 @@ bool IsLivingFoeActor(void* actor) {
 // LIVING Faction::Foe closes that channel by construction, which is why no probe was needed.
 //
 // Two passes over a <=40-entry pool, no allocation, no game calls.
+// DAT_022cbe1a -> RVA 0x21ABE1A (same page as RVA_PARTY_RECS 0x21A8080 = DAT_022c8080 above).
+constexpr uint32_t RVA_ESCAPE_STATE = 0x21ABE1A;   // u16; bit 0 = escape on, bit 2 = ramp done
+constexpr uint16_t ESCAPE_ON_BIT    = 0x0001;
+
+bool EscapeModeOn() {
+    uint16_t w = 0;
+    return MemRead::SafeReadU16(Hooks::ResolveRva(RVA_ESCAPE_STATE), 0, &w) && (w & ESCAPE_ON_BIT) != 0;
+}
+
 Engagement PartyEngagement() {
     Engagement out;
     void* pool = PtrAt(Hooks::ResolveRva(NavRva::ACTOR_POOL_BASE), 0);

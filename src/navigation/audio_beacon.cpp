@@ -87,6 +87,7 @@ uint64_t           g_nextPingMs = 0;
 uint64_t           g_straySinceMs = 0;   // first frame of the CURRENT stray run; 0 == on route
 uint64_t           g_lastReplanMs = 0;
 bool               g_wasEngaged = false;  // edge-detect combat so the log says when it flipped
+bool               g_wasEscaping = false; // edge-detect escape mode, for the same reason (S179)
 // Why the beacon is currently suspended, or null when it is not. Compared BY POINTER on purpose:
 // every value is one of the string literals below, so identity is a clean state test and the log
 // line fires on the TRANSITION only. That is a state machine detecting a change, not a speech dedup
@@ -345,7 +346,25 @@ void OnGameFrame() {
         ResetPhase();
     }
 
-    if (engaged) {
+    // ESCAPE MODE ALWAYS RESUMES THE ROUTE BEACON (S179, the user's rule: "when escape mode is on, the
+    // beacon should ***always*** resume" -- the route beacon, not the target one). A fleeing party is
+    // still `engaged`: foes keep targeting it until the flight actually breaks away, which is the
+    // deviation S92 recorded. So while escape is on, the combat branch below is skipped outright and
+    // the frame falls through to the objective beacon on the same leg. No route running: silence, as
+    // out of combat. The flag is the game's own (BattleState::EscapeModeOn), logged on every change.
+    const bool escaping = BattleState::EscapeModeOn();
+    if (escaping != g_wasEscaping) {
+        g_wasEscaping = escaping;
+        char m[160];
+        snprintf(m, sizeof(m), "escape mode %s (engaged=%d, objective=%d)%s",
+                 escaping ? "ON" : "off", engaged ? 1 : 0, objective ? 1 : 0,
+                 escaping ? (objective ? " -> objective beacon resumes" : " -> no route to resume")
+                          : (engaged ? " -> back to the target beacon" : ""));
+        Log::Write("BEACON", m);
+        ResetPhase();
+    }
+
+    if (engaged && !escaping) {
         FVec3 tgt;
         // Only a COMMITTED target is ever pinged. When the party is merely being attacked with nothing
         // committed the beacon stays silent -- the tester's decision in S92, and the reason
@@ -369,7 +388,7 @@ void OnGameFrame() {
     }
 
     // ---- objective beacon ----------------------------------------------------------------------
-    // Reached only when out of combat. With the target ping on and no route running, this is where
+    // Reached when out of combat, or in escape mode (S179). With the target ping on and no route running, this is where
     // the frame ends -- there is nothing to lead anybody along.
     if (!objective) return;
     if (g_current >= g_legs.size()) { Stop(); return; }

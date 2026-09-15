@@ -265,3 +265,14 @@ It is now **470**, and neither number came from moving code around for the count
 a reader's *parse* is usually pure and its *reads* are not, and cutting there gives a unit you can
 assert against without the game running. `src\ui\menu_reader.cpp` (900) remains the next candidate
 in this directory, and still should not be cut during a bug fix.
+
+## Session 179 - three new files, and path_search.cpp grew again
+
+| file | lines | note |
+|---|---|---|
+| `src\navigation\reach_gate.cpp` *(new)* | 306 | The unreachable filter's flood + verdicts. Its own state on purpose: NavReach and the exit filter built on it stay untouched. |
+| `src\navigation\door_binding.cpp` *(new)* | 183 | Object -> routine -> Door. Per-map cache keyed on the script fingerprint, not the map id. |
+| `src\navigation\map_script_routines.cpp` *(new)* | 107 | Per-routine facts. It repeats ReadExitDests' code-span rule (~15 lines) rather than refactoring a play-confirmed reader inside a feature change. Fold the two onto one span helper the next time `map_script.cpp` (671) is split. |
+| `src\navigation\path_search.cpp` | **1149** (was 1111) | +38 for the toggle-gated closed-floor price and its log line. Still the largest debt in the tree; the `Refusals` diagnostics struct named in S96 is still the right first cut. |
+| `src\battle\battle_state.cpp` | **546** (was 537) | +9 for `EscapeModeOn`. Already over; kept beside `PartyEngagement` because the beacon asks both questions together. |
+| `src\navigation\audio_beacon.cpp` | **525** (was 506) | +19 for the escape-mode gate and its edge log. The combat branch (target ping) is the natural seam if this file is split. |
