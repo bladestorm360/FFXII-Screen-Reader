@@ -31,7 +31,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83 |
@@ -158,6 +158,24 @@ not a conversation.
 **What is genuinely left:** the room identity was never MEASURED in either direction — only the map id
 and the two save-block cells matter, and both come from standing in the room. Related: L-01 (a sample
 is not a population), L-09 (state the scope you measured).
+
+### L-85 A LOOKALIKE MATCHES THE SHARED FEATURES. IDENTITY IS DECIDED BY THE ONE THAT DIFFERS
+**Before you call a known function "the surface in the report", list the report's features, find the
+one the candidate would NOT have if it were the wrong thing, and check that one first. For a
+script-driven screen, grep the `.dbg` native names for the screen's own words before reading any
+function body.**
+**Why:** S178. S72 described the hunt reward panel as *"a title line, a rule under it, then one row
+per reward, with a separate quantity column"*, and said it was not the obtain toast. S147 read the
+toast's body, found a row loop, a quantity field and a gil kind, and struck S72 as "wrong on both
+counts". That claim then stood across three documents and a code comment for thirty sessions. The
+feature S72 listed FIRST, the title, is exactly the one the toast lacks. Our own log showed that
+function composing `"You obtain a Wind Globe!"`, with no title anywhere. The real panel was one
+grep away, on the words the panel itself shows (`gil`, `win`, `clan` in `dbg_symbols_evctrl.csv`):
+`questresultwindow`. (`reward` and `hunt` matched nothing, because the engine calls a hunt a quest.) That name then
+checked out against `action_binding_tables.txt` and a two-hop call graph.
+**The tell:** the evidence for the identity is a list of things the candidate HAS. Nothing on the
+list is a thing the alternative would lack. Related: L-64 (a strike carries the same bar as the
+claim it strikes), L-06 (a search is only as good as its shape).
 
 ### L-69 A FIELD THAT MEANS DIFFERENT THINGS IN DIFFERENT STATES WILL HAND YOU A PLAUSIBLE WRONG NUMBER
 **Read the state byte BEFORE you read anything the state byte governs. A reused field does not fail

@@ -226,9 +226,9 @@ NPC-trigger path needs Phase 4 first.
 - [ ] User test: continuous FIFO across battle boundary verified
 
 **Reported silent (Session 72)** — details in `debug.md` § "Clan / Hunt surfaces":
-- [~] Multi-item reward panel — **surface FOUND in Session 147: it is `FUN_0035e070`, the function
-  the mod already hooks.** S72's "different surface" claim is struck. Why it is silent is still open;
-  the descriptor logging that settles it in one hunt is shipped.
+- [x] Multi-item reward panel — **built in Session 178, PLAY-CONFIRMED 2026-09-15.** It is
+  `FUN_003f4330`, opened by `questresultwindow` (`src\ui\reward_panel_reader.cpp`). S147's claim
+  that it was `FUN_0035e070` is struck.
 - [x] Hunt notice board — built in Session 87 (`src\ui\choice_reader.{h,cpp}`)
 
 ## Phase 8: Remaining menus
@@ -266,7 +266,7 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
 - [x] Autodetail (`F7` + `F8` row, default Off) — shop comparison and Libra volunteered on highlight
 - [x] Polish glyph mapping detected automatically from the loaded font atlas; `Text glyphs` row removed
 - [~] Exit reachability: instrumented (`terrain=` / `strict=`), fix deferred to the measurement
-- [~] Hunt-reward panel: surface found, descriptor logging shipped, silence not yet explained
+- [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there
 - [ ] **Killed enemies never leave the entity list** (reported in play 2026-08-10). No HP test in the
       field scan, and the grace window cannot age out a live transform. Two defects, both written up

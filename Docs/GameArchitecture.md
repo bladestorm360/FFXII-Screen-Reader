@@ -5674,12 +5674,19 @@ tree lookup returning `node+0x24`**, so the in-memory record is the LOADER's lay
 matches the ten values against the stock or PL vector, so the advance field is *located* by
 measurement. No match means log the values and stay Standard. The `Text glyphs` mod-menu row is gone.
 
-### The multi-item reward panel IS `FUN_0035e070` — STRIKES the S72 "different surface" claim
+### ~~The multi-item reward panel IS `FUN_0035e070`~~ — ⛔ STRUCK in Session 178; S72 was RIGHT
 
-`debug.md`'s S72 entry says of the hunt-reward panel: *"It is not the single-item obtained toast the
-mod already reads (`message_reader.cpp`, `FUN_0035e070`) — that one is a one-line toast with no title
-and no quantity column."* **Wrong on both counts.** The function has a row loop; nobody had read its
-body. Descriptor at `msg+8`:
+> **STRUCK (S178).** The hunt reward panel is **not** `FUN_0035e070`. It is `FUN_003f4330`, opened by
+> the `questresultwindow` script native — full chain in **§Session 178** at the end of this file.
+> `FUN_0035e070` has no title field, and the log shows what it builds: `"You obtain a Wind Globe!"`.
+> S147 matched three features of the report (a row loop, a quantity, a gil kind) and never checked
+> the one that told the two surfaces apart, **the title line** (`L-85`). The descriptor layout below
+> is still correct as a description of the toast. Only the identity was wrong. One more correction:
+> message `0x833` is the obtain template the bordered layout (flags bit 0) composes an item row
+> through. It is not a "gil" suffix. Gil (kind 1) only renders in the plain layout.
+
+~~`debug.md`'s S72 entry says of the hunt-reward panel: *"It is not the single-item obtained toast the
+mod already reads"* — **Wrong on both counts.**~~ The function has a row loop. Descriptor at `msg+8`:
 
 ```
 +0x00  i16  mode / title flag        (`FUN_0035e070:53` writes `mode == 0` into the first slot of its outgoing record)
@@ -5693,10 +5700,8 @@ body. Descriptor at `msg+8`:
 
 Rows render into three 0x180-byte slots and compose into `widget+0xC8` through a `0F 31` template
 (`FUN_002b4090`, cap `0x4A0`) — which is the buffer the mod already decodes, so the reader may well
-have been right all along. **Why it is silent is NOT yet established**: across all 20 archived dev
-logs the init line appears 20 times and `diag: item popup proc FUN_0035e070 fired` **zero** times, so
-there is no evidence the surface was ever visited in a dev session. S147 shipped the descriptor
-logging instead of a guess.
+have been right all along. ~~**Why it is silent is NOT yet established**~~ — it was silent because
+it was never this function (S178).
 
 ### `NavReach::ReachableStrict` — a measurement, not a gate
 
@@ -6409,3 +6414,76 @@ for the save that produced this census, not a property of the surface.
 **Text on this pane does NOT come through the resolvers `TextCapture` hooks.** The pane calls
 `FUN_002f9860` exactly twice, both for the static sub-panel above. A ring dump taken at pane
 construction returned only the preceding desk dialogue.
+
+## Session 178 — the hunt reward panel: `questresultwindow` -> `FUN_003f4330`
+
+**KEYWORDS: hunt reward panel questresultwindow queststartwindow native 0x37C 892 FUN_00344c60
+FUN_00290130 FUN_003f4c30 FUN_003f4aa0 FUN_003f4e70 FUN_003f4840 FUN_003f4330 FUN_003f41c0
+FUN_003f4060 FUN_0030baf0 key item 0x8000 DAT_02aed490 hunt table bill name gil row 0xFFFF 0x7D3
+reward_panel_reader STRIKES S147**
+
+Offline, `abs = RVA + 0x120000`. Each identity has two independent sources.
+
+### The native (conf 0.99)
+
+`questresultwindow` is native **`0x37C` (892)**. `action_binding_tables.txt` binds 892 to
+`FUN_00344c60` as its `enter` handler. Separately, the `.dbg` join at the measured delta 5140 puts
+dbg index 6032 (`questresultwindow`, mapctrl) on 892. `queststartwindow` is dbg 6042, i.e. native
+`0x386`. It has not been traced. `FUN_00344c60` reads the quest argument, then calls
+`FUN_00290130(quest, …)`.
+
+### The chain
+
+| step | function | RVA | what it does |
+|---|---|---|---|
+| fill | `FUN_003f8c60` -> `FUN_003f4c30` | `0x2D8C60` / `0x2D4C30` | builds the 0x28-byte REWARD BLOCK from the quest's reward data (`FUN_0030aac0` / `FUN_0030aea0`) |
+| grant | `FUN_003f4aa0` | `0x2D4AA0` | adds the gil (`FUN_00254ee0`), then every item: list A with its quantity, list B x1 (`FUN_00300b80`) |
+| result window | `FUN_003f4bd0` -> proc `FUN_003f4e70` | `0x2D4E70` | quest id at `+0xC4`. **Title** = `FUN_0037e8a0(FUN_0037edb0(quest))`: the hunt table `DAT_02aed490+0xC8`, the same table the Primer Hunts list reads |
+| sequencer | `FUN_003f4840` (0x130) | `0x2D4840` | title `+0xC8`, block copy `+0xD0..+0xF3`, stage byte `+0xC0`. Stage 0 opens the panel if gil or list A is non-empty. Stage 1 opens the key-item window if list B is non-empty |
+| **panel** | **`FUN_003f4330`** (0x128) | **`0x2D4330`** | **the titled reward panel. Hooked by `reward_panel_reader.cpp`** |
+| key items | `FUN_003f4060` (0xF0) | `0x2D4060` | list B -> `FUN_002a5b90` -> `FUN_002a59c0` -> the obtain toast `FUN_0035e070` (already spoken) |
+
+**Reward block** (FUN_003f4c30 writes it, FUN_003f4aa0 reads it; the two agree):
+
+| offset | type | meaning |
+|---|---|---|
+| `+0x00` | u8 | bit 0 = has gil |
+| `+0x04` | i32 | gil |
+| `+0x08` | u16 | list A count (non-key items) |
+| `+0x0A` | u16 | list B count (key items) |
+| `+0x0C` | A x (u16 id, u16 qty) | list A |
+| `+0x1C` | B x u16 id | list B |
+| `+0x24` | i32 | quest id (FUN_003f8c60) |
+
+**List B is exactly the key items.** `FUN_003f4c30` routes an id to B iff `FUN_0030baf0(id)`, and that
+function's whole body tests `(id & 0xF000) == 0x8000`. So a hunt's key items speak through the toast
+and everything else speaks from the panel. Nothing is covered twice, and nothing is left out.
+
+### The panel `FUN_003f4330` — case 1 layout (conf 0.98, producer + consumer agree)
+
+| offset | type | meaning |
+|---|---|---|
+| `+0xC0` | char* codec | title (the hunt / bill name) |
+| `+0xC8` | i32 | rows built. The fill loop stops at 3 |
+| `+0xCC + i*8` | u16 | row id: item id, or **`0xFFFF` = gil** |
+| `+0xD0 + i*8` | u32 | gil amount, or item quantity |
+| `+0x118` | ptr | the list widget. Its row callback is `FUN_003f41c0` |
+| `+0x120` | ptr | parent (the sequencer). Msg `0x12` is forwarded to it |
+
+The row callback `FUN_003f41c0` reads the same `+0xCC`/`+0xD0` pair by row index. A gil row renders
+message `0x7D3` with the amount into `+0xE4` (cap 0x20). An item row renders the name from
+`FUN_0035d380(category, id)+0x18`, where the category comes from `FUN_002fabd0` -> `FUN_003933b0`,
+plus the quantity as a drawn number. Msg `10` tests a button mask and closes the panel. Msg `0xE`
+is the close path (sound `0x27`).
+
+**Item name for the mod:** `BattleState::DefName(1, id << 16)`. Category 1 of `FUN_0031c5d0`
+re-dispatches on `id >> 12` through `FUN_00309440`'s table. That is how the toast names a key item
+(`Wind Globe`, logged) and how `license_reader` names gear. **✅ Witnessed on loot as well,
+2026-09-15:** `0x20E2` -> "Sickle-Blade", alongside `0x1173` -> "Bubble Belt".
+
+**✅ PLAY-CONFIRMED 2026-09-15.** The panel read `title="Antlion Infestation" rows=3`, with rows gil
+4300 / `0x1173` x1 / `0x20E2` x1. That matches the screenshot row for row, so every offset in the
+table above is measured, not just derived.
+
+**Second opener:** `FUN_003f47e0` <- `FUN_0057a4e0` (a menu window) opens the same sequencer, with a
+title from `FUN_0057a300`. It is unidentified and has not been played. It speaks the same way.

@@ -2937,7 +2937,32 @@ Two surfaces the tester reported as reading **nothing at all**. Both belong to t
 which the mod has never touched. **Reported only — no RE done, no function identified. Do not
 implement from a guess; find the surface first.**
 
-### 1. The multi-item reward panel — SURFACE FOUND (Session 147), still not play-confirmed
+### 1. The multi-item reward panel — ✅ SOLVED (Session 178), PLAY-CONFIRMED 2026-09-15
+
+> ✅ **PLAY-CONFIRMED on the first payout:** `[REWARD] reward panel: title="Antlion Infestation"
+> rows=3 | [id=0xFFFF value=4300 "4300 gil"] [id=0x1173 value=1 "Bubble Belt"] [id=0x20E2 value=1
+> "Sickle-Blade"]`, then a single `SPEAK-OUT`. It is followed by a harmless log-only `[READER]
+> unclaimed pane: obj0 RVA=0x2D4330`, because the menu census cannot see readers outside
+> `menu_reader`.
+
+> ⛔ **S178: THE S147 "STRIKE" BELOW IS ITSELF STRUCK. S72 WAS RIGHT.** The panel is **not**
+> `FUN_0035e070`. It is **`FUN_003f4330`**, opened by the script native **`questresultwindow`**
+> (`0x37C`) via `FUN_00344c60` -> `FUN_00290130` -> result window `FUN_003f4e70` -> sequencer
+> `FUN_003f4840`. The panel holds the title at `+0xC0`, the row count at `+0xC8`, and rows at
+> `+0xCC`/`+0xD0` (id `0xFFFF` = gil). A hunt's KEY items (`0x8xxx`) go to a second window that
+> hands them to the `FUN_0035e070` toast, which is the only part S147's function ever touched.
+> Reader: `src\ui\reward_panel_reader.cpp`. Layout and chain: `GameArchitecture.md` §Session 178.
+>
+> **How S147 went wrong:** it read the body of the function the mod already hooked and found a row
+> loop, a quantity and a gil kind — three of the report's features — and struck S72 without checking
+> the feature S72 listed FIRST, the title line. The composed text in our own logs (`"You obtain a
+> Wind Globe!"`) has no title. **What found it:** grepping the `.dbg` native names for the surface's
+> own words (`gil`, `win`, `clan`) turned up `questresultwindow` in one command (`L-85`).
+>
+> **Settles in play with:** `[REWARD] reward panel: title="…" rows=N | [id=… value=… "…"]` followed by
+> the spoken line. `no row resolved, staying silent` means `DefName(1, id<<16)` failed on that id
+> class. No `[REWARD]` line at all on a hunt payout means the hook never fired.
+
 
 > ⚠ **STRUCK, Session 147:** ~~"It is **not** the single-item obtained toast the mod already reads
 > (`message_reader.cpp`, `FUN_0035e070`, text at `widget+0xC8`) — that one is a one-line toast with
@@ -6041,7 +6066,7 @@ regression in something already understood.
 | Libra support for viewing enemies | **BUILT** on `o` (and volunteered by autodetail). The flag Session 32 could not find is `*(u32*)(P + 0x10F68) & 2`. Weaknesses **are** included — `BtlChr+0x40`, suppressed for Libra-proof marks and bosses. A first pass wrongly reported them unobtainable; see below. |
 | Autodetail | **BUILT** on `F7` + the `F8` menu, default Off, exactly to the spec in `Controls.md`. |
 | Polish diacritics automatic | **BUILT** — detected from the loaded font atlas. See below; this does NOT on its own close the tester's diacritics defect. |
-| Hunt rewards not read | Surface **found** (it was the function we already hooked); silence not yet explained; instrument shipped. |
+| Hunt rewards not read | ~~Surface **found** (it was the function we already hooked)~~ **STRUCK S178** — it was never that function; the panel is `FUN_003f4330` (`questresultwindow`). **SOLVED S178, play-confirmed 2026-09-15.** |
 | Exits/doors you cannot reach | **Instrumented, not changed.** See below. |
 
 ### SOLVED — enemy elemental weakness is `BtlChr + 0x40` (Session 147, after getting it wrong first)

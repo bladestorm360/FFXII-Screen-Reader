@@ -2921,3 +2921,77 @@ between steps.
 - **Still unconfirmed in play on a Polish install** — but the failure is now recoverable without a new
   build, and the log distinguishes the paths: `glyph variant FORCED: Polish fan patch (detection off)`
   vs `font atlas DETECTED: Polish fan patch` vs `font atlas UNRECOGNISED`.
+
+## Session 178 — 2026-09-15 — [text] Hunt rewards: the panel was never the toast S147 said it was (PLAY-CONFIRMED)
+
+**KEYWORDS: hunt reward panel questresultwindow native 0x37C FUN_00344c60 FUN_00290130 FUN_003f4c30
+FUN_003f4aa0 FUN_003f4e70 FUN_003f4840 FUN_003f4330 FUN_003f41c0 FUN_003f4060 key item list B
+FUN_0030baf0 reward_panel_reader DefName category 1 id<<16 GilSuffix STRIKES S147 L-85 Antlion
+Infestation**
+
+**Trigger:** user: *"get hunting rewards spoken when received"*, with a screenshot of the panel:
+`Antlion Infestation / 4300 gil / Bubble Belt x 1 / Sickle-Blade x 1`. The user also remembered that
+a diagnostic existed.
+
+### The diagnostic was aimed at the wrong function
+
+S147's `reward panel:` descriptor line lives in `message_reader.cpp`, on `FUN_0035e070`. The corpus
+has it 4 times across 3 logs. Every one is an obtain toast (`"You obtain a Potion!"`, `"…Orrachea
+Armlet!"`, `"…Wind Globe!"`). None is a hunt payout. Today's `Latest.log` is a 2-minute session and
+has no hunt in it either. So the instrument could never have fired on this panel, because the panel
+is a different window. `FUN_0035e070` has **no title field**. S72 had said it was a different
+surface, and S72 was right. S147's strike is struck (`L-85`).
+
+### How it was found (offline, no probe)
+
+Grepping the `.dbg` native names for the panel's own words turned up `questresultwindow`. That name
+has two independent sources: `action_binding_tables.txt` binds native 892 = `0x37C` to
+`FUN_00344c60`, and the dbg join at delta 5140 lands 892 on `questresultwindow`. From there:
+`FUN_00290130` fills a reward block (`FUN_003f4c30`), grants it (`FUN_003f4aa0`), and opens
+`FUN_003f4e70`. That window titles itself from the hunt table the Primer already reads. It spawns
+the sequencer `FUN_003f4840`, which opens **`FUN_003f4330`, the panel** (title `+0xC0`, rows `+0xC8`,
+row id `+0xCC`/value `+0xD0`, `0xFFFF` = gil). Its row callback `FUN_003f41c0` reads the same
+offsets back, so producer and consumer agree. Key items (`0x8xxx`, by `FUN_0030baf0`'s one-line
+body) go instead to `FUN_003f4060` -> the obtain toast, which already speaks. Full tables are in
+`GameArchitecture.md` §Session 178.
+
+### Built — `src\ui\reward_panel_reader.{h,cpp}`
+
+- Hooks `FUN_003f4330` (RVA `0x2D4330`, 2-arg window proc — the body reads only its two
+  parameters). On msg 1, after the original returns, it speaks `title, <amount> gil, <item>[ qty]`.
+  The quantity is spoken only above 1, the same as the inventory rows. Interrupt, like the toast.
+- Item names come from `BattleState::DefName(1, id << 16)`, the existing choke point. Category 1 is
+  the generic item category that re-dispatches on `id >> 12`. Gil uses the existing
+  `Phrase::GilSuffix`. **No new phrasebook entries.**
+- It feeds `MessageReader::NoteSpoken`, so `t` re-reads it. A live latch (set on msg 1, cleared on
+  msg `0x12`) joins `ASurfaceIsLive`. Init and shutdown are chained from `MessageReader`.
+- Logs a positive line every build (`[REWARD] reward panel: title="…" rows=N | [id=… value=… "…"]`)
+  and a distinct give-up line (`no row resolved, staying silent`). A hook that never fired, a panel
+  with unresolvable rows, and a spoken panel are therefore three different logs (`L-83`).
+- `message_reader.cpp`: the S147 comment is corrected, and its log prefix is renamed `reward panel:`
+  -> `item popup:`. The misread of message `0x833` as "gil" is also fixed: it is the obtain template.
+
+### State
+
+- Built clean. The deployed DLL is byte-identical to the build output, and the init string is present
+  in the binary.
+- **✅ PLAY-CONFIRMED 2026-09-15 (user, first try: "vocalized everything").** Build `aa52d71`+S178,
+  compiled 06:42. The log from the same payout as the screenshot:
+
+  ```
+  [REWARD] reward panel: title="Antlion Infestation" rows=3 | [id=0xFFFF value=4300 "4300 gil"] [id=0x1173 value=1 "Bubble Belt"] [id=0x20E2 value=1 "Sickle-Blade"]
+  [SPEAK-OUT] Antlion Infestation, 4300 gil, Bubble Belt, Sickle-Blade
+  ```
+
+  - **Both open risks are closed.** The loot id `0x20E2` resolved through `DefName(1, id<<16)`, so
+    category 1 is now witnessed on gear, loot and key items. There is exactly one `SPEAK-OUT` for the
+    panel, so nothing else spoke over it.
+  - **A log-only artifact to expect:** right after it, `[READER] unclaimed pane: obj0 RVA=0x2D4330 --
+    no reader spoke for it`. `menu_reader`'s S112 census only knows about readers inside its own
+    branch, so it cannot see `RewardPanelReader`. The census speaks nothing, so this is harmless. It
+    does use up one of the census's 12 class slots per session. Not changed, since the feature is
+    play-confirmed as shipped.
+  - This hunt had no key item, so the list-B handoff to the toast was not exercised in this payout.
+    That path is the toast the mod has always read.
+- The second opener, `FUN_003f47e0` <- `FUN_0057a4e0` (a menu), is unidentified and has not been
+  played. `queststartwindow` (`0x386`) has not been traced.

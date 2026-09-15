@@ -8,6 +8,7 @@
 #include "input/input_tracker.h"
 #include "ui/dialogue_reader.h"
 #include "ui/menu_state.h"
+#include "ui/reward_panel_reader.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -121,22 +122,22 @@ void SpeakAndStash(const std::wstring& text, const char* logPrefix) {
 void OnItemPopup(void* widget, void* msg) {
     if (!widget) return;
 
-    // THE REWARD-PANEL INSTRUMENT (Session 147). Print the DESCRIPTOR beside the composed text, once
-    // per fire, because those two disagreeing is the only way this surface can be silent while the
-    // hook is alive -- and until now the log could not tell the two apart.
+    // THE DESCRIPTOR (Session 147). Printed beside the composed text, once per fire, so "fired with an
+    // empty descriptor" and "fired but the text would not decode" are different lines in the log.
     //
     // `msg+8` -> the descriptor the caller filled in (FUN_0035e070:53). Its shape, from the row loop:
-    //     +0x00 i16  title/mode     (`local_6e8[0] = (this == 0)`)
-    //     +0x04 i16  ROW COUNT      (the loop bound: `0 < psVar2[2]`)
-    //     +0x08 u8   layout flags   (bit 0 picks the bordered multi-row panel over the plain toast)
+    //     +0x00 i16  mode           (`local_6e8[0] = (this == 0)`)
+    //     +0x04 i16  ROW COUNT      (the loop bound, at most 3 -- the template has three slots)
+    //     +0x08 u8   layout flags   (bit 0 = the bordered layout)
     //     +0x0C      ROW ARRAY, stride 8: i32 kind (0 = item, 1 = gil), then for kind 0 the item id
-    //                in the low half and the QUANTITY at +6; for kind 1 the raw amount, suffixed
-    //                with message 0x833.
+    //                in the low half and the QUANTITY at +6; for kind 1 the raw gil amount.
+    // Message 0x833 is NOT "gil": it is the obtain template the bordered layout composes a kind-0 row
+    // through -- logged as `mode=1 rows=1 flags=0x01 | [item 32945 x1]` -> "You obtain a Wind Globe!".
     //
-    // ⚠ THIS FUNCTION IS THE MULTI-ITEM REWARD PANEL. debug.md's S72 entry says "it is NOT the
-    // single-item obtained toast the mod already reads" and that is STRUCK: it is exactly this
-    // function. A row loop, a separate quantity field and a gil kind are all right here -- the
-    // reader was simply only ever exercised on one-item pickups, and nobody had read the body.
+    // ⚠ S147 CLAIMED THIS WAS THE HUNT REWARD PANEL, AND THAT IS STRUCK (S178). It has no title field
+    // and composes "You obtain X!" lines. The titled panel is FUN_003f4330, opened by the
+    // `questresultwindow` native -- see reward_panel_reader.cpp. A hunt's KEY items do still arrive
+    // here, because that panel hands them to this toast.
     void* d = nullptr;
     if (msg && MemRead::SafeReadPtr(reinterpret_cast<char*>(msg) + 8, &d) && d) {
         int16_t mode = 0, rows = 0;
@@ -145,7 +146,7 @@ void OnItemPopup(void* widget, void* msg) {
         MemRead::SafeReadS16(d, 0x04, &rows);
         MemRead::SafeReadU8(d, 0x08, &flags);
         char b[192];
-        int n = snprintf(b, sizeof(b), "reward panel: mode=%d rows=%d flags=0x%02X |", mode, rows, flags);
+        int n = snprintf(b, sizeof(b), "item popup: mode=%d rows=%d flags=0x%02X |", mode, rows, flags);
         for (int i = 0; i < rows && i < 8 && n > 0 && n < static_cast<int>(sizeof(b)); ++i) {
             int32_t kind = 0, payload = 0;
             int16_t qty = 0;
@@ -163,7 +164,7 @@ void OnItemPopup(void* widget, void* msg) {
     if (!GameText::IsMostlyPrintable(text)) {
         // Say WHY it went quiet. A composed buffer that decodes to nothing is a DIFFERENT defect
         // from a hook that never fired, and without this line they are the same silence.
-        Log::WriteW("MSGTEXT", "reward panel: composed text unreadable, staying silent. raw: ", text);
+        Log::WriteW("MSGTEXT", "item popup: composed text unreadable, staying silent. raw: ", text);
         return;
     }
     SpeakAndStash(text, "item: ");
@@ -252,6 +253,7 @@ uintptr_t HookedPanel(void* surface, void* msg) {
 bool ASurfaceIsLive() {
     if (DialogueReader::IsBoxLive()) return true;
     if (g_toastLive.load(std::memory_order_relaxed)) return true;
+    if (RewardPanelReader::IsLive()) return true;       // the titled reward panel, same latch shape
     void* owner = MenuState::FocusedOwner();
     return owner && (MenuState::IsChoicePopup(owner) || MenuState::IsConfirmWindow(owner));
 }
@@ -314,6 +316,8 @@ bool Init() {
     InputTracker::SetRereadCallback(&OnRereadKey);
     bool ok = Hooks::InstallTyped(RVA_ITEMPOPUP, &HookedItemPopup, &s_origItemPopup);
     ok     &= Hooks::InstallTyped(RVA_PANEL,     &HookedPanel,     &s_origPanel);
+    // The titled reward panel is a separate window, but it feeds this module's `t` store and gate.
+    ok     &= RewardPanelReader::Init();
     g_initialized = true;
     Log::Write("MSGTEXT", ok
         ? "MessageReader initialized (obtained-item toast via FUN_0035e070+0xC8; menu system "
@@ -325,6 +329,7 @@ bool Init() {
 void Shutdown() {
     if (!g_initialized) return;
     InputTracker::SetRereadCallback(nullptr);
+    RewardPanelReader::Shutdown();
     Hooks::Uninstall(RVA_PANEL);
     Hooks::Uninstall(RVA_ITEMPOPUP);
     g_initialized = false;
