@@ -32,7 +32,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | your task looks like… | grep tag | lessons |
 |---|---|---|
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90, L-95 |
-| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91 |
+| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
@@ -422,6 +422,26 @@ tester speed jump as proof that all three keys change speed (L-01). Keyboard `1`
 nothing observable. Repeating it gave a stale inference a new reason to survive.
 **The tell:** a "leads" or "see also" list assembled from a keyword search rather than from the surface the
 report is about.
+
+### L-97 A MEASUREMENT IS NOT A DEFECT UNTIL SOMETHING A PLAYER CAN SEE FOLLOWS FROM IT
+**A log line you cannot explain is a question. It becomes a defect only when you can name what the
+player loses because of it — and a line from a build that has since been fixed names nothing.**
+**Why:** S185. A pre-fix log showed `closed-floor: 44 crossing(s) CUT` on the Dreadnought Leviathan.
+That was a real measurement, and the narrowing written against it was confirmed working. It was then
+reverted (L-96), and the session close reported the cut as *"a real defect still live in the shipped
+build"* — in the release summary, twice. The user, who had actually played that build: *"pathing is
+working fine ... nothing is being returned as unwalkable, unsure what you're seeing in the log. there
+are no further defects and this is a shippable release."*
+**Two errors, and the second is the one that matters.** The line was read from a log written by the
+PRE-FIX binary and reported as the state of the POST-FIX one — the L-15 family, applied to my own
+work. And "A* cuts 44 crossings" was promoted to "defect" without anyone asking what the player loses,
+which with the corridor fallback in place was nothing at all.
+**The cost is not neutral.** Handing someone a list of "known live defects" in the build they are
+shipping is a claim about their release, and a wrong one wastes their attention and undermines the
+report that is true. **Before writing "still broken", state the player-visible consequence in one
+sentence.** If you cannot, it is an internals note — file it as one.
+**Corollary:** when the person who played the build contradicts your reading of a log, they measured
+the thing and you inferred it. Correct the record, do not defend the inference.
 
 ### L-77 IF THE PERSON PLAYING THE SAVE CAN ANSWER IT IN A SENTENCE, ASK THEM
 **Some unknowns are not measurements at all -- they are facts about the player's own game state:

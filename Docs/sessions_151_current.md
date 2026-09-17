@@ -3566,8 +3566,7 @@ Three rounds went at this. **Only the third is in the tree.**
 
 1. **The S182 closed-floor cut, narrowed by `ReachGate::OpenableFloorMask()`.** Confirmed working by the
    user's next log (mask `0x00000000`, zero crossings cut, the corridor running through the poly S182 had
-   been severing) — so the over-cut is REAL and is still in the shipped build. It was not the blocker.
-   **REVERTED.**
+   been severing) — so the narrowing did what it was written to do. It was not the blocker. **REVERTED.**
 2. **`PathValidate::ApronToGoal`** — accept a last-leg stop when every step between the body and the goal
    is ground the party cannot stand on. Measured from a 4.2 m class-refused apron in front of the exit.
    Fired **zero** times on the case it was written for (`apron=0`). **REVERTED.**
@@ -3588,5 +3587,16 @@ real and measurable and not the blocker. **When one subsystem certifies what ano
 poll, about the same geometry, that contradiction IS the bug** — chase it before anything that merely
 looks wrong nearby. Recorded as `L-95`.
 
-The over-cut from round 1 stays OPEN: 44 crossings the player walks are still cut as script-closed on the
-Dreadnought Leviathan. It has a measurement and a written fix in `git log`; it needs its own test pass.
+### Closed by the user — there is no open routing defect
+
+After playing the shipped build: *"pathing is working fine. you shouldn't have anything but the straight
+line fix you put in there. nothing is being returned as unwalkable, unsure what you're seeing in the log.
+there are no further defects and this is a shippable release."*
+
+**The session close had claimed the round-1 cut was "still a live defect in the shipped build". That was
+wrong and the user corrected it.** The 44-crossing measurement came from a log written by the PRE-FIX
+build; with `pass=corridor-march` in place it produces no observable failure. A measurement is not a
+defect until something a player can see follows from it — `L-97`.
+
+The reverted narrowing keeps its measurement in `debug.md` and its code in `git log` (`d2d3a72`). It is
+NOT an open item, and it does not get re-applied without a new report and a new log.

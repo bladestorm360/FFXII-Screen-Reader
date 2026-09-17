@@ -48,9 +48,16 @@ the flag shape alone is an inference.
 
 **It was confirmed to work before being reverted.** The user's next log read `material ids a door script
 can OPEN on this map: 0x00000000 (44 routine(s))`, zero crossings cut, and the corridor running through
-poly 1000 — the poly S182 had been severing. **So the over-cut is REAL and still present in the shipped
-build**, on this map: 44 crossings the player walks are cut as script-closed. It is not what was blocking
-the route, so it stays open rather than shipping unmeasured.
+poly 1000 — the poly S182 had been severing. So the narrowing did what it was written to do. It was not
+what was blocking the route.
+
+> **CLOSED BY THE USER, 2026-09-17, AFTER PLAYING THE SHIPPED BUILD:** *"pathing is working fine...
+> nothing is being returned as unwalkable, unsure what you're seeing in the log. there are no further
+> defects and this is a shippable release."* **There is no open routing defect.** The 44-crossing cut
+> below was measured in a log from the PRE-FIX build and, with `pass=corridor-march` in place, it
+> produces no observable failure — it is a note about A*'s internals, not a bug. Do not re-raise it as
+> one, and do not re-apply the reverted narrowing without a NEW report and a NEW log. Calling a stale
+> log line a live defect is exactly what `L-97` was written for.
 
 **An unreadable script keeps S182's behaviour exactly** — the mask is all-bits-set, so every closed-flag
 floor is still cut. A successful read can only ever NARROW the cut; it can never widen it. That bound is
