@@ -196,7 +196,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `` ` `` | Nav: rescan + area name | free |
 | `;` | **Context-gated target readout.** In battle: **committed** target status (name + instance letter + HP), silent on a merely browsed cursor — see below. In the field: **who Confirm will address**, e.g. "Talk: Montblanc" / "Action: Save Crystal", silent when nothing is in reach | free |
 | `/` | Nav: describe current (name + bearing + distance + obstacle) | free |
-| `'` | Nav: diagnostic probe (speaks "Diagnostic logged") | free |
+| ~~`'`~~ | **UNBOUND for the public 1.0 (S185, user instruction).** It was the nav diagnostic probe — a development key that dumps the route/mesh probe to the log and says nothing a player can act on. `NavProbe::Request` and the `VK_OEM_7` case in `nav_commands.cpp` are untouched; only the edge in `input_tracker.cpp` is gone, so re-binding it for a dev session is one line | free |
 | `4` | Party: slot 1 status (name, HP / MP with maximums, statuses) — **and, in a shop or on an equip screen, the equipment comparison for character 1** (see below) | free |
 | `5` | Party: slot 2 status — or comparison character 2 | free |
 | `6` | Party: slot 3 status — or comparison character 3 | free |
@@ -651,11 +651,12 @@ is reachable this way — combat verbosity, autodetail, the availability filter,
 
 ### What has no pad binding
 
-`F6` (name the selection — it opens a dialog, and a pad cannot type into one), `'` (the diagnostic
-probe), `9` (equipment column 6), `U` (License Points), `t` (re-read), `,` / `.` (the combat-log step),
+`F6` (name the selection — it opens a dialog, and a pad cannot type into one), `9` (equipment column 6), `U` (License Points), `t` (re-read), `,` / `.` (the combat-log step),
 `o` (describe — the right stick's Up reaches it, but no button does), `/` (describe the selection),
 `F4`, `F5`, `F7` and the volumes (menu-only by the settings rule above), and `B` / `N` (the Bhujerba
 shout minigame).
+
+`'` is not on this list any more: it has no KEYBOARD binding either as of S185.
 
 Four of those — `U`, `t`, `,` and `.` — **had** pad bindings until S185 and lost them to the user's
 layout; that was a deliberate trim, not an oversight. `8` is no longer on this list: it is **mod + A**.

@@ -28,6 +28,58 @@ using PathMarch::Arrived;
 // produce -- measured impact on maps 311/321 is ZERO legs.
 constexpr float kLongLegResweep = 12.0f;
 
+// ---- ARRIVING AT SOMETHING THE PARTY CANNOT STAND ON (Session 185) -------------------------------
+//
+// THE MEASUREMENT THAT BOUGHT THIS. Dreadnought Leviathan, the user's own play log: A* builds a
+// complete 78-poly corridor to `Exit ... Large Freight Stores 2`, the corridor march certifies it
+// CLEAR over every hop, and `repair[full-corridor]` walks **75 of its 76 legs** -- then breaches on
+// the LAST one at (120.2,248.8), 4.2 m from an exit at (120.0,253.0). The two polys covering that
+// last 4.2 m, 180 and 179, are `eff=0x1FA00000`: ground the leader's floor class refuses. The GOAL
+// poly is one of them. So the engine's own character controller will never carry the body over that
+// apron -- not because anything is in the way, but because the party cannot stand there at all.
+//
+// The arrival tolerance could not cover it: the request's interaction reach was 3.0 m and the
+// shortfall is 4.2 m, so every route to that exit was thrown away and spoken as "No path" while the
+// player walked to it by hand. This is the same failure the header already records once ("a target
+// you cannot stand on stops the body short every time") -- `arrivalTol` fixed the case where the
+// shortfall happens to fit inside the interaction band, and left this one.
+//
+// SO ASK THE QUESTION THE STOP ACTUALLY POSES: is there anywhere left between the body and the GOAL
+// -- `path.back()`, never the failing leg's own end -- that the party COULD have stood? Walk the
+// remainder in body-sized steps and look at the mesh. If
+// every step is ground the class refuses (or off-mesh, or the goal's own map-jump surface), the body
+// is as close as the game will ever put it and this is an ARRIVAL. If any step is standable, then
+// something really did stop it and the breach is real.
+//
+// MESH READS ONLY -- no sweeps, no volume rays, no probes charged. It is the same instrument the
+// search already prices terrain with (`NavMesh::TerrainRefused`), which is what keeps the two from
+// disagreeing about the same poly.
+bool ApronToGoal(const FVec3& stop, const FVec3& goal, int goalJumpGroup, float* outGap) {
+    const float gap = LenXZ(stop, goal);
+    if (outGap) *outGap = gap;
+    // A bound, so this can never rescue a route that gave up far away. 6.0 m covers the measured
+    // 4.2 m apron with room and is still under twice the largest interaction reach the planner asks
+    // for. If a log ever shows this firing at the bound, the bound is what to re-measure.
+    constexpr float kMaxApron = 6.0f;
+    if (gap <= 1e-3f) return true;
+    if (gap > kMaxApron) return false;
+
+    const float step = NavFootprint::BodyRadius();          // ~0.27 m -- finer than any poly here
+    const int   n    = static_cast<int>(gap / step) + 1;
+    for (int i = 1; i <= n; ++i) {
+        const float t = (static_cast<float>(i) / static_cast<float>(n));
+        const FVec3 q{ stop.x + (goal.x - stop.x) * t, 0.0f, stop.z + (goal.z - stop.z) * t };
+        const float y = GroundY(q.x, q.z, stop.y);
+        const NavMesh::PolyId cp = NavMesh::FindPolyAt(q.x, y, q.z);
+        if (cp == NavMesh::kNoPoly) continue;                          // off-mesh: not standable
+        if (goalJumpGroup != 0 && NavMesh::MapJumpGroup(cp) == goalJumpGroup) continue;  // the surface itself
+        if (!NavMesh::Walkable(cp)) continue;                          // not standable
+        if (NavMesh::TerrainRefused(cp)) continue;                     // the class refuses it
+        return false;   // the party could have stood here -- the body was stopped by something else
+    }
+    return true;
+}
+
 // IS A COLLISION VOLUME ON THIS LINE? **A MEASUREMENT, NOT A VERDICT** (Session 97).
 //
 // This was `WallAcross` and it FAILED THE ROUTE. It refused 16 of 16 routes on map 315 -- every single
@@ -127,7 +179,8 @@ void FillStopPoly(LegReport& r, const FVec3& stopAt) {
 
 } // namespace
 
-LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalTol) {
+LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalTol,
+                    int goalJumpGroup) {
     LegReport r;
     if (path.size() < 2) return r;
     r.total = path.size() - 1;
@@ -222,6 +275,30 @@ LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalT
                 // re-aimed at the same unstandable corner and re-failed. Accept the stop when the
                 // measured bound covers it; the beacon advances legs at 2.0 m regardless, and a
                 // genuine wall mid-leg still stops the body FAR shorter than this bound reaches.
+                // THE APRON: THE BODY IS AS CLOSE TO THE GOAL AS THE GAME WILL EVER PUT IT.
+                // See ApronToGoal above. Asked before the interior-corner rescue below, because the
+                // two are different questions -- that one asks whether one CORNER is standable, this
+                // one asks whether anything at all between the body and the GOAL ever was.
+                //
+                // NOT GATED ON `last`, and that was this rule's first mistake. The measured case
+                // breached on leg 75 of 76: an apron 4.2 m deep spans more than one corridor point,
+                // so "is this the final leg" is the wrong question. "Can the body get any nearer the
+                // goal" is the right one, and it is asked against `path.back()`, never against this
+                // leg's own end.
+                //
+                // It ACCEPTS THE WHOLE REMAINDER rather than stepping to the next leg: every point
+                // left is inside the apron by construction, so walking them would just re-fail.
+                // `checked` is set to `total` deliberately -- these legs are answered, not skipped,
+                // and leaving them unanswered would set `truncated` and route the caller to the
+                // frontier anyway, which is the outcome this rule exists to prevent.
+                if (cause == StopCause::Sweep &&
+                    ApronToGoal(stopAt, path.back(), goalJumpGroup, nullptr)) {
+                    ++r.apronArrivals;
+                    r.badReached = reachedM;
+                    r.badStopAt  = stopAt;
+                    r.checked    = r.total;
+                    break;
+                }
                 if (cause == StopCause::Sweep && !last) {
                     const float legLen2   = LenXZ(a, b);
                     const float shortfall = legLen2 - reachedM;

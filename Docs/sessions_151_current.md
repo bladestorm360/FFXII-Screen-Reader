@@ -3519,3 +3519,40 @@ session did not touch. The things most worth a falsifier on the first pass: whet
 takes focus over the game (it is `WS_EX_TOPMOST` and calls `SetForegroundWindow`, but a game that owns
 the whole screen is the case that breaks such things), and whether the `L3`+`R3` chord resolves the way
 a real thumb produces it. Grep `PROMPT` and `PAD` in the log.
+
+### Second half: "No path" on a route the player walked — the S182 cut fired where no door exists
+
+**User report, with the log:** *"a clear 'no path' validation failure on a valid path... I was able to walk
+toward the destination using crow-flies, and the path eventually, finally validated once I get close
+enough... there is no door in the way and no obstacle."* Progress-blocking for anyone who does not know to
+track by crow-flies.
+
+**The log answered it, and S182 had written down the falsifier itself.** 21 suppressed frontiers to the
+Dreadnought Leviathan exits; on every one the mod'''s own oracle said `goal poly 179 is IN the start poly'''s
+adjacency component -- this is the SEARCH giving up, not an unreachable goal`; and the first four carried
+`closed-floor: 44 crossing(s) CUT -- script-closed floor, material id(s) 31` at the exact pinch the
+validator then kept breaching on. S182'''s own comment above that cut: *"the falsifier for the cut: a map
+where this fires and the player walks that crossing by hand."*
+
+**Fix: the cut now needs the closed-flag SHAPE and a DECLARATION.** `ReachGate::OpenableFloorMask()` is
+the union of every container-0 routine'''s `opensFloorMask` -- the materials some script on this map can
+`setmapidfloor(N, 0, 1)`. In the mask: still CUT. Not in it: PRICED, as S96 established. **Straight out of
+the user'''s own ruling -- price what we infer, cut what the game declares.** A material a door routine can
+open is a declaration; the flag shape alone is an inference, and it was the inference that was wrong.
+
+An unreadable script returns all-bits-set, so it reproduces S182 exactly: a successful read can only
+NARROW the cut, never widen it. That is what keeps Sochen working -- its doors are real routines.
+
+**Also removed for the public build:** `''''`, the nav diagnostic probe key (user instruction). The handler
+and `NavProbe::Request` are untouched; only the edge that fires it is gone.
+
+**NOT PLAYED, and this one is going to the user to test before the release is updated.** Falsifiers: the
+Dreadnought Leviathan route must now speak legs from the same spot, and Sochen'''s closed doors must still
+say "No path" while shut. The new `closed-floor: ... PRICED not cut ...` line names exactly what the change
+let through.
+
+**Two defects found and deliberately NOT fixed, recorded in debug.md so they are not mistaken for closed:**
+the validator refuses chords the corridor march certifies CLEAR and the repair ladder cannot always mend
+them (`seq=56` had no closed-floor cut at all and still failed); and the attempt ladder spends escalations
+its own log line reports as ineffective (500->1500->4500, "not enough to move the search", three of four
+attempts). This fix removes what put the search into that corner on this map, not the corner itself.

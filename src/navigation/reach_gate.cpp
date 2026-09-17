@@ -1,4 +1,5 @@
 #include "navigation/reach_gate.h"
+#include "navigation/map_script_routines.h"
 #include "navigation/path_planner.h"
 #include "navigation/nav_reach.h"
 #include "navigation/nav_rva.h"
@@ -96,6 +97,38 @@ std::string Ascii(const std::wstring& w) {
 } // namespace
 
 uint32_t PartyRefuseBit() { return RefuseBit(PlayerState::PartyMovementClass()); }
+
+uint32_t OpenableFloorMask() {
+    // Keyed on the SCRIPT, not the map id: the id flips at the leading edge of a transition while the
+    // old blob is still resident (S93), so a map-id cache can be filled from the previous map.
+    static uint64_t s_fingerprint = 0;
+    static uint32_t s_mask        = 0xFFFFFFFFu;
+    static bool     s_have        = false;
+
+    const uint64_t fp = MapScript::ScriptFingerprint();
+    if (s_have && fp == s_fingerprint) return s_mask;
+
+    std::vector<MapScript::RoutineFacts> facts;
+    const bool ok = MapScript::ReadRoutineFacts(facts);
+    uint32_t mask = 0;
+    if (ok) for (const MapScript::RoutineFacts& f : facts) mask |= f.opensFloorMask;
+
+    // A FAILED READ KEEPS S182's BEHAVIOUR, it does not invent a new one. All-bits-set means every
+    // closed-flag floor is still cut, exactly as before this change -- so the only thing a successful
+    // read can ever do is NARROW the cut, and an unreadable script can never widen it.
+    s_mask        = ok ? mask : 0xFFFFFFFFu;
+    s_fingerprint = fp;
+    s_have        = true;
+
+    char m[192];
+    snprintf(m, sizeof(m),
+             "closed-floor: script %s -- material ids a door script can OPEN on this map: 0x%08X "
+             "(%zu routine(s)); anything closed outside this mask is PRICED, not cut",
+             ok ? "read" : "UNREADABLE (falling back to cut-everything, S182 behaviour)",
+             s_mask, facts.size());
+    Log::Write("NAV-ROUTE", m);
+    return s_mask;
+}
 
 bool ScriptClosed(NavMesh::PolyId p) {
     const uint32_t bit = PartyRefuseBit();

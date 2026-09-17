@@ -266,8 +266,13 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     }
     // The evidence for every cut, across all attempts: how many crossings, which materials, and one poly
     // to put a position on. A wrong cut then reads as a named map + material + place in one grep.
-    int      refClosed     = 0;
-    uint32_t closedMatsCut = 0;
+    int      refClosed        = 0;
+    uint32_t closedMatsCut    = 0;
+    // S185: closed-flag crossings the cut let through because no script on this map can open that
+    // material. They are PRICED, not cut. Printed beside the cut so one log line answers both.
+    int      refClosedPriced  = 0;
+    uint32_t closedMatsPriced = 0;
+    const uint32_t openableMats = ReachGate::OpenableFloorMask();
     PolyId   closedSample  = kNoPoly;
 
     // ---- PER-MAP RULE: class-refused ground is CUT on a flagged map (S183, map_route_rules.h) --------
@@ -452,17 +457,37 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 // one -- there is nothing on the other side to price.
                 if (n == kNoPoly) { ++refNoPoly; continue; }
 
-                // THE OTHER TRUE CUT (S182): a floor a script has closed, unless it is the start's or the
-                // goal's own. Never expanded, so no corridor, frontier, surface goal or repair rung built
-                // from this search can lead across it.
+                // THE OTHER TRUE CUT (S182, NARROWED S185): a floor a script has closed, unless it is
+                // the start's or the goal's own. Never expanded, so no corridor, frontier, surface goal
+                // or repair rung built from this search can lead across it.
+                //
+                // S185 ADDED THE SECOND HALF OF THE TEST, and S182's own comment is what asked for it:
+                // "the falsifier for the cut: a map where this fires and the player walks that crossing
+                // by hand". The Dreadnought Leviathan is that map. 44 crossings were cut here as
+                // script-closed, the goal was in the start's own adjacency component the whole time,
+                // and the player walked the route by hand while the mod said "No path" twenty-one
+                // times -- progress-blocking for anyone who does not know to track by crow-flies.
+                //
+                // THE USER'S RULE DECIDES IT: price what we INFER, cut what the game DECLARES. The
+                // closed-flag shape alone is an inference. A material some door routine can OPEN is a
+                // declaration -- the script says it is a door and says how it opens. So the cut now
+                // needs both. A closed floor no script on this map can open falls through to the
+                // ordinary terrain PRICE below, which is S96's rule and what every map but 184 uses.
                 {
                     uint32_t cr = 0, ce = 0;
                     if (NavMesh::PolyFlags(n, cr, ce) && ReachGate::ScriptClosedFlags(cr, ce, closedBit) &&
                         !((closedExemptMats >> ReachGate::Material(cr)) & 1u)) {
-                        ++refClosed;
-                        closedMatsCut |= 1u << ReachGate::Material(cr);
-                        if (closedSample == kNoPoly) closedSample = n;
-                        continue;
+                        const uint32_t mat = ReachGate::Material(cr);
+                        if ((openableMats >> mat) & 1u) {
+                            ++refClosed;
+                            closedMatsCut |= 1u << mat;
+                            if (closedSample == kNoPoly) closedSample = n;
+                            continue;
+                        }
+                        // Inferred, not declared: priced below like any other refused ground. Counted
+                        // so the log can show what this change let through.
+                        ++refClosedPriced;
+                        closedMatsPriced |= 1u << mat;
                     }
                 }
 
@@ -654,7 +679,8 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             Log::Write("NAV-ROUTE", fm);
         }
 
-        const PathValidate::LegReport rep = PathValidate::CheckLegs(poly, probesLeft, kArrivalTol);
+        const PathValidate::LegReport rep =
+            PathValidate::CheckLegs(poly, probesLeft, kArrivalTol, goalGroup);
         probesLeft -= rep.probes;
         stats.rays += rep.probes;
 
@@ -704,11 +730,11 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             // `march=/marchBlind=/marchGraze=` are the S100 adjacency march -- see LegReport.
             snprintf(vm, sizeof(vm),
                      "validate: attempt %d legs checked=%zu/%zu probes=%d worstFrac=%.2f tight=%d@%zu "
-                     "resweep=%d rescued=%d long=%d pinned=%d swept=%d blind=%d volHit=%d volWalked=%d "
+                     "resweep=%d rescued=%d long=%d pinned=%d apron=%d swept=%d blind=%d volHit=%d volWalked=%d "
                      "march=%d marchBlind=%d marchGraze=%d %s%s%s",
                      attempt, rep.checked, rep.total, rep.probes, rep.worstFraction,
                      rep.tightCorners, rep.firstTight, rep.resweeps, rep.rescued, rep.longWalks,
-                     rep.pinned, rep.swept, rep.blind, rep.volHit, rep.volWalked,
+                     rep.pinned, rep.apronArrivals, rep.swept, rep.blind, rep.volHit, rep.volWalked,
                      rep.march, rep.marchBlind, rep.marchGraze,
                      rep.ok ? "OK" : "BREACH", bad,
                      rep.blind     ? "  <== BLIND: no collision world for some legs; NOT verified"
@@ -1043,7 +1069,7 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     }
     // Every request that met a script-closed floor says so, whether it routed or not (S182). The
     // falsifier for the cut: a map where this fires and the player walks that crossing by hand.
-    if (refClosed > 0 || closedExemptMats != 0) {
+    if (refClosed > 0 || refClosedPriced > 0 || closedExemptMats != 0) {
         char mats[96]; int q = 0;
         for (int i = 0; i < 32 && q < 80; ++i)
             if ((closedMatsCut >> i) & 1u) q += snprintf(mats + q, sizeof(mats) - q, "%s%d", q ? "," : "", i);
@@ -1052,11 +1078,17 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         FVec3 sc{};
         if (closedSample != kNoPoly && NavMesh::PolyCentroid(closedSample, sc))
             snprintf(where, sizeof(where), "; first at poly %d (%.1f,%.1f,%.1f)", closedSample, sc.x, sc.y, sc.z);
-        char m[320];
+        char priced[96]; int pq = 0;
+        for (int i = 0; i < 32 && pq < 80; ++i)
+            if ((closedMatsPriced >> i) & 1u) pq += snprintf(priced + pq, sizeof(priced) - pq, "%s%d", pq ? "," : "", i);
+        if (pq == 0) snprintf(priced, sizeof(priced), "none");
+        char m[448];
         snprintf(m, sizeof(m),
                  "closed-floor: %d crossing(s) CUT -- script-closed floor, material id(s) %s%s | exempt "
-                 "material mask 0x%X (the start's / goal's own closed floor)",
-                 refClosed, mats, where, closedExemptMats);
+                 "material mask 0x%X (the start's / goal's own closed floor) | %d crossing(s) PRICED "
+                 "not cut, material id(s) %s (no script on this map opens those -- inferred, not "
+                 "declared; S185)",
+                 refClosed, mats, where, closedExemptMats, refClosedPriced, priced);
         Log::Write("NAV-ROUTE", m);
     }
 

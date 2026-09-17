@@ -73,6 +73,10 @@ struct LegReport {
     // footprint test FAILS and the shortfall is within the tangency bound; the player only ever
     // needs to come within the beacon's 2.0 m leg-advance radius of a corner anyway.
     int    pinned = 0;
+    // S185. Last legs accepted because EVERY step between the body and the goal is ground the party
+    // cannot stand on -- an exit's own class-refused apron. Above zero means a route that used to be
+    // thrown away as "No path" now ships, so it is the falsifier for ApronToGoal.
+    int    apronArrivals = 0;
     // Filled on a march breach: the exact crossing the mover's own accept rule refuses. `badMarchNbr`
     // -1 means a true boundary (no neighbour); otherwise the neighbour whose effective flags refused
     // the party, printed so a script-flipped group is readable at a glance.
@@ -196,6 +200,10 @@ struct LegReport {
 // Measured (Session 95 log): every single breach was the last leg, the body finishing 2.55 m from an
 // exit against a 0.42 m tolerance, and the ban that followed made A* declare the goal unreachable and
 // hand back a route ending 15.2 m short instead. Pass 0 to use the mid-route tolerance throughout.
-LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalTol = 0.0f);
+// `goalJumpGroup` (S185) is the map-jump group of the ROUTE's goal, or 0 when it is not a transition
+// surface. It only ever widens the last-leg arrival test in ApronToGoal; 0 is always safe, and the
+// class-refused half of that test does the work on an ordinary exit.
+LegReport CheckLegs(const std::vector<FVec3>& path, int probeCap, float arrivalTol = 0.0f,
+                    int goalJumpGroup = 0);
 
 } // namespace PathValidate

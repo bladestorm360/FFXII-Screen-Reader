@@ -545,7 +545,11 @@ void FeedDInputKeyboard(const unsigned char* dik) {
                       !fkeyModifierHeld && (dik[DIK_ESCAPE] & 0x80) != 0, false);
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
-    DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic
+    // `'` (the NavProbe diagnostic dump) IS NO LONGER BOUND -- removed for the public 1.0 at the
+    // user'''s instruction. It was a development key: it dumps the route/mesh probe to the log and says
+    // nothing a player can use, so on a public build it is a key that can only confuse. The handler
+    // and the probe itself are untouched (NavProbe::Request, nav_commands.cpp) -- only the edge that
+    // fires it is gone, so re-binding it for a dev session is one line.
     DInputEdge(VK_OEM_2,      g_extraDown[4],(dik[DIK_SLASH]      & 0x80) != 0, true);  // /  describe
     DInputEdge(VK_OEM_1,      g_extraDown[2],(dik[DIK_SEMICOLON]  & 0x80) != 0, true);  // ;  target status
     DInputEdge('P',           g_extraDown[5],(dik[DIK_P]          & 0x80) != 0, true);  // p  route to the active target

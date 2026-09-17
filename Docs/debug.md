@@ -2,6 +2,59 @@
 
 This file is structured for keyword searching. **Always grep before proposing solutions.**
 
+## S185 — "No path" on a walkable route: the S182 closed-floor cut fired on a map with no doors
+
+**Reported by the user (2026-09-17), with the log:** *"there is a clear 'no path' validation failure on a
+valid path... I was able to walk toward the destination using crow-flies, and the path eventually, finally
+validated once I get close enough... there is no door in the way and no obstacle."*
+
+**Measured, Dreadnought Leviathan, `FFXII-Screen-Reader-Latest.log` (build V1.0 `48ded58`):**
+
+- **21 `FRONTIER SUPPRESSED` → "No path"** for `Exit, Dreadnought Leviathan: Large Freight Stores 1/2`,
+  from `seq=1` at (45.84,152.00) through `seq=56` at (108.21,222.50). The player walked the whole way by
+  crow-flies. `seq=57`, from (113.16,222.98), returned `plan=Route` — the first success, ~30 m from the goal.
+- **The mod's own oracle contradicted its own answer on every one of them:** `oracle: goal poly 179 is IN
+  the start poly 341's adjacency component (1077 polys) -- the mesh connects these two, so this is the
+  SEARCH giving up, not an unreachable goal`.
+- **`closed-floor: 44 crossing(s) CUT -- script-closed floor, material id(s) 31; first at poly 1000
+  (59.9,0.0,151.1)`** on `seq=1..4` — at the exact pinch the validator then kept breaching on
+  (x≈59-60, z≈149), forcing the corridor through a gap the body sweep could not thread
+  (`repair[unpull]`, `repair[retreat]` and `repair[full-corridor]` all failed; four attempts spent, three
+  of them escalating one crossing's price 500→1500→4500 while the log said each time that the price *"was
+  not enough to move the search"*).
+- `corridor march: CLEAR over 76 hop(s)` on every failing attempt — the corridor walked; only the taut
+  chord did not.
+
+**ROOT CAUSE — and S182 wrote down this exact falsifier itself.** The comment above the cut reads: *"The
+falsifier for the cut: a map where this fires and the player walks that crossing by hand."* This is that
+map. `ReachGate::ScriptClosedFlags` answers a SHAPE — the override bank refuses this floor and the raw
+bank does not — and S182 promoted that shape to a hard A* cut on Sochen Cave Palace evidence, where every
+such floor is a door. On the Dreadnought Leviathan 44 crossings have the same shape and no door behind them.
+
+**FIX (S185): the cut now needs the shape AND a declaration.** `ReachGate::OpenableFloorMask()` returns
+the union of every container-0 routine's `opensFloorMask` — the material ids some script on this map can
+`setmapidfloor(N, 0, 1)`. A closed-flag crossing whose material is in that mask is still CUT; one whose
+material is not is PRICED, like any other class-refused ground (S96). Straight from the user's own rule:
+**price what we infer, cut what the game declares.** A material a door routine can open is a declaration;
+the flag shape alone is an inference.
+
+**An unreadable script keeps S182's behaviour exactly** — the mask is all-bits-set, so every closed-flag
+floor is still cut. A successful read can only ever NARROW the cut; it can never widen it. That bound is
+what keeps Sochen (map 184) working: its doors are real `gim_door` routines and stay in the mask.
+
+**The new log line is the falsifier for the FIX** — `closed-floor: ... | N crossing(s) PRICED not cut,
+material id(s) M (no script on this map opens those -- inferred, not declared; S185)`, plus a one-per-script
+line naming the mask. If Sochen's doors ever appear in the PRICED half, the mask read is wrong.
+
+**NOT PLAYED.** Falsifier for the whole change: the Dreadnought Leviathan route from the same spot must now
+speak legs instead of "No path", and Sochen's closed doors must still say "No path" while shut.
+
+**Also unresolved and NOT fixed here** — recorded so it is not mistaken for closed: the validator refuses
+chords the corridor march certifies, and the repair ladder cannot always mend them (`seq=56` had no
+closed-floor cut at all and still failed). The attempt ladder also spends escalations that its own log
+line reports as ineffective. Both are separate defects; this fix removes the cause that put the search into
+that corner on this map, not the corner itself.
+
 ## Tried & Failed
 
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
