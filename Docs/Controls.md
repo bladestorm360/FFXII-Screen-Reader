@@ -181,7 +181,8 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 | `\` | Nav: turn-by-turn route to current selection — **and starts the audio beacon** (Session 92). Press it again at any time to re-aim. **With Auto-walk On in the `F8` menu (Session 100) it also WALKS you there** — see the Auto-walk section | free |
 | `F4` | **Combat verbosity — Normal ⇄ Verbose.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut for mid-fight | free — game binds F1/F2/F3 only |
 | `F5` | Nav: availability filter — **All ⇄ Story-gated**. Orthogonal to the `-`/`=` category cycle; speaks the mode and the resulting count. Default All, so nothing is ever hidden unless you ask | free — game binds F1/F2/F3 only |
-| `F6` | label the focused entity with the clipboard text (persists; clears if the clipboard is empty) | mod-only |
+| `F6` | name the focused entity: an EDIT FIELD when it has no player name yet, a Yes/No "clear it?" box when it has (S185) | mod-only |
+| `Escape` | closes the mod menu, and ONLY while it is open. Not claimed anywhere else | see the note below |
 | `F7` | **Autodetail — Off ⇄ On (Session 147).** Speaks the new setting. Same value the `F8` menu holds. Changes only what is VOLUNTEERED: the shop equipment comparison on each highlight, and the Libra readout on each target change. `4`-`9` and `o` answer identically in both modes | free — reserved from S90, spent in S147 |
 | `F8` | **Mod menu** — open/close the mod's own settings. Up/Down pick a setting, Left/Right change it, `o` reads its description, `F8` closes | free — game binds F1/F2/F3 only |
 | `F11` | **Audio beacon — On ⇄ Off.** Speaks the new setting. Same setting the mod menu holds; this is the shortcut. Turning it **off** silences a running beacon immediately; turning it **on** only re-arms the feature — press `\` to start one, since an On press has no destination to aim at. **BARE PRESS ONLY** — see the rule below, which now covers every F-key. **Shift+F11 is an NVDA command the tester uses while playing** and the mod cannot swallow keys, which is where that rule started (S112). **Moved off `F9`, which belongs to the game** | free |
@@ -412,8 +413,29 @@ the tester's read is that it was a mod-side problem since fixed. That is recorde
 a mechanism — nobody has traced why it changed, and it should not be quoted as one until somebody does.
 
 Unaffected either way: the mod still **never swallows or injects** a key (it passes the DirectInput
-buffer as `const`, per the read-only rule), so there is still no way to run a text field in-game. That is
-why labelling entities (**F6**) reads the CLIPBOARD instead of capturing typing.
+buffer as `const`, per the read-only rule), so there is still no way to run a text field **in-game**.
+
+> **THE CLIPBOARD IS GONE FROM `F6` (Session 185), AND THE RULE ABOVE IS UNTOUCHED.** This paragraph
+> used to end *"that is why labelling entities (F6) reads the CLIPBOARD instead of capturing typing"*.
+> The reasoning was sound and the conclusion did not follow: the mod cannot run a text field inside the
+> game, but a text field does not have to be inside the game. `F6` now opens a real Win32 dialog of the
+> mod's own (`ui/text_prompt.h`) — typing into an EDIT control is ordinary window-message input and
+> never touches the DirectInput buffer, so nothing about the read-only rule is weakened. The game's own
+> device is simply unacquired while another window of the process holds focus, which is what already
+> happens on every alt-tab.
+>
+> **While a prompt is up, both input paths go quiet.** `FeedDInputKeyboard` runs its edge pass against
+> a ZEROED buffer and `PadRouter::OnPoll` returns early, so nothing the player types can trip a mod
+> hotkey. Zeros rather than an early return on the keyboard side is deliberate: returning would leave a
+> key that was held when the box opened still armed, and it would fire the moment the box closed.
+
+> **`Escape` is claimed by the mod menu only (Session 185, user instruction).** It is dispatched as a
+> virtual-buffer nav key and ModMenu is the only consumer that answers it; with the menu shut every
+> reader declines and the press does nothing on the mod's side. **This is NOT a claim that `Esc` is a
+> free key** — the game's Controls screen lists an *action* called "Escape" bound to Left Ctrl, which
+> says nothing about the physical key, and that screen has already been caught hiding a binding once
+> (`F9`, S112 — see L-51). The mod cannot swallow a key, so if the game does own `Esc`, both things
+> happen. That is the same accepted cost the arrow keys already carry inside this menu.
 
 > **`;` is context-gated, not double-bound (Session 73).** The battle reader is *structurally*
 > silent in the field — `ResolveTarget` needs either a committed action or an open select UI, and
@@ -494,30 +516,32 @@ autodetail already existing. It is one line about one character on a screen whos
 that comparison. Autodetail is the general "volunteer the detail everywhere" switch, and the shop
 is what it is for.
 
-## Controller — the pad scheme (Session 173, revised 174)
+## Controller — the pad scheme (Session 173, revised 174, rebuilt 185)
 
-> **STATUS: the right stick and the D-pad are PLAY-CONFIRMED; the rest is built and untried.** The
-> first play pass (2026-08-29) confirmed the pathfinder stick, the swallowed field camera and the
-> party slots. Everything below them changed after that pass and has not been played yet.
+> **STATUS: the right stick and the D-pad are PLAY-CONFIRMED; everything else is built and untried.**
+> The 2026-08-29 play pass confirmed the pathfinder stick, the swallowed field camera and the party
+> slots, and those three are the only parts S185 did not touch. **The S185 layout is the user's own
+> and has not been played.**
 
 **What FFXII itself uses a pad for**, which is what the scheme had to be built around:
 
 | Button | Field | Battle |
 |---|---|---|
-| L1 | Speed mode (x2 / x4) | Speed mode |
+| **L1** | Speed mode (x2 / x4) | Speed mode — and steps the **target list** back a group |
 | L2 | Toggle zoom | **Lock on to target** |
 | L3 | Show area map | Show area map |
-| **R1** | *nothing* | Steps the **target list** to its next group: Foes, Party, Reserve, Allies (L1 steps back) |
+| **R1** | *nothing* | Steps the **target list** to its next group: Foes, Party, Reserve, Allies |
 | R2 | Zoom the map and the license board | Hold to run from enemies |
 | R3 | Recentre the camera | Recentre the camera |
 | Select | Display map | Display map |
 | Start | Pause | Pause |
 | Triangle | Party menu | Party menu |
 
-**R1 is the only control the game leaves free on the field**, which is why the route lives there.
-The mod claims three things the game does use — Select's map, L3's area map, and the D-pad — and
-each was a deliberate trade. The `Controller` row in the `F8` menu, or **L3**, turns the whole thing
-off and hands the pad back untouched.
+**The mod claims four controls the game uses** — `L1`, `Back`, `L3` and `R3` — plus the D-pad and the
+right stick on the field. Each was a deliberate trade, and `L1` was the user's call at S185: game
+speed is reachable from the options menu and from the keyboard's `1`/`2`/`3`, pad buttons are scarce,
+and a speed toggle is not what one is worth spending on. **`L3` + `R3` together**, or the `Controller`
+row in the `F8` menu, turns the whole thing off and hands the pad back untouched.
 
 The pad reaches the mod through an `XInputGetState` intercept, and **it can only take an input away
 from the game, never press one** — see the second input-write exception in `CLAUDE.md`. Anything not
@@ -537,68 +561,101 @@ behind the modifier instead.
 | Right stick Right | Next object | `]` |
 | D-pad (field only) | Party status — **clockwise from Up: member 1, 2, 3, then the guest** | `4` `5` `6` `7` |
 | D-pad (anywhere else, combat included) | Walks the Status Attributes page and an open Clan Primer entry, exactly as the arrow keys do. The game still gets the press | Arrow keys |
-| R1 (field) | Route to the current selection, and start the audio beacon | `\` |
-| R1 (battle) | Route to the **active target** | `p` |
+| **L1** (field and battle) | **The interact readout** — who Confirm would address, or in a fight the enemy and its HP | `;` |
+| **R1** (field and battle) | Route to the current selection, and start the audio beacon | `\` |
 | Back / Select | Mod mode — says **"Mod"** | — |
-| L3 (left stick click) | Switch the pad intercept off or on — says **"Controller, Off"** | `F8` → Controller |
+| **L3** (left stick click) | Reachability filter off / on — says **"Unreachable filter, On"** | `F8` → that row |
+| **R3** (right stick click) | Audio beacon off / on — says **"Audio beacon, On"** | `F11` |
+| **L3 + R3 together** | Switch the pad intercept off or on — says **"Controller, Off"** | `F8` → Controller |
 
-> **Right stick Up is the one control that changes meaning, and it is the only one.** On a plain
-> idle field the description key has nothing to answer and the pathfinder has everything, so Up
-> cycles the category there. Anywhere a description could be read, it reads it.
+> **Right stick Up is the one control that changes meaning in Normal mode, and it is the only one
+> left.** On a plain idle field the description key has nothing to answer and the pathfinder has
+> everything, so Up cycles the category there. Anywhere a description could be read, it reads it.
 
-> **R1 is the other control that changes meaning.** Out of combat it routes to whatever the stick
-> has selected; in a fight it routes to the target you are already acting on. Both are one press,
-> in the context where each is wanted. With a targeting cursor up the mod does not take R1 at all,
-> so the game keeps its target-group switch.
+> **R1 STOPPED CHANGING MEANING AT S185, and the reason is the point.** It used to route to the
+> ACTIVE TARGET (`p`) in a fight. The user's ruling: *"the player needs to be able to pathfind away
+> from enemies if they want to escape, so even in battle it should be pathfind to selected
+> destination."* The one context where a route out matters most was the one context where the route
+> key aimed at the enemy. `p` did not lose its pad home — it moved to **mod + Y**, where asking for
+> the target's bearing is a deliberate question rather than the default.
+
+> **BOTH SHOULDERS ARE GATED ON `live` (Field or Battle), AND THAT IS WHAT KEEPS THE TARGET LIST
+> WORKING.** With a targeting cursor up the context is `FieldBusy`, not `Battle`, so neither shoulder
+> is consumed and the game keeps `L1` and `R1` as its Foes / Party / Reserve / Allies group step —
+> the switch **S184** built the spoken titles for. Taking them there would have silenced one feature
+> to feed another.
 
 > **The D-pad is only taken on the open field — never in combat.** Everywhere else it is dispatched
 > to the mod *and* passed straight through, so the game's own cursor still moves. That is what the
-> arrow keys already do, since the mod cannot swallow a key. A fight is always one command menu
-> away, and party slots are not worth costing you that cursor.
+> arrow keys already do, since the mod cannot swallow a key. A fight is always one command menu away,
+> and party slots are not worth costing you that cursor.
 
-> **L3 hands the whole pad back, and hands it back again.** It works whether the intercept is on or
-> off — a switch you could only throw once would leave you at the keyboard to undo it. While the
-> intercept is off the mod reads that one button and nothing else, and changes nothing the game sees.
+> **THE THUMB-CLICKS FIRE ON RELEASE, NOT ON PRESS, AND THAT IS WHAT MAKES THE CHORD POSSIBLE.** A
+> chord and its two singles cannot all be edge-triggered on the press: whichever button went down
+> first would have spoken before the second arrived. Resolving on the falling edge needs no timer and
+> no guess window — hold both and let go, and you get the chord; click one, and you get that one. The
+> player feels no delay, because the action lands as the thumb comes off the stick. It is also why
+> this is the right pair of buttons for the job: the user's own rule is that stick clicks are too
+> awkward for anything time-critical, and nothing is waiting on a settings toggle.
+
+> **L3 + R3 hands the whole pad back, and hands it back again.** It works whether the intercept is on
+> or off — a switch you could only throw once would leave you at the keyboard to undo it. While the
+> intercept is off the mod reads those two buttons and nothing else, consumes nothing, and changes
+> nothing the game sees: `L3` and `R3` pass through to the area map and the camera recentre. Only the
+> chord answers while off, because only the chord is the way back.
+
+> **THIS IS THE ONE EXCEPTION TO "NO SETTING GETS A PAD BUTTON", WIDENED FROM ONE BINDING TO THREE AT
+> S185, ON THE USER'S INSTRUCTION.** The rule it bends is real — a switch is two presses away through
+> `Start`, and the menu says what it changed and what the new value means. The reachability filter and
+> the audio beacon are the two the user flips constantly mid-play, and the intercept's own kill switch
+> cannot live behind a menu driven by the pad it switches off. `F4`, `F5`, `F7` and the volumes stay
+> menu-only.
 
 ### Mod mode — press Back, then one button
 
 Back says **"Mod"**. The next button is a mod command and the mode ends. Anything unmapped — Back
-again included — says **"Cancelled"**, and so does five seconds of silence, so there is no mode to
-get stuck in.
+again, the D-pad, either shoulder, either stick click — says **"Cancelled"**, and so does five seconds
+of silence, so there is no mode to get stuck in.
 
-> It moved off L3 in Session 174. A stick click cannot be reached without taking your thumb off the
-> stick you are steering with, which is why the mode went a whole session without being tried once.
+| Button | Out of combat | In a fight | Same as |
+|---|---|---|---|
+| X | Party gil | **The enemy: name and HP** | `g` / `;` |
+| Y | Rescan, and say the area name | **Directions to the active target** | `` ` `` / `p` |
+| A | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
+| B | Open or close the mod's settings menu | same | `F8` |
+| Start | Open or close the mod's settings menu | same | `F8` |
 
-| Button | Does | Same as |
-|---|---|---|
-| Start | Open the mod's settings menu | `F8` |
-| A | Describe / Libra | `o` |
-| B | Re-read the last line of dialogue | `t` |
-| X | Rescan, and say the area name | `` ` `` |
-| Y | Describe the current selection | `/` |
-| D-pad Up | License Points | `U` |
-| D-pad Down | Party gil | `g` |
-| D-pad Left / Right | Combat log: older / newer | `,` `.` |
-| L1 | Target readout | `;` |
+> **FIVE BINDINGS, AND THE REST WENT BACK TO THE GAME AT S185.** License Points (`U`), the combat-log
+> step (`,` `.`), the re-read (`t`), the describe (`o`) and the target readout on `L1` all left this
+> table when the user set the layout above. The D-pad and the right stick now mean **one thing
+> everywhere**, and `L1` and `R1` earned permanent Normal-mode homes — a button that changes job
+> depending on a latch is a button the player has to remember the state of. **The keyboard keeps every
+> one of those keys**, where they cost nothing.
 
-> **No setting has a pad button of its own, with one exception.** Combat verbosity, the audio
-> beacon, the availability filter, autodetail and the volumes are all changed in the settings menu,
-> which is Back then Start —
-> and the menu says what it changed and what the new value does. The keyboard shortcuts for them are
-> unchanged. A pad has few buttons and none of them is worth spending on a second route to a switch.
->
-> The exception is the `Controller` switch on L3, and only because it is the way out: reaching the
-> pad's own off switch through a menu you drive with the pad is circular.
+> **`A` is silent with no Esper out, and that silence is an answer.** An Esper absent from the field
+> has no HP to read. It is the same `8` the keyboard sends, so the two devices cannot drift — which
+> also means it inherits `8`'s one context gate: on a shop or equip screen `8` addresses equipment
+> column 5 instead.
+
+> **Mod mode moved off `L3` in Session 174, and stayed on Back at S185.** A stick click cannot be
+> reached without taking your thumb off the stick you are steering with, which is why the mode went a
+> whole session without being tried once.
 
 ### The mod menu, from the pad
 
 While the mod's settings menu is open it owns the pad: D-pad or right stick moves between settings
-and changes the focused one, **A** reads its description, **B**, **Start** or **Back** closes it. Everything
-the pad has no direct binding for is reachable this way — the availability filter, autodetail, the
-volumes, and the `Controller` switch itself.
+and changes the focused one, **A** reads its description, **B**, **Start** or **Back** closes it. From
+the keyboard, `F8` and **`Escape`** both close it (S185). Everything the pad has no direct binding for
+is reachable this way — combat verbosity, autodetail, the availability filter, the volumes, and the
+`Controller` switch itself.
 
 ### What has no pad binding
 
-`F6` (label from the clipboard), `'` (the diagnostic probe), `8` and `9` (equipment columns 5 and 6),
-and `B` / `N` (the Bhujerba shout minigame). The first two are development keys; the rest are
-keyboard-only for now rather than deliberately excluded.
+`F6` (name the selection — it opens a dialog, and a pad cannot type into one), `'` (the diagnostic
+probe), `9` (equipment column 6), `U` (License Points), `t` (re-read), `,` / `.` (the combat-log step),
+`o` (describe — the right stick's Up reaches it, but no button does), `/` (describe the selection),
+`F4`, `F5`, `F7` and the volumes (menu-only by the settings rule above), and `B` / `N` (the Bhujerba
+shout minigame).
+
+Four of those — `U`, `t`, `,` and `.` — **had** pad bindings until S185 and lost them to the user's
+layout; that was a deliberate trim, not an oversight. `8` is no longer on this list: it is **mod + A**.

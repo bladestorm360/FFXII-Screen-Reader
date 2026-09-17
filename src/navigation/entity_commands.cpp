@@ -7,6 +7,7 @@
 #include "navigation/nav_common.h"
 #include "navigation/nav_rva.h"        // TRAP_VISIBLE -- the cycle hides Traps on the game's own latch
 #include "navigation/player_state.h"
+#include "ui/text_prompt.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
@@ -174,65 +175,140 @@ void CmdToggleAvailability() {
     ClearFocusLocked();   // re-anchor to nearest in the new view
 }
 
-// F6 -- name the focused entity with whatever text is on the clipboard.
+// F6 -- name the focused entity in the player's own words.
 //
-// The mod cannot capture typing: it passes the DirectInput buffer to the game as `const` and never
-// swallows a key, so there is no way to run a text field in-game without breaking the read-only input
-// rule. The clipboard sidesteps that entirely -- type the name anywhere, copy it, focus the entity,
-// press F6. Nothing is injected into the game and no game memory is written; the clipboard is an OS
-// resource the mod only reads.
+// THE CLIPBOARD IS GONE (Session 185). It was never the feature; it was the workaround. The mod is
+// read-only on the keyboard -- it inspects the `const` DirectInput buffer the game polls and never
+// swallows a key -- so there was no way to run a text field INSIDE the game, and "type it somewhere
+// else, copy it, come back and press F6" was what that bought. A separate top-level window does not
+// bend that rule at all: typing into a Win32 EDIT control is window-message input and never touches
+// the DirectInput buffer. See `ui/text_prompt.h`.
 //
-// An empty clipboard clears the label, which is how a mistake is undone.
-void CmdLabelFromClipboard() {
+// TWO QUESTIONS, AND WHICH ONE YOU GET IS DECIDED BY THE OBJECT, NOT BY A MODE:
+//   * no custom name yet -> an edit field. OK with text names it; OK with nothing, or Cancel, does
+//     nothing at all. An empty field is no longer how a name is cleared -- that meaning moved to the
+//     confirmation below, where it can be ASKED as a question instead of guessed from a blank.
+//   * already named      -> a Yes/No box asking whether to clear it. Yes puts the object back to
+//     whatever the mod calls it from the game's own data; No leaves it alone. To RENAME, clear it and
+//     press F6 again -- one question per press, and neither can be answered by accident.
+//
+// THE DIALOG DOES NOT RUN HERE. `TextPrompt` puts it on a thread of its own and calls back when it
+// closes, so this function returns immediately and neither the game thread nor the hotkey thread is
+// ever sitting inside a modal loop.
+
+namespace {
+
+// What the callback needs to find its way back to the entity after the dialog closes. Captured BY
+// VALUE under the lock, because the player may have left the map by the time they press OK -- a
+// pointer into the entity vector would be pointing at a rescan that has already happened.
+struct PendingLabel {
+    int          mapId = -1;
+    int16_t      nameIdx = -1;
+    std::wstring key;        // the entity's baseLabel: the label store's identity, never `label`
+    FVec3        pos{};
+    uint8_t      container = 0;
+    uint16_t     slot = 0;
+};
+PendingLabel g_pending;      // one prompt at a time -- TextPrompt::Busy() is the interlock
+
+// Write the label the player chose (or an empty string to clear it) and say what happened. Runs on
+// the prompt's thread; takes the list mutex like every other command in this file.
+void ApplyPendingLabel(const std::wstring& text) {
     std::lock_guard<std::mutex> lk(g_mutex);
-    RescanLocked();
-    FVec3 p;
-    if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
-    RefreshPositionsLocked(p);
-
-    std::vector<size_t> view = FilteredSortedLocked();
-    if (view.empty()) { SpeakNoTargets(); return; }
-    int fi = FindFocusInViewLocked(view);
-    const Entity& e = g_entities[(fi >= 0) ? view[fi] : view[0]];
-
-    // Exits are named by the map script itself and keyed by controller, not by a handle-table slot, so
-    // there is nothing stable to hang a label on. Say nothing rather than pretend it worked.
-    if (!e.sceneObj) {
-        Log::Write("NAV-DIAG", "label: focused entity is a map transition, not a scene object -- no key to store");
+    // THE MAP MUST STILL BE THE ONE THEY WERE STANDING ON. A dialog has no time limit and the store
+    // is keyed by map, so filing a name under a map the player has left would attach their words to
+    // whatever object happened to share the id over there.
+    if (MapNames::CurrentMapId() != g_pending.mapId) {
+        Log::Write("NAV-DIAG", "label: the map changed while the prompt was open -- discarded");
         return;
     }
-
-    std::wstring text;
-    if (OpenClipboard(nullptr)) {
-        if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
-            if (const wchar_t* src = static_cast<const wchar_t*>(GlobalLock(h))) {
-                text = src;
-                GlobalUnlock(h);
-            }
-        }
-        CloseClipboard();
-    }
-    // Trim: a copy out of a text editor usually brings a trailing newline with it.
-    while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n' || text.back() == L' '))
-        text.pop_back();
-    size_t lead = 0;
-    while (lead < text.size() && (text[lead] == L' ' || text[lead] == L'\t')) ++lead;
-    text.erase(0, lead);
-    if (text.size() > 64) text.resize(64);   // it gets SPOKEN every time the entity is announced
-
-    // `baseLabel`, never `label`: by the time the player points at this entity its label may already
-    // carry a " 2" suffix, and keying on the suffixed words would file the label under an identity no
-    // later scan can reproduce.
-    const std::wstring& key = e.baseLabel.empty() ? e.label : e.baseLabel;
-    EntityLabels::SetLabel(MapNames::CurrentMapId(), e.nameIdx, key, e.pos,
-                           e.container, e.slot, text);
+    EntityLabels::SetLabel(g_pending.mapId, g_pending.nameIdx, g_pending.key, g_pending.pos,
+                           g_pending.container, g_pending.slot, text);
     RescanLocked();   // re-label the live list so the confirmation and the cursor agree immediately
 
-    if (text.empty()) {
-        Speech::Output(Phrase::Get(Phrase::Id::LabelCleared));
-    } else {
-        Speech::Output(Phrase::Get(Phrase::Id::LabelledPrefix) + text);
+    if (text.empty()) Speech::Output(Phrase::Get(Phrase::Id::LabelCleared));
+    else              Speech::Output(Phrase::Get(Phrase::Id::LabelledPrefix) + text);
+}
+
+void OnNameEntered(TextPrompt::Result r, const std::wstring& text, void*) {
+    if (r != TextPrompt::Result::Ok) { Log::Write("NAV-DIAG", "label: cancelled"); return; }
+    std::wstring t = text;
+    // Trim: a name pasted out of a text editor usually brings whitespace with it.
+    while (!t.empty() && (t.back() == L'\r' || t.back() == L'\n' || t.back() == L' ' || t.back() == L'\t'))
+        t.pop_back();
+    size_t lead = 0;
+    while (lead < t.size() && (t[lead] == L' ' || t[lead] == L'\t')) ++lead;
+    t.erase(0, lead);
+    if (t.size() > 64) t.resize(64);   // it gets SPOKEN every time the entity is announced
+    // OK on an empty field is NOT a clear any more -- clearing is its own question now, and reading a
+    // blank as one would delete a name on a keypress the player meant as "never mind".
+    if (t.empty()) { Log::Write("NAV-DIAG", "label: empty field -- nothing changed"); return; }
+    ApplyPendingLabel(t);
+}
+
+void OnClearConfirmed(TextPrompt::Result r, const std::wstring&, void*) {
+    if (r != TextPrompt::Result::Ok) {
+        Speech::Output(Phrase::Get(Phrase::Id::ModCancelled));
+        return;
     }
+    ApplyPendingLabel(std::wstring());
+}
+
+} // namespace
+
+void CmdLabelFocus() {
+    // One at a time. Without this a second F6 while the box is up would re-capture the focus behind
+    // the player's back and answer the first dialog with the second entity.
+    if (TextPrompt::Busy()) return;
+
+    std::wstring existing, spoken;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        RescanLocked();
+        FVec3 p;
+        if (!ReadPlayer(p)) { Speech::Output(Phrase::Get(Phrase::Id::PositionUnavailable)); return; }
+        RefreshPositionsLocked(p);
+
+        std::vector<size_t> view = FilteredSortedLocked();
+        if (view.empty()) { SpeakNoTargets(); return; }
+        int fi = FindFocusInViewLocked(view);
+        const Entity& e = g_entities[(fi >= 0) ? view[fi] : view[0]];
+
+        // Exits are named by the map script itself and keyed by controller, not by a handle-table
+        // slot, so there is nothing stable to hang a label on. Say nothing rather than pretend.
+        if (!e.sceneObj) {
+            Log::Write("NAV-DIAG", "label: focused entity is a map transition, not a scene object -- no key to store");
+            return;
+        }
+
+        // `baseLabel`, never `label`: by the time the player points at this entity its label may
+        // already carry a " 2" suffix, and keying on the suffixed words would file the name under an
+        // identity no later scan can reproduce.
+        g_pending.mapId     = MapNames::CurrentMapId();
+        g_pending.nameIdx   = e.nameIdx;
+        g_pending.key       = e.baseLabel.empty() ? e.label : e.baseLabel;
+        g_pending.pos       = e.pos;
+        g_pending.container = e.container;
+        g_pending.slot      = e.slot;
+
+        existing = EntityLabels::LabelFor(g_pending.mapId, g_pending.nameIdx,
+                                          g_pending.key, g_pending.pos);
+        spoken   = e.label;
+    }
+    // EVERYTHING BELOW IS OUTSIDE THE LOCK. Raising a window while holding the entity-list mutex
+    // would hand a UI thread a lock the game-side readers want, for as long as the player types.
+
+    if (!existing.empty()) {
+        TextPrompt::AskYesNo(
+            L"Clear custom name",
+            L"\"" + existing + L"\" is your own name for this object.\n\n"
+            L"Clear it and go back to the name the game gives it?",
+            &OnClearConfirmed, nullptr);
+        return;
+    }
+    TextPrompt::AskText(L"Name this object",
+                        L"Your name for \"" + spoken + L"\":",
+                        std::wstring(), &OnNameEntered, nullptr);
 }
 
 // S181. The cursor move a guide needs: put the focus on the one entity a caller can identify, and

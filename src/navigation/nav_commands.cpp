@@ -152,7 +152,7 @@ void OnNavKey(int vk) {
         case VK_OEM_MINUS:  EntityList::CmdPrevCategory();    break;  // -  previous category
         case VK_OEM_PLUS:   EntityList::CmdNextCategory();    break;  // =  next category
         case VK_F5:         EntityList::CmdToggleAvailability(); break; // F5 all <-> story-gated
-        case VK_F6:         EntityList::CmdLabelFromClipboard(); break;  // F6 label focus from clipboard
+        case VK_F6:         EntityList::CmdLabelFocus();       break;  // F6 name/clear the focused entity
         case VK_OEM_2:      EntityList::CmdDescribeCurrent(); break;  // /  describe current
         // `;` is context-gated, not double-bound: the battle reader is STRUCTURALLY silent in the
         // field (it needs a commitment or an open select UI), so its false return is the field

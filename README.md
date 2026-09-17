@@ -77,8 +77,8 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 * M, Numpad Plus, or Z: display map.
 * H, Numpad 0, or X: reset camera.
 * Left Shift: toggle walk and run.
-* 1: the same as L1 on a controller; cycles game speed. In a battle target list it switches target group instead — Foes, Party, Reserve, Allies — and the mod speaks the group you land on.
-* 3: the same as R1 on a controller; switches target group the other way in a battle target list.
+* 1: cycles game speed. In a battle target list it switches target group instead — Foes, Party, Reserve, Allies — and the mod speaks the group you land on. On a controller this used to be L1; the mod has taken that button, so on a pad this is the keyboard key for it.
+* 3: switches target group the other way in a battle target list.
 * F1, F2, F3: game speed — normal, double, quadruple.
 
 ### Mod
@@ -97,7 +97,7 @@ The mod reserves none of the game's keys. Every mod key is pressed on its own �
 * P: turn-by-turn directions to the target the game currently has selected.
 * F4: switch combat verbosity between Normal and Verbose — see the mod menu below.
 * F5: switch between listing everything and listing only what the story has opened up. It says which mode it is in and how many objects are left. Everything is listed by default, so nothing is ever hidden unless you ask for it.
-* F6: give the selected object your own name, taken from the clipboard.
+* F6: give the selected object your own name. A box opens for you to type it in. If the object already has a name you gave it, F6 asks instead whether you want to clear it.
 * F7: switch Auto detail on or off — see the mod menu below.
 * F11: turn the audio beacon on or off. It only responds to F11 on its own — hold Shift, Ctrl or Alt and it does nothing, so Shift+F11 stays yours for your screen reader.
 * F8: open or close the mod menu.
@@ -128,7 +128,13 @@ F11 turns the route beacon off and on (F11 on its own — not with Shift, Ctrl o
 
 Where several people or objects share one name the mod numbers them — Rabanastran 1, Rabanastran 2 — and those numbers now stay put, so the same person keeps the same number for as long as you are on that map, and again when you come back. F6 lets you replace that with words of your own: the innkeeper, quest guy, the stairs home.
 
-Copy the name you want in any other program — Notepad, a browser, an editor — then select the object with \[ and ] and press F6. The mod reads back "Labelled" and your name, and from then on that is what it calls the object, in the list, in descriptions and in directions. Pressing F6 with an empty clipboard clears the name again.
+Select the object with \[ and ], then press F6. A small box opens with a text field in it. Type the name you want and press Enter, or Tab to OK and press it. The mod reads back "Labelled" and your name, and from then on that is what it calls the object, in the list, in descriptions and in directions. Escape, or Cancel, closes the box and changes nothing.
+
+While that box is open the game does not receive anything you type, and neither does the mod — your keys go to the text field and nowhere else. When you close it the game gets the keyboard straight back.
+
+**To clear a name you have given, press F6 on that object again.** Because it already has your name on it, you get a Yes/No question instead of a text field: clear it and go back to what the game calls the object? Yes clears it, No leaves it alone, and No is what happens if you just press Enter. **To rename something, clear it first and then press F6 again** — one question per press, so neither a new name nor a cleared one can happen by accident.
+
+**Most people and objects in FFXII have no name until you talk to them, and that is the game working correctly, not the mod failing.** The game gives an NPC their name at the point in the story where you meet them, so someone who reads as "Rabanastran" now may well introduce themselves the first time you speak to them, and from then on the mod uses the real name. Naming things yourself is meant for the ones that stay nameless — an unmarked door you keep needing, a shopkeeper the game never introduces, the staircase back to the inn. Try talking to someone once before you decide they need a name from you.
 
 Names are saved and survive reloads, area changes and closing the game. They are kept in your own user folder (AppData\\Local\\FFXII-Screen-Reader), not in the game folder, so nothing in the game install is touched.
 
@@ -219,42 +225,50 @@ Worth knowing before you detour in Destiny's March: opening any of the eight doo
 
 #### Controller
 
-The mod reads a plugged-in controller as well as the keyboard. It is on by default. The Controller row in the mod menu below switches it off, and so does clicking the left stick in — L3 — which says "Controller" and the new setting. Off passes every button and stick straight to the game.
+The mod reads a plugged-in controller as well as the keyboard. It is on by default. The Controller row in the mod menu below switches it off, and so does clicking **both sticks in at once** — L3 and R3 together — which says "Controller" and the new setting. Off passes every button and stick straight to the game. That pair works whether the mod is reading the pad or not, so it always hands the pad back and always takes it again; you never have to reach the keyboard to undo it.
 
-L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken.
+L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken in normal play.
 
-* Right stick: Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera.
-* D-pad, on the field only: party members one, two, three and your guest, clockwise from Up. Everywhere else, battle included, it stays the game's cursor.
-* R1: turn-by-turn directions to the selected object and the audio beacon. In a fight it gives directions to the enemy your party is targeting instead. It goes to the game in menus and while a targeting cursor is up.
-* Back: mod mode. It says "Mod", the next button is a mod key, and it expires after five seconds. This takes the game's map toggle.
-* L3: the controller off and on switch above.
+The mod takes four things the game also uses, and each was a deliberate trade: **L1** (game speed — still on the keyboard's 1, 2 and 3, and in the options menu), **Back** (the map toggle), **L3** (the area map) and **R3** (recentre the camera). Everything else it holds, the game leaves free.
+
+* **Right stick:** Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera.
+* **D-pad, on the field only:** party members one, two, three and your guest, clockwise from Up. Everywhere else, battle included, it stays the game's cursor.
+* **L1:** what you are about to interact with — the person or object the game itself would act on if you pressed Confirm. In a fight it reads the enemy your party is on, with its HP.
+* **R1:** turn-by-turn directions to the selected object, and the audio beacon. **This works in battle too**, so you can pick an exit and be led out of a fight you do not want.
+* **Back:** mod mode. It says "Mod", the next button is a mod key, and it expires after five seconds.
+* **L3:** the reachability filter on and off. **R3:** the audio beacon on and off. Both say which setting they changed and what it is now.
+* **L3 and R3 together:** the controller off and on switch above.
+
+L1 and R1 both go to the game in menus and while a targeting cursor is up — that is where the game uses them to switch target group, and the mod reads the group out for you instead of taking the button.
 
 In mod mode, press Back and then:
 
-* Start: open or close the mod menu. A: describe. B: repeat the last line of dialogue.
-* X: rescan and announce the area. Y: describe the target the game has selected.
-* D-pad: Up License Points, Down your gil, Left and Right older and newer combat log lines.
-* L1: read the current target.
+* **X:** your gil. In a fight, the enemy's name and HP instead.
+* **Y:** rescan and announce the area. In a fight, directions to the enemy your party is targeting instead.
+* **A:** the summoned Esper's HP. Silent when you have no Esper out.
+* **B:** open or close the mod menu. **Start** does the same.
 * Anything else ends mod mode and says "Cancelled".
 
-While the mod menu is open, the D-pad and the right stick move between settings and change them, A reads a description, and B, Start or Back closes it.
+While the mod menu is open, the D-pad and the right stick move between settings and change them, A reads a description, and B, Start or Back closes it — and so does Escape on the keyboard.
+
+Everything else the mod can do is on the keyboard, and the mod menu reaches every setting. A controller has few buttons and the ones above are the ones worth spending.
 
 #### The mod menu (F8)
 
-F8 opens the mod's own settings, and F8 again closes it. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
+F8 opens the mod's own settings. F8 again closes it, and so does Escape. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
 
 The settings it holds:
 
 * Combat verbosity — Normal or Verbose. Normal speaks enemy defeat and EXP, party member low HP and KO, and loot drops. Verbose speaks everything Normal does, and also tells you when an enemy is readying an ability or beginning to cast a spell, which is your window to interrupt or move. Normal is the default.
-* Audio beacon — On or Off. The repeating sound that leads you along the route, described under Navigation above. On is the default.
+* Audio beacon — On or Off. The repeating sound that leads you along the route, described under Navigation above. On is the default. On a controller, clicking the right stick in changes it without opening the menu.
 * Audio beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Target beacon — On or Off. The separate sound that tracks the enemy your party is fighting, described above. On is the default.
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Auto detail — Off or On. Off reads the extra detail only when you ask for it: the equipment comparison on 4 to 9, and Libra on O. On also reads it as you move — the equipment comparison as you go down a shop list, and the Libra readout as you move the target cursor between enemies — after the short line, never instead of it. Both keys keep working either way. Off is the default.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: auto-walk watches the keyboard alone for that, and the left stick is passed straight to the game and never read, so pushing the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
-* Controller — On or Off. Whether the mod reads your controller, set out in full under Controller above. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support. Clicking the left stick in changes this setting without opening the menu.
+* Controller — On or Off. Whether the mod reads your controller, set out in full under Controller above. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support. Clicking both sticks in at once changes this setting without opening the menu.
 * Diacritics override — Standard or Polish translation. Which font the game is running, which is what decides how accented letters are read. On Standard the mod works it out from the game itself, and that covers the unmodified game in any language it shipped in. Set it to Polish translation if you are playing the PL fan patch and accented letters come out as the wrong letter — that setting is remembered and always wins. Standard is the default.
-* Unreachable filter — Off or On. On hides anything the route key has answered No path to, until a door opens, a waterfall moves or you leave the area. Enemies are always listed. Off is the default, and lists everything.
+* Unreachable filter — Off or On. On hides anything the route key has answered No path to, until a door opens, a waterfall moves or you leave the area. Enemies are always listed. Off is the default, and lists everything. On a controller, clicking the left stick in changes it without opening the menu.
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 * Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.

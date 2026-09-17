@@ -31,9 +31,13 @@ void SetLicensePointsCallback(HotkeyCallback cb);
 // it is safe off the game thread. `g` is free in this game's bindings (Docs/Controls.md).
 void SetGilCallback(HotkeyCallback cb);
 
-// S174. Fired (input thread) when the pad's `L3` asks for the intercept off or on; ModMenu
-// registers `ToggleController`. A callback like every other handler here: this file knows no menu.
-void SetControllerToggleCallback(HotkeyCallback cb);
+// S174, widened S185. Fired (input thread) when a pad thumb-click asks for one of the mod's own
+// settings to flip: the reachability filter on `L3`, the audio beacon on `R3`, or the pad intercept
+// itself on the two clicked together. `settingId` is a `ModMenu::SettingId` cast to int -- an int, so
+// this file does not have to agree with ModMenu about the enum, exactly as `DispatchSpeakPhrase`
+// does with `Phrase::Id`. A callback like every other handler here: this file knows no menu.
+typedef void (*SettingToggleCallback)(int settingId);
+void SetSettingToggleCallback(SettingToggleCallback cb);
 
 // Callback fired (on the input thread) when the user presses the "re-read last line"
 // key (`t`), while the game window is foregrounded. The message reader registers a
@@ -117,10 +121,11 @@ void DispatchModKey(int vk);
 // callback. Phrasebook strings are static, so nothing is allocated or owned across the post.
 void DispatchSpeakPhrase(int phraseId);
 
-// S174: toggle the gamepad intercept, from the pad poll. Only posts, like `DispatchSpeakPhrase`.
-// Not a `DispatchModKey` VK: the Controller row has no keyboard shortcut to name it by. The caller
-// runs it ABOVE its own `ControllerOn()` gate, which would otherwise eat the button that undoes it.
-void DispatchToggleController();
+// S174, widened S185: flip one of the mod's own settings from the pad poll. Only posts, like
+// `DispatchSpeakPhrase`. Not a `DispatchModKey` VK -- these rows have no keyboard shortcut to name
+// them by, and the Controller row in particular is run ABOVE the pad router's own `ControllerOn()`
+// gate, which would otherwise eat the button that undoes it.
+void DispatchToggleSetting(int settingId);
 
 // Wall-clock milliseconds (GetTickCount64) of the last key-down event.
 // 0 if no event has been observed since Init.

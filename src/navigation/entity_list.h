@@ -82,7 +82,7 @@ void CmdPrevCategory();       // -
 void CmdToggleAvailability(); // F5  (All <-> Story-gated)
 void CmdDescribeCurrent();    // /  (cardinal bearing + distance to the selection)
 void CmdRescan();             // `
-void CmdLabelFromClipboard(); // F6 name the focused entity with whatever is on the clipboard
+void CmdLabelFocus();         // F6 name the focused entity -- an edit field, or a clear-it prompt
 
 // Live world position + label of the current route target (the focused object, else
 // the nearest in the active filter). False if not on the field or nothing is listed.

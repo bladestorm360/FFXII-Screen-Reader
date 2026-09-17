@@ -296,6 +296,17 @@ bool OnMenuNavKey(int vk) {
             g_cursor = LastVisible();
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
+        // S185, user instruction: Escape is the habit every other settings screen trains, so it
+        // closes this one too. `F8`, and the pad's B / Start / Back, still close it -- this is one
+        // more way out of a menu, never the only one.
+        //
+        // It is claimed ONLY while the menu is open. The `return false` at the top of this function
+        // is what makes that true: with the menu shut the key is offered to the status buffer and the
+        // Clan Primer, both of which ignore it, and nothing happens. As always the mod does not
+        // swallow it, so if the game has its own use for Esc that still happens as well.
+        case VK_ESCAPE:
+            Toggle();
+            return true;
         // Left and right are now DIRECTIONAL. They used to both advance, on the reasoning that every
         // setting was two-valued so "previous" and "next" were the same move -- with a note to widen
         // it when a setting with three or more values arrived. Volume is that setting.
@@ -343,13 +354,16 @@ void ApplyTextGlyphs() {
 
 } // namespace
 
+// Defined below, beside ToggleController -- forward-declared here because Init registers it.
+static void OnPadToggleSetting(int settingId);
+
 bool Init() {
     if (g_initialized) return true;
     Load();                                     // seeds defaults, then overlays the stored file
     ApplyTextGlyphs();                          // before any reader can decode a string
     InputTracker::SetModMenuNavCallback(&OnMenuNavKey);
     InputTracker::SetModMenuDescribeCallback(&OnDescribe);
-    InputTracker::SetControllerToggleCallback(&ToggleController);
+    InputTracker::SetSettingToggleCallback(&OnPadToggleSetting);
     g_initialized = true;
     for (int i = 0; i < kCount; ++i) LogState("initialized", i);
     return true;
@@ -359,7 +373,7 @@ void Shutdown() {
     if (!g_initialized) return;
     InputTracker::SetModMenuNavCallback(nullptr);
     InputTracker::SetModMenuDescribeCallback(nullptr);
-    InputTracker::SetControllerToggleCallback(nullptr);
+    InputTracker::SetSettingToggleCallback(nullptr);
     g_open.store(false, std::memory_order_relaxed);
     g_initialized = false;
 }
@@ -470,6 +484,18 @@ void Adjust(SettingId id, int delta) { AdjustImpl(id, delta, /*speakName=*/false
 // leave a blind player guessing WHICH thing just went off, at the exact moment their pad changed
 // behaviour. "Controller, Off" costs one word and answers it.
 void ToggleController() { AdjustImpl(SettingId::Controller, +1, /*speakName=*/true); }
+
+// S185. The pad's two thumb-clicks and their chord, arriving as an int from a file that knows no
+// enum of ours. ONE handler for all three rather than three callbacks: what a thumb-click does is a
+// question about the pad scheme, and the pad scheme is the only thing that should have to answer it.
+//
+// It speaks the NAME as well as the value, which the menu's own Left/Right deliberately does not.
+// Inside the menu the player has just heard which row they are on; out here there is no row and no
+// screen, so "On" alone would be a value with nothing attached to it.
+static void OnPadToggleSetting(int settingId) {
+    if (settingId < 0 || settingId >= kCount) return;
+    AdjustImpl(static_cast<SettingId>(settingId), +1, /*speakName=*/true);
+}
 
 // (`SetSilently` lived here until Session 115. It set a value without speaking it -- the one caller
 // was sneak assist's auto-off on a map change -- and went with the toggle that needed it. `Adjust`

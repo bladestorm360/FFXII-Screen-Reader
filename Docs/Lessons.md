@@ -35,11 +35,11 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
-| editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
+| editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -569,6 +569,21 @@ values is also the detector's own fallback.
 ## Editing code that already works
 `TAG:refactor`
 
+### L-94 TWO WRITERS TO A VALUE SOMETHING ELSE REBUILDS FROM SCRATCH IS NOT A RACE — IT IS A LOSS
+**Before adding a write to shared output, find out whether a later step recomputes that output from an
+ORIGINAL it kept. If it does, the earlier write is discarded — not sometimes, but whenever the later
+step runs.**
+**Why:** S185. `PadRouter::OnPoll` ends with `state->pad.buttons = buttons & ~consume`, rebuilding the
+word from the `buttons` local it captured at the top. A new thumb-click block above it wrote
+`state->pad.buttons` directly, and that write was silently undone on **every poll that also consumed
+anything else** — which is most of them. It compiled clean, it was correct in isolation, and it would
+have read as an intermittent "the pad sometimes opens the area map" bug dependent on what else the
+player happened to be holding.
+**The fix is structural, not a reorder:** one accumulator, one write. Hoisting `consume` above the new
+block made the two writers into one.
+**The tell:** you are writing to a field, and somewhere below, a line assigns that same field from a
+snapshot taken before you. Reordering hides it for now; the accumulator removes it.
+
 ### L-27 MOVING ONLY THE ARM AND THE COMPARE CHANGES THE PREDICATE
 **When converting a counter to a clock, port the DISARM too.**
 **Why:** S152. The beacon's stray counter is zeroed the instant the player is back on route, so it
@@ -842,6 +857,23 @@ words. Confirming it would have meant unsolving a finished puzzle. **Turn-by-tur
 entire point of the feature; a statue reporting only solved / not-solved is the feature not working.**
 Weigh the cost of the doubt against the cost of the gap: the 0.98 bar is there to stop wrong
 *assertions*, not to license shipping something that does not do the job.
+
+### L-93 A CONSTRAINT ON ONE MECHANISM IS NOT A CONSTRAINT ON THE GOAL
+**When a rule blocks the obvious way to do something, write down which one the rule actually names —
+the mechanism, or the outcome. A workaround that outlives its premise looks exactly like a design.**
+**Why:** S185, and it had stood for a hundred and twenty sessions. `F6` named a field entity from the
+CLIPBOARD, and `Docs/Controls.md` justified it in one sentence that was true and one that did not
+follow: *"the mod still never swallows or injects a key ... so there is still no way to run a text
+field in-game. That is why labelling entities (F6) reads the CLIPBOARD instead of capturing typing."*
+The rule forbids **swallowing a DirectInput key**. A text field does not have to be inside the game: a
+Win32 EDIT control in a window of the mod's own takes ordinary window-message input and never touches
+the DirectInput buffer, so the read-only rule is not weakened by one byte. The premise was about a
+mechanism; the conclusion was stated about the goal, and "type it in Notepad, copy it, come back" was
+carried for over a year as though it were the design.
+**The tell:** the workaround is described in the docs with a *because* that names a rule rather than a
+requirement. Re-read the rule and ask what noun it governs. Here the answer was four words long.
+**Not a licence to route around a rule.** The rule is untouched — the mod still passes the DirectInput
+buffer as `const`. What changed is that it was being applied to a case it never covered.
 
 ### L-71 ⟲ A CORRECTION APPLIED TO ONE MEMBER OF A DIVERGENT PAIR IS NOT APPLIED TO ITS SIBLING
 **When you learn that two things have different layouts, fix EVERY reader of both, not the one that

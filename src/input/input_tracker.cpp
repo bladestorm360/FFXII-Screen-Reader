@@ -2,6 +2,7 @@
 #include "input/pad_hook.h"
 #include "core/hooks.h"
 #include "core/logger.h"
+#include "ui/text_prompt.h"
 #include "core/mem_read.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
@@ -31,10 +32,11 @@ constexpr UINT WM_GIL       = WM_APP + 9;   // `g` -> speak party gil total (fie
 constexpr UINT WM_PADSAY    = WM_APP + 10;  // wParam = Phrase::Id -> speak it from THIS thread. The
                                             // pad poll must not speak on the game's input thread;
                                             // see InputTracker::DispatchSpeakPhrase in the header.
-constexpr UINT WM_PADCTRL   = WM_APP + 11;  // S174: `L3` -> flip the Controller row. Its own message
-                                            // rather than a DispatchModKey VK: the Controller row
-                                            // has no keyboard shortcut, so reusing the key table
-                                            // would mean inventing a phantom key to name it by.
+constexpr UINT WM_PADSET    = WM_APP + 11;  // wParam = ModMenu::SettingId -> flip that row and speak
+                                            // its name + new value. Its own message rather than a
+                                            // DispatchModKey VK: these rows have no keyboard
+                                            // shortcut, so reusing the key table would mean
+                                            // inventing a phantom key to name each of them by.
 
 // Input diagnostics (LL-hook key probe + the [ vs ] check). Input is confirmed
 // working via the DirectInput path, so these are OFF; flip to true to re-diagnose.
@@ -54,7 +56,7 @@ InputTracker::HotkeyCallback g_describeCb = nullptr;
 InputTracker::HotkeyCallback g_rereadCb = nullptr;
 InputTracker::HotkeyCallback g_lpCb = nullptr;
 InputTracker::HotkeyCallback g_gilCb = nullptr;
-InputTracker::HotkeyCallback g_ctrlToggleCb = nullptr;
+InputTracker::SettingToggleCallback g_settingToggleCb = nullptr;
 InputTracker::NavKeyCallback g_navKeyCb = nullptr;
 InputTracker::MenuNavCallback g_menuNavCb = nullptr;
 // First refusal on arrows/Home/End and on `o` — see the header. Both decline while the mod menu is
@@ -159,6 +161,16 @@ constexpr int DIK_F4 = 0x3E, DIK_F5 = 0x3F, DIK_F6 = 0x40, DIK_F7 = 0x41, DIK_F8
 // Ctrl/Alt scan codes for the BARE-KEY guard below. (DIK_LSHIFT / DIK_RSHIFT are already declared
 // with the movement keys above.)
 constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0xB8;
+// Escape closes the mod's own menu (Session 185, user instruction). It is dispatched ONLY as a
+// virtual-buffer nav key, and ModMenu is the only consumer that answers it -- with the menu shut
+// every reader declines and the press does nothing on our side.
+//
+// THIS IS NOT A CLAIM THAT ESCAPE IS FREE (L-51). The game's Controls screen lists an action it
+// calls "Escape" bound to Left Ctrl, which says nothing about the physical Esc key, and that screen
+// has already been caught hiding a binding once (`F9`). The mod cannot swallow a key, so if the
+// game does own Esc, both things happen -- which is the same accepted cost the arrow keys carry
+// inside this menu, and it only applies while the menu is open.
+constexpr int DIK_ESCAPE = 0x01;
 // Windows keys, for the same guard: Win+F-key is a shell chord and belongs to the shell.
 constexpr int DIK_LWIN = 0xDB, DIK_RWIN = 0xDC;
 // DIK_SPACE / DIK_RETURN are gone with the Confirm observation. The mod has no reason to watch the
@@ -169,7 +181,7 @@ constexpr int DIK_LWIN = 0xDB, DIK_RWIN = 0xDC;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[28]{};   // 0-15 + 20-27 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[29]{};   // 0-15 + 20-28 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -321,11 +333,13 @@ DWORD WINAPI InputThread(LPVOID) {
             // A phrasebook line the pad router asked for (mod mode entered / cancelled). Interrupts,
             // because it is an answer to a button the player pressed a moment ago.
             Speech::Output(Phrase::Get(static_cast<Phrase::Id>(m.wParam)), true);
-        } else if (m.message == WM_PADCTRL) {
-            // `L3` -> the pad intercept's own kill switch. A callback like every other handler here:
-            // this file knows no reader and no menu, and the pad must not make it the exception.
-            InputTracker::HotkeyCallback cb = g_ctrlToggleCb;
-            if (cb) cb();
+        } else if (m.message == WM_PADSET) {
+            // A pad thumb-click asking for one of the mod's own settings to flip -- the reachability
+            // filter, the audio beacon, or the intercept's own kill switch. A callback like every
+            // other handler here: this file knows no reader and no menu, and it names the setting by
+            // an int so it does not have to agree with ModMenu about the enum.
+            InputTracker::SettingToggleCallback cb = g_settingToggleCb;
+            if (cb) cb(static_cast<int>(m.wParam));
         } else if (m.message == WM_MENUNAV) {
             // Arrows + Home/End -> virtual-buffer nav (status screen). Offer to the buffer first; for
             // Home/End (lParam != 0) fall through to the combat-log nav path when it declines.
@@ -409,7 +423,7 @@ void Shutdown() {
 void SetDescribeCallback(HotkeyCallback cb) { g_describeCb = cb; }
 void SetLicensePointsCallback(HotkeyCallback cb) { g_lpCb = cb; }
 void SetGilCallback(HotkeyCallback cb) { g_gilCb = cb; }
-void SetControllerToggleCallback(HotkeyCallback cb) { g_ctrlToggleCb = cb; }
+void SetSettingToggleCallback(SettingToggleCallback cb) { g_settingToggleCb = cb; }
 void SetRereadCallback(HotkeyCallback cb) { g_rereadCb = cb; }
 void SetNavKeyCallback(NavKeyCallback cb) { g_navKeyCb = cb; }
 void SetMenuNavCallback(MenuNavCallback cb) { g_menuNavCb = cb; }
@@ -446,13 +460,21 @@ void DispatchSpeakPhrase(int phraseId) {
     PostThreadMessageW(g_threadId, WM_PADSAY, static_cast<WPARAM>(phraseId), 0);
 }
 
-void DispatchToggleController() {
+void DispatchToggleSetting(int settingId) {
     if (!g_threadId) return;
-    PostThreadMessageW(g_threadId, WM_PADCTRL, 0, 0);
+    PostThreadMessageW(g_threadId, WM_PADSET, static_cast<WPARAM>(settingId), 0);
 }
 
 void FeedDInputKeyboard(const unsigned char* dik) {
     if (!dik || !g_threadId) return;
+
+    // A PROMPT IS A KEYBOARD (Session 185). While one of the mod's own dialogs is up the player is
+    // typing into a Win32 edit field, and the buffer below is whatever the game last polled before it
+    // lost focus. Run the whole edge pass against ZEROS rather than returning early: returning would
+    // leave a key that was down when the box opened still armed, so it would fire the instant the box
+    // closed. Zeros release every edge cleanly and dispatch nothing.
+    static const unsigned char kNoKeys[256] = {};
+    if (TextPrompt::Busy()) dik = kNoKeys;
     if (!g_dinputActive.exchange(true)) {
         Log::Write("INPUT", "DirectInput keyboard feed active — hotkeys via the game's own poll");
         // DInput now owns dispatch — retire the redundant global WH_KEYBOARD_LL hook
@@ -512,10 +534,15 @@ void FeedDInputKeyboard(const unsigned char* dik) {
 
     DInputEdge(VK_F4,         g_extraDown[14], bareF(DIK_F4),  true);  // F4 combat verbosity
     DInputEdge(VK_F5,         g_extraDown[15], bareF(DIK_F5),  true);  // F5 all/story-gated
-    DInputEdge(VK_F6,         g_extraDown[20], bareF(DIK_F6),  true);  // F6 label from clipboard
+    DInputEdge(VK_F6,         g_extraDown[20], bareF(DIK_F6),  true);  // F6 name/clear the selection
     DInputEdge(VK_F7,         g_extraDown[27], bareF(DIK_F7),  true);  // F7 autodetail
     DInputEdge(VK_F8,         g_extraDown[21], bareF(DIK_F8),  true);  // F8 mod menu
     DInputEdge(VK_F11,        g_extraDown[22], bareF(DIK_F11), true);  // F11 audio beacon on/off
+    // Escape -> the mod menu's close. Bare press only, on the same guard as the F-keys: Alt+Esc
+    // and Ctrl+Esc belong to the shell. `false` = no combat-log fallback, so outside the menu it
+    // reaches the virtual buffers, is declined by all of them, and ends there.
+    DInputMenuNavEdge(VK_ESCAPE, g_extraDown[28],
+                      !fkeyModifierHeld && (dik[DIK_ESCAPE] & 0x80) != 0, false);
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     DInputEdge(VK_OEM_7,      g_extraDown[3],(dik[DIK_APOSTROPHE] & 0x80) != 0, true);  // '  diagnostic

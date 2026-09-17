@@ -121,14 +121,40 @@ battle job needs a targeting cursor up, which the router classifies `FieldBusy` 
 > **A survey line is only evidence when the game word's moving bit corresponds to the control named**,
 > and that comparison was not possible until S174 added `raw=`.
 
-### Amendment to the intercept's "off" guarantee (S174)
+### Amendment to the intercept's "off" guarantee (S174, restated S185)
 
 `CLAUDE.md`'s second input-write exception said `PadRouter::OnPoll` "returns on its first line" with
-the `Controller` row off. It now returns on the FOURTH: foreground check, edge bookkeeping, the `L3`
-kill-switch test, then the gate. **The guarantee that matters is unchanged** — with the intercept off
-the mod writes nothing, so the `XINPUT_STATE` the game reads is byte-identical to an unmodded run.
-What changed is that the mod still READS one bit while off, which is what lets `L3` switch it back
-on. A switch that could only be thrown once is not an escape hatch.
+the `Controller` row off. It now returns on the FIFTH: foreground check, edge bookkeeping, the prompt
+check, the thumb-click block, then the gate. **The guarantee that matters is unchanged** — with the
+intercept off the mod writes nothing, so the `XINPUT_STATE` the game reads is byte-identical to an
+unmodded run. What changed is that the mod still READS two bits while off, which is what lets the
+`L3` + `R3` chord switch it back on. A switch that could only be thrown once is not an escape hatch.
+
+**S185 moved the kill switch from `L3` alone to `L3` + `R3` together**, because the user's layout
+spends the two clicks singly on the reachability filter and the audio beacon. The consume rule while
+off is unchanged and is what keeps the guarantee literal: **nothing is consumed while the intercept is
+off**, so `L3` and `R3` reach the game's area map and camera recentre exactly as they would with no
+mod installed. Only the chord answers while off, because only the chord is the way back.
+
+**Both singles and the chord resolve on the FALLING edge.** That is not a stylistic choice — it is
+what makes one pair of buttons carry three meanings with no timer. Edge-triggering all three on the
+press is impossible: whichever button went down first would have acted before the second arrived, so
+every chord would be preceded by a spurious single. The latch (`thumbsTogether`) is set the moment
+both bits are down together and survives until both are up, so press order and release order are both
+irrelevant; `chordFired` stops the second release from firing the chord twice.
+
+### A mod dialog stands both input paths down (S185)
+
+While `TextPrompt::Busy()` — the `F6` naming field or its clear-confirmation — `FeedDInputKeyboard`
+runs its whole edge pass against a **zeroed** 256-byte buffer, and `PadRouter::OnPoll` returns early
+after carrying its edge state forward. Two details, both learned from the same failure shape:
+
+- **Zeros, not an early return, on the keyboard side.** Returning would leave a key that was held when
+  the box opened still armed in `g_extraDown`, and it would fire on the poll after the box closed.
+  Zeros release every edge cleanly and dispatch nothing.
+- **The pad's `prevThumbs` is carried forward before the early return**, for the same reason in the
+  other direction: the chord resolves on a falling edge, so a stale `prevThumbs` would turn a click
+  released while the player was typing into a toggle the instant the dialog closed.
 
 ## Locale Detection — CORRECTED APPROACH (2026-05-05)
 

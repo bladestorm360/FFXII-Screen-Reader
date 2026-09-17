@@ -15,7 +15,7 @@
 // CLAUDE.md's centralization rule, and it is also what makes every future mod key reachable from the
 // pad without touching this file.
 //
-// ---- THE SCHEME (Session 173, revised 174 from the first play pass) ------------------------------
+// ---- THE SCHEME (Session 173, revised 174, rebuilt 185 to the user's own layout) ---------------
 //
 // WHAT FFXII ITSELF SPENDS, which is what the scheme had to be built around: L1 Speed mode · L2 zoom,
 // and lock-on in a fight · L3 area map · R2 map zoom, and hold-to-flee in a fight · R3 recentre
@@ -33,29 +33,39 @@
 //                       behaves identically, because it cannot swallow a key at all. Combat is on
 //                       this side of the line: a fight is always one command menu away, and party
 //                       slots are not worth costing the player that cursor.
-//   R1            THE ROUTE KEY, and the second context-gated control. Field: route + audio beacon
-//                       (`\`). Battle: route to the ACTIVE TARGET (`p`) -- the one `;` already
-//                       speaks for, no battle menu needed, and not the game's L2 lock-on. Passed
-//                       through in menus and with a targeting cursor up, which is where the game's
-//                       own R1 (switch the target list to Reserve) lives.
+//   L1            THE INTERACT READOUT (`;`) -- what am I about to talk to, open or hit, and in a
+//                       fight the enemy's name and HP. S185 took it from the game's Speed mode at
+//                       the user's instruction: game speed is reachable from the options menu and
+//                       from the keyboard, and pad buttons are too scarce to spend one on it.
+//   R1            THE ROUTE KEY (`\`), in every context -- route to the current selection and start
+//                       the beacon. S185 stopped it changing meaning in a fight: the route a player
+//                       most needs mid-combat is a way OUT, and sending R1 to `p` there meant the
+//                       one context where escaping matters was the one where the route key aimed at
+//                       the enemy. `p` moved to mod + Y.
 //   Back          arm mod mode. Speaks "Mod". Costs the game's map toggle, knowingly.
-//   L3            switch the intercept off or on. Speaks "Controller, <value>".
+//   L3            reachability filter on/off.   R3   audio beacon on/off.
+//   L3 + R3       switch the intercept off or on. Speaks "Controller, <value>".
+//
+//   BOTH SHOULDERS PASS THROUGH IN A MENU AND UNDER A TARGETING CURSOR, which is what keeps the
+//   battle target list intact: there the context is FieldBusy, so the game keeps L1 and R1 as its
+//   Foes / Party / Reserve / Allies group step -- the switch S184 built the spoken titles for.
 //
 // MOD MODE -- armed by Back, spends itself on the NEXT button, expires after 5 s.
-//   Start  mod menu (`F8`)          A  describe (`o`)        B  re-read line (`t`)
-//   X      rescan + area (`` ` ``)  Y  describe target (`/`)
-//   D-pad  Up License Points (`U`) · Down gil (`g`) · Left/Right combat log older/newer (`,` `.`)
-//   L1     target readout (`;`)
-//   Anything else -- Back again, R1, either stick click -- ends the mode and speaks "Cancelled".
+//   Start  mod menu (`F8`)            B  mod menu (`F8`) -- closes it, and opens it when shut
+//   A      summoned Esper (`8`), silent when none is out
+//   X      gil (`g`)                  -- in a fight: enemy name and HP (`;`)
+//   Y      rescan + area (`` ` ``)    -- in a fight: directions to the target (`p`)
+//   Anything else -- Back again, the D-pad, either shoulder, either stick click -- ends the mode and
+//   speaks "Cancelled".
 //
-//   NOTHING HERE FLIPS A SWITCH. A setting with a mod-menu row is reached through Start, which is
-//   two presses and tells you what it changed; a pad button is scarce and a duplicate route is not
-//   what to spend one on. That rule struck L1 and R1 as toggles, and pre-empts `F5`, `F7` and the
-//   volumes. The Controller row on L3 is the ONE exception, and only because it is the escape
-//   hatch: reaching the pad's off switch through the pad's own menu is circular.
+//   FIVE BINDINGS, AND THE REST WENT BACK (S185). License Points, the combat-log step, `t` and `o`
+//   left this table when the user set the layout above: the D-pad and the right stick now mean one
+//   thing everywhere, and a button that changes job depending on a latch is a button the player has
+//   to remember the state of. The keyboard keeps every one of those keys -- they cost nothing there.
 //
 // MOD MENU OPEN -- it is modal, so here the pad IS taken: D-pad and right stick move and change the
-//   focused setting, A reads its description, B, Start or Back closes.
+//   focused setting, A reads its description, B, Start or Back closes. So does Escape, from the
+//   keyboard (S185).
 //
 // WHAT IS DELIBERATELY NOT BOUND: A, B, X and Y in Normal mode. They are the game's core verbs --
 // talk, cancel, map, menu -- and a mod that eats one of them is a mod the player cannot play
@@ -64,6 +74,13 @@
 // EVERY BINDING IS A VIRTUAL-KEY CODE handed to `InputTracker::DispatchModKey`. This file owns no
 // behaviour: `\` from a pad and `\` from the keyboard are the same call into the same handler, so a
 // change to what a key does needs no edit here, and a new mod key is one row in a table above.
+//
+// THE THUMB-CLICKS ARE THE ONE EXCEPTION TO "NO SETTING GETS A PAD BUTTON", and S185 widened it from
+// one button to three bindings on the user's instruction. The rule it bends is real -- a switch is
+// two presses away through the menu, which says what it changed -- but the reachability filter and
+// the beacon are the two the user flips constantly mid-play, and the intercept's own kill switch
+// cannot live behind a menu driven by the pad it switches off. They fire on RELEASE, not on press,
+// which is what lets one pair of buttons carry two singles and a chord with no timer.
 
 // ---- THREADING, and why the gate is not evaluated here ------------------------------------------
 // `OnPoll` runs on the game's input-poll thread. The predicates that decide "is the field really

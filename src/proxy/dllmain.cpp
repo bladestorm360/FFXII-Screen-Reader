@@ -14,6 +14,7 @@
 #include "ui/dialogue_reader.h"
 #include "ui/primer_reader.h"
 #include "ui/mod_menu.h"
+#include "ui/text_prompt.h"
 #include "audio/audio_engine.h"
 #include "navigation/navigation.h"
 #include "battle/combat_events.h"
@@ -212,6 +213,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             // Before Navigation: the beacon lives under it and must stop pinging before the audio
             // device closes.
             AudioEngine::Shutdown();
+            // Before InputTracker and Speech go: a prompt still on screen would call back into
+            // both of them after they had been torn down.
+            TextPrompt::Shutdown();
             ModMenu::Shutdown();
             Navigation::Shutdown();
             DialogueReader::Shutdown();

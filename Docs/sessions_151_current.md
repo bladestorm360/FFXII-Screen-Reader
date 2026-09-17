@@ -3400,3 +3400,122 @@ from the project's own location. Verified by configuring in a throwaway build di
 cache could not mask it: `DEV_ROOT=D:/Games/Dev`, `FFXII_SDL3_SOURCE=D:/Games/Dev/SDL3-source`, identical to the
 literal it replaced. Rebuilt, 0 warnings, redeployed, `cmp` identical. **`master` is now the only branch and
 there are no worktrees.**
+
+
+## Session 185 — 2026-09-17 — [input] Pad scheme rev 3, and `F6` gets a real text field (UNPLAYED)
+
+**The user's layout, given as a spec, not a question.** Two jobs in one session: the controller scheme
+rebuilt to what they asked for, and `F6` stopped going through the clipboard.
+
+### The pad, rev 3
+
+| Control | Was (S174) | Is now |
+|---|---|---|
+| `L1` | *the game's* Speed mode; mod-mode target readout | **`;` the interact readout**, field and battle |
+| `R1` | `\` on the field, `p` in a fight | **`\` in both** |
+| `L3` | the intercept kill switch | **reachability filter** |
+| `R3` | *the game's* camera recentre | **audio beacon** |
+| `L3`+`R3` | — | **the intercept kill switch** |
+| mod + X / Y / A / B | `` ` `` / `/` / `o` / `t` | **gil or `;` / `` ` `` or `p` / `8` / `F8`** |
+| mod + D-pad, `L1` | `U`, `g`, `,`, `.`, `;` | **gone** — "Cancelled" |
+| mod + Start | `F8` | unchanged; `B` now does it too |
+
+Unchanged and untouched: the right stick, and the D-pad. They are also the only parts of the scheme
+that were ever play-confirmed, which is worth noting before the next play pass.
+
+**Three of the user's rulings carried a reason, and the reasons are the durable part.**
+
+1. **`R1` routes in a fight too.** *"The player needs to be able to pathfind away from enemies if they
+   want to escape, so even in battle it should be pathfind to selected destination."* S174 had sent
+   battle `R1` to `p` (route to the active target) on the reasoning that a route to what you are
+   fighting is what you want mid-combat. That reasoning had it backwards: the one context where a
+   route OUT matters most was the one context where the route key aimed at the enemy. `p` moved to
+   mod + Y.
+2. **`L1` is taken from the game.** *"Controller space is limited so it is an unnecessary game
+   function to have on controller"* — game speed is in the options menu and on the keyboard's
+   `1`/`2`/`3`.
+3. **Two settings got pad buttons, against the standing rule.** S174's rule was that a setting with a
+   menu row gets no pad button, one exception for the kill switch. The user widened it to three
+   bindings. The rule is not struck — `F4`, `F5`, `F7` and the volumes are still menu-only — but the
+   filter and the beacon are the two they flip constantly, and a rule about scarcity is the user's to
+   spend.
+
+**`L1` and `R1` are gated on `live` (Field or Battle), which is what preserves S184.** With a
+targeting cursor up the context is `FieldBusy`, so neither shoulder is consumed and the game keeps its
+Foes / Party / Reserve / Allies group step — the switch S184 built the spoken titles for one session
+earlier. Taking a shoulder there would have silenced a play-confirmed feature to feed an unplayed one.
+
+**The chord needed a shape, and the shape is the finding.** `L3` and `R3` each mean something alone
+and something else together, which cannot be edge-triggered on the press: whichever went down first
+would act before the second arrived, so every chord would be preceded by a spurious single. Resolving
+on the **falling** edge needs no timer and no guess window. A latch set the instant both bits are down
+together, cleared only when both are up, makes press order and release order irrelevant. It is also
+the right pair of buttons for it: the user's own S174 ruling is that stick clicks are too awkward for
+anything time-critical, and nothing is waiting on a settings toggle.
+
+**A bug found and fixed in this session's own code, worth recording because it was invisible in a
+build.** The thumb block first wrote `state->pad.buttons` directly. The apply at the bottom of
+`OnPoll` rebuilds that word from the ORIGINAL `buttons` local, so on any poll that also consumed
+something else the second write silently handed `L3`/`R3` back to the game — intermittent, and
+dependent on what else the player happened to be pressing. Fixed by hoisting `consume` above the off
+switch so there is **one accumulator and one write**. A second writer to a value something else
+rebuilds from scratch is not a race; it is a guaranteed loss, waiting on a condition.
+
+### `F6`: a real edit field, and a confirmation
+
+`ui/text_prompt.{h,cpp}` — a Win32 edit dialog and a Yes/No box, each on a thread of its own.
+
+**The clipboard was never the feature; it was the workaround, and its premise was wrong.**
+`Docs/Controls.md` justified it correctly and then drew the wrong conclusion: the mod cannot run a
+text field *inside the game* (it passes the DirectInput buffer as `const` and never swallows a key) —
+**but a text field does not have to be inside the game.** Typing into a Win32 EDIT control is ordinary
+window-message input and never touches the DirectInput buffer, so the read-only rule is not weakened
+by one byte. The game's device is simply unacquired while another window of the process holds focus,
+which is what already happens on every alt-tab. *A constraint on one mechanism is not a constraint on
+the goal — check which one you wrote down.*
+
+- **No custom name yet → an edit field.** OK with text names it; OK with nothing, or Cancel, does
+  nothing. **An empty field is no longer a clear** — that meaning moved to the question below, where
+  it can be asked instead of guessed from a blank.
+- **Already named → a Yes/No box**, defaulting to **No**, asking whether to clear it back to the
+  game's own name. To rename: clear, then press `F6` again. One question per press.
+- A genuine `#32770` dialog, built as an in-memory `DLGTEMPLATE` because this project has no `.rc`. A
+  screen reader reads a dialog's title, its static text and its focused control on open; a plain popup
+  with child controls gets the focused control alone.
+- **The static is created BEFORE the edit control on purpose** — a screen reader labels an edit from
+  the static that precedes it in z-order, so swapping the two silently costs the field its name.
+- **Its own thread, not the game thread and not the InputTracker thread.** The game thread would
+  freeze the game (memory: never stall the game thread). The InputTracker thread is the mod's hotkey
+  dispatcher — a modal loop on it would queue every other key behind the dialog and stall
+  `Shutdown`'s `WM_QUIT`.
+- **While a prompt is up both input paths stand down**, and each needed a different shape for the same
+  reason. The keyboard feed runs its whole edge pass against a **zeroed** buffer rather than returning
+  early: returning would leave a key held when the box opened still armed, to fire the moment it
+  closed. The pad returns early but **carries `prevThumbs` forward first**, or a click released while
+  typing would become a toggle when the dialog shut.
+- The entity's identity is captured **by value under the lock** and the lock is released before the
+  window goes up; the callback re-takes it and **refuses to apply if the map has changed**, since the
+  label store is keyed by map and a dialog has no time limit.
+
+### Also
+
+- **`Escape` closes the mod menu** (user instruction), claimed only while it is open. **This is not a
+  claim that `Esc` is free** — `L-51`: the game's Controls screen lists an *action* called "Escape" on
+  Left Ctrl, which says nothing about the physical key, and that screen has hidden a binding before
+  (`F9`, S112). The mod cannot swallow a key, so if the game owns `Esc` both things happen — the same
+  accepted cost the arrow keys already carry inside this menu.
+- `InputTracker`'s `SetControllerToggleCallback` / `DispatchToggleController` / `WM_PADCTRL` became
+  the generic `SetSettingToggleCallback` / `DispatchToggleSetting` / `WM_PADSET`, carrying a setting
+  id as an `int` — the same idiom `DispatchSpeakPhrase` uses for `Phrase::Id`, so `input_tracker`
+  still knows no menu. Three bindings through one path instead of a near-duplicate per button.
+- README rewritten: the whole Controller section, `F6`, and — at the user's instruction — **a note
+  that NPCs are commonly unnamed until spoken to, which is correct game behaviour.** The game gives an
+  NPC their name at the story beat where you meet them; custom naming is for the ones that stay
+  nameless.
+- Clean build, 0 warnings, deployed.
+
+**NOT PLAYED.** Everything above is built and untried except the right stick and the D-pad, which this
+session did not touch. The things most worth a falsifier on the first pass: whether the dialog actually
+takes focus over the game (it is `WS_EX_TOPMOST` and calls `SetForegroundWindow`, but a game that owns
+the whole screen is the case that breaks such things), and whether the `L3`+`R3` chord resolves the way
+a real thumb produces it. Grep `PROMPT` and `PAD` in the log.

@@ -108,6 +108,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/reward_panel_reader.cpp
     src/ui/dialogue_reader.cpp
     src/ui/mod_menu.cpp
+    src/ui/text_prompt.cpp
     src/battle/battle_state.cpp
     src/battle/battle_state_diag.cpp
     src/battle/battle_state_names.cpp
