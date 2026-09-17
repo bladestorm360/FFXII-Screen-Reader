@@ -6,7 +6,7 @@ Adds NVDA output, pathfinding, menu reading and other accessibility aides to Fin
 
 ## Known Issues
 
-This is an early test build. The following are known — please report anything else you run into.
+The following are known and still open in this release — please report anything else you run into.
 
 Button prompts inside tutorial text are skipped. A line like "press \[button] to save" reads as "press to save". The text around it should be intact — if you hear a sentence lose its ending, or a stray letter appear mid-word, that is worth reporting.
 
@@ -77,8 +77,8 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 * M, Numpad Plus, or Z: display map.
 * H, Numpad 0, or X: reset camera.
 * Left Shift: toggle walk and run.
-* 1: the same as L1 on a controller; cycles game speed.
-* 3: the same as R1 on a controller.
+* 1: the same as L1 on a controller; cycles game speed. In a battle target list it switches target group instead — Foes, Party, Reserve, Allies — and the mod speaks the group you land on.
+* 3: the same as R1 on a controller; switches target group the other way in a battle target list.
 * F1, F2, F3: game speed — normal, double, quadruple.
 
 ### Mod
