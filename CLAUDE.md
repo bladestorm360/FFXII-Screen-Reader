@@ -780,6 +780,17 @@ the Module Loader / External File Loader (both want the `dinput8.dll` slot).
 - `..\FFXII-Decompile\` — RE archive
 - `~/.claude/plans/deep-research-time-i-atomic-sonnet.md` — original session plan
 
+## Branches
+
+**The trunk is `master`** (S184, 2026-09-17). It is the default branch on `origin`
+(`github.com/bladestorm360/FFXII-Screen-Reader`, private) and holds every session's work. The old
+`combat-system` branch WAS the trunk for ~196 commits; at the user's instruction `master` was
+fast-forwarded onto it and `combat-system` was deleted, locally and on the remote. Session entries and
+release records written before that date name `combat-system` — that is history, not a live branch.
+
+The two worktree branches `nav/surface-goal` and `nav/event-transfer` are kept and are not merged
+automatically.
+
 ## Session Log Management
 
 Session logs live in `Docs\sessions_*.md`, split into **50-session chunks** so no single

@@ -861,6 +861,10 @@ the SDL3 source path from `CMAKE_CURRENT_SOURCE_DIR` instead of a literal `D:/Ga
 to the same directory on this checkout, so the build is unaffected, and it was **deliberately not
 merged to `combat-system`**, which was about to cut this build.
 
+> **Branch names since S184 (2026-09-17):** `master` was fast-forwarded to the trunk and `combat-system` was
+> deleted, so **the trunk is `master`** and the paragraph above is history. `nav/surface-goal` and
+> `nav/event-transfer` are unchanged.
+
 **Purpose:** shotgun build of Sessions 147–151. What the tester is exercising: the stale-entity
 pruner and the Esper vitals on `8` (S147/S148), the HP display clamp, the license board's spoken
 availability (S149), collected-treasure pruning (S150), and the off-hand/shield candidate list, which
