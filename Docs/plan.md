@@ -270,6 +270,8 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
       key has answered "No path" to it, until a door/waterfall moves or the area changes. Built, UNPLAYED
 - [~] **Script-closed floors are CUT by the router** (S182, always on) — shut doors and Sochen's waterfalls are
       never routed through. Built, UNPLAYED
+- [ ] **Falls of Time (map 184): no route through class-refused water** — user ruling 2026-09-17, map-specific
+      `map_route_rules` table; spec in debug.md "routes buy their way through the waterfalls". NOT BUILT
 - [~] **Doors by script evidence** (S179) — routine calls `mapjump`, or opens the closed floor it stands in. UNPLAYED
 - [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there

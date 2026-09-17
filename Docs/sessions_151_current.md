@@ -3271,3 +3271,13 @@ whether the cut is the whole fix. If every listed poly is `mat=0`, the remaining
 graze, which touches every map and needs a ruling first.
 
 **Falsifiers:** debug.md, both S182 entries at the top of Tried & Failed.
+
+**Same session, after the commit — USER RULING on Falls of Time (documented, NOT built, at the user's
+instruction: "document that and close out here").** *"It's likely ordinary water, but you need to make it
+map specific so you don't change routing on every map … Either way, waterfall or ordinary water, it's an
+invalid route and needs fixed."* Spec in debug.md under "routes buy their way through the waterfalls":
+a new `map_route_rules` table (NOT the danger table, whose rows switch sneak assist on), first row map 184;
+on a flagged map A* CUTS class-refused ground (goal and start polys exempt, since two of 184's exits sit on
+refused polys) and the march refuses to graze across it; one `map-rule:` line per request. Recorded
+accurately that the Northern Sluiceway fix itself was global — the per-map precedent is S121's
+mechanism-flagged table (`PathDanger::MapUsesEngineCatch`).

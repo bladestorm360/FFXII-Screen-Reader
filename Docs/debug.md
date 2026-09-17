@@ -80,13 +80,62 @@ own, which the user has ruled out.
 - The door listed again after the puzzle opens it (the override table changes, so the record lapses).
 - No `reach-gate:` line of any kind without a route press before it, and no `STALL ReachGate` line ever.
 
-### BUILT S182, UNPLAYED — routes buy their way through the waterfalls (A* now CUTS script-closed floors)
+### BUILT S182, UNPLAYED — routes buy their way through the waterfalls (A* now CUTS script-closed floors); MAP-184 WATER FIX SPECIFIED, NOT BUILT
 
 KEYWORDS: routing through water waterfall Falls of Time map 184 closed floor price kClosedFloorPenalty
 closedAware UnreachableFilterOn path_search 244 terrain 4000 blocked recorded material 3 4 setmapidfloor
 reach-gate filter OFF log only stuck in water closed-floor CUT terrain paid static material 0 0x07800000
+map specific map 184 route rules MapRefusesTerrain graze kGrazeAllow ordinary water invalid route
 
 **S182 STATUS — read this block first; the S181 write-up below is kept as the record.**
+
+**USER RULING (2026-09-17, after S182 was committed) — SPECIFIED, NOT BUILT: Falls of Time's route
+through water is invalid whatever the water is, and the fix must be MAP-SPECIFIC.**
+
+> *"It's likely ordinary water, but you need to make it map specific so you don't change routing on every
+> map. There must be a way to do that similarly to how we handled the northern sluiceway. Either way,
+> waterfall or ordinary water, it's an invalid route and needs fixed."*
+
+**So nothing waits on `terrain paid:` any more to decide WHETHER to fix it** — that line now only says
+which polys the fix will refuse, for the record. The decision is made: on map 184, a route may not cross
+ground the party's class refuses, script-closed or static.
+
+**Precedent, stated accurately.** The Northern Sluiceway fix itself was GLOBAL (S100 row 11: A* prices
+`TerrainRefused`, the march refuses it, on every map). The sanctioned way to scope a routing mechanism to
+ONE map is the S121 ruling recorded in `feedback_never_widen_onto_working_map` and built as
+`PathDanger::MapUsesEngineCatch`: a small constexpr table with one row per map. Each row carries a flag
+per MECHANISM, and new machinery keys on its own flag, never on "the map has a row". L-49 ("solve
+globally, never per-map") bans map-id special cases inside ALGORITHMS; a per-map feature table with its
+own mechanism flag is the exception the user sanctioned, and the user has ordered it again here.
+
+**The spec:**
+1. **A new table, not the danger table.** `navigation/map_route_rules.{h,cpp}`: `constexpr` rows
+   `{ mapId, flags }`, one query `bool MapRefusesTerrain(uint32_t mapId)` (linear scan, no game reads, any
+   thread). First and only row: **map 184, Falls of Time** (`announce: mapId=184 sub="Falls of Time"`,
+   09-16 log). Do not put it in `PathDanger`: that table's rows gate sneak assist, and a row there would
+   switch sneak assist on for 184 (the S121 failure shape exactly).
+2. **A* on a flagged map** (`PathSearch::Run`, map id read ONCE per request): a neighbour that is
+   `!Walkable` or `TerrainRefused` is CUT, like the script-closed cut, instead of paying `kTerrainPenalty`.
+   **Exempt the goal poly and the start poly themselves** — two of 184's own exits sit ON refused polys
+   (`routable? "Exit, … Destiny's March" … poly=2751 eff=0x0F840000 … terrain=1`, and poly 2727), and a
+   player standing on a refused poly must still be able to route off it. Transitions already route with
+   the arrival band + reach, so a seam bordered by water is still arrived at from its dry side.
+3. **The march on a flagged map** (`PathMarch::MarchLeg` / `GrazeScan`): a refused crossing is a BREACH;
+   no 1 m graze across it. Without this, a taut chord between two dry corridor polys can still skim a
+   water edge that A* avoided — that graze is how the 09-16 routes validated (`marchGraze=15`,
+   corridor march `grazes=58`) while the player walked into the water. The arrival forgiveness at the end
+   of the final leg stays (exits on refused polys need it).
+4. **Instrument, shipped with it (L-39):** one line per request on a flagged map —
+   `map-rule: map 184 refuses class-refused ground -- N crossing(s) CUT, M graze(s) refused` — plus the
+   existing `terrain paid:` (which must read `terrain=0` on 184 after the fix).
+5. **No new game-thread work** (CLAUDE.md stall rule): this only removes options from a search the player
+   asked for, and the table query is a scan of one row.
+
+**Falsifiers:** on 184, a `\` route to any of the four legs' exits that says "No path" from the arrival
+area while the puzzle stage has that exit open (check `[SOCHEN] waterfall: … stage N` against the layout
+table in GameArchitecture.md) — that would mean the dry route does not exist as a mesh path and the rule is
+too strict. Any line from `map-rule:` on a map other than 184 means the gate leaked. Widening to another map
+needs that map's own play evidence and its own row (L-48).
 
 **Built (clean build, UNPLAYED):** points 1, 2, 3 and 5 of THE FIX below, as ruled. In `PathSearch::Run` a
 neighbour whose flags pass `ReachGate::ScriptClosedFlags` (raw class bit clear, effective set) is NOT
@@ -112,8 +161,8 @@ the falls. The cut is still the ruled fix and removes the waterfall half for cer
 WHOLE fix for Falls of Time is exactly what `terrain paid:` answers on the next visit:
 - corridor pays terrain and every listed poly is `mat=0` (`eff=0x07800000`/`0x0F800000`) →
   the waterfalls were never the crossing; the defect is the march's 1 m graze (`kGrazeAllow`) forgiving a
-  narrow strip of refused ground. That is a new diagnosis and needs its own ruling (it touches the S100
-  march accept rule on every map) — do NOT widen it onto working maps without one (L-48).
+  narrow strip of refused ground. **RULED (2026-09-17, block above): fix it on map 184 only, whichever it
+  is.**
 - `closed-floor: … CUT … material id(s) 3,4` and the route to the leg's exit now `terrain=0` → fixed.
 - `closed-floor` fires and the exit answers "No path" → at that stage the exit is genuinely behind the falls
   from where the player stands; check the stage (`[SOCHEN] waterfall: … stage N`) against the layout table.
