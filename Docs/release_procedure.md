@@ -863,7 +863,8 @@ merged to `combat-system`**, which was about to cut this build.
 
 > **Branch names since S184 (2026-09-17):** `master` was fast-forwarded to the trunk and `combat-system` was
 > deleted, so **the trunk is `master`** and the paragraph above is history. `nav/surface-goal` and
-> `nav/event-transfer` are unchanged.
+> `nav/event-transfer` were deleted too, worktrees and all, after `8d29827` (this entry's own SDL3-path commit)
+> was cherry-picked to `master`. **`master` is the only branch there is.**
 
 **Purpose:** shotgun build of Sessions 147–151. What the tester is exercising: the stale-entity
 pruner and the Esper vitals on `8` (S147/S148), the HP display clamp, the license board's spoken

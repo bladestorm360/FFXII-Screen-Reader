@@ -788,8 +788,11 @@ the Module Loader / External File Loader (both want the `dinput8.dll` slot).
 fast-forwarded onto it and `combat-system` was deleted, locally and on the remote. Session entries and
 release records written before that date name `combat-system` — that is history, not a live branch.
 
-The two worktree branches `nav/surface-goal` and `nav/event-transfer` are kept and are not merged
-automatically.
+**`master` is now the ONLY branch, local and remote (S184).** `nav/surface-goal` and `nav/event-transfer`
+were deleted with their worktrees at the user's instruction: `nav/event-transfer` held nothing `master` lacked,
+and `nav/surface-goal`'s one unmerged commit (`8d29827`, the derived `DEV_ROOT`) was cherry-picked to `master`
+first. There are no worktrees any more -- `D:\Games\Dev\Custom\FFXII\FFXII-SR-surface-goal` and
+`...-event-transfer` are gone. A new branch is a deliberate choice now, not the house style.
 
 ## Session Log Management
 

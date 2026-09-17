@@ -3389,3 +3389,14 @@ is unnecessary (*"it always starts on the party members targeting screen"*); dim
 handling (*"as I said before"*); and the truncated-handle note was closed for want of evidence (*"close it
 unless we have evidence of such"*) -- a theoretical risk is not an open item, `L-92`. The measured half of that
 last one stands: `FUN_0027e530` is the target-list row draw, not an item list.
+
+**Repo consolidated to ONE branch at the user's instruction (same session).** `master` was fast-forwarded onto
+the 196 commits that had accumulated on `combat-system` (a clean fast-forward -- `master` held nothing of its
+own) and `combat-system` was deleted, local and remote; `master` was already the remote default. Then the two
+worktree branches went the same way: `nav/event-transfer` had no commit `master` lacked, and
+`nav/surface-goal`'s single unmerged commit `8d29827` -- deliberately held back at the V0.7 release -- was
+cherry-picked first. It removes the last hardcoded `D:/Games/Dev` from `CMakeLists.txt` by deriving `DEV_ROOT`
+from the project's own location. Verified by configuring in a throwaway build directory, where the existing
+cache could not mask it: `DEV_ROOT=D:/Games/Dev`, `FFXII_SDL3_SOURCE=D:/Games/Dev/SDL3-source`, identical to the
+literal it replaced. Rebuilt, 0 warnings, redeployed, `cmp` identical. **`master` is now the only branch and
+there are no worktrees.**
