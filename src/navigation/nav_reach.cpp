@@ -32,6 +32,7 @@ std::mutex                                         g_pubMutex;
 std::shared_ptr<const std::unordered_set<int32_t>> g_published;   // null until the first fill closes
 std::shared_ptr<const std::unordered_set<int32_t>> g_publishedStrict;   // DIAGNOSTIC ONLY -- see below
 std::atomic<bool> g_ready{false};
+std::atomic<uint32_t> g_generation{0};   // bumped on every (re)start -- see Generation()
 std::atomic<int>  g_count{0};
 std::atomic<int>  g_countStrict{0};
 
@@ -121,6 +122,7 @@ void OnGameFrame(uint32_t epoch, const FVec3& playerPos) {
         g_stackStrict.push_back(here);
         g_running = true;
         g_ready.store(false, std::memory_order_release);
+        g_generation.fetch_add(1, std::memory_order_acq_rel);
     }
 
     if (!g_running) return;
@@ -190,16 +192,7 @@ void Invalidate() {
 bool Ready()     { return g_ready.load(std::memory_order_acquire); }
 int  CellCount() { return g_count.load(std::memory_order_acquire); }
 
-bool ContainsPoly(int32_t poly, bool* answered) {
-    std::shared_ptr<const std::unordered_set<int32_t>> snap;
-    {
-        std::lock_guard<std::mutex> lk(g_pubMutex);
-        snap = g_published;
-    }
-    const bool have = snap && !snap->empty();
-    if (answered) *answered = have;
-    return have && snap->count(poly) != 0;
-}
+uint32_t Generation() { return g_generation.load(std::memory_order_acquire); }
 
 bool Reachable(const FVec3& p, float tolerance) {
     std::shared_ptr<const std::unordered_set<int32_t>> snap;

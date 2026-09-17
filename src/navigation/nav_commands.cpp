@@ -12,6 +12,7 @@
 #include "ui/equip_compare.h"
 #include "ui/equip_target_reader.h"
 #include "navigation/interact_target.h"
+#include "navigation/route_query.h"
 #include "battle/party_status.h"
 #include "ui/save_reader.h"
 #include "battle/combat_log.h"
@@ -30,27 +31,10 @@ namespace {
 // `\` — request a turn-by-turn route to the current selection. The actual A* runs on
 // the game thread (crash-safe on transitions); the legs (or "No path") are spoken from
 // there a frame or two later. We only capture the fixed world target here.
-// How near an exit counts as arriving at it, for routing purposes. Deliberately the SAME numbers
-// PathPlanner uses to say "At the exit" (kAtExitDist / kAtExitDy) -- if the planner would call the
-// player arrived there, the search must be allowed to finish there.
-constexpr float kExitArriveDist = 3.0f;
-constexpr float kExitArriveDy   = 3.0f;
-
-// How near a target the engine applies NO radius to (class 1 -- see InteractTarget::Reach) the
-// route is allowed to finish. This is a SANITY BOUND, not a discriminator, and the difference
-// matters: A* pops in order of remaining distance to the target, so the first poly inside this
-// bound is already about the nearest walkable point to the object -- the bound only stops the
-// search settling for somewhere absurd. Deliberately the same 3.0 m as kExitArriveDist and for
-// the same S96 reason: when the target has no polygon you can stand on, "walk onto it" is not a
-// goal any search can meet, and refusing to finish nearby produces a FALSE "No path" on a
-// target the player can walk to by hand. Measured case: Draklor 67F "C.D.B.", off-mesh, nearest
-// walkable point 0.69 m away, refused against a 0.50 m radius that was never the engine's.
-constexpr float kNoRadiusApproach = 3.0f;
-
 void RouteToCurrent() {
     FVec3 pos; std::wstring label;
     bool isTransition = false;   // exits only: the target is the map-jump surface itself
-    void* sceneObj = nullptr;    // needed for the interaction band -- see below
+    void* sceneObj = nullptr;    // needed for the interaction band -- see RouteQuery::For
     // The map-jump group, 0 unless this is a walk-onto surface. `pos` is one vertex of that surface;
     // this is the handle to the rest of it, for the failure path in PathSearch. See Entity::seamGroup.
     int seamGroup = 0;
@@ -62,63 +46,16 @@ void RouteToCurrent() {
         return;
     }
     Log::Write("NAV-ROUTE", "'\\' (route) pressed: target acquired -> PathPlanner::Request");
-    // Route to where you could STAND and interact, not to where the object is. Both halves of the
-    // engine's own predicate come along: the vertical BAND says which surfaces you could interact
-    // from, and the horizontal REACH says how close you have to be -- so the search can stop exactly
-    // where `;` starts answering instead of walking you onto the target.
-    //
-    // A transition is excluded on purpose: its destination IS the surface you walk onto.
-    InteractTarget::Band  band;
-    InteractTarget::Reach reach;
-    if (!isTransition) {
-        band  = InteractTarget::ReadBandFor(sceneObj);
-        reach = InteractTarget::ReadReachFor(sceneObj);
-    } else {
-        // AN EXIT IS ARRIVED AT, NOT LANDED ON (Session 96).
-        //
-        // Transitions used to be given no band and no reach at all, which makes PathSearch require A*
-        // to finish on the exit's OWN polygon and nothing else. That is stricter than the rest of the
-        // mod: PathPlanner already calls anything within kAtExitDist "At the exit" and stops routing.
-        //
-        // It produced a FALSE "No path" on an exit the tester then walked to by hand. The log shows why:
-        // `reach=1` (NavReach found a reachable poly within its 4.5 m slack) while A* failed, and
-        // `edge=6` -- the edge tests were barely refusing anything, so the search was not walled in, it
-        // simply could not finish on the one polygon it was told to finish on. A map-jump surface can
-        // easily be bordered by water on the sides you would never approach from.
-        //
-        // Supplying a band and a reach turns on `NoteFallback`, the machinery that already records the
-        // first poly A* pops that you could stand on and interact from -- proven code, used by every
-        // non-transition target since S73. Nothing else changes: if the exit's own poly IS reachable,
-        // IsGoal still matches it first and the fallback is never consulted.
-        band.valid  = true;
-        band.lo     = pos.y - kExitArriveDy;
-        band.hi     = pos.y + kExitArriveDy;
-        reach.valid = true;
-        reach.radiusMin = kExitArriveDist;
-    }
-    // radiusMin, not radius: the ellipse radius is direction-dependent, and a goal poly has to be
-    // interactable from whatever angle the route happens to arrive at. Unless the engine applies
-    // no radius to this class at all, in which case radiusMin is not a conservative number, it is
-    // the wrong layout read confidently -- and the approach bound above is used instead.
-    const float reachRadius = !reach.valid       ? 0.0f
-                            : reach.engineRadius ? reach.radiusMin
-                                                 : kNoRadiusApproach;
-    // WHICH SOURCE, on the line before the request, so a wrong route can be attributed without
-    // guessing. `class1-no-engine-radius` is the branch this session added; if a "No path" ever
-    // shows up under it, the bound is what to question, not the reach model.
+    // The band, the reach and the arrival rule for exits live in RouteQuery::For (S182), because the
+    // Unreachable filter has to ask the router exactly this question about every listed entity.
+    const RouteQuery::Params q = RouteQuery::For(pos, isTransition, sceneObj, seamGroup);
     {
         char rm[144];
-        snprintf(rm, sizeof(rm), "route reach: %.2fm source=%s",
-                 reachRadius,
-                 isTransition        ? "transition-arrive"
-                 : !reach.valid      ? "none (reach unreadable -> target's own poly)"
-                 : reach.engineRadius ? "class3-radiusMin"
-                                      : "class1-no-engine-radius");
+        snprintf(rm, sizeof(rm), "route reach: %.2fm source=%s", q.reachRead, q.reachSource);
         Log::Write("NAV-ROUTE", rm);
     }
     // seedBeacon=true: `\` is the "lead me there" key, so its route arms the audio beacon.
-    if (band.valid) PathPlanner::Request(pos, label, isTransition, band.lo, band.hi, reachRadius, true, seamGroup);
-    else            PathPlanner::Request(pos, label, isTransition, 1.0f, -1.0f, 0.0f, true, seamGroup);
+    PathPlanner::Request(q.target, label, q.isTransition, q.bandLo, q.bandHi, q.reach, true, q.seamGroup);
     // S100: with the Auto-walk toggle ON, `\` also walks the route. Only a pending stamp here --
     // the game thread engages once the beacon reports an active route, so a plan that fails
     // (Frontier / "No path") structurally cannot start the character walking. `p` deliberately

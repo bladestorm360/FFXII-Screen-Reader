@@ -201,8 +201,10 @@ bool Walkable(PolyId p) {
 //     boundary, the waded 321 shallows are bit-23-clear, and the NavTrace STANDING-ON-REFUSED
 //     tripwire has never fired once.
 // CONSUMERS: A*'s terrain PRICE (never a cut -- the S96 lesson stands), the march's accept rule,
-// and the frontier's bestNear guard. `NavMesh::Walkable` deliberately stays the permissive TYPE
-// test: wiring the class test into it is the over-refusal lever S96 pulled (it gates flood, goal
+// and the frontier's bestNear guard. ONE SUBSET IS CUT, and it is not this test's doing: a floor a
+// SCRIPT has closed (raw class bit clear, effective bit set -- ReachGate::ScriptClosedFlags) is the
+// engine's own runtime refusal rather than our reading of terrain type, and A* cuts it since S182.
+// `NavMesh::Walkable` deliberately stays the permissive TYPE test: wiring the class test into it is the over-refusal lever S96 pulled (it gates flood, goal
 // acceptance, EdgePassable and GroundY at once) and must never be pulled again.
 bool TerrainRefused(PolyId p) {
     if (!ValidPoly(p)) return false;

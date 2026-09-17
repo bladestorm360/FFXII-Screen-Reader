@@ -38,7 +38,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
-| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75 |
+| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
@@ -98,9 +98,22 @@ float pool is allocated in source order across the whole map, so the cactus's x 
 twelve entries apart from anything else of its own, and its y was not in the pool at all (it is an
 immediate operand). Controls prove the search RAN; they cannot prove the shape was right.
 
-### L-07 DON'T MODEL THE VERDICT — READ THE WORD THE VERDICT IS READ FROM
+### L-07 ⟲ DON'T MODEL THE VERDICT — READ THE WORD THE VERDICT IS READ FROM
 **Why:** S149. Sessions were spent reconstructing a license-board reachability rule; the game simply
 reads `cell+0x18 & 0x1000`, and `FUN_00323600` has no adjacency test at all.
+**S182, and this time the verdict being modelled was OUR OWN.** The Unreachable filter was specified as
+"hide what the route key cannot reach", and S179 answered it with a separate flood of the mesh plus a 3 m
+ring test. The router was sitting one call away. The two disagreed on the first door the user tried —
+Pilgrim's Door 1 "reachable" to the flood, "No path" to `\` from the same spot — and in two whole play
+logs the flood never judged one entity unreachable, so the filter hid nothing. A cheaper model of a
+subsystem's answer is a second subsystem that will disagree with the first; when the spec names the
+answer ("no valid path"), use the answer the thing itself gives -- and if getting it costs the game thread
+work nobody asked for, that is a question for the user first (L-88). S182 settled on recording the answer
+`\` already speaks. Its silence also
+went unnoticed because "reachable" was the unlogged default — L-83's shape.
+**Same session, the aggregate form:** S181 read `corridor pays terrain=4000` as "crosses two waterfalls".
+A price total names no poly. Every march breach in that log named material-0 ground, not the waterfall
+materials. Before attributing a total to a culprit, log the items (`terrain paid:` now does).
 
 ### L-08 ASK WHETHER A BLOCKING QUESTION IS DECOMPILE-ANSWERABLE BEFORE CALLING IT PLAY-BLOCKED
 **Why:** S152. The per-frame audit declared the game-speed mechanism "NOT established, measure
@@ -683,6 +696,21 @@ on Discord — the readme describes the mod as it is now.
 
 ### L-44 SLOWER THAN VANILLA = OUR CODE
 First suspect: our lock in their hot path. Detail: `feedback_stall_is_always_mod_side.md`.
+
+### L-88 ⛔ A FEATURE THAT NEEDS THE GAME THREAD TO DO WORK NOBODY ASKED FOR IS A QUESTION, NOT A DESIGN
+**Before building anything that runs on the game thread on the mod's own initiative -- a background search,
+a flood, a periodic scan -- stop and ask. Spacing it, rate-limiting it and pausing it in fights do not make
+it acceptable; they make it a smaller freeze. The user's standing answer is to revoke the feature.**
+**Why:** S182. The Unreachable filter's spec ("hide what has no valid path") was met exactly by running
+the real router in the background: one search per 250 ms or more, 2-43 ms each. The cost was written up
+honestly in the report -- and that was the problem: it was decided and built first, disclosed after.
+*"Game freeze is 100%, completely unacceptable and you should never have built a system that could
+potentially do that without express permission."* It also broke CLAUDE.md's existing rule against polled
+per-frame work without approval, which was on the page the whole time. What shipped instead records the
+answer the route key already gives when the player presses it: weaker, and free.
+**The tell:** your design contains a scheduler, a "next allowed" deadline, or a cost multiplier on the game
+thread. Also: "we could move it to another thread" -- the engine functions it calls are not yours to call
+there (a stall traded for a crash). Rule: CLAUDE.md "NEVER ADD A FRAME STALL TO THE GAME THREAD".
 
 ### L-45 USE A `GetTickCount64()` DEADLINE, NOT A FRAME COUNTDOWN
 House idiom: `constexpr uint64_t kThingMs`, a `uint64_t` stamp where **0 means not armed**, compare

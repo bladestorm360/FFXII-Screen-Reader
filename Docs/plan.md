@@ -266,8 +266,10 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
 - [x] Autodetail (`F7` + `F8` row, default Off) — shop comparison and Libra volunteered on highlight
 - [x] Polish glyph mapping detected automatically from the loaded font atlas; `Text glyphs` row removed
 - [~] Exit reachability: instrumented (`terrain=` / `strict=`), fix deferred to the measurement
-- [~] **Unreachable filter** (S179, `F8` row, default Off) — hides entities behind a script-closed floor or
-      not mesh-connected; routes price closed doors hard when On. Built, UNPLAYED
+- [~] **Unreachable filter** (S179, rebuilt S182, `F8` row, default Off) — On hides an entity once the route
+      key has answered "No path" to it, until a door/waterfall moves or the area changes. Built, UNPLAYED
+- [~] **Script-closed floors are CUT by the router** (S182, always on) — shut doors and Sochen's waterfalls are
+      never routed through. Built, UNPLAYED
 - [~] **Doors by script evidence** (S179) — routine calls `mapjump`, or opens the closed floor it stands in. UNPLAYED
 - [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there

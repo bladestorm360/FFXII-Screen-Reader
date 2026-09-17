@@ -3208,3 +3208,66 @@ the Northern Sluiceway section, which paid for that lesson first.
 
 **Session closed with the fix specified and NOT built, at the user's instruction.** Everything else from
 S180 and S181 is built, deployed and uncommitted.
+
+## Session 182 — 2026-09-17 — [nav] The Unreachable filter asks the router; A* cuts script-closed floors (UNPLAYED)
+
+KEYWORDS: unreachable filter rebuilt router verdict background route check RouteQuery ReachGate world
+generation NoteRouteResult Log ScopedMute script-closed floor CUT closed-floor terrain paid Pilgrim's Door 1
+Falls of Time waterfall kClosedFloorPenalty deleted NavReach Generation AnsweredAboutTarget
+
+**Asked (own log, session 06:26, map 185; the user was testing the puzzle skip row in-game meanwhile):**
+*"you built the unreachable filter completely wrong: when toggled off … it should say 'no path' if an
+object is in the list but has no valid path. EG. Pilgrims Door 1 in the latest log. When toggled on,
+entities that have no valid path should be hidden from the entity list. Currently it is not hiding
+entities that have no valid path. Fix that and also take care of the documented solution for the falls
+of time attempting to route through water … the goal is … to get the pathfinder to route around the
+waterfall properly so that the exit we need … becomes reachable, as we had to do in northern sluiceway."*
+
+**Found, from the log (no game run):**
+- The S179 filter never hid anything: zero `reach-gate: "…"` verdict lines in this log or the 09-16 one,
+  although a non-reachable verdict is always logged. Its flood called 1188 of 1194 polys "open" (it walks
+  through static ground the router only prices), and a 3 m ring put a poly of that component beside
+  every door. Same spot, same door: `plan=NoPath` from the router. The terrain-refusing twin flood is no
+  substitute either (`strict … 20` of 1194). Only the router answers "valid path" — L-07, recurring.
+- The S181 waterfall diagnosis is weaker than written: nothing logged which polys `terrain=4000` paid for,
+  and all 24 march breaches in that log named material-0 ground (`nbrEff=0x07800000`), not the waterfall
+  materials 3/4. The cut is the ruled fix and removes the waterfall half for certain; whether it is the
+  whole of Falls of Time is what the new `terrain paid:` line answers.
+
+**First build, REVOKED by the user before deployment.** It met the spec exactly by running the real router
+in the background on the game thread (one search per 250 ms or more, 2-43 ms each, paused in fights, logs
+muted). Reading that cost in the report, the user: *"game freeze is 100%, completely unacceptable and you
+should never have built a system that could potentially do that without express permission. If you can't
+build the unreachable filter without intercepting the main game thread (which could cause crashing), then
+revoke it completely … if you can think of another way … that doesn't potentially cause game freezing or
+crashing, then do that instead."* Deleted, with the `Log::ScopedMute` it needed. It had also broken
+CLAUDE.md's existing no-polling rule. New CRITICAL rule in CLAUDE.md ("NEVER ADD A FRAME STALL TO THE GAME
+THREAD…") and `L-88`.
+
+**Shipped (clean build, 0 warnings; UNPLAYED):**
+1. **A* CUTS script-closed floors, whatever the row says** (`path_search.cpp`): not expanded, start's and
+   goal's own material exempt; `kClosedFloorPenalty` and the row's reach into routing deleted. Logs:
+   `closed-floor: N crossing(s) CUT -- … material id(s) …; first at poly P (x,y,z)`, and `terrain paid:`
+   naming each refused poly a corridor bought (poly, eff, material, position). This is inside the route
+   request the player made — no new game-thread work.
+2. **The filter records the route key's own answer and nothing else** (`reach_gate.{h,cpp}` rewritten): the
+   planner's drain stores Route / "At the exit" vs NoPath / Frontier for requests the player hears, against
+   label + place (0.25 m), with the world state (map epoch, override-table fingerprint,
+   `NavReach::Generation()`). The list rebuild hides a "No path" record while the row is On and that world
+   still holds. No search, no flood, no per-frame call — `ReachGate::OnGameFrame` and `Invalidate` are gone.
+   **Limit, told to the user:** nothing is hidden until `\` has answered "No path" to it.
+3. **`RouteQuery`** (`route_query.{h,cpp}`): the `\` request and the planner's arrival test + search, moved
+   verbatim; only the route key calls it now. `AnsweredAboutTarget` keeps a search that could not place the
+   player from recording anything.
+4. S179's flood, `Judge` and `NavReach::ContainsPoly` deleted; `NavReach::Generation()` added (a counter).
+5. Row wording (phrasebook, 3 strings) and the README line rewritten to the shipped behaviour — **reworded
+   user-facing text, flagged to the user.** plan.md, debug.md (filter entry, waterfall entry, S179 strike),
+   GameArchitecture.md (two stale claims struck), Lessons.md (`L-07` ⟲, `L-88`), PerformanceIssues.md,
+   CLAUDE.md (the stall rule).
+
+**Open, and said to the user:** the S181 waterfall diagnosis is unproven — all 24 march breaches in the
+09-16 log named material-0 ground, not materials 3/4. The next Falls of Time log's `terrain paid:` decides
+whether the cut is the whole fix. If every listed poly is `mat=0`, the remaining cause is the march's 1 m
+graze, which touches every map and needs a ruling first.
+
+**Falsifiers:** debug.md, both S182 entries at the top of Tried & Failed.

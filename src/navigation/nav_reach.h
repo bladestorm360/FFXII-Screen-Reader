@@ -53,9 +53,10 @@ bool ReachableStrict(const FVec3& p, float tolerance);
 // Diagnostics: cells in the reachable set (0 until the fill starts).
 int CellCount();
 
-// ANY THREAD. Is `poly` in the published PERMISSIVE component? `*answered` is false when no set is
-// published yet, and the return is then meaningless. Read-only; changes nothing about this module --
-// ReachGate uses it to tell "only through a closed floor" from "not connected at all" (S179).
-bool ContainsPoly(int32_t poly, bool* answered);
+// ANY THREAD. How many times the flood has (re)started -- a new map, or the player turning up outside the
+// component it closed (a lift, a scripted move). The Unreachable filter starts a new world generation on
+// a change, because a route verdict taken from the other component says nothing about this one (S182).
+// (Replaces S179's ContainsPoly, whose only reader was the flood verdict S182 removed.)
+uint32_t Generation();
 
 } // namespace NavReach

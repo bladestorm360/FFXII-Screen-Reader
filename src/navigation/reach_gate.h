@@ -1,62 +1,78 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include "navigation/nav_types.h"
 #include "navigation/nav_mesh.h"
 #include "navigation/entity_scan.h"
 
-// "CAN THE PLAYER GET THERE RIGHT NOW?" -- the unreachable filter, Session 179.
+// THE UNREACHABLE FILTER, AND THE SCRIPT-CLOSED FLOOR TEST UNDER IT -- Session 179, rebuilt Session 182.
 //
-// Behind the mod-menu row `Unreachable filter`, DEFAULT OFF. With the row off nothing here changes what
-// is listed or how anything routes; the verdicts are still computed and LOGGED ("would hide"), so real
-// maps can be checked before anyone turns it on.
-//
-// THE MEASUREMENT IT RESTS ON. A closed in-map door is not a collision object the mesh cannot see. The
-// door's routine calls `setmapidfloor(N, class, 0)`, which forces the leader's floor-refusal bit (23)
-// on for walkmap MATERIAL N through the override bank the mod already applies (NavMesh::PolyFlags'
-// effective flags). Opening it calls the same with 1. So:
+// ---- script-closed floors ---------------------------------------------------------------------------
+// A closed in-map door or a Sochen waterfall is not a collision object the mesh cannot see. Its routine
+// calls `setmapidfloor(N, class, 0)`, which forces the party's floor-refusal bit on for walkmap MATERIAL N
+// through the override bank the mod already applies (NavMesh::PolyFlags' effective flags). So:
 //
 //   SCRIPT-CLOSED  =  the party's class bit is CLEAR in the poly's RAW flags
 //                     and SET in its EFFECTIVE flags.
 //
-// That is deliberately NOT "bit 23 is set". Raw bit 23 is static map data that also marks ledges and
-// out-of-bounds ground under exits that route fine (Travica Way), and cutting on it is the S96 lever
-// that cost a working exit. Only a refusal the SCRIPT imposed at runtime counts here.
+// Deliberately NOT "bit 23 is set": raw bit 23 is static map data that also marks ledges and ground under
+// exits that route fine (Travica Way), and cutting on it is the S96 lever that cost a working exit.
+// PathSearch CUTS a script-closed poly, whatever the filter row says: it is the engine's own runtime
+// refusal, not our inference (the user's S181 ruling -- price what we infer, cut what the game declares).
 //
-// THE VERDICT. A third flood -- separate state, separate restart, never touching NavReach's two --
-// expands through `Walkable` and refuses script-closed polys. An entity is judged on the mesh polys
-// found on rings up to 3 m around it (so an object you press from beside it is judged by where you
-// stand):
-//   Reachable          any of those polys is in the open component
-//   BehindClosedFloor  none is, but one is in NavReach's permissive component: the only way there is
-//                      through a floor a script has closed (a door, a flood gate, a barrier)
-//   Disconnected       no mesh connection at all (across water, another level with no walkway)
-//   Unknown            no answer yet, no poly found, or a flood is refilling -- NEVER hidden
-// Enemies are never judged: they come to you, and hiding one is not a navigation question.
+// ---- the filter ------------------------------------------------------------------------------------
+// Mod-menu row `Unreachable filter`, default OFF. The user's contract (2026-09-17): Off lists everything
+// and `\` says "No path" to anything with no valid path; On hides what has no valid path.
+//
+// THE VERDICT IS THE ROUTE KEY'S OWN ANSWER, AND ONLY WHEN THE PLAYER ASKED FOR IT. When a route the
+// player requested (and heard) comes back "No path" -- NoPath, or a Frontier, which the planner speaks as
+// "No path" -- that entity is hidden while the row is On. Nothing here ever runs a search, a flood, or any
+// per-frame work of its own:
+//   * S179 judged a flood of the mesh; it disagreed with the router (Pilgrim's Door 1 "reachable" to the
+//     flood, "No path" to `\`) and in two play logs hid nothing.
+//   * S182's first build ran real searches in the background on the game thread. REVOKED BY THE USER
+//     before it was ever deployed: each check stalled a frame (2-43 ms), and a mod that can freeze the
+//     game is not acceptable without express permission -- see CLAUDE.md and Lessons.md L-88.
+// So an entity is hidden only AFTER `\` has said "No path" to it. That is the whole mechanism.
+//
+// A recorded answer holds for one WORLD STATE: the same map epoch, the same override-table bytes (a door
+// or waterfall moving changes them) and the same NavReach component (a lift or scripted move changes
+// it). Any change and the entity is listed again. All of that is compared at the list rebuild, on the
+// thread doing the rebuild; the game thread only stores the answer the route key already produced.
+//
+// Enemies are never hidden: they come to you, and hiding one is not a navigation question.
 namespace ReachGate {
 
-enum class Verdict : uint8_t { Unknown = 0, Reachable, BehindClosedFloor, Disconnected };
+enum class Verdict : uint8_t { Unknown = 0, Reachable, NoPath };
 
-// GAME THREAD. Advance the open-component flood. Restarts on a new epoch, when the player stands
-// outside the published set, and when the override table's bytes change (a door opened or closed).
-void OnGameFrame(uint32_t epoch, const FVec3& playerPos);
+// ---- script-closed floors ------------------------------------------------------------------------
+// The effective-flags bit that refuses the party's current movement class (bit 23 class 0, 25 class 1,
+// 26 class 2, 27 class 3, 24 class 5), or 0 when no refusal bit is known -- in which case nothing is ever
+// script-closed. GAME THREAD (reads the party's movement class); read it once per search.
+uint32_t PartyRefuseBit();
 
-// GAME THREAD. Drop everything on map teardown.
-void Invalidate();
+inline bool ScriptClosedFlags(uint32_t raw, uint32_t eff, uint32_t bit) {
+    return bit != 0 && (raw & bit) == 0 && (eff & bit) != 0;
+}
 
-// GAME THREAD (reads the party's movement class). True when a script has closed `p` to the party --
-// see the header note for the exact test.
+// The walkmap material id a poly's floor-override entry is indexed by (FUN_00232020's first bank).
+inline uint32_t Material(uint32_t raw) { return (raw >> 13) & 0x1F; }
+
+// GAME THREAD. True when a script has closed `p` to the party.
 bool ScriptClosed(NavMesh::PolyId p);
 
-// ANY THREAD. Judge and store a verdict on every entity, logging each change of verdict once. Called
-// by the list rebuild; it never removes anything -- the list filter decides, and only when the row is on.
+// ---- the filter ----------------------------------------------------------------------------------
+// GAME THREAD, from PathPlanner's drain, for a request the player heard. Stores the answer against the
+// label and place it was asked for, with the world state it was given in. O(records), no search.
+void NoteRouteResult(const std::wstring& label, const FVec3& target, bool reachable);
+
+// ANY THREAD (the list rebuild, under EntityList's lock). Stamp each entity with the recorded answer that
+// still holds for the current world state, else Unknown. Removes nothing -- EntityList's filter decides.
 void Annotate(std::vector<EntityScan::Entity>& list);
 
-// Whether a stored verdict is one the filter hides.
-inline bool Hides(uint8_t verdict) {
-    return verdict == static_cast<uint8_t>(Verdict::BehindClosedFloor) ||
-           verdict == static_cast<uint8_t>(Verdict::Disconnected);
-}
+// Whether a stamped verdict is one the filter hides.
+inline bool Hides(uint8_t verdict) { return verdict == static_cast<uint8_t>(Verdict::NoPath); }
 
 } // namespace ReachGate

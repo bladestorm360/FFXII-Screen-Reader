@@ -100,8 +100,8 @@ const Setting kSettings[] = {
       { Id::TextGlyphsStandard,     Id::TextGlyphsPolish },
       { Id::TextGlyphsDescStandard, Id::TextGlyphsDescPolish },
       Id::TextGlyphsDesc, "text_glyphs", 0, nullptr },
-    // S179. Default OFF: the user's own condition -- currently working paths must not change unless
-    // the player switches this on. OFF is byte-identical listing and routing (reach_gate.h).
+    // S179, rebuilt S182. Default OFF, which lists everything. It no longer touches routing at all:
+    // script-closed floors are cut for every route by the user's S181 ruling (reach_gate.h).
     { Id::SettingUnreachable, Kind::Named, 2,
       { Id::BeaconOff,          Id::BeaconOn },
       { Id::UnreachableDescOff, Id::UnreachableDescOn },
@@ -406,8 +406,8 @@ bool ControllerOn() {
     return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);
 }
 
-// S179. Read from the input thread (the list filter) and the game thread (the router's closed-floor
-// price), with the same relaxed-atomic discipline as the rows above.
+// S179/S182. Read from the input thread (the list filter), with the same relaxed-atomic discipline as the
+// rows above.
 bool UnreachableFilterOn() {
     return EffectiveValue(SettingId::UnreachableFilter) == static_cast<int>(Beacon::On);
 }

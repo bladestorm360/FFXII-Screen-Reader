@@ -101,7 +101,8 @@ bool Walkable(PolyId p);
 // sits on the exact flag boundary, the waded shallows are bit-23-clear, and the NavTrace tripwire
 // has never fired. Consumers: A*'s terrain PRICE, the march's accept rule, the frontier's bestNear
 // guard. It is a PRICE/BREACH input, NEVER a graph cut, and never wired into `Walkable` -- S96
-// proved that lever over-refuses (399/690 prims priced out of existence on map 311).
+// proved that lever over-refuses (399/690 prims priced out of existence on map 311). The one cut A*
+// makes on refused ground is the script-closed subset, by its own test (ReachGate, S182).
 bool TerrainRefused(PolyId p);
 
 // Is `p` a legitimate floor-poly index? A poly index is an s16 in the engine and the prim encoding

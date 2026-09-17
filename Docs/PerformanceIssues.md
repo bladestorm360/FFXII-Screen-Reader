@@ -41,6 +41,15 @@ refactor under an unconfirmed fix would have doubled the risk:
 | `navigation/entity_postscan.cpp` | 667 | +event-door pass (S119) on top of the twin filter. Clean seam when paid: the sign/doorway/twin block vs the label/numbering passes. |
 | `navigation/sneak_assist.cpp` | 651 | Was 292 in S116; +event-fire hook (S117/118) + trigger census/skip (S119). Clean seam: the script-native clamps vs the engine-trigger machinery — but split only after 569 is play-confirmed, not before. |
 
+**Session 182 (2026-09-17), measured:** `navigation/path_search.cpp` **1210** (was 1149; over the cap long
+before this session -- it grew by the script-closed CUT, its `closed-floor:` evidence line and the `terrain
+paid:` instrument, all of which belong inside the A* loop they describe). `navigation/path_planner.cpp`
+**538** (was 569: the "At the exit" test and the seam-set + search moved out to the new
+`navigation/route_query.cpp`, 160). `navigation/reach_gate.cpp` **146** (was 302: S179's flood and verdict
+deleted; the filter now only records the route key's own answers). Split candidate when `path_search.cpp` is
+next opened for a feature: the post-search outcome block (histogram, surface goal, oracle, frontier -- ~220
+lines) is a clean seam.
+
 Re-measured **2026-07-30 (Session 94)**. The same four files are over, and none of them grew materially:
 `menu_reader.cpp` took the two-line gambit dispatch branch and `ingame_menu_reader.cpp` a corrected
 comment, both of which had to land in those files -- the dispatch is the one choke point for `0x8000`,

@@ -3552,8 +3552,12 @@ animation and repeats every call with state `1`, then `reqdisable`s itself.
 **Consequence — the test the mod uses (`ReachGate::ScriptClosed`):** a poly is closed by a script when
 the party class's refusal bit is **clear in RAW flags and set in EFFECTIVE flags**. Raw bit 23 alone is
 static map data (ledges and out-of-bounds ground under exits that route fine, S96/S147) and must never
-be read as "closed". The premise is checked on every flood by the `reach-gate: closed sample poly … raw=
-… eff=…` line: a sample with the raw bit SET would falsify the test.
+be read as "closed". ~~The premise is checked on every flood by the `reach-gate: closed sample poly … raw=
+… eff=…` line~~ **(STRUCK S182: that flood and its sample line are gone.)** Since S182 A* CUTS a poly that
+passes this test (`ReachGate::ScriptClosedFlags`, start's and goal's own material exempt), so the premise is
+now falsified in PLAY rather than by a sample: `closed-floor: N crossing(s) CUT -- … material id(s) …; first
+at poly P (x,y,z)` naming a crossing the player then walks by hand. Two live measurements stand behind it:
+S179's doors (185) and S181's waterfalls (184, materials 3,4 = the stage-0 layout).
 
 **Scope, stated as measured:** one map's four doors plus a 769-script census. The census found **824
 routines** calling `setmapidfloor`, including talk-triggered magic walls (118), fake walls, rocks, gates,
@@ -6629,8 +6633,10 @@ entrances 1-10 exactly once each.
 **The layout table below is CONFIRMED LIVE (S181 play log):** on entering 184 at stage 0 the reach gate
 reported `9 script-closed crossing(s) refused, material id(s) 3,4` — the two the stage-0 row names, from
 a component flood that knows nothing about this table. **So a waterfall is a script-closed floor, by the
-same `setmapidfloor` mechanism as S179's doors**, and the router must price it (see debug.md, "routes buy
-their way through the waterfalls").
+same `setmapidfloor` mechanism as S179's doors**, and since S182 the router CUTS it rather than pricing it
+(user's ruling; see debug.md, "routes buy their way through the waterfalls"). **What that log did NOT
+show:** which polys the corridor's `terrain=4000` actually paid for — every march breach in it named
+material-0 ground (`nbrEff=0x07800000`), not 3 or 4. The S182 `terrain paid:` line records it.
 
 `rui_a01`'s Map_Director tests the four pairs in DESCENDING order (9/7/5/3) at map load; a match sets
 that leg's done-cell and the waterfall layout for that stage. Any other arrival clears all eight cells

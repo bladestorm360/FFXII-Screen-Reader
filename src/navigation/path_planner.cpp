@@ -9,6 +9,7 @@
 #include "navigation/nav_blocked.h"
 #include "navigation/nav_reach.h"
 #include "navigation/reach_gate.h"
+#include "navigation/route_query.h"
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
 #include "navigation/path_directions.h"
@@ -93,24 +94,10 @@ bool                  g_haveObjective = false;
 // per rendered frame at every speed. See Docs\PerFrameAudit.md.
 constexpr uint64_t kWaitMs = 1500;
 
-// How near an exit counts as BEING AT IT, in X/Z metres. Measured need: on Muthru Bazaar the tester
-// stood 0.78 m from the Rabanastre East End arrival and was still fed "East 3. 3 steps" on ten
-// consecutive route presses, cycling through East / Northeast / Southeast / North and never
-// converging, because the last two metres are a transition trigger and not a walk.
-constexpr float kAtExitDist = 3.0f;
+// "At the exit" -- how near, in X/Z and in Y -- is RouteQuery::AtTransition's (S182), shared with the
+// Unreachable filter so the two can never disagree about arriving.
 // Inside this, the player is standing IN the doorway and a bearing to it would be noise.
 constexpr float kOnExitDist = 1.0f;
-// ...and it must ALSO be within this much of the seam's own height (Session 74).
-//
-// Y used to be deliberately ignored here, on the reasoning that an exit's height was unreliable. That
-// was true when the height came from the map-control blob, and it stopped being true in Session 64
-// when an exit became a walkmap FLOOR POLYGON -- its Y is now a floor. Ignoring it meant Upper
-// Apartments announced "At the exit" for the Highhall seam while the player stood 7.8 m beneath it,
-// because the two exits there are 4 m apart horizontally and 9.7 m apart vertically.
-//
-// Generous on purpose: it only has to separate storeys, never to judge a slope or a doorstep. The
-// old rule survives for anything blob-derived; this applies to walkmap seams, which is all of them.
-constexpr float kAtExitDy   = 3.0f;
 
 // THE DESTINATION NAME IS NOT SPOKEN. A route is requested for the thing the player just heard
 // named by `[`/`]`, or for the target they just locked, so "Eastgate. 3 north, 2 east" spends the
@@ -213,7 +200,6 @@ void OnMapTeardown() {
     g_epoch.fetch_add(1, std::memory_order_acq_rel);   // any pending request is now stale
     NavMesh::Invalidate();                             // drop the cached walkmap arrays for the dead map
     NavReach::Invalidate();                            // and the reachable-set answer built on it
-    ReachGate::Invalidate();                           // and the unreachable filter's own component
     MapQuery::InvalidateMapJumpSurfaces();             // and the seams, which are walkmap geometry too
     // The beacon's leg corners are coordinates on the map being torn down. It would notice via the
     // epoch on its next frame anyway, but stopping here cuts a ping mid-transition instead of
@@ -280,9 +266,6 @@ void OnGameFrame() {
             MapQuery::PrimeMapJumpSurfaces(MapNames::CurrentMapId(),
                                            g_epoch.load(std::memory_order_acquire));
             NavReach::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
-            // S179: the unreachable filter's own flood -- separate state, so NavReach above (and the
-            // exit filter built on it) is untouched by it.
-            ReachGate::OnGameFrame(g_epoch.load(std::memory_order_acquire), pp);
             // Breadcrumb the walked path. Piggybacks on the position read this block already does, and
             // is the only measurement we have of where a transition ACTUALLY fires -- see nav_trace.h.
             NavTrace::OnFieldFrame(MapNames::CurrentMapId(), pp);
@@ -364,9 +347,15 @@ void OnGameFrame() {
     // NO DIRECTION IS SPOKEN. S59 shipped one and it sent the tester east into a wall; there is nothing
     // left to derive anyway now that the route ends on the trigger. Checked BEFORE the search, so
     // standing on an exit can never produce "No path" either.
-    const float exitDist = NavCommon::Distance2D(from, target);
-    const float exitDy   = std::fabs(from.y - target.y);
-    if (isTransition && exitDist <= kAtExitDist && exitDy <= kAtExitDy) {
+    RouteQuery::Params q;
+    q.target       = target;
+    q.isTransition = isTransition;
+    q.bandLo       = bandLo;
+    q.bandHi       = bandHi;
+    q.reach        = reach;
+    q.seamGroup    = seamGroup;
+    float exitDist = 0.0f, exitDy = 0.0f;
+    if (RouteQuery::AtTransition(q, from, exitDist, exitDy)) {
         float facing = 0.0f;
         PlayerState::ReadCameraForwardStable(facing);
         std::wstring say = Phrase::Get(Phrase::Id::AtTheExit);
@@ -388,42 +377,22 @@ void OnGameFrame() {
         // Standing on the destination: there is no route left to lead anybody along.
         if (seedBeacon) AudioBeacon::Stop();
         if (!silent) Speech::Output(say, true);
+        if (!silent) ReachGate::NoteRouteResult(label, target, true);   // standing on it: plainly reachable
         ClearIfSeq(seq);
         return;
     }
 
-    // THE WHOLE SEAM, for the search's failure path only (Session 98).
-    //
-    // `target` is ONE VERTEX of a map-jump surface -- the nearest to the player when the scan ran.
-    // That is the right point to measure a distance to and the wrong one to end a route on: on map
-    // 315 the nearest vertex of a 27 m seam was the corner the walkable approach reaches LAST, and
-    // the route validated 21 of 22 legs, drove 20 m along the surface, and was called "No path".
-    // `PathSearch::Run` consults this only after the ordinary single-point search has already
-    // failed, so a route that works today never sees it.
-    //
-    // A `false` here means NOT SWEPT YET, not "no seams" (map_seams.h) -- so the vector stays empty
-    // and the search behaves exactly as it does today. Never invent a fallback from a blind read.
-    std::vector<NavMesh::PolyId> seamPolys;
-    if (seamGroup != 0) {
-        std::vector<MapQuery::MapJumpSurface> surfaces;
-        // The SAME map id the seam sweep is primed with two hundred lines above, so the cache's
-        // read guard (`g_seamMap != mapId`) can only agree with the writer's.
-        if (MapQuery::CachedMapJumpSurfaces(MapNames::CurrentMapId(), surfaces)) {
-            for (const MapQuery::MapJumpSurface& s : surfaces) {
-                if (s.group != seamGroup) continue;
-                seamPolys.reserve(s.polys.size());
-                for (int p : s.polys) seamPolys.push_back(static_cast<NavMesh::PolyId>(p));
-                break;
-            }
-        }
-    }
-
-    // (Session 106's danger-zone argument was REVERTED in S108 -- it made map 568's Door 2
-    // unroutable. The zone table survives only as the F10 sneak-assist map whitelist.)
+    // The seam set for the failure path, and the search itself: RouteQuery::Search (S182), the same call
+    // the Unreachable filter makes, so the answer it hides on is this answer.
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
-    PathSearch::Plan r = PathSearch::Run(from, target, curEpoch, bandLo, bandHi, reach, rawPoly, poly, st,
-                                         seamPolys.empty() ? nullptr : &seamPolys);
+    PathSearch::Plan r = RouteQuery::Search(q, from, curEpoch, rawPoly, poly, st);
+    // THE UNREACHABLE FILTER'S ONLY INPUT (S182): the answer this request is about to SPEAK. A Frontier is
+    // spoken as "No path", so for the filter it is exactly that. Not recorded when the player will not hear
+    // it (a silent beacon replan), nor when the search could not place the player at all -- that is no
+    // answer about the target. Storing it is a lock and a short vector scan; the filter never searches.
+    if (!silent && RouteQuery::AnsweredAboutTarget(st))
+        ReachGate::NoteRouteResult(label, target, r == PathSearch::Plan::Route);
 
     const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
                          : (r == PathSearch::Plan::Frontier) ? "Frontier"

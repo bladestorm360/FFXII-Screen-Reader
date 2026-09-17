@@ -11,7 +11,6 @@
 #include "navigation/nav_blocked.h"
 #include "navigation/player_state.h"
 #include "navigation/reach_gate.h"
-#include "ui/mod_menu.h"
 #include "core/logger.h"
 
 #include <windows.h>
@@ -78,6 +77,10 @@ struct Node {
 //
 // The heuristic stays plain Euclidean and therefore stays admissible: penalties only ever ADD to the
 // true cost, so a straight-line estimate can never overshoot it.
+//
+// TWO CUTS SURVIVE, AND BOTH ARE THE GAME'S OWN WORD RATHER THAN OURS: an edge with no neighbour (there
+// is nothing to price), and -- since S182 -- a floor a SCRIPT has closed (see below). Every measurement
+// WE make stays a price.
 constexpr float kTightPenalty   = 500.0f;    // body does not fit anywhere along this edge
 constexpr float kTerrainPenalty = 2000.0f;   // the LEADER's floor class may not stand on the neighbour
 constexpr float kBlockedPenalty = 2000.0f;   // the player PHYSICALLY failed to get past here
@@ -99,14 +102,26 @@ constexpr float kIdenticalStopTol = 0.5f;
 // not ask for (S100: the 311<->321 auto-walk bounce). Same tier as a physical block: avoided
 // whenever any alternative exists, still crossable when it is genuinely the only way.
 constexpr float kForeignSeamPenalty = 2000.0f;
-// A FLOOR A SCRIPT HAS CLOSED (S179) -- only while the `Unreachable filter` row is ON. Such a poly is
-// already TerrainRefused and pays kTerrainPenalty like any bit-23 ground, and that flat 2000 was not
-// enough: Mirror of the Soul's route to its second Ancient Door paid terrain=8000 to cut through door 4's
-// closed floor, and the player stuck on it (`blocked: recorded (136.7,25.5,160.7)`). Unlike static
-// bit-23 ground (ledges under good exits, S96), a script-closed floor is a door that is shut, so an
-// alternative is worth ten times more. STILL A PRICE: a goal whose only approach is through a closed
-// door still routes and still says so. The target's own closed floor is exempt (reach_gate.h).
-constexpr float kClosedFloorPenalty = 20000.0f;
+// A FLOOR A SCRIPT HAS CLOSED IS CUT, NOT PRICED (S182 -- the user's S181 ruling, "price what we infer,
+// cut what the game declares"). There is no constant for it, because there is no price.
+//
+// What it replaced: S179 priced such a poly +20000, and only while the `Unreachable filter` row was On.
+// With the row Off (the default) it paid the flat kTerrainPenalty like any bit-23 ledge, so a shut door
+// lying across the short way was simply bought: Mirror of the Soul's route paid terrain=8000 through
+// door 4's shut floor and the player stuck on it. Even at +20000 a target whose ONLY approach was
+// through a shut door still got a confident route through it -- a wrong route, which for a blind player
+// is worse than "No path" (L-75).
+//
+// WHY A CUT IS LEGITIMATE HERE WHEN S96 PROVED CUTS OVER-REFUSE: the evidence class. S96 cut on static
+// terrain TYPE, our proxy for walkability, and the party wades that water. A script-closed floor --
+// raw class bit clear, effective bit set (ReachGate::ScriptClosedFlags) -- is the engine's own runtime
+// refusal after a `setmapidfloor`: measured on S179's doors and S181's waterfalls. The row no longer
+// has any say in routing; it only decides what the LIST shows.
+//
+// The closed floor the TARGET or the PLAYER stands on is exempt, by material id: a route to a shut door
+// ends on that door's own shut floor, and a player standing on a floor a script has just closed must
+// still be able to route off it. The exemption is by MATERIAL, so a goal on the same material as a
+// barrier also exempts that barrier -- tighten it to the goal's connected patch only if a case turns up.
 
 // A portal a later attempt should avoid, because the taut path through it turned out not to be
 // walkable. Scoped to ONE request -- never cached across presses, because the obstacle may be a door
@@ -237,20 +252,20 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // S100 tester round's 311<->321 bounce. Priced, never cut, and the goal's own seam is exempt
     // by construction.
     const int goalGroup = (!goalOffMesh) ? NavMesh::MapJumpGroup(goal) : 0;
-    // S179: closed floors priced hard, ONLY with the Unreachable filter row on. Off, `closedAware` is
-    // false and not one crossing below is priced differently. The closed floor the TARGET or the
-    // PLAYER stands on is exempt by material id -- routing to a shut door ends on its own shut floor,
-    // and every approach to it would otherwise pay the same penalty for nothing.
-    const bool closedAware = ModMenu::UnreachableFilterOn();
+    // S182: floors a script has closed are CUT (see the note above kTightPenalty's block), with the
+    // start's and the goal's own closed material exempt. The class bit is read ONCE per request.
+    const uint32_t closedBit = ReachGate::PartyRefuseBit();
     uint32_t closedExemptMats = 0;
-    int refClosed = 0;
-    if (closedAware) {
-        for (const PolyId q : { start, goal }) {
-            if (q == kNoPoly || !ReachGate::ScriptClosed(q)) continue;
-            uint32_t qr = 0, qe = 0;
-            if (NavMesh::PolyFlags(q, qr, qe)) closedExemptMats |= 1u << ((qr >> 13) & 0x1F);
-        }
+    for (const PolyId q : { start, goal }) {
+        uint32_t qr = 0, qe = 0;
+        if (q == kNoPoly || !NavMesh::PolyFlags(q, qr, qe)) continue;
+        if (ReachGate::ScriptClosedFlags(qr, qe, closedBit)) closedExemptMats |= 1u << ReachGate::Material(qr);
     }
+    // The evidence for every cut, across all attempts: how many crossings, which materials, and one poly
+    // to put a position on. A wrong cut then reads as a named map + material + place in one grep.
+    int      refClosed     = 0;
+    uint32_t closedMatsCut = 0;
+    PolyId   closedSample  = kNoPoly;
 
     // ---- THE GOAL SURFACE, observed but never obeyed ------------------------------------------
     // `seamPolys` is the map-jump surface the target belongs to, or null for everything that is not
@@ -408,6 +423,20 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                 // one -- there is nothing on the other side to price.
                 if (n == kNoPoly) { ++refNoPoly; continue; }
 
+                // THE OTHER TRUE CUT (S182): a floor a script has closed, unless it is the start's or the
+                // goal's own. Never expanded, so no corridor, frontier, surface goal or repair rung built
+                // from this search can lead across it.
+                {
+                    uint32_t cr = 0, ce = 0;
+                    if (NavMesh::PolyFlags(n, cr, ce) && ReachGate::ScriptClosedFlags(cr, ce, closedBit) &&
+                        !((closedExemptMats >> ReachGate::Material(cr)) & 1u)) {
+                        ++refClosed;
+                        closedMatsCut |= 1u << ReachGate::Material(cr);
+                        if (closedSample == kNoPoly) closedSample = n;
+                        continue;
+                    }
+                }
+
                 FVec3 nc{};
                 if (!Centroid(n, nc)) continue;
 
@@ -439,11 +468,6 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                     const bool haveFlags = NavMesh::PolyFlags(n, nr, ne);
                     if (haveFlags) NoteRefusedFlags(ne);
                     penT += kTerrainPenalty;
-                    if (closedAware && haveFlags && !((closedExemptMats >> ((nr >> 13) & 0x1F)) & 1u) &&
-                        ReachGate::ScriptClosed(n)) {
-                        ++refClosed;
-                        penT += kClosedFloorPenalty;
-                    }
                 }
                 // A FOREIGN TRANSITION SURFACE IS A TELEPORT, NOT A FLOOR (Session 100 tester
                 // round: the replanned Lowtown route cornered ON the No. 10 Channel seam and
@@ -525,6 +549,33 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
 
         // ---- Reconstruct the corridor, then STRING-PULL it -----------------------------------------
         PathCorridor::Build(came, reached, pr.chain, pr.portals, pr.clipped, pr.blocked);
+
+        // WHICH GROUND THE CORRIDOR PAID FOR (S182). `terrain=4000` said two polys the leader's class
+        // refuses were bought, and nothing said which: S181 read Falls of Time's as the waterfalls, while
+        // every march breach in that log named static material-0 ground (`nbrEff=0x07800000`). The poly,
+        // its effective flags, its material and where it is settle that in one line. Only a corridor
+        // that pays terrain prints it.
+        if (pr.penTerrain > 0.0f) {
+            char tp[360]; int q = 0, shown = 0, total = 0;
+            for (const PolyId cp : pr.chain) {
+                if (cp == start) continue;                 // a price is paid on ENTERING a poly
+                if (NavMesh::Walkable(cp) && !NavMesh::TerrainRefused(cp)) continue;
+                ++total;
+                if (shown >= 4 || q >= static_cast<int>(sizeof(tp)) - 72) continue;
+                uint32_t cr = 0, ce = 0;
+                FVec3 cc{};
+                NavMesh::PolyFlags(cp, cr, ce);
+                NavMesh::PolyCentroid(cp, cc);
+                q += snprintf(tp + q, sizeof(tp) - static_cast<size_t>(q),
+                              "%s%d eff=0x%08X mat=%u at (%.1f,%.1f,%.1f)", shown ? " | " : "", cp, ce,
+                              ReachGate::Material(cr), cc.x, cc.y, cc.z);
+                ++shown;
+            }
+            char tm[440];
+            snprintf(tm, sizeof(tm), "terrain paid: attempt %d, %d poly(s) the party's class refuses: %s%s",
+                     attempt, total, q ? tp : "none found on the chain", total > shown ? " ..." : "");
+            Log::Write("NAV-ROUTE", tm);
+        }
 
         // ---- string-pull, then repair the corners, then validate -----------------------------------
         std::vector<Portal> plain;
@@ -948,12 +999,22 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                  best.penTerrain, best.penOther, fl);
         Log::Write("NAV-ROUTE", m);
     }
-    if (closedAware && (refClosed > 0 || closedExemptMats != 0)) {
-        char m[176];
+    // Every request that met a script-closed floor says so, whether it routed or not (S182). The
+    // falsifier for the cut: a map where this fires and the player walks that crossing by hand.
+    if (refClosed > 0 || closedExemptMats != 0) {
+        char mats[96]; int q = 0;
+        for (int i = 0; i < 32 && q < 80; ++i)
+            if ((closedMatsCut >> i) & 1u) q += snprintf(mats + q, sizeof(mats) - q, "%s%d", q ? "," : "", i);
+        if (q == 0) snprintf(mats, sizeof(mats), "none");
+        char where[96] = "";
+        FVec3 sc{};
+        if (closedSample != kNoPoly && NavMesh::PolyCentroid(closedSample, sc))
+            snprintf(where, sizeof(where), "; first at poly %d (%.1f,%.1f,%.1f)", closedSample, sc.x, sc.y, sc.z);
+        char m[320];
         snprintf(m, sizeof(m),
-                 "closed-floor: %d crossing(s) priced +%.0f each (exempt material mask 0x%X: the "
-                 "start's / goal's own closed floor) -- Unreachable filter ON",
-                 refClosed, kClosedFloorPenalty, closedExemptMats);
+                 "closed-floor: %d crossing(s) CUT -- script-closed floor, material id(s) %s%s | exempt "
+                 "material mask 0x%X (the start's / goal's own closed floor)",
+                 refClosed, mats, where, closedExemptMats);
         Log::Write("NAV-ROUTE", m);
     }
 

@@ -303,6 +303,16 @@ and above all not the very thing the feature under repair is supposed to give th
 - **NO** polling, timers, or per-frame checks — event-driven hooks only. **No
   exceptions** outside narrow polled-monitor cases that have been documented and
   explicitly approved.
+- **NEVER ADD A FRAME STALL TO THE GAME THREAD WITHOUT THE USER'S EXPRESS PERMISSION FOR THAT SPECIFIC
+  MECHANISM (CRITICAL).** No background route search, flood, scan or engine-call loop that runs on the game
+  thread on the mod's own initiative — however it is rate-limited, spaced or paused. Work the PLAYER asked
+  for with a keypress (a route request) is the only game-thread cost that needs no separate approval. And
+  never move such work to another thread instead: the engine's collision and walkmap functions run against
+  state the game thread mutates, which trades a stall for a crash. If a feature cannot be built without it,
+  say so and ask; the user's standing answer is to revoke the feature. **Why (2026-09-17, S182):** a filter
+  build ran one real route search in the background every 250 ms+ (2-43 ms stall each) and was revoked
+  before deployment: *"game freeze is 100%, completely unacceptable and you should never have built a
+  system that could potentially do that without express permission."* Lessons.md `L-88`.
 - **NEVER COUNT FRAMES.** A counter incremented once per call and compared against a
   constant silently means "N/60 seconds", and it is wrong at every other frame rate —
   at 144 fps a 90-frame budget is 0.63 s, not the 1.5 s its comment claims. Use a

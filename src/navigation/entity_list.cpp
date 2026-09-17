@@ -151,9 +151,9 @@ int RescanLocked() {
     // have already been through them once.
     EntityScan::ApplyPlayerLabels(fresh);
     EntityScan::NumberDuplicateLabels(fresh, detail);
-    // S179: a reachability verdict on every entry, carried ones included. Removes nothing -- the
-    // filter below acts on it only when the `Unreachable filter` row is on, and the verdicts are
-    // logged either way.
+    // S179/S182: the route key's own recorded answer on every entry, carried ones included, while the
+    // world it was given in still holds. Removes nothing; the filter below acts on it only while the row
+    // is on.
     ReachGate::Annotate(fresh);
 
     g_lastScanMs = now;
@@ -211,9 +211,9 @@ void RefreshPositionsLocked(const FVec3& playerPos) {
 bool PassesFiltersLocked(const Entity& e) {
     if (g_currentCategory != Category::All && e.category != g_currentCategory) return false;
     if (g_availability == Availability::Gated && e.available) return false;
-    // S179, the `Unreachable filter` row (default OFF). Off: this line is never true, so the list is
-    // exactly what it was. On: hides what ReachGate judged behind a script-closed floor or not
-    // connected at all; an Unknown verdict is never hidden.
+    // The `Unreachable filter` row (S179, rebuilt S182; default OFF). Off: this line is never true, so
+    // everything is listed. On: hides what the route key answered "No path" for, while the world it was
+    // asked in still holds (reach_gate.h); anything never routed to is never hidden.
     if (ModMenu::UnreachableFilterOn() && ReachGate::Hides(e.reach)) return false;
     return true;
 }

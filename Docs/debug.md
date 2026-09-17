@@ -7,11 +7,127 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-### OPEN — DIAGNOSED, FIX SPECIFIED, NOT BUILT (S181 play) — routes buy their way through the waterfalls
+### FAILED (S179), REBUILT S182 (background searches REVOKED), UNPLAYED — the Unreachable filter judged a flood, and the flood was not the router
+
+KEYWORDS: unreachable filter hides nothing Pilgrim's Door 1 No path still listed ReachGate Judge flood open
+component 3 m ring verdict never logged route verdict background check RouteQuery world generation
+NoteRouteResult ScopedMute reach-gate checked NO PATH HIDDEN strict flood 20 of 1194 game thread stall
+freeze revoked background search record only answered No path
+
+**Reported (2026-09-17, own log `x64\FFXII-Screen-Reader-Latest.log`, session 06:26, map 185):** *"you built
+the unreachable filter completely wrong: when toggled off, if an entity is unreachable, it should say 'no
+path' … EG. Pilgrims Door 1 in the latest log. When toggled on, entities that have no valid path should be
+hidden from the entity list. Currently it is not hiding entities that have no valid path."*
+
+**The contract, in the user's words, and it is the whole spec:** Off = everything listed, and routing to
+something with no valid path says "No path". On = anything with no valid path is HIDDEN. So the verdict the
+filter hides on must BE the router's answer.
+
+**What S179 built instead, and why it could never meet that.** `ReachGate` ran its own flood through
+`NavMesh::Walkable` (the permissive type test) refusing only script-closed polys, then judged an entity
+Reachable if ANY poly on rings of 0 / 1.5 / 3 m around it was in that component. Measured in the log:
+- `reach-gate: fill complete -- 1188 polys open … 6 script-closed crossing(s) refused, material id(s) 1,2,3`
+  — the "open" component was the whole map but six polys. It walks straight through static bit-23 ground
+  the router only PRICES and the march then refuses, so it went round every closed door.
+- **Zero `reach-gate: "…"` verdict lines in this log AND in the 2026-09-16 Falls of Time log.** A non-
+  Reachable verdict is always logged, so in two whole play sessions the flood never judged a single entity
+  unreachable. With the row On (set at 04:08:53) both Pilgrim's Doors stayed listed.
+- Same spot, same door: `drain seq=22: target="Pilgrim's Door 1" … plan=NoPath` (4 attempts, 4986 expands,
+  `oracle: goal poly 1006 is IN the start poly 941's adjacency component … the SEARCH giving up`).
+- The obvious tighter flood is no better: NavReach's terrain-refusing twin logged `strict, terrain-refusing:
+  20` of 1194 on this map at entry. No flood approximates the router; only the router answers "valid path".
+
+**FIRST REBUILD (S182) — REVOKED BY THE USER BEFORE IT WAS EVER DEPLOYED. Do not rebuild it.** It made the
+verdict the router's answer by running `RouteQuery::Search` in the BACKGROUND on the game thread: one search
+per check, nearest unchecked entity first, spaced `max(250 ms, 8 x the last check)`, paused during fights
+and pending route requests, router logs muted by a thread-local `Log::ScopedMute`. Each check stalls the
+frame it runs in (2-43 ms measured for routes on these maps). The user, on reading that cost: *"game freeze
+is 100%, completely unacceptable and you should never have built a system that could potentially do that
+without express permission. If you can't build the unreachable filter without intercepting the main game
+thread (which could cause crashing), then revoke it completely … if you can think of another way around
+that doesn't potentially cause game freezing or crashing, then do that instead."* It also broke the
+standing CLAUDE.md rule against polled per-frame work without approval. Deleted, with `Log::ScopedMute`.
+Rule and lesson: CLAUDE.md "NEVER add a frame stall to the game thread", `L-88`.
+Also ruled out for the same reason: running the search on another thread (it calls engine collision
+functions against state the game thread mutates — a crash risk, not just a stall), and any flood, bounded
+or not (S179's was bounded and still wrong).
+
+**WHAT SHIPPED INSTEAD (S182, clean build, UNPLAYED): the filter hides only what the route key has ALREADY
+answered "No path" to.** No search, flood or per-frame work of its own anywhere:
+1. **The planner's drain records the answer it is about to speak** (`ReachGate::NoteRouteResult`): Route or
+   "At the exit" = reachable; NoPath or Frontier (spoken "No path") = not. Only for requests the player
+   HEARS (not silent beacon replans), and not when the search could not place the player at all
+   (`RouteQuery::AnsweredAboutTarget`). Cost on the game thread: a 640-byte guarded read, a lock, a scan of
+   at most 256 records — inside the request the player already made.
+2. **The record holds for one world state:** map epoch + override-table fingerprint (a door or waterfall
+   moving) + `NavReach::Generation()` (a lift, a scripted move). Compared at the list rebuild, on the thread
+   doing the rebuild. Any change and the entity is listed again.
+3. **Matching:** same label at the same point (0.25 m) — the request carries the entity's own position.
+   Tight because Destiny's March lists each Door of Hours once per side (spacing not measured), onto
+   different rooms. A walking NPC stops matching and is listed.
+4. `RouteQuery` (`route_query.{h,cpp}`) stays: the `\` request and the planner's arrival test + search,
+   moved verbatim, now called only by the route key. S179's flood, `Judge` and `NavReach::ContainsPoly`
+   are deleted.
+
+**What this does NOT do, stated plainly:** it does not hide anything the player has not routed to. With
+the row On, Pilgrim's Door 1 is listed until `\` says "No path" to it; from then it is hidden until a door
+opens, a waterfall moves or the area changes. That is the most the filter can do without searching on its
+own, which the user has ruled out.
+
+**Falsifiers for the next log:**
+- `reach-gate: "Pilgrim's Door 1" at (…) answered No path -- hidden from the list while the Unreachable
+  filter is on` after a `\` press, and the door absent from `[` / `]` on the next press with the row On.
+- The door listed again after the puzzle opens it (the override table changes, so the record lapses).
+- No `reach-gate:` line of any kind without a route press before it, and no `STALL ReachGate` line ever.
+
+### BUILT S182, UNPLAYED — routes buy their way through the waterfalls (A* now CUTS script-closed floors)
 
 KEYWORDS: routing through water waterfall Falls of Time map 184 closed floor price kClosedFloorPenalty
 closedAware UnreachableFilterOn path_search 244 terrain 4000 blocked recorded material 3 4 setmapidfloor
-reach-gate filter OFF log only stuck in water
+reach-gate filter OFF log only stuck in water closed-floor CUT terrain paid static material 0 0x07800000
+
+**S182 STATUS — read this block first; the S181 write-up below is kept as the record.**
+
+**Built (clean build, UNPLAYED):** points 1, 2, 3 and 5 of THE FIX below, as ruled. In `PathSearch::Run` a
+neighbour whose flags pass `ReachGate::ScriptClosedFlags` (raw class bit clear, effective set) is NOT
+EXPANDED — `continue`, before any pricing — unless its material is the start's or the goal's own. The row
+no longer touches routing (`ui/mod_menu.h` no longer reaches `path_search.cpp` at all), and
+`kClosedFloorPenalty` is deleted. Because the poly is never expanded, no corridor, frontier, surface goal
+or repair rung can lead across it. Point 4 (short-circuit from the flood) was NOT built: the flood is gone
+(see the entry above) and the cut alone is what makes the answer correct.
+
+**Two new log lines:**
+- `closed-floor: N crossing(s) CUT -- script-closed floor, material id(s) 3,4; first at poly P (x,y,z) |
+  exempt material mask 0x..` — every request that met one, routed or not (replaces the `priced +20000 …
+  Unreachable filter ON` line).
+- `terrain paid: attempt K, N poly(s) the party's class refuses: <poly> eff=… mat=… at (x,y,z) | …` —
+  whenever a corridor pays terrain. **This exists because the S181 diagnosis below is NOT proven.**
+
+**CORRECTION TO THE S181 EVIDENCE (L-07, L-01) — the waterfall reading was an inference, not a measurement.**
+S181 read `corridor pays terrain=4000` + three `blocked` spots as "the route crosses two waterfall polys".
+Nothing in that log says WHICH polys were paid for. What the log does name is every march breach: all 24
+of them are `nbrEff=0x07800000` — material 0, bits 23-26 set, a material the waterfall layout never touches — not materials 3 or 4
+(`0x0FA06000` / `0x0F848000`). So the stuck spots may be static water or ledge ground grazed through, not
+the falls. The cut is still the ruled fix and removes the waterfall half for certain; whether it is the
+WHOLE fix for Falls of Time is exactly what `terrain paid:` answers on the next visit:
+- corridor pays terrain and every listed poly is `mat=0` (`eff=0x07800000`/`0x0F800000`) →
+  the waterfalls were never the crossing; the defect is the march's 1 m graze (`kGrazeAllow`) forgiving a
+  narrow strip of refused ground. That is a new diagnosis and needs its own ruling (it touches the S100
+  march accept rule on every map) — do NOT widen it onto working maps without one (L-48).
+- `closed-floor: … CUT … material id(s) 3,4` and the route to the leg's exit now `terrain=0` → fixed.
+- `closed-floor` fires and the exit answers "No path" → at that stage the exit is genuinely behind the falls
+  from where the player stands; check the stage (`[SOCHEN] waterfall: … stage N`) against the layout table.
+
+**Falsifier for the cut itself (L-48):** any map where `closed-floor: … CUT` names a material and the player
+walks that crossing by hand. Watch in particular the exemption: it is by MATERIAL, so a target on the same
+material as a barrier also opens that barrier (Destiny's March's two-sided Doors of Hours are the likely
+first case: routing to a door's far-side object from the near side).
+
+**STRUCK (S182): the "Stopgap the player can use TODAY" paragraph below** — the row no longer prices
+anything, so switching it On does not change a route.
+
+---
+
 
 **Reported (2026-09-16, own log `x64\FFXII-Screen-Reader-Latest.log`, session 12:32):** *"I think it's
 trying to route through water."* Correct, and the log says so in four places.
@@ -86,7 +202,7 @@ one; and **log every refused crossing with its material id on a FAILED search**,
 shows up as a named map + material in one grep rather than as a silent dead end. Falsifier: any map
 where `closed-floor:` fires and the player walks that crossing by hand.
 
-**Stopgap the player can use TODAY:** switch `Unreachable filter` On in the `F8` menu while in the
+**~~Stopgap the player can use TODAY~~ (STRUCK S182 — the row no longer affects routing):** switch `Unreachable filter` On in the `F8` menu while in the
 palace. That is the same code path, already shipped — routes then price the falls at 20000 per poly and
 go round. Two honest limits on the stopgap: the list also hides what is behind a closed floor (the cost
 the user accepted in S179), and because it is still a PRICE, a target whose only approach is the falls
@@ -203,7 +319,9 @@ door partly in the way.
    The in-map rule was the user's choice ("in-map doors -> Doors"). **Risk, named so it can be tested
    (L-78):** a lift or cart that opens its own platform passes both tests. Every promotion logs
    `door-binding: … -> Door: routine[N] "<name>", <why>`; a lift in that list is the falsifier.
-2. `ReachGate` + mod-menu row `Unreachable filter`, **default OFF**. A third flood refuses script-closed
+2. **[STRUCK S182 — both halves replaced; see "the Unreachable filter judged a flood" at the top of this
+   file. The row now hides what the ROUTER answers "No path" for, and A* CUTS closed floors whatever the row
+   says.]** `ReachGate` + mod-menu row `Unreachable filter`, **default OFF**. A third flood refuses script-closed
    polys only; verdicts are logged either way (`reach-gate: "<label>" … WOULD HIDE`). With the row ON, the
    list hides BehindClosedFloor/Disconnected, and A* adds `kClosedFloorPenalty` 20000 per closed poly,
    exempting the start's and goal's own closed material. **Known false-hide risk with the row ON:**

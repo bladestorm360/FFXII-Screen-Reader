@@ -119,6 +119,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/map_script_routines.cpp
     src/navigation/door_binding.cpp
     src/navigation/reach_gate.cpp
+    src/navigation/route_query.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp

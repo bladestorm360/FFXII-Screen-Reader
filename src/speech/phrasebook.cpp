@@ -183,9 +183,9 @@ const Row kTable[] = {
 
     // S179: Unreachable filter row -- same order as the enum's tail. Flag any reword to the user.
     EN(L"Unreachable filter"),
-    EN(L"Whether things you cannot walk to right now are listed, such as places behind a closed door or across water."),
-    EN(L"Off lists everything and routes exactly as before."),
-    EN(L"On hides what is out of reach until you can reach it, and routes steer around closed doors."),
+    EN(L"Whether something the route key has answered No path to stays in the list."),
+    EN(L"Off lists everything."),
+    EN(L"On hides anything the route key has answered No path to, until a door opens, a waterfall moves or you leave the area."),
 
     // S180: Sochen Cave Palace door puzzles -- same order as the enum's tail. Flag any reword to the user.
     EN(L"Solve door puzzles"),

@@ -81,10 +81,10 @@ enum class SettingId : int {
     // carries -- means "no override" and hands the question back to detection. Reading value 0 as a
     // decision would force stock on everyone and the detector would never fire. See `SetVariant`.
     TextGlyphs,
-    // S179: hide what cannot be walked to right now (behind a script-closed floor, or not connected),
-    // and price closed floors hard in the router. Default OFF, and OFF is byte-identical routing and
-    // listing: the user's condition for the feature was that working paths must not change unless the
-    // player chooses it. Placed after TextGlyphs so every existing row keeps its position.
+    // S179, rebuilt S182: hide an entity once the route key has answered "No path" to it, until the world
+    // changes (reach_gate.h). It decides what the LIST shows and nothing else, and does no work of its
+    // own -- since S182 the router cuts script-closed floors whatever this row says, by the user's ruling.
+    // Default OFF, which lists everything. Placed after TextGlyphs so every existing row keeps its position.
     UnreachableFilter,
     // S132, both visible ONLY while a shout-minigame sequence is actually running (shout_meter.h's
     // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
@@ -124,7 +124,7 @@ bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
 bool AutoDetailOn();       // S147: whether detail is VOLUNTEERED on highlight. Never gates a key
 bool ControllerOn();       // whether the pad intercept may read or consume anything. Input thread
-bool UnreachableFilterOn(); // S179: list filter (input thread) + closed-floor price (game thread)
+bool UnreachableFilterOn(); // S179/S182: the list filter only -- never routing, never a search
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
 bool SochenPuzzlesOn();    // S180: whether Sochen's two door puzzles are marked solved. Game thread
