@@ -3,9 +3,24 @@
 Triggered when the user says **"prepare release X.X"** (e.g. `prepare release 0.01`,
 `prepare release 1.2`). Substitute `<version>` for the user's number throughout.
 
-**The user ships the release.** This procedure produces the zip and stops. It does **not** tag, does
-not push, and does not create a GitHub Release — releases are distributed by the user by hand, and
-`/Releases/` is gitignored so no artifact ever reaches the repo.
+**CHANGED 2026-09-17, AT V1.0 — THE PROCEDURE NOW PUBLISHES.** It produces the zip *and* tags,
+pushes, and creates a public GitHub Release with the zip attached. `/Releases/` is still gitignored,
+so the artifact still never reaches the repo as a tracked file — it reaches people as a **release
+asset**, which is a different thing and is the point of the change.
+
+> **What the old wording was, and why it was right until it wasn't.** This file used to open *"The
+> user ships the release. This procedure produces the zip and stops — it does not tag, does not push,
+> and does not create a GitHub Release."* That was correct for fourteen releases: every one of them
+> went to a handful of testers and sponsors by hand, and the repo was private, so a GitHub Release
+> would have been a download link that 404s for everyone who mattered. **Neither half holds at V1.0.**
+> The repo went public at V1.0 and the audience is now the public, so hand-distribution is the thing
+> that does not scale and the tag is what lets a bug report name a build. The old rule is not being
+> overridden as a mistake — it is being retired because its premise expired.
+
+**Step 6 onward is outward-facing and irreversible-ish. Confirm with the user before running it**
+unless they triggered this procedure with an explicit instruction to publish. A tag can be deleted
+and a Release can be unpublished, but a zip that people have already downloaded cannot be recalled,
+and a repo that has been public can have been cloned.
 
 ## Inputs
 
@@ -72,6 +87,14 @@ lone backtick is the literal `` ` `` key name and must survive. Then, on every l
 of spaces to one and strip trailing whitespace**; write CRLF throughout and no BOM. No leftover `#` or
 backticks beyond that single one. Save as `ReadMe.txt` (capital R, capital M) in the version
 directory.
+
+**Trailing blank lines are dropped, and the file ends with exactly one CRLF (added V1.0).** This is
+the **third** conversion rule to be found by a failing rebuild rather than read out of this
+paragraph. `README.md` ends with a blank line; every shipped `ReadMe.txt` ends `you.
+` with
+nothing after it. A converter that simply CRLF-joins the source's lines comes out **2 bytes long**
+and every other byte identical — which is exactly how the previous two omissions presented, and is
+undetectable without the validation step.
 
 > **The last two rules were undocumented until V0.7, and their absence broke a rebuild.** The
 > space-collapse and the trailing-whitespace strip appeared only in the *audit* sentences of earlier
@@ -155,14 +178,55 @@ are a separate commit made *before* the trigger" bounds a release's **scope** �
 correcting a line already known to violate `CLAUDE.md`. Three records flagged the same changelog
 sentence and shipped it three times.
 
-### 5. Report
+### 5. Commit the record, and push
 
-Confirm the zip was created and list its contents. Do not push, tag, or publish anything.
+The record from step 4 is a repo change like any other. Commit it, then push `master`. **Verify the
+push with git, never with a memory file or this file** — `git rev-list --left-right --count
+origin/master...HEAD` must read `0 0`.
+
+Everything through here is reversible. Everything below is not.
+
+### 6. Tag the release
+
+```
+git tag -a V<version> -m "<title>" <commit>
+git push origin V<version>
+```
+
+- **The tag name carries the leading `V`**, matching the release directory and the zip: `V1.0`.
+- **Annotated (`-a`), never lightweight.** An annotated tag carries its own date, author and message,
+  and is what `gh release create` shows. A lightweight tag is a bare pointer and loses all of that.
+- **Tag the commit the record describes**, which is the commit carrying the record itself — so
+  checking out the tag gives you the record of the build, not the state one commit before it.
+- **A tag that has been pushed is effectively permanent.** Deleting it does not reach anyone who has
+  already fetched. If the version number is wrong, find that out at step 4, not here.
+
+### 7. Create the GitHub Release
+
+```
+gh release create V<version> "Releases\FFXII-Screen-ReaderV<version>.zip" --title "<title>" --notes-file <notes>
+```
+
+- **The zip is attached as a release asset.** That is the whole point — it is the download link.
+- **Write the notes for players, not for us.** The release records in this file are a build-tracing
+  artifact full of commit hashes and internal lessons; a release note is what a blind player reads to
+  decide whether to install. Install steps, what is new, what is known-broken, how to report a bug.
+  **Do not paste the record.**
+- **`--latest` is the default and is what you want** for a normal release. Use `--prerelease` for a
+  test or sponsor build if one is ever published this way.
+- **Never `--draft` and then forget it.** A draft Release is invisible and its tag is not, which is
+  the worst of both.
+- Check the asset actually uploaded (`gh release view V<version>`), because a failed upload leaves a
+  Release with no download and nothing says so.
+
+### 8. Report
+
+Confirm the zip, the tag, the Release URL, and that the asset is attached and downloadable.
 
 ## What this procedure does NOT do
 
-- **Does not tag or push.** The user ships releases by hand.
-- **Does not create a GitHub Release.** The repo is private and holds source only.
+- ~~**Does not tag or push.**~~ ~~**Does not create a GitHub Release.**~~ **BOTH RETIRED 2026-09-17
+  at V1.0 — it now does all three.** See steps 5–7 and the banner at the top of this file.
 - **Does not modify `README.md`.** If the readme needs changes, that is a separate commit made
   *before* the release-prep trigger.
 - **Does not bump a version string in code.** ~~There is no version constant in the build; the
@@ -182,7 +246,125 @@ Confirm the zip was created and list its contents. Do not push, tag, or publish 
 # Release Records
 
 Newest first. One entry per release, written at step 4. `Releases\` is gitignored, so this table is
-the only record in the repo that a given zip ever existed.
+the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
+which is most of the argument for tagging: a record can be edited, a tag points at a tree.
+
+## V1.0 — 2026-09-17
+
+**THE FIRST PUBLIC RELEASE, AND THE FIRST ONE THIS PROCEDURE PUBLISHED ITSELF.** Every release
+before it was a zip handed to testers and sponsors; this one is tagged `V1.0`, pushed, and attached
+to a GitHub Release on a repo that went **public** the same day. It is also the first release whose
+name carries no build-type suffix — there is no `-Test-Build` or `-Sponsor-Build` because it is not
+one. The trigger was the tester clear: a tester finished the game on this code and the bugs that
+clear turned up are fixed.
+
+**Built from:** `b21034c`. **The DLL's behaviour traces to `1d1b015`** (S184, the battle target
+groups) — everything after it is documentation, comments or build plumbing: `7dc2f4e` is
+comment-only on `ingame_menu_reader.cpp` (its own message says so, and the diff is one comment
+block), `58698bc` changes only how `CMakeLists.txt` finds the dev-tree root, `aa1d502` / `25d6d9e` /
+`66b0031` are docs, and `b21034c` is the stamp bump below. Covers **Sessions 177–184** since
+`V0.7-Test-Build`'s `9e6915d` (S176).
+
+**Artifacts.**
+
+dinput8.dll  947,712  sha256 7dde57ac157c03ada13c7b9d251250ada78bb88c9b56afe70fc66f766271cfdd
+SDL3.dll  1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll  122,368  carried from V0.7-Test-Build
+nvdaControllerClient64.dll  153,600  carried from V0.7-Test-Build
+ReadMe.txt  25,603  sha256 56cf92082b9da0d7eb82b6ff6d0cc3c686b4ac0bb7d79f21864f922d8bfc9c1d
+zip  1,276,318  sha256 3bdf47d81abec601f41eedf59fecb6502d7a1c6ffafa7aec100dfd497b04d236
+
+`dinput8.dll` grew **49,664 bytes** over V0.7's 898,048, which is the honest shape of eight sessions
+that each added real code — unlike V0.7, whose 512-byte delta across eleven sessions was the tell
+that seven of them had been reverted. **All four DLLs were re-verified x64** (PE machine field
+`8664`) rather than trusted because they shipped before; the two carried TTS DLLs are byte-identical
+to V0.7's.
+
+**The version number was checked against these records rather than taken at face value.** The
+trigger named `1.0` directly; `V0.7-Test-Build` (2026-08-30) is the newest record and `1.0` is
+untaken, so it stands. That is five releases running where the check was made, after three wrong
+numbers in the four before that. **It is still worth making when the number looks obvious.**
+
+**THE BUILD STAMP WAS RIGHT GOING IN.** `FFXII_SR_VERSION` 0.7 → 1.0 in `b21034c`, **with
+`build\CMakeCache.txt` updated in the same change** — it is a `CACHE STRING` and editing
+`CMakeLists.txt` alone is a silent no-op. **Verified in the shipped binary, never in the source:**
+`dinput8.dll` holds the null-terminated strings `1.0` (once) and `b21034c` (once) and **zero
+occurrences of `0.7`**, so a V1.0 log opens `Build: V1.0 (b21034c)`. Second release running that the
+bump was clean; the trap that shipped `V0.6` five times has now stayed shut twice.
+
+**ReadMe: CHANGED** — 25,603 bytes / 271 lines, against V0.7's 22,903 / 255. One commit touched
+`README.md` in this range, `66b0031`, made at the trigger in response to the key audit below.
+
+**Output audit on the shipped file:** zero `#`, zero `*`, zero `](`, zero `&#x20;`, zero doubled
+spaces, no BOM, CRLF on all 271 lines with no bare LF, and **exactly one backtick** — the literal
+`` ` `` key name, the same single survivor as every release since V0.2.1. The **17 backslashes**
+were each read and are all content: the two Windows install paths, and prose references to the `\`
+route key. The count is unchanged from V0.7.
+
+**THE CONVERTER WAS VALIDATED AGAINST TWO SHIPPED ARTIFACTS, NOT ONE — AND THE RULES AS WRITTEN WERE
+STILL NOT SUFFICIENT, FOR THE THIRD RELEASE RUNNING.** Rebuilt from step 2's rules, it reproduced
+both `V0.7-Test-Build\ReadMe.txt` (22,903 bytes, sha256 `7495b0ab…73904172`) and
+`V0.6.5-Sponsor-Build\ReadMe.txt` (20,759, `fd596d59…e475ca8`) **byte-identically**, each matching
+the hash its own record states. It did **not** pass first time: the output was **2 bytes long**,
+because `README.md` ends with a blank line and every shipped `ReadMe.txt` ends with exactly one CRLF
+after the last line of prose. **That is the third conversion rule to be recovered from a failing
+rebuild rather than read out of the paragraph that claims to be sufficient** — after the
+trailing-whitespace strip and the space-collapse at V0.7. Step 2 has been amended to state it, L-68
+applied at first occurrence.
+
+**The two-artifact check is the new bar and it earned its keep immediately.** V0.7 validated against
+one file and called the rules falsified-but-narrowly; a single artifact cannot distinguish "the
+rules are complete" from "the rules and this one file share a gap". Validating against two files
+from different months costs one extra command.
+
+**Readme key audit — ONE GAP, FIXED RATHER THAN FLAGGED.** All 36 keys the mod actually consumes
+were enumerated from `input_tracker.cpp`'s dispatch (`O T U G \ [ ] ` - = ' / ; P 4 5 6 7 8 9 B N ,
+. Home End` and the four arrows, plus `F4 F5 F6 F7 F8 F11`) and every one of them has a readme
+entry. `DIK_F9` appears in the source and is **not** a gap — it is the game's Hide On-Screen
+Keyboard, documented in a comment as deliberately left alone after the beacon moved off it.
+
+The gap was an existing key whose meaning changed on a screen, which is the half of the audit rule
+that is easy to skip. The keyboard `1` and `3` entries described only the field meaning of L1/R1
+("cycles game speed"); S184 established that in a battle target list those same buttons step the
+list through Foes / Party / Reserve / Allies, and the mod now speaks the group you land on. Both
+lines were rewritten in `66b0031`.
+
+**S184's readout itself adds NO readme entry, and that is the rule rather than an omission.** It
+reads on its own, the player makes no decision about it, and the user closed the phrasing follow-ups
+explicitly ("ALL WORKS AS INTENDED, NO new mod phrasing necessary"). A feature with no key has
+nothing for a player to look up — `CLAUDE.md`, and this file's own 2026-08-03 correction against
+listing features that read by themselves.
+
+**The other readme change was the framing.** Known Issues opened *"This is an early test build"* —
+the first sentence a new player would read, and false for a public 1.0. Only that sentence changed;
+**every item in the Known Issues list is still open and still shipped**, and none of them was
+quietly dropped to make the release look better.
+
+**What is actually in this build, by session.** S177 Polish diacritics — the detection never fired
+and two wrong constants were the cause; the S130 toggle returns as `Diacritics override`. S178 hunt
+reward panel — the payout is `questresultwindow`, never the toast, which strikes S147's answer.
+S179 doors by script, the Unreachable filter, and escape resuming the route beacon. S180+S181 the
+Sochen Cave Palace puzzle-skip row and the by-hand guide on `B`. S182 A* cuts script-closed floors
+and the filter hides only what the route key itself answered No path to — the background-search
+version of that filter was **revoked**, not shipped. S183 the beacon no longer goes silent under
+image windows, Sigils of Sacrifice by colour, the Falls of Time water rule, and routes that no
+longer vanish mid-walk. S184 the battle target list's groups and Reserve rows.
+
+**PLAY-CONFIRMATION — READ THIS BEFORE USING THIS RECORD TO LOCALISE A REGRESSION.** The basis for
+shipping is a **tester clearing the game** on this code, plus fixes for what that clear turned up.
+That is far stronger evidence than any previous release had, and it is also **a blanket
+attestation**: it says the whole works, not which session made any given line speak. S183 and S184
+were individually play-confirmed the day they landed. **S179, S180, S181 and S182 were each recorded
+as UNPLAYED at the time they were written, and S177's Polish detection has never been confirmed by a
+`font atlas DETECTED` line in a tester log** — a clear exercises navigation heavily and almost
+certainly covered most of it, but "almost certainly" is not a measurement and a full-game clear
+cannot tell you which commit broke something. If a navigation regression is reported against V1.0,
+those four sessions are the range to bisect, not the whole eight.
+
+**Published.** Tag `V1.0` (annotated) on the commit carrying this record, pushed to `origin`, and a
+GitHub Release with the zip attached. The repo was flipped from private to public in the same pass,
+on the user's explicit instruction — which is the one step in this procedure that no amount of
+care makes reversible, and the reason step 6's confirmation rule now exists in writing.
 
 ## V0.7-Test-Build — 2026-08-30
 

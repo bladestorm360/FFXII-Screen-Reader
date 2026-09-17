@@ -743,8 +743,10 @@ a release from memory; the file is the source of truth and is versioned with the
 `Docs\release.md` on 2026-07-24; older session entries cite the old name.)
 
 Summary (details, preconditions, and the exact commands are in that file): build a fresh
-`dinput8.dll` → assemble `Releases\V<version>\` with **exactly four files** → zip with 7-Zip as
-`Releases\FFXII-Screen-ReaderV<version>.zip` → **record it in that file's Release Records** → report.
+`dinput8.dll` → assemble `Releases\V<version>\` with **exactly five files** → zip with 7-Zip as
+`Releases\FFXII-Screen-ReaderV<version>.zip` → **record it in that file's Release Records** → commit
+and push the record → **tag `V<version>` and publish a GitHub Release with the zip attached** →
+report.
 
 **Releases are recorded in `Docs\release_procedure.md`, NEVER as a `## Session N` entry.** A release
 produces no code change; giving it a session number spends one from the global counter on a build and
@@ -752,12 +754,22 @@ buries the release history in a file about RE findings. Releases 0.1 (Session 50
 67) predate this rule — do not copy them. Version naming follows `V<num>-<label>-build`
 (`V0.1.1-shotgun-build`, `V0.2-test-build`).
 
-The four files are `dinput8.dll`, **`Tolk.dll`**, **`nvdaControllerClient64.dll`**, and `ReadMe.txt`
-(converted from `README.md` to plain text). Preserve casing exactly, and **the TTS pair must be x64**
-(PE machine `8664`) — the x86 Tolk loads and then silently never speaks.
+The five files are `dinput8.dll`, **`SDL3.dll`**, **`Tolk.dll`**, **`nvdaControllerClient64.dll`**,
+and `ReadMe.txt` (converted from `README.md` to plain text). Preserve casing exactly, and **every
+shipped DLL must be x64** (PE machine `8664`) — the x86 Tolk loads and then silently never speaks.
+**`SDL3.dll` is not optional** (added S92): the mod links it, so without it the game does not start
+at all. This summary said "four files" and omitted it for fourteen releases; corrected 2026-09-17.
 
-**The user ships releases by hand.** The procedure stops at the zip: no tag, no push, no GitHub
-Release. `/Releases/` is gitignored — release artifacts never enter the repo.
+**THE PROCEDURE NOW PUBLISHES (changed 2026-09-17, at V1.0).** It tags `V<version>`, pushes, and
+creates a public GitHub Release with the zip attached. `/Releases/` is still gitignored, so no
+artifact enters the repo as a tracked file — it ships as a **release asset**.
+
+> This used to read *"The user ships releases by hand. The procedure stops at the zip: no tag, no
+> push, no GitHub Release."* That was right while the repo was private and every build went to a
+> handful of testers by hand — a GitHub Release would have been a link that 404s for its audience.
+> The repo went public at V1.0 and the audience is the public, so both halves expired. **Step 6
+> onward is outward-facing: confirm with the user before running it** unless they explicitly said to
+> publish.
 
 **Do bundle the TTS pair; corrected 2026-07-15.** This summary previously said "exactly two files"
 and "never bundle `Tolk.dll` / `nvdaControllerClient64.dll`". That was the **deploy** rule leaking
@@ -783,7 +795,8 @@ the Module Loader / External File Loader (both want the `dinput8.dll` slot).
 ## Branches
 
 **The trunk is `master`** (S184, 2026-09-17). It is the default branch on `origin`
-(`github.com/bladestorm360/FFXII-Screen-Reader`, private) and holds every session's work. The old
+(`github.com/bladestorm360/FFXII-Screen-Reader`, **public since V1.0, 2026-09-17** — it was private
+until then) and holds every session's work. The old
 `combat-system` branch WAS the trunk for ~196 commits; at the user's instruction `master` was
 fast-forwarded onto it and `combat-system` was deleted, locally and on the remote. Session entries and
 release records written before that date name `combat-system` — that is history, not a live branch.
