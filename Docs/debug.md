@@ -46,6 +46,46 @@ what keeps Sochen (map 184) working: its doors are real `gim_door` routines and 
 material id(s) M (no script on this map opens those -- inferred, not declared; S185)`, plus a one-per-script
 line naming the mask. If Sochen's doors ever appear in the PRICED half, the mask read is wrong.
 
+### Round 2 and 3: the cut was real but not the cause, and neither was the arrival
+
+**Round 2 (apron).** With the cut gone (log confirms `material ids a door script can OPEN on this map:
+0x00000000`, zero crossings cut, and the corridor now running through poly 1000), A* built a complete
+78-poly corridor, `corridor march: CLEAR over 76 hop(s)`, and `repair[full-corridor]` walked 75 of 76
+legs before stopping 4.2 m from the exit on class-refused ground (polys 180, 179, `eff=0x1FA00000`; the
+goal poly is one of them) against a 3.0 m arrival tolerance. `PathValidate::ApronToGoal` accepts that
+case. **It did not fix the route** -- the next log showed `apron=0`, because the breach that actually
+suppresses this route is elsewhere. The rule is kept: it is correct, and it was measured.
+
+**Round 3 (the one that mattered).** The suppressing breach is MID-ROUTE, and it is the taut chord:
+
+```
+corridor march: CLEAR over 76 hop(s)
+validate: attempt 1 legs checked=1/24 ... apron=0 ... BREACH bad=1 len=41.03m reached=37.84m
+          stop=(83.6,0.00,154.8) why=sweep stopPoly=378 walk=1 eff=0x00200000
+          | corner: poly=376 clear=1 margin=1000000000.00m  vol@stop=0 vol@+0.3m=0
+```
+
+**Leg 1 is a 41 m straight line across a warehouse.** The sweep stops 3.2 m short and nothing explains
+it as an obstruction: no volume at the stop or 0.3 m ahead of it, the stop poly walkable with benign
+flags, the target corner clear with no boundary anywhere near it. The corridor -- opening to opening --
+walks. Cutting a 41 m corner across poly boundaries is exactly what a body sweep SHOULD refuse, and it
+is not evidence that the corridor is unwalkable. Four attempts and every repair rung failed to close it.
+
+**FIX: `pass=corridor-march`.** When every attempt is spent and the adjacency march certified the whole
+corridor, `PathSearch::Run` ships the CORRIDOR (`PathFunnel::FullCorridor`) as a `Plan::Route` instead of
+falling to the frontier. `path_validate.cpp` already lets the march overrule the sweep in the other
+direction and says why -- *"the sweep is structurally blind to adjacency walls ... so its CLEAR cannot
+overrule the march"* -- and the converse is no weaker: the march is mesh adjacency plus the engine's own
+per-crossing floor-class test, not the hairline ray S93 struck. It can only ever displace
+`Plan::Frontier`, which is spoken as "No path", so it cannot degrade a map that routes today (L-48).
+Guarded on `pr.reachedGoal`, so a partial corridor can never ship as a complete route.
+
+**Known cost:** the corridor is not string-pulled, so the spoken directions are more granular than a
+taut route -- more legs, each shorter. Better than "No path"; worth revisiting if it reads as noisy.
+
+**Falsifier:** `pass=corridor-march` in the log followed by a player walking into a wall. If that
+happens, find what the march cannot see -- do not widen this.
+
 **NOT PLAYED.** Falsifier for the whole change: the Dreadnought Leviathan route from the same spot must now
 speak legs instead of "No path", and Sochen's closed doors must still say "No path" while shut.
 

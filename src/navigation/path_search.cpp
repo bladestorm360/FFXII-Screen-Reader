@@ -331,6 +331,12 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     // attempt means falling back on the worst one.
     std::vector<FVec3> bestPrefix;
     float bestPrefixDist = -1.0f;      // metres from the prefix's last point to the goal
+
+    // THE LAST CORRIDOR THE ADJACENCY MARCH CERTIFIED END TO END (S185). Kept so the fallback below
+    // can ship it rather than speaking "No path" over a corridor the mod has just proved walkable.
+    std::vector<Portal> marchedPortals;
+    bool                marchedClear = false;
+    size_t              marchedHops  = 0;
     // A*'s parent links from the LAST pass run. Hoisted out of the attempt loop because the frontier
     // rebuilds a corridor to a DIFFERENT end poly than the search aimed at; `best` is likewise always
     // the last pass, so the two always describe the same search.
@@ -791,6 +797,18 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
             Log::Write("NAV-ROUTE", cmm);
         }
 
+        // Bank it whether or not the ladder goes on to succeed: if every rung fails and every attempt
+        // is spent, this is the only geometry left that anything in the mod has certified walkable.
+        // `pr.reachedGoal` is belt AND braces: the loop already breaks out above when the search
+        // fails to reach the goal, so a corridor that stops short cannot get here. Stated anyway,
+        // because shipping a partial corridor AS a complete route is the one way this fallback could
+        // do real harm, and that must not depend on a `break` three hundred lines up staying put.
+        if (!cmarch.breached && !plain.empty() && pr.reachedGoal) {
+            marchedPortals = plain;
+            marchedClear   = true;
+            marchedHops    = cmarch.hops;
+        }
+
         // ---- REPAIR BEFORE RE-SEARCHING -------------------------------------------------------------
         // The ladder itself lives in `path_repair.{h,cpp}` -- it needs none of this function's search
         // state, and the reasoning behind each rung is long enough to belong beside the code it governs.
@@ -1220,6 +1238,62 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         snprintf(m2, sizeof(m2), "corridor openings (poly:edge at their midpoints): %s%s", pm,
                  best.portals.size() > 8 ? " ..." : "");
         Log::Write("NAV-ROUTE", m2);
+    }
+
+    // ---- LAST RESORT: SHIP THE CORRIDOR THE MARCH CERTIFIED (Session 185) --------------------------
+    //
+    // WHAT THIS IS FOR, in the user's words after two failed fixes: *"those exits both have valid
+    // paths. I can walk there. the mod needs to be able to route the player there."*
+    //
+    // THE CONTRADICTION IT RESOLVES. On the Dreadnought Leviathan the log says both of these, in the
+    // same poll, about the same geometry:
+    //     corridor march: CLEAR over 76 hop(s)
+    //     validate: BREACH bad=1 len=41.03m reached=37.84m stop=(83.6,154.8) why=sweep
+    //                   ... vol@stop=0 vol@+0.3m=0, stopPoly walkable, target corner clear
+    // -- and then speaks "No path" for a route the player walks by hand. The taut chord is a 41 m
+    // straight line across a warehouse; the CORRIDOR goes opening to opening. Cutting a corner across
+    // a poly boundary is exactly what a body sweep is supposed to refuse, and it is not evidence that
+    // the corridor is unwalkable. The repair ladder exists to close that gap and, on this map, cannot.
+    //
+    // WHY THE MARCH IS ALLOWED TO WIN HERE. `path_validate.cpp` already lets the march overrule the
+    // sweep in the OTHER direction, and says why: "the sweep is structurally blind to adjacency walls
+    // -- one zero-radius centre ray plus a destination sphere, no adjacency read anywhere -- so its
+    // CLEAR cannot overrule the march." The converse is no weaker. The march is mesh adjacency plus
+    // the engine's OWN per-crossing floor-class test (`MAP_FLOOR_WALKABLE`), walked hop by hop at
+    // body scale; it is not the hairline ray S93 struck, and it is the instrument this file already
+    // trusts to decide whether the repair ladder is even the right tool.
+    //
+    // AND IT CAN ONLY REPLACE A FAILURE. Every route that validates today has already returned, far
+    // above this line. The only thing this can ever displace is `Plan::Frontier`, which the planner
+    // speaks as "No path" -- so by construction it cannot degrade a working map (L-48), and the
+    // comparison is not "a good route versus a bad one" but "a corridor the mesh certifies versus
+    // nothing at all".
+    //
+    // FALSIFIER, and it is a real one: `pass=corridor-march` in the log with a player who then walks
+    // into a wall. If that happens the answer is to find what the march cannot see, not to widen it.
+    if (marchedClear && !marchedPortals.empty()) {
+        std::vector<FVec3> corr;
+        const int pts = PathFunnel::FullCorridor(from, to, marchedPortals, corr);
+        if (pts >= 2 && corr.size() >= 2) {
+            rawPoly         = corr;
+            stats.pass      = "corridor-march";
+            stats.endPoly   = goal;
+            stats.shortfall = 0.0f;
+            stats.nearDist  = 0.0f;
+            outPoly         = rawPoly;
+            char cm[320];
+            snprintf(cm, sizeof(cm),
+                     "corridor-march route: the chord never validated, but the adjacency march "
+                     "certified all %zu hop(s) of the corridor -- shipping the CORRIDOR itself "
+                     "(%zu points) rather than speaking No path over walkable ground. attempts=%d "
+                     "banned=%d expands=%d",
+                     marchedHops, rawPoly.size(), stats.attempts, stats.bannedEdges, stats.expands);
+            Log::Write("NAV-ROUTE", cm);
+            return Plan::Route;
+        }
+        Log::Write("NAV-ROUTE",
+                   "corridor-march route: the march certified the corridor but FullCorridor produced "
+                   "no polyline -- falling through to the frontier");
     }
 
     // ---- FRONTIER: never dead-end ------------------------------------------------------------------
