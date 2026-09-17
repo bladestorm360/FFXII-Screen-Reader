@@ -60,28 +60,6 @@ inline bool ScriptClosedFlags(uint32_t raw, uint32_t eff, uint32_t bit) {
 // The walkmap material id a poly's floor-override entry is indexed by (FUN_00232020's first bank).
 inline uint32_t Material(uint32_t raw) { return (raw >> 13) & 0x1F; }
 
-// ---- WHICH CLOSURES THE GAME ACTUALLY DECLARES (Session 185) --------------------------------------
-// Bit N set: some container-0 routine on THIS map calls `setmapidfloor(N, class 0, open)` -- that is,
-// the map's own script has a way to OPEN material id N. 0xFFFFFFFF when the script could not be read,
-// which deliberately reproduces S182's behaviour exactly rather than guessing.
-//
-// WHY IT EXISTS. `ScriptClosedFlags` above answers "the override bank refuses this floor and the raw
-// bank does not", and S182 made that a CUT in A*. On Sochen Cave Palace every such floor is a door.
-// On the Dreadnought Leviathan, 44 crossings matched the same shape and **the player walked straight
-// through them** -- the exact falsifier S182 wrote down for its own cut ("a map where this fires and
-// the player walks that crossing by hand").
-//
-// The user's rule settles what to do about it: PRICE WHAT WE INFER, CUT WHAT THE GAME DECLARES. A
-// floor some door script can open is a declaration -- the game says it is a door and says how it
-// opens. A floor that reads closed with no script anywhere on the map able to open it is an
-// INFERENCE, and it is the one that was wrong. So the cut now needs both: the closed-flag shape AND a
-// script that owns the material. Everything else falls through to the ordinary terrain PRICE, which
-// is what S96 established and what every map but 184 has always used.
-//
-// GAME THREAD. Cached on `MapScript::ScriptFingerprint()`, so the routine table is read once per
-// script load and every later search is a compare and a return.
-uint32_t OpenableFloorMask();
-
 // GAME THREAD. True when a script has closed `p` to the party.
 bool ScriptClosed(NavMesh::PolyId p);
 

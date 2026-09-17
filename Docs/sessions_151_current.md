@@ -3534,7 +3534,10 @@ adjacency component -- this is the SEARCH giving up, not an unreachable goal`; a
 validator then kept breaching on. S182'''s own comment above that cut: *"the falsifier for the cut: a map
 where this fires and the player walks that crossing by hand."*
 
-**Fix: the cut now needs the closed-flag SHAPE and a DECLARATION.** `ReachGate::OpenableFloorMask()` is
+**⚠ THAT FIX WAS REVERTED BEFORE THE SESSION CLOSED — see below. What follows is what was built and
+measured, not what shipped.**
+
+**Fix (reverted): the cut needs the closed-flag SHAPE and a DECLARATION.** `ReachGate::OpenableFloorMask()` is
 the union of every container-0 routine'''s `opensFloorMask` -- the materials some script on this map can
 `setmapidfloor(N, 0, 1)`. In the mask: still CUT. Not in it: PRICED, as S96 established. **Straight out of
 the user'''s own ruling -- price what we infer, cut what the game declares.** A material a door routine can
@@ -3556,3 +3559,34 @@ the validator refuses chords the corridor march certifies CLEAR and the repair l
 them (`seq=56` had no closed-floor cut at all and still failed); and the attempt ladder spends escalations
 its own log line reports as ineffective (500->1500->4500, "not enough to move the search", three of four
 attempts). This fix removes what put the search into that corner on this map, not the corner itself.
+
+### What actually shipped, and the two rounds that did not
+
+Three rounds went at this. **Only the third is in the tree.**
+
+1. **The S182 closed-floor cut, narrowed by `ReachGate::OpenableFloorMask()`.** Confirmed working by the
+   user's next log (mask `0x00000000`, zero crossings cut, the corridor running through the poly S182 had
+   been severing) — so the over-cut is REAL and is still in the shipped build. It was not the blocker.
+   **REVERTED.**
+2. **`PathValidate::ApronToGoal`** — accept a last-leg stop when every step between the body and the goal
+   is ground the party cannot stand on. Measured from a 4.2 m class-refused apron in front of the exit.
+   Fired **zero** times on the case it was written for (`apron=0`). **REVERTED.**
+3. **`pass=corridor-march`** — when every attempt is spent and the adjacency march certified the whole
+   corridor, ship the CORRIDOR rather than speak "No path" over it. **PLAY-CONFIRMED by the user:** *"yes,
+   your fix worked."*
+
+**The user's instruction, and it is the durable part:** *"revert the fixes that weren't related to the
+blocker while I test. we don't want fixes that were unrelated that could potentially cause regressions
+elsewhere."* A change that is correct but not the cause is still an unmeasured risk to every map that
+works today, and bundling it with the fix under test makes a clean confirmation impossible. The revert is
+purely subtractive — `git diff` against the pad commit is **74 insertions, 0 deletions, one file**.
+
+**THE LESSON THE FIRST TWO ROUNDS PAID FOR.** The contradiction that turned out to be the answer was in
+the FIRST log read, printed on every failing attempt, in the mod's own words: `corridor march: CLEAR over
+76 hop(s)` immediately beside `validate: ... BREACH ... why=sweep`. Two rounds went to causes that were
+real and measurable and not the blocker. **When one subsystem certifies what another refuses, in the same
+poll, about the same geometry, that contradiction IS the bug** — chase it before anything that merely
+looks wrong nearby. Recorded as `L-95`.
+
+The over-cut from round 1 stays OPEN: 44 crossings the player walks are still cut as script-closed on the
+Dreadnought Leviathan. It has a measurement and a written fix in `git log`; it needs its own test pass.

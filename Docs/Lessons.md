@@ -31,7 +31,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90, L-95 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
@@ -39,7 +39,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -120,6 +120,34 @@ materials. Before attributing a total to a culprit, log the items (`terrain paid
 first" and blocked four fixes for three months. The answer was in `FUN_0022a770` the whole time.
 **Inverse also true:** some facts are runtime-only (who calls a dispatch-table slot; what rate a
 loop actually runs at). Say which kind you have.
+
+### L-95 WHEN TWO SUBSYSTEMS DISAGREE ABOUT THE SAME GEOMETRY, THE DISAGREEMENT IS THE BUG
+**Two instruments answering the same question differently, in the same poll, about the same object, is
+not noise to be worked around — it is the defect, and it is usually printed side by side in the log.
+Chase it before anything that merely looks wrong nearby.**
+**Why:** S185, and it cost two full rounds and two shipped-then-reverted fixes. The mod spoke "No path"
+to an exit the user walked to by hand. Every failing attempt printed these two lines together:
+
+```
+corridor march: CLEAR over 76 hop(s)
+validate: ... BREACH bad=1 len=41.03m reached=37.84m stop=(83.6,154.8) why=sweep
+          ... vol@stop=0 vol@+0.3m=0, stopPoly walkable, target corner clear
+```
+
+One subsystem certified the corridor walkable; another refused a 41 m taut chord across it, with no
+volume, a walkable stop poly and a clear target corner. **That is the whole bug**, and the fix was to
+let the certifying instrument win where the alternative was silence (`pass=corridor-march`).
+**What was chased instead, both real and both wrong:**
+  * an S182 closed-floor CUT firing on a map with no doors — confirmed over-cutting 44 crossings by a
+    play log, and **still not the blocker**;
+  * an arrival rule for an exit's class-refused apron — measured at 4.2 m against a 3.0 m tolerance,
+    and it fired **zero** times on the case it was written for.
+Both were defensible. Both were found by looking for something broken NEAR the failure instead of at
+the contradiction IN it.
+**The tell:** you are reading a log where the mod states two incompatible things about one piece of
+geometry and you are scrolling past it to find a cause. Stop there. Also: a subsystem whose comment
+explains why it may overrule another (`path_validate.cpp` lets the march overrule the sweep, "the sweep
+is structurally blind to adjacency walls") has already written down which of the two to trust.
 
 ### L-59 ⟲ SCOPE A RULE BY THE MEASURED DATA, NOT BY WHAT YOU BELIEVE THE POPULATION IS
 **"Only ask this of X" is worthless if your test for X is an assumption.**
@@ -874,6 +902,21 @@ carried for over a year as though it were the design.
 requirement. Re-read the rule and ask what noun it governs. Here the answer was four words long.
 **Not a licence to route around a rule.** The rule is untouched — the mod still passes the DirectInput
 buffer as `const`. What changed is that it was being applied to a case it never covered.
+
+### L-96 A FIX THAT IS CORRECT BUT NOT THE CAUSE IS AN UNMEASURED RISK — DO NOT SHIP IT WITH THE ONE UNDER TEST
+**When several candidate fixes were built chasing one bug, ship only the one that fixed it. Revert the
+rest before the confirmation pass, however well evidenced they are.**
+**Why:** S185, the user's own instruction: *"revert the fixes that weren't related to the blocker while
+I test. we don't want fixes that were unrelated that could potentially cause regressions elsewhere."*
+Two of three rounds were correct in isolation — one was confirmed working by a play log — and neither
+was the blocker. Shipping them alongside the real fix would have put unmeasured change onto every map
+that already works, and would have made the confirmation pass unable to attribute anything: a pass
+proves nothing about three changes at once, and a regression could not be pinned on any of them.
+**The bar this sets:** "it is correct" is not the test. "It fixed the reported defect" is. Everything
+else goes back, with its MEASUREMENT kept in `debug.md` and its code in `git log`, and gets its own
+test pass when someone wants it.
+**Check the revert is subtractive.** S185's was: `git diff` against the previous commit came back 74
+insertions, 0 deletions, one file. A revert that still shows deletions has taken something else with it.
 
 ### L-71 ⟲ A CORRECTION APPLIED TO ONE MEMBER OF A DIVERGENT PAIR IS NOT APPLIED TO ITS SIBLING
 **When you learn that two things have different layouts, fix EVERY reader of both, not the one that

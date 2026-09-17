@@ -31,12 +31,26 @@ map. `ReachGate::ScriptClosedFlags` answers a SHAPE — the override bank refuse
 bank does not — and S182 promoted that shape to a hard A* cut on Sochen Cave Palace evidence, where every
 such floor is a door. On the Dreadnought Leviathan 44 crossings have the same shape and no door behind them.
 
-**FIX (S185): the cut now needs the shape AND a declaration.** `ReachGate::OpenableFloorMask()` returns
+**⚠ THIS FIX WAS BUILT, MEASURED, AND THEN REVERTED (same session) — it is NOT in the tree.** The
+user's instruction once the real blocker was found: *"revert the fixes that weren't related to the
+blocker while I test. we don't want fixes that were unrelated that could potentially cause regressions
+elsewhere."* That is the right call and it is the rule to follow again: a change that is correct but
+not the cause is still an unmeasured risk to every map that works today, and bundling it with the fix
+under test makes a clean confirmation impossible. **What is recorded below is a MEASUREMENT worth
+keeping, not shipped behaviour.** `git log` for the code if it is ever wanted.
+
+**What was built:** `ReachGate::OpenableFloorMask()` returns
 the union of every container-0 routine's `opensFloorMask` — the material ids some script on this map can
 `setmapidfloor(N, 0, 1)`. A closed-flag crossing whose material is in that mask is still CUT; one whose
 material is not is PRICED, like any other class-refused ground (S96). Straight from the user's own rule:
 **price what we infer, cut what the game declares.** A material a door routine can open is a declaration;
 the flag shape alone is an inference.
+
+**It was confirmed to work before being reverted.** The user's next log read `material ids a door script
+can OPEN on this map: 0x00000000 (44 routine(s))`, zero crossings cut, and the corridor running through
+poly 1000 — the poly S182 had been severing. **So the over-cut is REAL and still present in the shipped
+build**, on this map: 44 crossings the player walks are cut as script-closed. It is not what was blocking
+the route, so it stays open rather than shipping unmeasured.
 
 **An unreadable script keeps S182's behaviour exactly** — the mask is all-bits-set, so every closed-flag
 floor is still cut. A successful read can only ever NARROW the cut; it can never widen it. That bound is
@@ -48,13 +62,15 @@ line naming the mask. If Sochen's doors ever appear in the PRICED half, the mask
 
 ### Round 2 and 3: the cut was real but not the cause, and neither was the arrival
 
-**Round 2 (apron).** With the cut gone (log confirms `material ids a door script can OPEN on this map:
+**Round 2 (apron) — ALSO BUILT AND THEN REVERTED, and it never fixed anything.** `PathValidate::ApronToGoal`
+is NOT in the tree. With the cut gone (log confirms `material ids a door script can OPEN on this map:
 0x00000000`, zero crossings cut, and the corridor now running through poly 1000), A* built a complete
 78-poly corridor, `corridor march: CLEAR over 76 hop(s)`, and `repair[full-corridor]` walked 75 of 76
 legs before stopping 4.2 m from the exit on class-refused ground (polys 180, 179, `eff=0x1FA00000`; the
 goal poly is one of them) against a 3.0 m arrival tolerance. `PathValidate::ApronToGoal` accepts that
 case. **It did not fix the route** -- the next log showed `apron=0`, because the breach that actually
-suppresses this route is elsewhere. The rule is kept: it is correct, and it was measured.
+suppresses this route is elsewhere. Reverted with round 1: a rule that fired zero times on the case it
+was written for has no evidence behind it at all, which makes it the easiest of the three to be wrong.
 
 **Round 3 (the one that mattered).** The suppressing breach is MID-ROUTE, and it is the taut chord:
 
@@ -86,8 +102,15 @@ taut route -- more legs, each shorter. Better than "No path"; worth revisiting i
 **Falsifier:** `pass=corridor-march` in the log followed by a player walking into a wall. If that
 happens, find what the march cannot see -- do not widen this.
 
-**NOT PLAYED.** Falsifier for the whole change: the Dreadnought Leviathan route from the same spot must now
-speak legs instead of "No path", and Sochen's closed doors must still say "No path" while shut.
+**WHAT ACTUALLY SHIPPED: round 3 alone.** `pass=corridor-march`, confirmed by the user in play — *"yes,
+your fix worked"*. Rounds 1 and 2 were reverted before that confirmation so the test measures one change.
+
+**THE LESSON THE THREE ROUNDS PAID FOR.** The contradiction that turned out to be the answer was in the
+FIRST log read, in the mod's own words, printed on every failing attempt: `corridor march: CLEAR over 76
+hop(s)` beside `validate: ... BREACH ... why=sweep`. Two rounds were spent on causes that were real,
+measurable, and not the blocker — an over-cut that a play log confirmed, and an arrival rule that fired
+zero times. **When one subsystem certifies what another refuses, in the same poll, about the same
+geometry, that contradiction IS the bug.** Chase it before anything that merely looks wrong nearby.
 
 **Also unresolved and NOT fixed here** — recorded so it is not mistaken for closed: the validator refuses
 chords the corridor march certifies, and the repair ladder cannot always mend them (`seq=56` had no
