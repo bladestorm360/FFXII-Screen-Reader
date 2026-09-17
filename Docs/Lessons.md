@@ -32,7 +32,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | your task looks like… | grep tag | lessons |
 |---|---|---|
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90 |
-| a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
+| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
@@ -381,6 +381,19 @@ and walking there finds nothing") also came true verbatim and cost four more bui
 precise enough to be tests.** The whole line was reverted in S172.
 Sibling of [L-73]: an erratum recorded is not an erratum applied. Same shape, one level up -- there
 the note was about a TOOL, here about your own unshipped bug.
+
+### L-91 A NOTE ABOUT A USER'S REPORT CARRIES THE REPORT'S CONTEXT, NOT A GREP OF ITS KEYWORDS
+**When recording something the user reported for a later session, write down what they said and the context
+they were in. Do not staple on "leads" found by grepping the key names: a key means different things on
+different screens, and a grep hit carries whatever the old doc claimed -- right or wrong -- into the new note
+with fresh authority.**
+**Why:** S183 close. The user reported two silent screens opened with L1/R1 (`1`/`3`). The note added "R1
+selects Reserve in the battle target list" and "`1`/`2`/`3` are game speed" from Controls.md. The screens are in
+the item targeting menu, so neither applied -- and the second had been false since Session 44, which read one
+tester speed jump as proof that all three keys change speed (L-01). Keyboard `1` is pad L1, `3` is R1, `2` does
+nothing observable. Repeating it gave a stale inference a new reason to survive.
+**The tell:** a "leads" or "see also" list assembled from a keyword search rather than from the surface the
+report is about.
 
 ### L-77 IF THE PERSON PLAYING THE SAVE CAN ANSWER IT IN A SENTENCE, ASK THEM
 **Some unknowns are not measurements at all -- they are facts about the player's own game state:

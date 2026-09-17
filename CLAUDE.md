@@ -432,7 +432,8 @@ and above all not the very thing the feature under repair is supposed to give th
   Everything else in this rule stands unchanged: no lock-on presses, no speed changes, and any
   OTHER feature that would *drive* the game still requires **explicit user permission** and a
   design discussion first. (Original rule confirmed Session 44 after a tester speed-jump turned
-  out to be their own `1`/`2`/`3` = Game Speed keypress; exception recorded Session 100 so the
+  out to be their own `1` keypress -- keyboard `1` is the pad's L1, which cycles game speed (S183 correction; the
+  S44 wording said `1`/`2`/`3` were all Game Speed); exception recorded Session 100 so the
   audit trail stays truthful — `debug.md`'s read-only-input entries carry the same note.)
 
 ### Combat log specifics

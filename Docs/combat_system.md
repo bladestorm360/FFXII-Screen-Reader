@@ -1067,7 +1067,8 @@ Transition function `FUN_003183d0` (RVA `0x1F83D0`, 0.97).
 > discussion.
 
 Speed index `DAT_01fd4a98` (RVA `0x1EB4A98`, i32, domain {0,1,2}), key handler `FUN_00233640`
-(RVA `0x113640`) — this is what the game's own `1`/`2`/`3` keys drive. Multiplier table at RVA
+(RVA `0x113640`) — ~~this is what the game's own `1`/`2`/`3` keys drive~~ (STRUCK S183: the user measured keyboard `1` = pad L1
+cycling game speed, `3` = R1, `2` no observed effect; which input reaches this handler is unverified). Multiplier table at RVA
 `0x7E8BA8`, values unreadable offline (hypothesis {1,2,4}, 0.85).
 Modal state `DAT_02064ad3` (RVA `0x1F44AD3`): 2 = simulating, 3 = full menu (0.90–0.97).
 Sim accumulator RVA `0x1F44AC0`; effective speed = `ac8 × ac4`.

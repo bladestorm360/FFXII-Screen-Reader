@@ -10,7 +10,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > (see Conflicts).
 >
 > **UPDATE (Session 45):** added the party-status keys `4`/`5`/`6` — the game binds `1`/`2`/`3`
-> (Game Speed) but **nothing to `4`/`5`/`6`**, so they are free. `;` changed from the facing
+> (pad-button stand-ins: `1` = L1, `3` = R1 -- corrected S183, see below) but **nothing to `4`/`5`/`6`**, so they are free. `;` changed from the facing
 > readout to **active target status**; the facing readout was dropped.
 >
 > **UPDATE (Session 54):** `F5` added (nav availability filter).
@@ -112,13 +112,21 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > Session 93 had called the `R` menu the *field menu* to keep the two apart. In practice the two words
 > never got confused, and one of them was not the game's.
 
-> **CORRECTION (Session 44):** an earlier capture of this menu row mislabeled `1`/`2`/`3`
+> **STRUCK (S183, 2026-09-17), measured by the user in play:** `1`/`2`/`3` do NOT all change game
+> speed. The number keys stand in for pad buttons: **keyboard `1` = L1**, which CYCLES game speed (a toggle, not a
+> fixed setting); **keyboard `3` = R1**; keyboard `2` did nothing the user could observe. In the item targeting
+> menu, `1`/`3` (L1/R1) open two screens that are still silent (debug.md, OPEN). The on-screen-keyboard overlay's
+> labels agree for `1` (`Game Speed/Change Group`) and `3` (`Change Group`); its `2 Lock On` is unconfirmed. The
+> Session 44 claim below was an inference from one tester speed jump, which a `1` press alone explains.
+>
+> ~~**CORRECTION (Session 44):** an earlier capture of this menu row mislabeled `1`/`2`/`3`
 > as "Game Speed / Target Group / Lock On". **Runtime disproved that — `1`, `2`, and `3`
 > all change GAME SPEED** (they mirror the `F1`/`F2`/`F3` "Regular/Double/Quadruple Game
 > Speed" bindings below; the tester's sudden speed jump was their own `1`/`2`/`3` keypress,
 > not the mod). There is **no keyboard "Lock On" or "Target Group" binding** in this config.
 > **The mod reserves NONE of `1`/`2`/`3`** (its hotkeys are all letters/punctuation, listed
-> below) and never injects them — it is strictly read-only on input (see debug.md).
+> below) and never injects them — it is strictly read-only on input (see debug.md).~~ (The last sentence
+> still holds: the mod reserves none of `1`/`2`/`3`.)
 
 ### System / Other (category header off-screen)
 | Action | Main | Alt 1 | Alt 2 |
@@ -156,6 +164,8 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > `1 Game Speed/Change Group`, `2 Lock On`, `3 Change Group`. Session 44 recorded runtime evidence
 > that 1/2/3 are all Game Speed; the overlay disagrees. **Neither is struck here** — one of them is
 > reading a different profile and it has not been measured which. Do not act on either until it is.
+> **RESOLVED (S183):** the user measured it in play -- `1` = L1 (cycles game speed), `3` = R1, `2` no observed
+> effect. The overlay was right about `1` and `3`; Session 44 is struck above.
 
 ## Mod-reserved keys (all STANDALONE — no Shift)
 
@@ -377,7 +387,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > **`p` target source (Session 44):** `p` routes to the battle **target the game is currently
 > selecting**, read from the target-selection object at `DAT_0209be80 + 0x9FD8`
 > (`battle_target_reader`). It does **NOT** press or depend on any keyboard "Lock On" key —
-> there is no such binding in this config (see the 1/2/3 correction above). `p` is read-only:
+> there is no such binding in this config (see the 1/2/3 correction above -- itself corrected in S183: `1` = L1, `3` = R1). `p` is read-only:
 > it reads the selected target's position and computes a route; it presses nothing.
 
 ## Conflicts & resolutions

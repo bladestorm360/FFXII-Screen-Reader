@@ -7,27 +7,31 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-### OPEN (reported 2026-09-17, end of S183) — two unvoiced screens behind L1 / R1 (`1` / `3` on the keyboard)
+### OPEN (reported 2026-09-17, end of S183) — two silent screens in the ITEM TARGETING MENU, opened with L1 / R1 (`1` / `3`)
 
-KEYWORDS: L1 R1 key 1 key 3 use item on character not in party reserve member target list silent screen
-unknown screen vocalization menu reader NOT STARTED
+KEYWORDS: item targeting menu L1 R1 key 1 key 3 use item on character not in party reserve member silent
+screen unknown screen vocalization menu reader NOT STARTED
 
 **Reported by the user, verbatim:** *"there is a screen (accessed by pressing la/r1 (1 or 3 on keyboard)) that
 allows the use of items on characters not in the current party, as well as another screen that I am unsure the
-purpose of. these screens both need vocalization."* The user played S183's build and confirmed everything else
-works; these two screens are simply silent. Nothing was investigated this session.
+purpose of. these screens both need vocalization."* **Context, also the user's:** both are reached from the ITEM
+TARGETING MENU -- not the battle menu. Nothing was investigated.
 
-**Existing records to read FIRST (leads, not conclusions -- none of them was written about these screens):**
-- `Controls.md` pad table: **R1 in battle "Selects Reserve in the target list"**; L1 is Speed mode. The
-  item-on-a-reserve-member screen is most likely that reserve target list, reached from an item target list.
-- `Controls.md` Session 44 correction: in the field, keyboard `1`/`2`/`3` all change GAME SPEED. The user says
-  `1`/`3` open these screens, so the context they were pressed in (which menu was open) decides what they do --
-  establish that from the log before assuming either reading.
-- `Controls.md` status screen: "Character switching is L1/R1" (S147 `FUN_002c2c50` re-read). A different surface.
+**Corrected the same day:** the first version of this entry attached "leads" found by grepping the key names --
+R1 selecting Reserve in the battle target list, and `1`/`2`/`3` being game speed. The user: neither is relevant
+(this is the item targeting menu), and the second was false -- keyboard `1` = pad L1 (cycles game speed), `3` =
+R1, `2` no observed effect. Struck in Controls.md, GameArchitecture.md, combat_system.md, CLAUDE.md, README.md.
 
-**First step next session:** ask the user which menu they were in when they pressed `1`/`3`, then grep the
-latest log for `[READER] unclaimed pane:` lines around that moment -- the menu reader already logs the window
-class RVA of any pane no reader spoke for, which names both screens' classes without a probe.
+**First step next session:** grep the log from a session where these screens were opened for `[READER] unclaimed
+pane:` -- the menu reader logs the window class RVA of every pane no reader spoke for, which names both screens'
+classes without a probe. Then check `GameArchitecture.md` and `MenuArchitecture.md` for those classes.
+
+### TO VERIFY (user, next session) — reserve party member selection in the BATTLE menu's target list
+
+KEYWORDS: battle menu target list reserve R1 party member selection reads correctly verify
+
+A separate surface from the entry above. The user will check in play whether choosing a reserve party member in
+the battle menu's target list is read correctly, and report. Nothing to do before that report.
 
 ### SOLVED S183, PLAY-CONFIRMED — the audio beacon went silent for whole dungeons: an IMAGE window read as "a dialogue box is on screen"
 
@@ -2806,9 +2810,9 @@ FeedDInputKeyboard` only edge-detects/reads. (2) Repo-wide there is **no** `Send
 / `mouse_event` / `PostMessage(WM_KEY…)`, **no** `WriteProcessMemory`, and **no** memory-write helper —
 the mod has no path to write game memory. The only `VirtualProtect` is the one-time vtable patch that
 installs the read-only hook. (3) Every game function the mod calls is a pure getter (area name, ground/
-segment/exit queries). **The speed change was the tester's own `1`/`2`/`3` keypress** (those are Game
-Speed 1×/2×/4× — see Controls.md; the old "Lock On / Target Group" labels were wrong). The mod reserves
-none of `1`/`2`/`3`.
+segment/exit queries). **The speed change was the tester's own keypress** (~~`1`/`2`/`3` are Game Speed 1×/2×/4×~~ -- STRUCK
+S183: keyboard `1` = pad L1, which cycles game speed; `3` = R1; `2` no observed effect; see Controls.md). The
+mod reserves none of `1`/`2`/`3`.
 **AUDIT UPDATE, Session 100:** the read-only rule now carries ONE recorded, user-authorized
 exception — Auto-walk (`AutoWalk::OnDevicePoll`, dinput8_proxy.cpp) may OR the W/A/S/D bits into
 the keyboard buffer while engaged, default OFF, with the tracker still fed the PRE-injection state.

@@ -2806,8 +2806,8 @@ trusting anything below it.**
 2026-07-14 (Session 44) — **(a) Mod is strictly READ-ONLY on input/memory** (audit:
 no `SendInput`/`keybd_event`/`WriteProcessMemory`/mem-write; DirectInput buffer passed as `const`; only
 `VirtualProtect` = the one-time vtable patch; all game calls are pure getters). The tester's speed jump
-was their own `1`/`2`/`3` keypress = **Game Speed 1×/2×/4×** (the old Controls.md "Lock On / Target Group"
-labels for 1/2/3 were WRONG — corrected). **(b) Naviicon "markers" REMOVED** (see below — disproven).
+was their own keypress ~~`1`/`2`/`3` = **Game Speed 1×/2×/4×**~~ (**STRUCK S183:** keyboard `1` = pad L1, which
+cycles game speed; `3` = R1; `2` no observed effect -- user-measured, see Controls.md). **(b) Naviicon "markers" REMOVED** (see below — disproven).
 **(c) All-maps exit DB extracted OFFLINE** from the VBF (`tools/parse_mapdata.py`): each map ships as
 `ps2data/plan_master/map_ctrl/<AREA>/<MAP>/bin/<MAP>.mpk` (~550 maps); `mld = mpk[u32(mpk,0x10):]`; the
 `.mld` tables are file-relative (reloc `_DAT_01f83530`=0): `+0x70` EXITS `[u32 count][u32 recOff…]`, record
@@ -2825,7 +2825,7 @@ in it, and `marker[+0x04]` was the entity HANDLE, not a label id. `EnumerateMark
 /`MARK_*`/`ScanMarkersLocked` all deleted; nothing labelled "Marker" appears anymore. `Category::Event` (old
 `+0x54` spawn/dialogue triggers) and the real exits (`+0x70`) are unchanged. **`p`-key target source**: `p`
 routes to the battle target the game is currently selecting (`DAT_0209be80 + 0x9FD8`, `battle_target_reader`);
-it does NOT press or depend on any keyboard "Lock On" key — there is no such binding (1/2/3 = Game Speed).
+it does NOT press or depend on any keyboard "Lock On" key — there is no such binding (~~1/2/3 = Game Speed~~ -- struck S183: `1` = L1, `3` = R1).
 
 Session 43 — ~~**Map-exit source CORRECTED.**~~ **STRUCK (Session 45) — the "correction" was wrong.**
 > `mapData+0x54` is **NOT** the arrival/spawn table. Its ONLY evidence was "`FUN_00353490` places the
@@ -2905,7 +2905,7 @@ render hooks resolve `bc`→actor (`+0x698`)→`sceneObj` (`+0x10`)→world pos 
 `[`/`]` cursor is now identity-locked (`CursorId` = obj+nameIdx+label+category). **OPEN (pending runtime
 confirmation):** whether `DAT_0209be80+0x9FD8` stays populated outside command target-selection (⇒ `p` works
 for a persistent lock) or only while the command menu is choosing a target — answered by the baked `NAV-ROUTE`
-log, not yet verified. (NOTE Session 44: the keyboard `2` is **Game Speed**, not Lock-On — there is no
+log, not yet verified. (NOTE Session 44, ~~the keyboard `2` is **Game Speed**~~ -- struck S183, `2` has no observed effect -- not Lock-On; there is no
 keyboard lock-on binding; `p` reads the selection object directly, it never presses a key.) Also confirm the
 field stays nav-safe in battle-state mode.
 Session 32 — Battle target-selection readout SHIPPED: real path is a

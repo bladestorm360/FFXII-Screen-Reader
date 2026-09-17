@@ -277,8 +277,10 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
 - [x] **Sigils of Sacrifice spoken with their colour** (Pharos Third Ascent) — S183, play-confirmed 2026-09-17
 - [x] **A route never becomes invalid mid-walk** — failed re-plans keep the live route; `\` re-speaks it (S183),
       play-confirmed 2026-09-17
-- [ ] **Two silent screens behind L1/R1 (`1`/`3`)** — using items on characters not in the party, and a second
-      screen of unknown purpose. Reported 2026-09-17; see debug.md OPEN entry. NOT STARTED
+- [ ] **Two silent screens in the item targeting menu, opened with L1/R1 (`1`/`3`)** — using items on characters
+      not in the party, and a second screen of unknown purpose. Reported 2026-09-17; debug.md OPEN entry. NOT STARTED
+- [ ] **Verify: reserve party member selection in the battle menu's target list reads correctly** — the user will
+      check in play next session
 - [~] **Doors by script evidence** (S179) — routine calls `mapjump`, or opens the closed floor it stands in. UNPLAYED
 - [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there

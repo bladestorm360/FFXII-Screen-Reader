@@ -77,8 +77,8 @@ Speech working but no beacon means SDL3 loaded and the audio device did not open
 * M, Numpad Plus, or Z: display map.
 * H, Numpad 0, or X: reset camera.
 * Left Shift: toggle walk and run.
-* 1, 2, 3: game speed — normal, double, quadruple.
-* F1, F2, F3: game speed — normal, double, quadruple (same as 1, 2, 3).
+* 1: cycle game speed (the same as L1 on a controller).
+* F1, F2, F3: game speed — normal, double, quadruple.
 
 ### Mod
 

@@ -3330,8 +3330,13 @@ on that leg; `\` re-speaks the remaining legs. `L-90`.
 **Falsifiers:** debug.md, the three S183 entries at the top of Tried & Failed, and the S182 water entry's S183
 block. Grep: `TEXT-LESS window`, `sigil-colour:`, `map-rule:`, `keep-route:`, `automatic re-plan HELD`.
 
-**Recorded for next session, NOT started (user, at close):** two silent screens reached with L1/R1 (`1`/`3` on
-the keyboard) -- one uses items on characters not in the current party, the other's purpose is unknown. Both
-need vocalization. debug.md has the OPEN entry with the existing leads (`Controls.md`: R1 selects Reserve in the
-battle target list; keyboard `1`/`2`/`3` are game speed in the field) and the first step: ask which menu was
-open, then read the log's `unclaimed pane:` lines for the two window classes.
+**Recorded for next session, NOT started (user, at close):** two silent screens in the ITEM TARGETING MENU,
+opened with L1/R1 (`1`/`3` on the keyboard) -- one uses items on characters not in the current party, the other's
+purpose is unknown. Both need vocalization. Separately, the user will verify in play that reserve party member
+selection in the battle menu's target list reads correctly.
+
+**Corrected at close (user):** the first version of that note attached two "leads" from Controls.md -- R1 selects
+Reserve in the battle target list, and `1`/`2`/`3` are game speed. Neither is relevant (the screens are in the item
+targeting menu), and the second was false: keyboard `1` is pad L1, which cycles game speed; `3` is R1; `2` has no
+observed effect. The Session 44 claim is struck in Controls.md, GameArchitecture.md, combat_system.md, debug.md,
+CLAUDE.md and README.md (its `1, 2, 3` line was player-facing). `L-91`.
