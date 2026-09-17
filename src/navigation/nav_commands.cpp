@@ -6,6 +6,7 @@
 #include "navigation/nav_probe.h"
 #include "navigation/shout_meter.h"
 #include "navigation/statue_guide.h"
+#include "navigation/sochen_guide.h"
 #include "navigation/nav_types.h"
 #include "ui/battle_target_reader.h"
 #include "ui/equip_compare.h"
@@ -259,6 +260,7 @@ void OnNavKey(int vk) {
         case 'B':
             ShoutMeter::RequestMeterCheck();                          // B  infamy meter
             StatueGuide::RequestCheck();                              // B  statue puzzle status
+            SochenGuide::RequestCheck();                              // B  Sochen puzzle next step
             break;
         case 'N':           ShoutMeter::RequestGuardCheck();  break;  // N  nearest NPCs
         case VK_HOME:       CombatLog::JumpOldest();          break;  // Home  oldest entry

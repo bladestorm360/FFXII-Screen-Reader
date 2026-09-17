@@ -12,6 +12,8 @@
 #include "navigation/shout_meter.h"
 #include "navigation/statue_diag.h"
 #include "navigation/statue_guide.h"
+#include "navigation/sochen_doors.h"
+#include "navigation/sochen_guide.h"
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
@@ -184,6 +186,11 @@ uint64_t __fastcall HookedFieldFrame() {
         // The statue readout `B` answers from. Same gate and same cost as the capture above -- it
         // arms on a live `mrm_` script, and off that dungeon it is five slot reads and a return.
         { STALL_SCOPE("StatueGuide::OnFieldFrame"); StatueGuide::OnFieldFrame(); }
+        // Sochen Cave Palace door puzzles. Same gate and same cost as the statue pair: it arms on a
+        // live `rui_` script, and writes at most once per visit while its mod-menu row is On.
+        { STALL_SCOPE("SochenDoors::OnFieldFrame"); SochenDoors::OnFieldFrame(); }
+        // The `B` answer for the same palace. One atomic load when the key has not been pressed.
+        { STALL_SCOPE("SochenGuide::OnFieldFrame"); SochenGuide::OnFieldFrame(); }
     }
     return s_origFieldFrame ? s_origFieldFrame() : 1;
 }
@@ -208,6 +215,8 @@ void __fastcall HookedTeardown() {
         ShoutMeter::OnMapTeardown();
         StatueDiag::OnMapTeardown();
         StatueGuide::OnMapTeardown();
+        SochenDoors::OnMapTeardown();
+        SochenGuide::OnMapTeardown();
     }
     if (s_origTeardown) s_origTeardown();
 }

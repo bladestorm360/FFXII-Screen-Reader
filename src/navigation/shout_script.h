@@ -8,8 +8,8 @@
 // variable indices into an address.
 //
 // This is a READ layer plus one narrowly-scoped write helper. It knows nothing about speech, keys
-// or the gauge; `shout_meter` and `shout_fill` are its only callers, and the write helper is only
-// ever reached from `shout_fill` under that file's charter.
+// or the gauge. The write helper is reached only from `shout_fill` and `sochen_doors`, each under
+// its own file's charter.
 //
 // ---- THE MODULE RECORD (all CONFIRMED from the loader FUN_0026C8C0 and the resolver FUN_00262440)
 //
@@ -140,8 +140,9 @@ bool ReadVar(void* addr, uint8_t elemType, int32_t* out);
 
 // SEH-guarded write of a script variable, honoring `elemType`. False on fault.
 //
-// ⚠ THIS IS A GAME-MEMORY WRITE. It exists for exactly one caller, `ShoutFill`, under the charter
-// in shout_fill.h. Nothing else may call it.
+// ⚠ THIS IS A GAME-MEMORY WRITE. It has exactly two callers, each under its own user-authorized
+// charter: `ShoutFill` (shout_fill.h) and, since S180, `SochenDoors` (sochen_doors.h). Nothing else
+// may call it.
 bool WriteVar(void* addr, uint8_t elemType, int32_t value);
 
 } // namespace ShoutScript

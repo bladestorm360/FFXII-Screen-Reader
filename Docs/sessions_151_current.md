@@ -3071,3 +3071,140 @@ the word before building on it. `AudioBeacon` skips its combat branch while the 
 invisible to the mod. The door's own script said otherwise in one disassembly.
 
 **Closed out on the user's instruction:** committed, pushed, deployed. Unplayed at close.
+
+## Session 180 — 2026-09-15 — [nav] Sochen Cave Palace: both door puzzles solved from a menu row (UNPLAYED)
+
+KEYWORDS: Sochen Cave Palace rui_ Pilgrim's Door Ascetic's Door waterfall puzzle clock puzzle Door of
+Hours class0+0x918 save block write SochenDoors Solve door puzzles sochen_puzzles descriptor table offline
+L-87 ebp_var_census
+
+**Asked:** the player is in Sochen (own log, build `aa52d71`, maps 186 -> 185 -> 184). Two Pilgrim's Doors
+and an Ascetic's Door sit behind puzzles. Priority: a mod-menu row, shown only in the palace, that sets
+the puzzle flags solved. Preferably also exit labels so the puzzles can be done by hand.
+
+**Found, offline only:**
+- Walkthroughs (jegged, gamerguides, no24guides) for how the puzzles play: an exit sequence through Falls
+  of Time / Mirror of the Soul / Destiny's March flips the waterfalls, and a clockwise circuit through
+  Destiny's March's Doors of Hours opens the Ascetic's Door.
+- Disassembled all eleven `rui_` map scripts and the event scripts. `rui_a01` = Falls of Time, `rui_a02` =
+  Mirror of the Soul, `rui_b01` = Destiny's March.
+- **Struck S154's "the descriptor table is not reachable offline"** (L-87). It is at `blob+u32(blob+0x28)`,
+  and `mrm_b03`'s two cells decode to exactly S156's live measurements.
+- One save-block byte, `class0+0x918`: `0x02` waterfall puzzle -> both Pilgrim's Doors (`gim_door01/02`,
+  the mod's "Pilgrim's Door 1/2"); `0x01` clock puzzle -> the Ascetic's Door (`secret_door`). A census of
+  every script declaring the byte accounts for all eight bits. Detail: GameArchitecture.md.
+- **The two Pilgrim's Doors are one puzzle,** not two.
+
+**Shipped (clean build, deployed, cmp identical; NOT played):**
+- `sochen_doors.{h,cpp}`: on each field frame, is a `rui_` script live? If the row is On, once per visit,
+  after checking the module's class-0 base equals RVA `0x2044480` and any declaration of `+0x918` is
+  exactly u8, it ORs `0x03` into the byte. It logs before, after and read-back under `SOCHEN`. It never
+  clears a bit.
+- `F8` row `Solve door puzzles`, key `sochen_puzzles`, default Off, visible only while `InPalace()`.
+- Phrasebook: 4 rows appended. **The wording is new; flag it to the user.** README: one bullet. CLAUDE.md:
+  the three game-memory write exceptions are now listed in the read-only rule.
+- `ShoutScript::WriteVar`'s charter comment now names its second caller.
+
+**Not built:** exit labels for doing the puzzles by hand (the user's option 1). What it would need is in
+GameArchitecture.md: the waterfall stages live in class 5 `+0x80..+0x87`, keyed on `nowjumpindex`; the clock
+circuit lives in class 1. It was offered as a follow-up.
+
+**Falsifiers for the next log:** `[SOCHEN] WROTE class0+0x918 … read back` with `0x03` set, or `already
+solved`; any `declining:` line. In play: a Pilgrim's Door opens instead of "Some unknown mechanism holds it
+fast."; after re-entering Falls of Time and Destiny's March, the waterfall layout and the exit behind the
+Ascetic's Door are the solved ones.
+
+## Session 181 — 2026-09-16 — [nav] Sochen Cave Palace: the by-hand puzzle guide on `B` (UNPLAYED)
+
+KEYWORDS: Sochen puzzle guide B key waterfall four legs door puzzle eight doors clock circuit
+FocusWhere EntityList focus seamGroup ExitDest RoutineIndexOfObject class 5 work globals class 1 strayed
+
+**Asked:** "build the by-hand puzzle solver for both puzzles" — option 1 from S180, which shipped only
+the skip row.
+
+**Found, offline (the scripts, no game run):**
+- The waterfall sequence is four legs of *leave 184 by this exit, re-enter 184 by that entrance*, and
+  `nowjumpindex` is the arriving `mapjump`'s own entrance literal. Ten exits into Falls of Time cover
+  entrances 1-10 exactly once, and the entrance number equals the arriving map's exit group — a clean
+  bijection that made the pairing checkable rather than assumed.
+- The door puzzle is eight doors in a fixed order, each from a fixed SIDE (the `…b` routines are the
+  far side). Each door raises its own class-1 flag; a step counts only while every later flag is clear,
+  which is exactly what the inscription's "Stray but once" describes. Count at class-1 `+0x3C`.
+- `REQEW(priority, routine, entry)` confirmed from `rui_a02`'s door turning the player before opening.
+Both tables are in GameArchitecture.md "The two sequences, step by step".
+
+**Shipped (clean build, deployed, cmp identical; NOT played):**
+- `sochen_guide.{h,cpp}` on `B`, alongside the shout meter and the statue guide — three contexts, one
+  key, each draining its own request on the field frame. It speaks "Waterfall puzzle, step 2 of 4.
+  Mirror of the Soul 3." and focuses that exit; `\` then routes as it does for any object.
+- `EntityList::FocusWhere(test, ctx, outLabel)` — the cursor move a guide needs. It does not speak and
+  does not route: `GetCurrentTarget` already prefers the focus, so the player's own key still does the
+  routing (one choke point).
+- Targets are joined by SCRIPT FACTS: an exit by its `mapjump` destination + entrance -> `ExitDest::
+  group` -> `Entity::seamGroup`; a door by `RoutineIndexOfObject` against a table of routine names.
+  No label matching anywhere, because both puzzles are made of identically-named objects.
+- Phrasebook: 4 rows appended (`Waterfall puzzle`, `Door puzzle`, `step`, the out-of-turn sentence);
+  `solved` reuses StatueSolved and the counts reuse OfJoiner. **Wording is new — flag it to the user.**
+  README: one section.
+
+**Falsifiers for the next log:** `[SOCHEN] waterfall: … -> target found` / `doors: … -> target found`.
+A `target NONE (<reason>)` names its own reason; the two that would mean a design change are "the
+exit's map-jump group is not in the list" and "no listed object runs that routine".
+
+**Same session, after the first build — the RESUME half (user: "a way to continue the puzzle if the
+player takes a side track… a key to repeat the current puzzle step").** The key is `B`, not `.` (`.`
+is the combat log's newer-entry key), and B was already stateless: every press re-reads the script's
+counters and re-focuses, so repeating it was free. What was missing was the side-track case, and it is
+now built:
+- from a palace room the puzzles do not use, B focuses the way back toward one they do (Falls of Time
+  first, then the other two) instead of speaking a step with no target;
+- with the waterfall puzzle solved and the door one not, from off Destiny's March B names the door
+  puzzle and the way back to it, with no step number — that count is in that map script's own class-1
+  storage and cannot be read from another map, and inventing a number would be a fabricated answer;
+- the solved summary moved into `Answer`, so `SpeakWaterfall` / `SpeakClock` no longer carry a
+  solved branch that could not be reached.
+- **The remote door hint is gated on the waterfall puzzle actually being solved.** Reaching it with the
+  waterfall unsolved means its cells did not read, and naming the other puzzle there would be a
+  confident answer to a question that had failed. It stays silent and logs instead.
+Also recorded for the player, because the game never says it: in Destiny's March, opening a door to pass
+through is itself a move, so a detour through one stalls the count.
+
+**PLAYED, same day (own log, session 12:32) — and it routes through the waterfalls.** The user: *"I
+think it's trying to route through water."* The log agrees, four ways: the reach gate sees the falls
+(`9 script-closed crossing(s) refused, material id(s) 3,4` — the exact two materials the stage-0 layout
+turns on, which is the offline decode and the live gate agreeing without either being told about the
+other), the route to the puzzle's own exit pays `terrain=4000` to cut through two of them, a later one
+pays `12000`, and the player recorded three `blocked` spots walking into the water.
+
+**Root cause is one line, and it is S179's own defect surviving in the half that was left behind a
+toggle:** `path_search.cpp:244` reads `ModMenu::UnreachableFilterOn()` to decide whether closed floors
+are priced, and the row is Off by default — so a waterfall costs the flat 2000-per-poly terrain price
+and A* buys it. **The fix is specified in `debug.md` ("routes buy their way through the waterfalls") and
+deliberately NOT built this session, at the user's instruction.** Shape: the closed-floor PRICE becomes
+unconditional, the LIST filter stays behind the row (hiding things is a preference, where to walk is
+not), every S179 safety property is kept, and the four places that state the old contract get corrected
+together. Stopgap for today: switch the row On in the palace.
+
+Two smaller things the same log settled: the first `B` press on map entry answered with no target
+because it ran before the seam sweep (fix: re-arm once for the next frame, in the same debug.md entry),
+and the log's own `Build:` banner named S179's commit on an uncommitted tree — folded into `L-62`, which
+already owned the stale-stamp half of that lesson.
+
+**USER'S RULING, closing the session — a script-closed floor is a CUT, not a price.** *"The unreachable
+object should still say 'No path' even if it shows on the filter, not act as if it can find a path
+through the obstacle. That is the same bug as the northern sluiceway problem."* So the fix written up in
+`debug.md` is no longer "make the price unconditional": A* must REFUSE a script-closed poly, and a target
+behind one answers "No path" — while the `Unreachable filter` row keeps deciding only what the LIST
+shows. **Being listed and being routable are now deliberately independent**, and an entity that is
+listed AND answers "No path" is the instruction rather than an inconsistency to tidy away.
+
+The carve-out against S96 ("cutting over-refuses", reverted twice) is written down with it, because it
+WILL be re-litigated otherwise: S96 cut on static terrain TYPE, which is our inference and is wrong (the
+party wades that water). A script-closed floor is the engine's own override bank refusing the party
+after a `setmapidfloor`, measured twice on two mechanisms — S179's doors, S181's waterfalls. **Price what
+we infer, cut what the game declares.** Folded into `L-75`, which already owned the general form (a
+permissive cost model turns an invalid goal into a plausible route, not an error), and cross-linked from
+the Northern Sluiceway section, which paid for that lesson first.
+
+**Session closed with the fix specified and NOT built, at the user's instruction.** Everything else from
+S180 and S181 is built, deployed and uncommitted.

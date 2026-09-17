@@ -7,6 +7,170 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### OPEN — DIAGNOSED, FIX SPECIFIED, NOT BUILT (S181 play) — routes buy their way through the waterfalls
+
+KEYWORDS: routing through water waterfall Falls of Time map 184 closed floor price kClosedFloorPenalty
+closedAware UnreachableFilterOn path_search 244 terrain 4000 blocked recorded material 3 4 setmapidfloor
+reach-gate filter OFF log only stuck in water
+
+**Reported (2026-09-16, own log `x64\FFXII-Screen-Reader-Latest.log`, session 12:32):** *"I think it's
+trying to route through water."* Correct, and the log says so in four places.
+
+**The evidence, all from that one session on map 184:**
+- `reach-gate: fill complete -- 2187 polys open from poly 1686 | 9 script-closed crossing(s) refused,
+  material id(s) 3,4 | filter OFF (log only)` — the mod SEES the falls. Materials 3 and 4 are exactly the
+  two the stage-0 waterfall layout turns on (GameArchitecture.md "The two sequences, step by step"), so
+  the offline decode and the live gate agree without either being told about the other.
+- `reach-gate: closed sample poly 2619 raw=0x01048000 eff=0x0F848000 (class bit 0x00800000)` — raw bit
+  clear, effective bit set: S179's script-closed test holds here.
+- `cost: attempt 1 corridor pays terrain=4000 other=0` on the route to the puzzle's own exit, and
+  `terrain=12000` on a later one — 2 and 6 closed polys, bought at the flat `kTerrainPenalty` of 2000.
+- `blocked: recorded (32.1,2.0,51.3)`, then `(44.4,1.4,47.5)`, then `(91.9,1.8,40.5)` — the player
+  walking into the falls and reporting it, three times.
+
+**Root cause, one line:** `path_search.cpp:244`, `const bool closedAware = ModMenu::UnreachableFilterOn();`.
+The row is Off by default (`MODMENU initialized: unreachable_filter=0` in this very log), so
+`kClosedFloorPenalty` is never added and a script-closed poly costs the same flat 2000 as any bit-23
+ledge. A waterfall lying across the short way is therefore cheap to cross, and A* crosses it. This is
+the S179 defect exactly — *"the corridor bought its way through a shut door at the flat 2000-per-poly
+terrain price"* — surviving in the half of that session's fix that was left behind a toggle.
+
+**THE FIX — USER'S RULING, 2026-09-16: a script-closed floor is a CUT, not a price.**
+
+> *"The unreachable object should still say 'No path' even if it shows on the filter, not act as if it
+> can find a path through the obstacle. That is the same bug as the northern sluiceway problem."*
+
+1. **A* REFUSES to expand into a script-closed poly**, whatever the mod-menu row says. A target whose
+   only approach crosses one then produces the search's own honest failure, which the planner already
+   speaks as "No path". `kClosedFloorPenalty` stops being the mechanism (path_search.cpp:443).
+2. **The filter row keeps the LIST and never touches the ROUTE.** Being listed is a preference the user
+   ruled on in S179; being walkable is a fact. **An entity may be listed AND answer "No path" — that
+   pairing is the instruction, not a contradiction to tidy away.**
+3. **Keep the start's and goal's own closed material exempt** (path_search.cpp:247). Without it, routing
+   TO a shut door fails, because the door's own floor is the closed one, and a player standing on a
+   poly a script just closed could route nowhere at all.
+   *Refinement to consider only if a case turns up:* the exemption is by MATERIAL id, so a goal on the
+   same material as the barrier also exempts the barrier. Exempting the goal's own connected closed
+   patch instead would be tighter. Do not build it speculatively.
+4. **Optional short-circuit, not required:** `ReachGate` already floods the open component, so the
+   planner could answer "No path" from `BehindClosedFloor` / `Disconnected` without searching at all.
+   The cut in point 1 is what makes the behaviour correct; this only makes it instant.
+5. **Correct the four places that state the old contract in the same commit** (L-38): `reach_gate.h`'s
+   "with the row off nothing here changes … how anything routes"; `kClosedFloorPenalty`'s comment at
+   path_search.cpp:102; the `closed-floor:` log line's "Unreachable filter ON" text; and
+   `nav_mesh.cpp:203`'s "A*'s terrain PRICE (never a cut — the S96 lesson stands)", which stays TRUE for
+   terrain and now needs to say that script-closed is the one exception.
+
+**WHY A CUT IS LEGITIMATE HERE, WHEN S96 PROVED CUTS OVER-REFUSE — read this before re-litigating it.**
+The difference is the EVIDENCE CLASS, not the severity.
+- S96 cut on **static terrain type** (`bit 23` in raw map data) as a proxy for walkability. That proxy
+  is wrong — the party wades that water — and the cut refused 399 of 690 prims on map 311 and took map
+  315 to zero exits. It was reverted twice and the price model that replaced it is correct and stays.
+- A script-closed floor is **the game's own runtime refusal**: raw class bit CLEAR, effective bit SET,
+  i.e. a script called `setmapidfloor(id, class, 0)` and the engine's own override bank now refuses the
+  party. It has been measured twice, on two different mechanisms: S179's doors on Mirror of the Soul
+  (route stuck exactly at the shut door) and S181's waterfalls here (materials 3,4, three blocked spots).
+  Cutting on it is not an inference about terrain; it is reading the refusal the engine applies.
+
+So: **price what we INFER, cut what the game DECLARES.** L-75 is the general form — a permissive cost
+model turns an unreachable goal into a confident speakable route instead of an error — and the Northern
+Sluiceway (map 315, this file, "the mod routes them there confidently" while the player stops at
+x ≈ 45.5) is the same failure the user is naming. For a blind player a wrong route is worse than no
+route: they walk it, get stuck, and have no way to see why.
+
+**Risk, and the instrument to ship with it (L-39, L-48).** This changes routing on every map with a
+script-closed floor — magic walls, flood gates, the 824-routine `setmapidfloor` census in
+GameArchitecture.md — and a false positive now costs a hard "No path" where the player could walk,
+which is exactly the damage S96 did. Mitigations: the test stays the narrow raw-clear/effective-set
+one; and **log every refused crossing with its material id on a FAILED search**, so a wrong refusal
+shows up as a named map + material in one grep rather than as a silent dead end. Falsifier: any map
+where `closed-floor:` fires and the player walks that crossing by hand.
+
+**Stopgap the player can use TODAY:** switch `Unreachable filter` On in the `F8` menu while in the
+palace. That is the same code path, already shipped — routes then price the falls at 20000 per poly and
+go round. Two honest limits on the stopgap: the list also hides what is behind a closed floor (the cost
+the user accepted in S179), and because it is still a PRICE, a target whose only approach is the falls
+will still be routed to rather than refused — the ruling above is what fixes that half, and only the
+build fixes it. The puzzle guide is unaffected either way: `FocusWhere` ignores the list filters by
+design, so the row never changes which exit or door `B` names.
+
+**Second, smaller defect in the same log:** the first `B` press on entering the map answered
+`target NONE (the exit's map-jump group is not in the list)` and spoke a step with no target, because it
+ran BEFORE `seams: swept 10 group(s) for map 184` — the exit surfaces did not exist yet. Later presses
+on the same map found the target every time. Fix: when the seam sweep has not run for this epoch, the
+guide should re-arm its request for the next field frame instead of answering, and only give up after
+that. One retry, not a loop.
+
+**Not a defect, but read this before trusting the log's own header:** that session's stamp says
+`Build: V0.7 (8db23ed) compiled Sep 15 2026 09:04:50`, which is S179's commit and a stale compile time —
+the tree was uncommitted, so the hash is the last commit's, and the version string's translation unit
+did not recompile. The `[SOCHEN]` lines are what prove the S181 build was running. See `L-62`.
+
+### OPEN, UNPLAYED (S181) — Sochen Cave Palace: the by-hand guide on `B`
+
+KEYWORDS: Sochen puzzle guide B key waterfall legs door puzzle clock circuit FocusWhere seam group
+EntityList focus gim_door08b gim_door15 class 5 work globals class 1 module storage strayed out of turn
+
+**Asked (2026-09-16):** build the by-hand solver for both puzzles — the other half of S180's skip row.
+
+**Shipped (S181), unplayed:** `SochenGuide` on `B` (shared with the shout meter and the statue guide;
+each drains its own request). It reads the live script state, says which step you are on, and puts the
+`[` / `]` focus on the exit or door that step names, so `\` routes there. It writes nothing.
+
+- Waterfall state: storage class 5 `+0x80..+0x87` (shared work globals, which is why it survives the
+  map changes). Step = completed legs + 1. Target on 184 is the leg's out-exit, on 185/192 the exit
+  that arrives back at 184 by the leg's entrance (or, when the leg has not been started, any exit back).
+- Door state: class 1 `+0x3C` count plus seven per-door flags, readable only on 192 (class 1 is per
+  module). A later door's flag up = "strayed", and the guide says to leave and come back.
+- Targets are matched by SCRIPT FACTS, never by label: an exit by its own `mapjump` destination and
+  entrance -> `ExitDest::group` -> `Entity::seamGroup`; a door by `MapScript::RoutineIndexOfObject`
+  against the routine names in the table (GameArchitecture.md "The two sequences, step by step").
+- New: `EntityList::FocusWhere` — the only way besides a player keypress to move the focus. It does not
+  speak and does not route.
+- **`B` IS ALSO THE RESUME KEY** (user's request, same session): it is stateless, so a second press after
+  a detour re-reads the counters and re-focuses. From a palace room the puzzles do not use, it focuses
+  the way back toward one they do; once the waterfall puzzle is solved and the door one is not, from off
+  Destiny's March it names the door puzzle and the way back to it, with no step number (that count lives
+  in that map script's own storage and is unreadable from elsewhere).
+
+**Falsifiers for the next log:** `[SOCHEN] waterfall: map … -> target found` and `[SOCHEN] doors: … ->
+target found`. **`target NONE (…)` is the thing to read first** — the reason is printed, and the two
+most likely are the exit's map-jump group not being in the entity list, and no listed object running a
+door's routine (which would mean the `b`-side objects are not listed separately, and the door half of
+the guide needs a different join). In play: after `B`, the route key should lead to the named exit or
+door, and the step number should advance by one each time the game's own waterfall message fires.
+
+### OPEN, UNPLAYED (S180) — Sochen Cave Palace: the Pilgrim's and Ascetic's Door puzzles, solved by a menu row
+
+KEYWORDS: Sochen Cave Palace Pilgrim's Door Ascetic's Door waterfall puzzle clock puzzle Door of Hours
+class0+0x918 save block write SochenDoors Solve door puzzles sochen_puzzles rui_ mod menu context gate
+
+**Asked (2026-09-15, own log, build `aa52d71`):** the player is in Sochen (maps 186 -> 185 -> 184). Two
+Pilgrim's Doors and an Ascetic's Door need puzzles a blind player cannot do. Priority: a mod-menu row,
+visible only in the palace, that sets the puzzle flags solved. Second: exit labels for doing it by hand.
+
+**Diagnosis (offline, scripts only — no game run needed, L-08):** one save-block byte, `class0+0x918`.
+Bit `0x02` = waterfall puzzle (Falls of Time), and it gates BOTH Pilgrim's Doors (`rui_a02`
+`gim_door01/02` = the mod's "Pilgrim's Door 1/2"). Bit `0x01` = clock puzzle (Destiny's March), and it
+gates the Ascetic's Door (`rui_b01` `secret_door`). Full bit table: GameArchitecture.md "Sochen Cave
+Palace door puzzles". **The user's "two Pilgrim's Doors with separate puzzles" is two faces of one
+puzzle;** the second puzzle is the Ascetic's.
+
+**Shipped (S180), unplayed:** `SochenDoors` + row `Solve door puzzles` (key `sochen_puzzles`, default Off,
+visible while a `rui_` script is live). On: once per map visit, `byte |= 0x03`, after checking the live
+module's class-0 base equals RVA `0x2044480` and any declaration of `+0x918` is exactly `0x00000918`.
+Nothing is cleared; the doors still open through the game's own dialogue (which sets `0x40`/`0x80`).
+
+**Falsifiers for the next log:** `[SOCHEN] WROTE class0+0x918 … read back 0x..` with bits 0 and 1 set, or
+`both puzzles already solved`. Any `declining:` line means nothing was written — read its numbers. In
+play: a Pilgrim's Door answers "open" instead of "Some unknown mechanism holds it fast."; after
+re-entering Falls of Time no "waterfalls" message appears and the layout is the solved one; after
+re-entering Destiny's March the Ascetic's Door opens and the exit behind it works.
+
+**Known limit, by design:** switching the row On while standing in Falls of Time or Destiny's March
+changes the waterfalls / the Ascetic's exit on the NEXT entry (their loaders read the bit once). The
+row's description tells the player to leave and come back.
+
 ### OPEN, UNPLAYED (S179) — doors listed as Interactables, and a route that died on a half-closed door
 
 KEYWORDS: door category interactables Ancient Door Pilgrim's Door gim_door setmapidfloor material override
@@ -467,6 +631,13 @@ field-sign GROUP-1 record — see `GameArchitecture.md`, Session 104.
 
 **READ THIS BEFORE TOUCHING PATHFINDING FOR MAP 315 OR FOR "the route goes through something the
 player cannot cross".**
+
+**The same failure SHAPE recurred in S181 on Sochen's waterfalls, and the user named it as this one:**
+*"that is the same bug as the northern sluiceway problem."* A route the mod speaks confidently that the
+player then cannot walk. There the cause was our own cost model buying a crossing the game refuses, and
+the ruling that came out of it — **price what we infer, cut what the game declares** — is in the entry
+"routes buy their way through the waterfalls" at the top of this file. It does not change any diagnosis
+below; it is the general lesson this map paid for first.
 
 > **STRUCK: this section's own title, "FOUR SESSIONS, FOUR FIXES, STILL BLOCKED", and every
 > "STILL BLOCKED" claim below it.** They were true through S99 and were left standing while the map

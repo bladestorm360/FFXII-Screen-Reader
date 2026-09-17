@@ -186,6 +186,18 @@ const Row kTable[] = {
     EN(L"Whether things you cannot walk to right now are listed, such as places behind a closed door or across water."),
     EN(L"Off lists everything and routes exactly as before."),
     EN(L"On hides what is out of reach until you can reach it, and routes steer around closed doors."),
+
+    // S180: Sochen Cave Palace door puzzles -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"Solve door puzzles"),
+    EN(L"Whether the waterfall puzzle and the clock puzzle in this palace count as solved, which is what unlocks their doors."),
+    EN(L"Off leaves both puzzles as the game wrote them."),
+    EN(L"On marks both solved, so their doors open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning this off does not unsolve them."),
+
+    // S181: the Sochen puzzle guide (B). Same order as the enum's tail. Flag any reword to the user.
+    EN(L"Waterfall puzzle"),
+    EN(L"Door puzzle"),
+    EN(L"step"),
+    EN(L"A door was opened out of turn, so the count has stopped. Leave the area and come back to start again."),
 };
 
 #undef EN

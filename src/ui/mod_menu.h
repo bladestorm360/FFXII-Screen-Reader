@@ -90,6 +90,9 @@ enum class SettingId : int {
     // `PuzzleActive`, which reads the game's own gauge-shown bit -- not merely "you are in Bhujerba").
     PuzzleGuide,          // the spoken meter and the B/N keys.       Default ON  -- it only informs
     PuzzleSkip,           // one shout completes the minigame.        Default OFF -- it writes game state
+    // S180, visible ONLY while a Sochen Cave Palace script is live (SochenDoors::InPalace). On marks
+    // the waterfall and clock puzzles solved in the save block. Default OFF -- it writes game state.
+    SochenPuzzles,
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
@@ -124,6 +127,7 @@ bool ControllerOn();       // whether the pad intercept may read or consume anyt
 bool UnreachableFilterOn(); // S179: list filter (input thread) + closed-floor price (game thread)
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
+bool SochenPuzzlesOn();    // S180: whether Sochen's two door puzzles are marked solved. Game thread
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get

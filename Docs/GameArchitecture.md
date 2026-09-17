@@ -6230,7 +6230,16 @@ stands there.
 two other maps out of map-local state, so the facings are cross-script globals (storage class 4).
 That is a structural inference, ~0.95, and `StatueDiag` measures the storage class to settle it.
 
-### What the file CANNOT answer, and why
+### ~~What the file CANNOT answer, and why~~ — STRUCK (S180): the descriptor table IS in the file
+
+**STRUCK.** Everything below was read at the FILE base. Session 137 had already moved the base to
+`file + u32(file+0x10)` (= `file+0x80`), and S166's `ebp_disasm.py` rewrite parses every script that
+way. At that base, `blob + u32(blob+0x28)` is the variable descriptor table — `[u32 count][count x
+(u32 desc, u32 0)]`, the same `desc` word `FUN_00262440` decodes. **Offline check (S180):** `mrm_b03`'s
+var `0x0D` decodes to `0x100009B1` (s8, class 0, `+0x9B1`) and var `0x07` to `0x10000882` (s8, class 0,
+`+0x882`) — exactly the two cells S156 measured live in the table below. So variable index, storage
+class and offset are all answerable from the extracted file. Tool: `FFXII-Decompile\tools\
+ebp_var_census.py`. See `L-87`. The original text is kept for the record:
 
 The map-script `.ebp` container is **not** the layout `notes\EBP2_DBG_format.md` documents for the
 four controller scripts. On a map script `hdr+0x18` addresses the **message region** — the
@@ -6551,3 +6560,105 @@ but has not been played.
 
 **`queststartwindow`** (native `0x386`) has not been traced. The user's expectation is that it is the
 window shown when a hunt is accepted, and they do not consider it a priority.
+
+## Sochen Cave Palace door puzzles — one save-block byte, `class0+0x918` (Session 180)
+
+**KEYWORDS: Sochen Cave Palace rui_ Pilgrim's Door Ascetic's Door waterfall puzzle clock puzzle Door of
+Hours Falls of Time Mirror of the Soul Destiny's March class0+0x918 save block puzzle flag
+setmapjumpgroupflag 0x14D secret_door gim_door nowjumpindex**
+
+Decoded offline from the room scripts (`FFXII-Decompile\output\rui_*_ebp_disasm.txt`, descriptors via
+`tools\ebp_var_census.py`). Not yet written in play — the S180 mod-menu row is the first instrument.
+
+**Scripts -> maps.** Every `rui_` map script jumps only to Sochen maps (184-202) or the save-crystal
+teleport list, which is why the palace gate is the `rui_` prefix. Bound by content, not by a mapId join:
+
+| script | map | evidence |
+|---|---|---|
+| `rui_a01` | 184 Falls of Time | the three waterfall messages; exits to 185 and 192 |
+| `rui_a02` | 185 Mirror of the Soul | Pilgrim's Door inscription; the live routine list in our own log (`[13]gim_door01 [14]gim_door02`) |
+| `rui_b01` | 192 Destiny's March | both Ascetic's Door inscriptions; 20 `gim_doorNN` Doors of Hours; `secret_door` |
+
+**The byte.** One `u8`, storage class 0, offset `0x918` — descriptor word exactly `0x00000918` in all six
+scripts that declare it (`rui_a01` v7, `rui_a02` v13, `rui_a04` v14, `rui_a05` v14, `rui_b01` v10,
+`rui_b03` v8; the debug script `evt_t0081`'s `Map_Debug_menu_mtanaka` also flips bit `0x01`). Class 0 is
+the persistent save block (S156), so absolute = `FUN_002ef2b0()` + `0x918` = RVA `0x2044D98`.
+
+| bit | set by | read by | conf |
+|---|---|---|---|
+| `0x01` clock puzzle solved | every Door of Hours in `rui_b01` on completing the circuit | `secret_door` (the Ascetic's Door) refuses to open without it; `rui_b01` loader sets jump-group flag `0x14D` + navimap 0 while set, releases it otherwise | 0.98 |
+| `0x02` waterfall puzzle solved | `rui_a01` Map_Director `main`, the frame the fourth stage is reached ("You hear a door open in the distance.") | `rui_a02` `gim_door01` and `gim_door02` — the mod's "Pilgrim's Door 1/2" — refuse without it ("Some unknown mechanism holds it fast."); `rui_a01` init uses the solved waterfall layout while set; `rui_a02` init picks navimap 0 | 0.98 |
+| `0x04` | `rui_a05` `ele_switch` | — | lift switch, untouched |
+| `0x08` | `rui_b03` `ele_switch` | — | lift switch, untouched |
+| `0x10` | `rui_a04` `big_door_01` | `rui_a04` loader | locked door, untouched |
+| `0x20` | `rui_b01` `big_door_02` ("securely locked … proper key") | `rui_b01` loader, jump-group flag `0x14E` | key door, untouched |
+| `0x40` Ascetic's Door opened | `secret_door` talk, when the player chooses to open | same routine: skips the question next time | 0.98 |
+| `0x80` Pilgrim's Door opened | `gim_door01/02` talk, likewise | same routines | 0.98 |
+
+**Both Pilgrim's Doors are ONE puzzle.** `gim_door01` (z 60.6) and `gim_door02` (z 85.2) sit either side
+of the central enclosure and both test bit `0x02`. `gim_door03/04` on the same map open on interaction
+with no flag at all.
+
+**How the waterfall puzzle counts (for a future guide, not used by S180).** Stage state is NOT in the
+save block: `rui_a01` keeps it in storage class 5 (`+0x80..+0x83` "left through exit 1/3/5/7", written
+by the four long `__MJ_CTRL00[1357]` routines just before their `mapjump`; `+0x84..+0x87` stage reached).
+On load, Map_Director compares `nowjumpindex` (3/5/7/9) with the matching "left through" flag to advance
+a stage, else clears all eight. Four stages -> bit `0x02`. The Destiny's March circuit is counted in
+storage class 1 (`rui_b01` v16-v46, counter v44 reaching 7). Neither needs to be touched to solve.
+
+**Door talk reads the bit live; the two loaders read it once.** So a bit set mid-visit opens a door at
+once, but the waterfall layout (184) and jump-group `0x14D` (192) follow on the next entry. The normal
+solve path does not have this gap because the completing Door of Hours also REQs
+`secret_door.map_door_ok`, which sets `0x14D` itself.
+
+### The two sequences, step by step (Session 181) — what the `B` guide is built on
+
+**Waterfall (maps 184 / 185 / 192).** Four legs. Each leg is *leave Falls of Time by one exit, come
+back into Falls of Time by one entrance*. `nowjumpindex` on arrival IS the entrance literal of the
+`mapjump` that brought you, and on these maps it also equals the arriving map's own exit group — the
+ten exits of 184 carry groups 1-10 and the ten exits into 184 (five in 185, five in 192) target
+entrances 1-10 exactly once each.
+
+| leg | leave 184 by group | that exit's `mapjump` | come back by arriving at 184 entrance | which is | class-5 cells |
+|---|---|---|---|---|---|
+| 1 | 2 | 185 entrance 5 | 3 | `rui_a02` group 1 | left `+0x80`, done `+0x84` |
+| 2 | 4 | 192 entrance 1 | 5 | `rui_b01` group 4 | left `+0x81`, done `+0x85` |
+| 3 | 6 | 185 entrance 4 | 7 | `rui_a02` group 2 | left `+0x82`, done `+0x86` |
+| 4 | 8 | 192 entrance 2 | 9 | `rui_b01` group 3 | left `+0x83`, done `+0x87` |
+
+**The layout table below is CONFIRMED LIVE (S181 play log):** on entering 184 at stage 0 the reach gate
+reported `9 script-closed crossing(s) refused, material id(s) 3,4` — the two the stage-0 row names, from
+a component flood that knows nothing about this table. **So a waterfall is a script-closed floor, by the
+same `setmapidfloor` mechanism as S179's doors**, and the router must price it (see debug.md, "routes buy
+their way through the waterfalls").
+
+`rui_a01`'s Map_Director tests the four pairs in DESCENDING order (9/7/5/3) at map load; a match sets
+that leg's done-cell and the waterfall layout for that stage. Any other arrival clears all eight cells
+("The waterfalls seem to have returned to their original course" when at least one was set, silence
+when none were). Leg 4 additionally ORs `0x02` into `class0+0x918`. Layouts, by stage, as ids the
+script shows/hides: stage 0 = 3,4 on; 1 = 1,3,5; 2 = 1,2,3; 3 = 3,5,6; 4 = 4 only.
+
+**Doors / clock (map 192).** Eight doors, one fixed order, each from one fixed SIDE — the `b` routines
+are the far side of the same door, so the order is a circuit, not a list of doors. Each door raises its
+own class-1 flag when opened, unconditionally; the step counts only while every LATER door's flag is
+still clear, and the count lives at class-1 `+0x3C`.
+
+| step | routine | script id | its flag (class 1) |
+|---|---|---|---|
+| 1 | `gim_door08b` | 23 | `+0x35`, tested by nobody — this door restarts the count |
+| 2 | `gim_door15` | 15 | `+0x2F` |
+| 3 | `gim_door14b` | 26 | `+0x38` |
+| 4 | `gim_door12` | 12 | `+0x2C` |
+| 5 | `gim_door09b` | 24 | `+0x36` |
+| 6 | `gim_door02` | 2 | `+0x22` |
+| 7 | `gim_door03b` | 21 | `+0x33` |
+| 8 | `gim_door05` | 5 | `+0x25` — completes when the count reads 7 |
+
+So a door opened out of turn stalls the sequence until the module reloads, which is the inscription's
+"Stray but once, another day must you return". Completion ORs `0x01` into `class0+0x918` and REQs
+`secret_door.map_door_ok`, which is what also enables jump-group flag `0x14D` in the same visit.
+
+**`REQEW(priority, routine, entry)`** — confirmed on `rui_a02`'s `gim_door01`, which REQs routine
+`0x1F` (`map_ダミーＰＣ`) entry 11 `ターン` to turn the player toward the door, then entry 1
+`扉オープン` to open it. That is how `rui_b01`'s `REQEW(1, 0x28, 2)` was read as `secret_door`
+entry 2.

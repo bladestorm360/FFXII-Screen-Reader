@@ -224,6 +224,19 @@ enum class Id {
     // Appended at the END so no earlier positional row shifts. Flag any reword to the user.
     SettingUnreachable, UnreachableDesc, UnreachableDescOff, UnreachableDescOn,
 
+    // S180: the Sochen Cave Palace door-puzzle row. The user asked for the toggle ("a mod toggle ...
+    // that allows both puzzle flags to be set to solved"); the wording is ours and was flagged to them.
+    // The Off/On VALUES reuse BeaconOff/BeaconOn. Door names are the game's own text, so the sentences
+    // name the puzzles by what they are instead. Appended at the END; flag any reword to the user.
+    SettingSochenPuzzles, SochenPuzzlesDesc, SochenPuzzlesDescOff, SochenPuzzlesDescOn,
+
+    // S181: the by-hand guide for the same two puzzles (sochen_guide.cpp, key B). The game says
+    // NOTHING about either sequence until the whole thing is right -- no step count, no "that one
+    // worked", and the doors and exits it wants are named identically to their neighbours -- so
+    // there is no game text to read instead. `solved` reuses StatueSolved, and the counts reuse
+    // OfJoiner. Wording is ours; flag any reword to the user.
+    SochenWaterfall, SochenDoorPuzzle, SochenStep, SochenOutOfTurn,
+
     Count
 };
 

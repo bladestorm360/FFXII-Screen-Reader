@@ -204,6 +204,18 @@ It reads all three from anywhere in the Stilshrine, and is silent everywhere els
 
 Two settings appear in the mod menu while you are shouting, and only then. Puzzle guide covers the spoken meter and the two keys, and starts on. Instant success fills the meter on your first shout, and starts off.
 
+#### Sochen Cave Palace: the two door puzzles
+
+* B: the step you are on in this palace's current puzzle, and which exit or door comes next.
+
+The palace has two puzzles. The waterfall puzzle runs between Falls of Time, Mirror of the Soul and Destiny's March in four legs, and opens both Pilgrim's Doors. The door puzzle is eight of Destiny's March's own doors opened in one fixed order, and opens the Ascetic's Door.
+
+B says, for example, "Waterfall puzzle, step 2 of 4. Mirror of the Soul 3.", and puts your selection on that exit — so the route key then leads you to it. In Destiny's March it guides the door puzzle, unless you are part-way through a waterfall leg, in which case it keeps you on that. It is silent everywhere outside the palace.
+
+Press B again any time to pick the puzzle back up — after a chest, a fight, or a wander. It reads the puzzle afresh every press, so it tells you where the sequence actually stands and points you at the next target again; from a room the puzzle does not use, it points you back toward one that it does.
+
+Worth knowing before you detour in Destiny's March: opening any of the eight doors is a move in the puzzle, even if you were only passing through to reach something. Do your exploring there before you start, or expect to start over. If it does happen, B says the count has stopped, and leaving the area and coming back restarts it.
+
 #### Controller
 
 The mod reads a plugged-in controller as well as the keyboard. It is on by default. The Controller row in the mod menu below switches it off, and so does clicking the left stick in — L3 — which says "Controller" and the new setting. Off passes every button and stick straight to the game.
@@ -244,6 +256,7 @@ The settings it holds:
 * Unreachable filter — Off or On. On hides objects you cannot walk to right now, such as a room behind a closed door or a ledge across water, until you can reach them, and routes steer around closed doors. Enemies are always listed. Off is the default, and lists and routes exactly as before.
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
+* Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.
 
 F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 

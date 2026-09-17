@@ -235,4 +235,33 @@ void CmdLabelFromClipboard() {
     }
 }
 
+// S181. The cursor move a guide needs: put the focus on the one entity a caller can identify, and
+// hand back the words the list would speak for it. It deliberately does NOT speak and does NOT
+// route -- the caller composes its own sentence, and the player's own route key still does the
+// routing through `GetCurrentTarget`, which prefers the focus.
+//
+// The FILTERS ARE NOT CONSULTED. The target of a puzzle step is a fact about the puzzle, not about
+// which category the player happens to be cycling, and `GetCurrentTarget` reads the focus before it
+// reads any filtered view -- so focusing an Exit while the player is browsing NPCs still routes to
+// the exit. Nothing else in the mod sets the focus without the player asking for that object.
+bool FocusWhere(EntityTest test, void* ctx, std::wstring* outLabel) {
+    if (!test) return false;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    RescanLocked();
+    FVec3 p;
+    if (ReadPlayer(p)) RefreshPositionsLocked(p);
+
+    const Entity* best = nullptr;
+    for (const Entity& e : g_entities) {
+        if (!test(e.sceneObj, e.seamGroup, ctx)) continue;
+        // NEAREST WINS. A puzzle step usually names exactly one entity, but a door with two sides is
+        // two objects sharing one routine, and the one you can reach is the near one.
+        if (!best || e.dist2D < best->dist2D) best = &e;
+    }
+    if (!best) return false;
+    SetFocusLocked(*best);
+    if (outLabel) *outLabel = best->label;
+    return true;
+}
+
 } // namespace EntityList

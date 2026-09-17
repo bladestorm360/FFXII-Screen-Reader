@@ -413,6 +413,12 @@ and above all not the very thing the feature under repair is supposed to give th
      pause or stall. Widening consumption to a new control is a normal design change, not a new
      category — but widening it to *injection* is a new category and needs new permission.
 
+  **GAME-MEMORY WRITES, each user-authorized and each chartered in its own header:** sneak assist
+  (`sneak_assist.h`, S107), the shout minigame's Instant success (`shout_fill.h`, 2026-08-05), and
+  Sochen Cave Palace's Solve door puzzles (`sochen_doors.h`, 2026-09-15, S180: ORs two puzzle bits
+  into one save-block byte, context-gated row, default Off). Each writes only what its charter names;
+  a new target is a new permission.
+
   Everything else in this rule stands unchanged: no lock-on presses, no speed changes, and any
   OTHER feature that would *drive* the game still requires **explicit user permission** and a
   design discussion first. (Original rule confirmed Session 44 after a tester speed-jump turned

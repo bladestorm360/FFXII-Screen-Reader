@@ -101,6 +101,19 @@ void CmdLabelFromClipboard(); // F6 name the focused entity with whatever is on 
 bool GetCurrentTarget(FVec3& outPos, std::wstring& outLabel, bool* outIsTransition = nullptr,
                       void** outSceneObj = nullptr, int* outSeamGroup = nullptr);
 
+// PUT THE FOCUS ON ONE SPECIFIC ENTITY, chosen by a caller-supplied test (S181, the Sochen puzzle
+// guide). The nearest passing entity wins, the `[` / `]` cursor lands on it, and its spoken label is
+// returned so the caller can name it in one sentence. False when nothing passes.
+//
+// The point of focusing rather than routing: `GetCurrentTarget` prefers the focused object over the
+// nearest, so the route key then leads there with no second path through the planner -- the guide
+// names a target, the player's own key still does the routing.
+//
+// GAME THREAD (it rescans and reads live transforms). `sceneObj` is null for fixed exits, and
+// `seamGroup` is 0 for everything that is not a walk-onto surface.
+typedef bool (*EntityTest)(void* sceneObj, int seamGroup, void* ctx);
+bool FocusWhere(EntityTest test, void* ctx, std::wstring* outLabel);
+
 // Dump the raw handle table (tag NAV-DIAG): every named/interactive scene object per
 // container with its category byte, interaction flags, npcdic key, name, and world
 // position — the data that confirms where a given object (e.g. the tutorial gate) lives.

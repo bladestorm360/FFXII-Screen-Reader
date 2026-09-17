@@ -6,6 +6,7 @@
 #include "speech/speech.h"
 #include "core/game_text.h"          // S177: the restored glyph-variant row pushes SetVariant here
 #include "navigation/shout_meter.h"
+#include "navigation/sochen_doors.h"
 
 #include <windows.h>
 
@@ -122,6 +123,12 @@ const Setting kSettings[] = {
       { Id::BeaconOff,         Id::BeaconOn },
       { Id::PuzzleSkipDescOff, Id::PuzzleSkipDescOn },
       Id::PuzzleSkipDesc, "puzzle_skip", 0, &ShoutMeter::PuzzleActive },
+    // S180, user's request: CONTEXT-GATED to Sochen Cave Palace, default OFF on the Instant success
+    // precedent directly above -- it writes game state. See sochen_doors.h for the charter.
+    { Id::SettingSochenPuzzles, Kind::Named, 2,
+      { Id::BeaconOff,            Id::BeaconOn },
+      { Id::SochenPuzzlesDescOff, Id::SochenPuzzlesDescOn },
+      Id::SochenPuzzlesDesc, "sochen_puzzles", 0, &SochenDoors::InPalace },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -390,6 +397,10 @@ bool AutoDetailOn() {
 // nothing the instant fill could honestly write.
 bool PuzzleGuideOn() { return EffectiveValue(SettingId::PuzzleGuide) == static_cast<int>(Beacon::On); }
 bool PuzzleSkipOn()  { return EffectiveValue(SettingId::PuzzleSkip)  == static_cast<int>(Beacon::On); }
+
+// S180. Game thread only (SochenDoors::OnFieldFrame). Context-gated like the pair above, so it answers
+// false everywhere outside Sochen Cave Palace whatever the stored value says.
+bool SochenPuzzlesOn() { return EffectiveValue(SettingId::SochenPuzzles) == static_cast<int>(Beacon::On); }
 
 bool ControllerOn() {
     return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);

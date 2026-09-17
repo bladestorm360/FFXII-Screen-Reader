@@ -31,7 +31,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83 |
@@ -141,6 +141,11 @@ absent entry may mean nobody wrote one *yet*.
 recompile unless it changes. I used it as evidence that the user had not run a fix. They had, and it
 had genuinely failed -- so the stamp cost a real defect a round of denial. `cmp` on the two files
 settles it in one line. Related: L-10, read the build first -- but read it from the bytes.
+**THE HASH LIES THE SAME WAY, and worse (S181).** `Build: V0.7 (8db23ed)` is the git hash captured at
+CMake CONFIGURE time, so on an uncommitted tree it names the last COMMIT -- a build carrying two whole
+new features reported the previous session's hash and the previous day's compile time. Identify a log's
+build by a line only the new code could have written (`[SOCHEN]` settled that one in a single grep), or
+by `cmp` against the build output. Never by the banner, in either field.
 
 ### L-64 ⟲ BEFORE STRIKING A CLAIM, CHECK WHETHER IT AND ITS REFUTATION ARE ACTUALLY EXCLUSIVE
 **A correction is a conclusion and carries the same bar as the thing it corrects. Do not strike a
@@ -191,6 +196,18 @@ even printed them: `goal … eff=0x0FA07000`, material 3, on a route to door 3.
 one member whose routine name is on the screen. Related: L-06 (the shape you searched for), L-85
 (identity is decided by the feature that differs), L-01 (a sample is not a population — the census of
 824 callers is what stopped this becoming "every setmapidfloor caller is a door").
+
+### L-87 A CANNOT-BE-ANSWERED-OFFLINE CLAIM EXPIRES WHEN THE PARSER UNDER IT IS FIXED
+**When a doc says "the file cannot tell us X", check what base or parser that was concluded with. If
+either has been corrected since, the claim is void until re-tested. Test it against a value already
+measured live.**
+**Why:** S154 wrote "the variable descriptor table is not reachable offline" after reading map scripts at
+the FILE base. S137 had already moved the base to `file+0x80`, and S166 rewrote the disassembler on it,
+but the claim stood. It sent the Stilshrine statues to runtime measurement (S156-S157) for cells that
+were in the extracted file. S180 re-tested it in one step: `mrm_b03` var `0x0D` decodes offline to
+`+0x9B1`, exactly S156's live measurement. The whole Sochen puzzle was then solved from scripts alone.
+**The tell:** a negative capability claim ("not reachable", "cannot answer") older than a format fix it
+depends on. Related: L-38 (strike, do not append), L-08 (map-data questions are decompile questions).
 
 ### L-69 A FIELD THAT MEANS DIFFERENT THINGS IN DIFFERENT STATES WILL HAND YOU A PLAUSIBLE WRONG NUMBER
 **Read the state byte BEFORE you read anything the state byte governs. A reused field does not fail
@@ -266,6 +283,13 @@ not 19 m away in the graph, whatever the distance readout says. Compare cost aga
 before believing a route.
 **And fix it at the goal, not in the search.** The pricing model was right; the input was wrong. The
 repair went where the script coordinate becomes a world position -- one population, no router edit.
+**S181 ADDS THE OTHER HALF, by the user's ruling: PRICE WHAT WE INFER, CUT WHAT THE GAME DECLARES.**
+Static terrain type is our inference and stays priced (S96 proved cutting it over-refuses). A
+SCRIPT-CLOSED floor -- raw class bit clear, effective bit set, i.e. the engine's own override bank
+refusing the party after a `setmapidfloor` -- is the game's own declaration, and is CUT: a target
+behind one must answer "No path" rather than be handed a route through the obstacle, even when the
+list still shows it. Measured twice before the ruling (S179 doors, S181 waterfalls). See debug.md,
+"routes buy their way through the waterfalls".
 
 ### L-76 WHEN A FIX RESTS ON A PREMISE YOU CANNOT CHECK OFFLINE, SHIP THE LINE THAT NAMES THE BRANCH
 **Do not ship the fix and hope. Ship the fix AND the one log line that says which case you are in,
