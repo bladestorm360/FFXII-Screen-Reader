@@ -293,3 +293,18 @@ in this directory, and still should not be cut during a bug fix.
 | `src\navigation\path_search.cpp` | **1149** (was 1111) | +38 for the toggle-gated closed-floor price and its log line. Still the largest debt in the tree; the `Refusals` diagnostics struct named in S96 is still the right first cut. |
 | `src\battle\battle_state.cpp` | **546** (was 537) | +9 for `EscapeModeOn`. Already over; kept beside `PartyEngagement` because the beacon asks both questions together. |
 | `src\navigation\audio_beacon.cpp` | **525** (was 506) | +19 for the escape-mode gate and its edge log. The combat branch (target ping) is the natural seam if this file is split. |
+
+## Session 184 - the target-group reader, and three files already over the cap grew
+
+| file | lines | note |
+|---|---|---|
+| `src\ui\target_group_reader.cpp` *(new)* | 267 | The group title + Reserve rows. Its own file on purpose: both readers it touches were already far over. |
+| `src\core\game_text_ex.cpp` *(new)* | 73 | The engine's `ex00` + UTF-16 string format. Split out because `game_text.cpp` is over; `Decode` gained a 5-line dispatch. |
+| `src\ui\ingame_menu_reader.cpp` | **829** | +18: the controller before/after calls, the panel-focus claim, `BattleListDrawCallback`, and the corrected `RVA_DRAW_ITEM` label. The table above (648) was stale; this is measured. The battle-command half is still the seam. |
+| `src\ui\battle_target_reader.cpp` | **862** | +20: `AllyHpClause`, `ReannounceQueued`, the queue deadline. |
+| `src\ui\menu_reader.cpp` | 906 | +3 (include, Init, Shutdown). |
+| `src\core\game_text.cpp` | 743 | +5 (the `ex00` dispatch). |
+
+Centralization kept: the Reserve row's HP comes from the target reader's own `HpClause` (exported, not copied),
+the name from `BattleState::CharacterName`, the title from `TextCapture::ResolveStringById`, and the draw-callback
+read from `IngameMenuReader::BattleListDrawCallback` (exported, not re-read).

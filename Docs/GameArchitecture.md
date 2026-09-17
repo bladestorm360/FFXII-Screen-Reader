@@ -95,7 +95,7 @@ to it is a correction to `src\input\pad_router.cpp`.
 | L1 | Speed mode (x2 / x4) | Speed mode |
 | L2 | Toggle zoom | **Lock on to target** (hold to face it) |
 | L3 | Show area map | Show area map |
-| **R1** | *nothing* | Selects **Reserve** in the target list |
+| **R1** | *nothing* | Steps the **target list** to its next group — Foes, Party, Reserve, Allies (L1 steps back; S184, "Battle target groups") |
 | R2 | Zoom the map and the license board | Hold to run from enemies |
 | R3 | Recentre the camera | Recentre the camera |
 | Select | Display map | Display map |
@@ -6765,3 +6765,74 @@ Shipped as `SigilColours` (label suffix, from `MapScript::RoutineFacts::bgEffect
 **KEYWORDS: Pharos Ridorana rbl_n01 rbl_n02 map 1141 1140 Spire Ravel Third Ascent Way Stone Sigil of
 Sacrifice s_warp bgeffectplay 0xC3 glow effect colour white yellow pink purple class0+0x93d altar Steel
 Magicks Knowledge Wealth statusgmk rbl_j02 fieldsign name table file+0x1C**
+
+## Battle target groups — Foes / Party / Reserve / Allies (S184)
+
+**KEYWORDS: target list group L1 R1 Reserve Allies Foes Party FUN_0027b430 FUN_0027c730 FUN_0027b6c0
+FUN_0027e050 FUN_0027d5c0 FUN_0027e530 FUN_00279e20 FUN_00276d30 FUN_002778c0 message 0x1F 0x21 parent+0x2FF0
+0x400 parent+0x208 text 0x4A49 0x4A4A 0x4A4B 0x4A4C menu_expansion ex00 wide string FUN_00364980
+target_group_reader item targeting reserve member characters not in the party**
+
+Aiming a battle action puts up a TARGET LIST with up to four groups, stepped by L1/R1. Reached from the
+battle menu (`Items` → an item → target list); an item may target the reserve, which is the only way to use
+one on a character who is not in the active party. Every fact below is offline, conf 0.98 unless marked.
+
+**Window chain.** The battle menu root `FUN_00279e20` (RVA `0x159E20`) owns two parent slots (stride
+`0x3010`) of `FUN_00276d30` (RVA `0x156D30`); each parent builds one controller `FUN_002778c0` (RVA `0x1578C0`)
+at `parent+0x220`, and each controller two `FUN_0027ad70` panels at `ctrl+0xF0` and `ctrl+0x1710` (`ctrl+0xD0`
+= the parent). A command whose target is chosen from a list puts a kind in **`0x10..0x13`** at `root+0x61B8`;
+the root builds a parent for it, sets **`parent+0x2FF0` bit `0x400` (target mode)**, and broadcasts message
+**`0x1F`** with the kind at `msg+0x08` down the parent's subtree.
+
+**Controller message `0x1F` (build the next list).** Toggles which panel is live (`ctrl+0xDA`), and in target
+mode only writes the **group title** codec pointer to **`parent+0x208`** (a timer beside it at `+0x210`):
+
+| kind | title text id | US string | builder list kind (`panel+0x4C0`) | row draw |
+|---|---|---|---|---|
+| `0x10` | `0x4A4A` | FOES | not 0xD/0xF/0x1C (conf 0.95 which) | `FUN_0027e530` |
+| `0x11` | `0x4A49` | PARTY | `0xD` | `FUN_0027e530` |
+| `0x12` | `0x4A4B` (the else arm) | RESERVE | **`0xF`** | **`FUN_0027d5c0`** |
+| `0x13` | `0x4A4C` | ALLIES | `0x1C` | `FUN_0027e530` |
+
+It then calls `FUN_0027e050(panel, kind, ...)` — whose `0x10..0x13` arm maps kind → list kind through a
+4-int table at `DAT_01e0c398` and is the **only** assignment of both row draws — and `FUN_002d47c0(widget,
+..., 1)`, which sends the new list's first-row **`0x8000` focus synchronously, before `0x1F` returns**. A reader
+that speaks a title must therefore speak it BEFORE the original, or the title cuts off that row.
+
+**Reserve = list kind `0xF`, three sites agree:** the builder `FUN_0031eb20` case `0xF` walks roster list 3
+slots **4..8** (`BtlWork+0x5A7E`), writing each BtlChr's charId (`bc+0x04`) as the row and the target-validity
+verdict of `FUN_00322a80` into the row flag (bit 1 = not a legal target for this action); `FUN_0027c730` maps
+list kind `0xF` ↔ group 2 ↔ kind `0x12`; and it tests group 2 with `FUN_0027b6c0` (RVA `0x15B6C0`), whose whole
+body builds list kind `0xF` and returns "non-empty".
+
+**Row layout, list struct at `panel+0x4C0`:** kind `+0x4C0`, count `+0x500` (i32), rows from `+0x510` stride 8 —
+the row value (i32; a charId for Reserve, a unit handle for the other three) at `+0x510`, the row flag at
+`+0x514`. `FUN_0027d5c0` names a Reserve row through the character master table (`FUN_0031c5d0` category 2),
+the same walk as `BattleState::CharacterName`; it dims a row whose flag has bit 1.
+
+**`FUN_0027e530` IS THE TARGET-LIST DRAW, NOT AN ITEM LIST — STRIKES the "items" label.** Its row value is a
+unit handle; `FUN_00272cb0(handle)` decodes the handle and returns that object's name, `FUN_00272c80` a number
+drawn beside it. The mod's `RVA_DRAW_ITEM` branch (ingame_menu_reader) still feeds it a u16-truncated handle;
+never observed to speak, left unchanged, recorded in debug.md.
+
+**The group step.** `FUN_0027b430` (RVA `0x15B430`, args controller / panel / parent / direction, returns 1 on a
+change) is the only stepper. Callers: the controller's pad case with bits **`0x0400` → −1 and `0x0800` → +1**,
+and cases 4/5 of the `FUN_00290520` input source. It asks `FUN_0027c730` (RVA `0x15C730`) for the next group
+allowed by the mask at `parent+0x3000` (group 0 bit 1, group 1 bit 2, group 2 bit 8, group 3 bit 4) that is
+non-empty, and on a change bubbles `0x21` (root stores the kind) and `0x22` up the parent chain
+(`FUN_00275440` walks `+0x10` parents), closes the parent, and returns 1. The root rebuilds, which is a new
+target-mode `0x1F`. **The user reports these screens on L1/R1 (keyboard `1`/`3`)**, which pairs with bits
+`0x0400`/`0x0800` exactly as the libpad layout at the top of this file predicts — corroboration of that layout,
+not yet a promotion of it.
+
+**The "ex00" wide string format.** `menu_expansion.bin` (message section 19; the section is the file's first
+id / 10000) holds ids `0x4A48..0x4A4D` not as codec text but as ASCII `ex00` + UTF-16LE: LEADER, PARTY, FOES,
+RESERVE, ALLIES, TIME (US, decoded offline; other locales not extracted). The engine's own test is
+`FUN_00364980` (RVA `0x244980`: first bytes `e`,`x`); the label renderers `FUN_002d8690` / `87d0` / `8910` /
+`89e0` / `8b00` route such a string to the wide renderer `FUN_003649a0` instead of the codec one;
+`FUN_00365b50` copies the header and walks u16 characters with `{`-inserts; `FUN_0029ccf0` writes one (`ex00` +
+`+`/`-`). `GameText::Decode` dispatches on the full `ex00` header since S184 (`core/game_text_ex.cpp`).
+
+**Shipped as** `src/ui/target_group_reader.{h,cpp}`: title on a group switch (armed by `FUN_0027b430` returning 1,
+spoken in the controller hook before the original's `0x1F`), Reserve rows claimed by their draw callback. See
+debug.md S184.

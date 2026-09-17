@@ -7,31 +7,83 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
-### OPEN (reported 2026-09-17, end of S183) — two silent screens in the ITEM TARGETING MENU, opened with L1 / R1 (`1` / `3`)
+### SOLVED S184, PLAY-CONFIRMED — the target list's L1/R1 groups: no group title, and every RESERVE row silent
 
 KEYWORDS: item targeting menu L1 R1 key 1 key 3 use item on character not in party reserve member silent
-screen unknown screen vocalization menu reader NOT STARTED
+screen unknown screen target list group Foes Party Reserve Allies title FUN_0027b430 FUN_0027d5c0 list kind 0xF
+parent+0x208 ex00 wide string menu_expansion target_group_reader TGTGROUP S184
 
-**Reported by the user, verbatim:** *"there is a screen (accessed by pressing la/r1 (1 or 3 on keyboard)) that
-allows the use of items on characters not in the current party, as well as another screen that I am unsure the
-purpose of. these screens both need vocalization."* **Context, also the user's:** both are reached from the ITEM
-TARGETING MENU -- not the battle menu. Nothing was investigated.
+**Reported by the user at the close of S183, verbatim:** *"there is a screen (accessed by pressing la/r1 (1 or 3
+on keyboard)) that allows the use of items on characters not in the current party, as well as another screen
+that I am unsure the purpose of. these screens both need vocalization."* Context, the user's: the ITEM TARGETING
+MENU.
 
-**Corrected the same day:** the first version of this entry attached "leads" found by grepping the key names --
-R1 selecting Reserve in the battle target list, and `1`/`2`/`3` being game speed. The user: neither is relevant
-(this is the item targeting menu), and the second was false -- keyboard `1` = pad L1 (cycles game speed), `3` =
-R1, `2` no observed effect. Struck in Controls.md, GameArchitecture.md, combat_system.md, CLAUDE.md, README.md.
+**The log (Latest, session 09:28-09:32 on 09-17, the one just before that report).** Its last minute is the
+battle menu's `Items` -> `Ether 19` -> target list. The list's two panels take turns
+(`pane owner=...AFF0` / `...99D0`, both `focus=...98E0`) -- the same controller building a new list in its
+other panel on each L1/R1 press. The only speech in that minute is the nameplate reader naming the four units
+on the field (Ashe, Basch, Reddas, Fran). **No reserve member is named anywhere in the log, and no group name
+is ever spoken.** There is no `unclaimed pane` line for these panels because they are the battle command
+panel class, which the command reader claims, and its name resolve stays silent for a row draw it does not map.
 
-**First step next session:** grep the log from a session where these screens were opened for `[READER] unclaimed
-pane:` -- the menu reader logs the window class RVA of every pane no reader spoke for, which names both screens'
-classes without a probe. Then check `GameArchitecture.md` and `MenuArchitecture.md` for those classes.
+**What the screens are (offline, conf 0.98; GameArchitecture.md "Battle target groups (S184)").** L1/R1 step
+the target list through up to four GROUPS, each with its own game title: FOES, PARTY, RESERVE, ALLIES. RESERVE
+is list kind `0xF`, built from roster slots 4-8 -- "characters not in the current party". The "unknown purpose"
+screen is one of the other groups; which one depends on the item, and the title now says it. Foes/Party/Allies
+rows are field units, and the nameplate reader already speaks those.
 
-### TO VERIFY (user, next session) — reserve party member selection in the BATTLE menu's target list
+**Two traps found on the way, both handled:**
+- The title strings are not codec text. They are the engine's `ex00` + UTF-16 format, so `GameText::Decode`
+  read them as rubbish that could pass the printable test. Decode now switches on the `ex00` header the way the
+  engine's label renderers do (`core/game_text_ex.cpp`).
+- The controller's list build sends the new list's first-row focus BEFORE it returns. A title spoken after the
+  original would cut off that row, so the title speaks before the original and the row queues behind it.
+
+**Built:** `src/ui/target_group_reader.{h,cpp}`, plus 3-line hooks into `ingame_menu_reader.cpp`
+(controller before/after, the panel focus) and `battle_target_reader.cpp` (`AllyHpClause`,
+`ReannounceQueued`).
+- `FUN_0027b430` hooked; returning 1 arms a 2000 ms deadline. The next target-mode `0x1F` speaks the title for
+  its kind (`TextCapture::ResolveStringById`, interrupting). Entering targeting never arms, so the first list is
+  unchanged.
+- The switch queues what comes next. On Reserve the queued thing is the row this reader speaks. On any other
+  group the nameplate reader is re-armed, so it names the unit it lands on even when that is the same one.
+- A panel whose draw is `FUN_0027d5c0` AND whose list kind is `0xF` is claimed before any command resolve:
+  `"<name>, HP <cur>/<max>"`, the ally target line. Name from `CharacterName(charId)`; HP from the reserve slot
+  (4-8) whose `bc+0x04` matches.
+- Clean build, 0 warnings, deployed, `cmp` identical.
+
+**PLAY-CONFIRMED by the user the same day:** *"ALL WORKS AS INTENDED, NO new mod phrasing necessary, all
+vocalization is as it should be."* Both screens read, so the S183 report is answered in full and the
+"TO VERIFY" item below is closed with it. No phrasebook word was needed: every word spoken here is the
+game's own -- the group titles from its message book, the names from the character master table, and the
+HP clause is the existing ally target line.
+
+**Falsifiers (grep `TGTGROUP`):** `group switch accepted: dir=±1` on each L1/R1; `group title kind=0x12 id=0x4A4B:
+RESERVE` (or its locale's word); `title check kind=...: game wrote ... -- matches` (a `MISMATCH` means the
+kind->id table is wrong); `reserve row i/n charId=N slot=4..8 flags=0x.. (queued behind the title): Vaan, HP x/y`.
+A `reserve row NOT spoken:` line names the failed gate. Silence with no `group switch accepted` means the hook
+never fired, so the stepper identity is wrong.
+
+**Not built, and why:**
+- **No title when targeting OPENS.** It would add a word to every attack and spell. If a list opens straight on
+  Reserve, its rows still read, but without the word "Reserve". Offer it; do not add it unasked.
+- **The dim flag is not spoken.** Bit 1 at `panel+0x514+i*8` means "this item cannot target this member". It is
+  logged only; speaking it needs a new phrasebook word, which needs permission.
+- **`RVA_DRAW_ITEM` (`FUN_0027e530`) is mislabelled "items"; it is the Foes/Party/Allies row draw**, and
+  `TrySpeakBattleCommand` feeds it a u16-truncated handle. It has never spoken in any log, and the nameplate reader
+  owns those rows. The latent risk is that a truncated handle decodes to a real object's name. Recorded; not
+  changed in this build.
+
+### CLOSED S184 (was TO VERIFY) — reserve party member selection in the BATTLE menu's target list
 
 KEYWORDS: battle menu target list reserve R1 party member selection reads correctly verify
 
 A separate surface from the entry above. The user will check in play whether choosing a reserve party member in
 the battle menu's target list is read correctly, and report. Nothing to do before that report.
+
+**S184, CLOSED:** the log showed the item targeting screens ARE this list (battle menu `Items` -> item -> target
+list), and its Reserve group is what `target_group_reader` reads. One play pass answered both, and the user
+confirmed it: *"ALL WORKS AS INTENDED."*
 
 ### SOLVED S183, PLAY-CONFIRMED — the audio beacon went silent for whole dungeons: an IMAGE window read as "a dialogue box is on screen"
 

@@ -1,6 +1,7 @@
 #include "ui/ingame_menu_reader.h"
 #include "ui/menu_reader.h"
 #include "ui/text_capture.h"
+#include "ui/target_group_reader.h"
 #include "core/game_text.h"
 #include "core/hooks.h"
 #include "core/item_names.h"
@@ -169,7 +170,10 @@ constexpr uint32_t RVA_DRAW_TOPCMD = 0x156BE0; // FUN_00276be0 -- SAME function 
                                               // the other the draw-callback identity we compare against.
 constexpr uint32_t RVA_DRAW_CHOOSER= 0x15D240; // FUN_0027d240 (Magicks/Technicks category chooser)
 constexpr uint32_t RVA_DRAW_MAGICK = 0x15CE70; // FUN_0027ce70 (spell/technick list, cat 0x14)
-constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 (items) — CONFIRMED working
+constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 -- MISNAMED "items": S184 found FUN_0027e050's
+                                              // 0x10-0x13 arm is its ONLY assignment, i.e. it is the
+                                              // TARGET list draw (Foes/Party/Allies, rows = u32 unit
+                                              // handles). Behaviour unchanged; see debug.md S184.
                                               // (FUN_0035d330's record walk moved to
                                               // battle/battle_state.cpp as DefName -- shared with
                                               // the combat log; FUN_00272cb0, the item name codec,
@@ -675,7 +679,14 @@ uint64_t HookedBcmdCtrl(void* ctrl, void* msg) {
         if (msgId == MSG_CTRL_BUILD) { g_bcmdNeedName = true; g_bcmdQueueNext = false; }
     }
 
+    // The target list's GROUP title (Foes / Party / Reserve / Allies) speaks BEFORE the original: the
+    // original's 0x1F sends the new list's first-row focus synchronously, and that row must queue
+    // behind the title rather than be cut off by it. See ui/target_group_reader.cpp.
+    TargetGroupReader::BeforeCtrlMessage(ctrl, msgId, msg);
+
     const uint64_t r = s_origBcmdCtrl ? s_origBcmdCtrl(ctrl, msg) : 0;
+
+    TargetGroupReader::AfterCtrlMessage(ctrl, msgId);   // log only: the title the game just wrote
 
     // AFTER the original: case 0x23 is where parent+0x2FE0 is written, so the new character only
     // exists on the way out.
@@ -800,6 +811,9 @@ void ArmPaneEntry(void* owner, uint32_t rowOff, int index) {
 // caches a name.
 void OnBattleCommandFocus(void* owner, int index) {
     g_bcmdLivePanel.store(owner, std::memory_order_relaxed);
+    // The target list's RESERVE group is this same panel class with its own row draw, and its rows are
+    // charIds, not command ids. Its reader claims it by that draw before any command resolve is tried.
+    if (TargetGroupReader::OnPanelFocus(owner, index)) return;
     if (TrySpeakBattleCommand(owner, index)) {
         std::lock_guard<std::mutex> lk(g_mutex);
         g_bcmdPendingPanel = nullptr; g_bcmdPendingIndex = -1;   // spoken -> drop any stale pending
@@ -809,5 +823,7 @@ void OnBattleCommandFocus(void* owner, int index) {
     g_bcmdPendingPanel = owner;
     g_bcmdPendingIndex = index;
 }
+
+void* BattleListDrawCallback(void* panel) { return BattleDrawCallback(panel); }
 
 } // namespace IngameMenuReader

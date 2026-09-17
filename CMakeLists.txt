@@ -58,6 +58,7 @@ add_library(${PROJECT_NAME} SHARED
     src/core/frame_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
+    src/core/game_text_ex.cpp
     src/core/message_macro.cpp
     src/core/item_names.cpp
     src/speech/speech.cpp
@@ -94,6 +95,7 @@ add_library(${PROJECT_NAME} SHARED
     src/ui/status_reader.cpp
     src/ui/popup_reader.cpp
     src/ui/battle_target_reader.cpp
+    src/ui/target_group_reader.cpp
     src/ui/title_reader.cpp
     src/ui/message_reader.cpp
     src/ui/reward_panel_reader.cpp

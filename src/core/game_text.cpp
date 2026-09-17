@@ -456,6 +456,11 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
     if (!p) return false;
     if (maxBytes > kMaxCodecBytes) maxBytes = kMaxCodecBytes;
 
+    // "ex00" + UTF-16 is the engine's other string format, switched on by its prefix exactly as the
+    // label renderers switch (game_text_ex.cpp). One page: the format has no page-break byte.
+    std::wstring ex;
+    if (DecodeExString(p, maxBytes, ex)) { pages.push_back(std::move(ex)); return true; }
+
     uint8_t buf[kMaxCodecBytes];
     size_t n = 0;
     if (!SafeCopy(p, maxBytes, buf, &n)) return false;

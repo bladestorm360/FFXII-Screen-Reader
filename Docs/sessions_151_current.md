@@ -3340,3 +3340,50 @@ Reserve in the battle target list, and `1`/`2`/`3` are game speed. Neither is re
 targeting menu), and the second was false: keyboard `1` is pad L1, which cycles game speed; `3` is R1; `2` has no
 observed effect. The Session 44 claim is struck in Controls.md, GameArchitecture.md, combat_system.md, debug.md,
 CLAUDE.md and README.md (its `1, 2, 3` line was player-facing). `L-91`.
+
+## Session 184 — 2026-09-17 — [menus] The target list's L1/R1 groups: the group title, and the Reserve rows (PLAY-CONFIRMED)
+
+KEYWORDS: item targeting menu L1 R1 key 1 key 3 target list group Foes Party Reserve Allies reserve member
+characters not in the party FUN_0027b430 FUN_0027c730 FUN_0027b6c0 FUN_0027d5c0 FUN_0027e530 list kind 0xF
+parent+0x208 message 0x1F ex00 UTF-16 wide string menu_expansion FUN_00364980 target_group_reader game_text_ex
+TGTGROUP
+
+**Asked:** pick up the screens documented at the close of S183, and check the latest log near its end for what
+is not vocalized.
+
+**The log** (Latest, 09:28-09:32, the session right before the S183 report): its last minute is the battle
+menu's `Items` -> `Ether` -> target list. The two panels of one controller take turns, one per list build, and
+the only speech is the nameplate reader naming the four field units. No reserve member is ever named, and no
+group name is ever spoken. Nothing else near the end is unvocalized; the last `unclaimed pane` (0x1084F0) comes
+with `keyboard GetDeviceState FAILING` as the game loses focus at exit.
+
+**Found offline (GameArchitecture.md "Battle target groups (S184)", conf 0.98):**
+- L1/R1 step the target list through up to four groups: FOES, PARTY, RESERVE, ALLIES. `FUN_0027b430` is the
+  only stepper (pad bits `0x0400`/`0x0800`); it returns 1 on a change, and the menu root rebuilds.
+- Each list build (`0x1F`) writes the group title to `parent+0x208`. It then sends the new list's first-row focus
+  before returning.
+- RESERVE is list kind `0xF`: roster slots 4-8, rows are charIds, drawn by `FUN_0027d5c0`. Three sites agree
+  (the builder, the group stepper, and the non-empty test `FUN_0027b6c0`).
+- The titles are NOT codec text. They are the engine's `ex00` + UTF-16 format (US: LEADER, PARTY, FOES,
+  RESERVE, ALLIES, TIME at `0x4A48..0x4A4D`). The engine switches renderers on that prefix, `FUN_00364980`.
+- `FUN_0027e530`, which the command reader labels "items", is the target-list row draw for Foes, Party and
+  Allies. The label is struck.
+
+**Built:** `src/ui/target_group_reader.{h,cpp}` and `src/core/game_text_ex.cpp`, plus small hooks into
+`ingame_menu_reader`, `battle_target_reader` and `menu_reader`.
+- Title on a group SWITCH only, spoken BEFORE the controller's `0x1F` original, so the new list's first row
+  queues behind it.
+- Reserve rows read `"<name>, HP <cur>/<max>"`.
+- Other groups re-arm the nameplate reader, queued behind the title.
+- `GameText::Decode` handles the `ex00` format.
+- Clean build, 0 warnings, deployed, `cmp` identical.
+
+**PLAY-CONFIRMED by the user, same day:** *"ALL WORKS AS INTENDED, NO new mod phrasing necessary, all
+vocalization is as it should be."* Committed and pushed at session close. The S183 "reserve selection in
+the battle target list" check is answered by the same pass.
+
+**Falsifiers and the not-built list:** debug.md's S184 entry at the top of Tried & Failed. Grep `TGTGROUP`.
+
+**Still offered, not built** (user declined none of them explicitly -- they were simply not needed for this
+defect): a group title when targeting OPENS, speaking the "cannot target" row flag (would need a phrasebook
+word), and the u16-truncated handle in the mislabelled `RVA_DRAW_ITEM` branch.

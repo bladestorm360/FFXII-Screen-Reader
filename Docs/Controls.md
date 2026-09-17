@@ -507,7 +507,7 @@ is what it is for.
 | L1 | Speed mode (x2 / x4) | Speed mode |
 | L2 | Toggle zoom | **Lock on to target** |
 | L3 | Show area map | Show area map |
-| **R1** | *nothing* | Selects **Reserve** in the target list |
+| **R1** | *nothing* | Steps the **target list** to its next group: Foes, Party, Reserve, Allies (L1 steps back) |
 | R2 | Zoom the map and the license board | Hold to run from enemies |
 | R3 | Recentre the camera | Recentre the camera |
 | Select | Display map | Display map |
@@ -549,7 +549,7 @@ behind the modifier instead.
 > **R1 is the other control that changes meaning.** Out of combat it routes to whatever the stick
 > has selected; in a fight it routes to the target you are already acting on. Both are one press,
 > in the context where each is wanted. With a targeting cursor up the mod does not take R1 at all,
-> so the game keeps its Reserve switch.
+> so the game keeps its target-group switch.
 
 > **The D-pad is only taken on the open field — never in combat.** Everywhere else it is dispatched
 > to the mod *and* passed straight through, so the game's own cursor still moves. That is what the

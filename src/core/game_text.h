@@ -46,7 +46,15 @@ void SetVariant(Variant v);
 // Decode a NUL-terminated codec byte string into a wide string. Reads at most
 // `maxBytes` codec bytes. SEH-guarded (the source struct can be transient);
 // returns an empty string on fault or null input.
+// A string carrying the engine's "ex00" wide header is decoded as UTF-16 instead -- see below.
 std::wstring Decode(const uint8_t* p, size_t maxBytes = 512);
+
+// The engine's SECOND string format: the bytes "ex00", then UTF-16LE to a 0x0000 (game_text_ex.cpp
+// has the four engine functions that establish it). False when `p` does not carry that header, so the
+// caller decodes it as codec; true fills `out` with the text, `{...}` inserts dropped. Reads at most
+// `maxBytes` bytes. SEH-guarded. Decode and DecodePages already dispatch on it -- call it directly
+// only when you need to know which format a string was.
+bool DecodeExString(const uint8_t* p, size_t maxBytes, std::wstring& out);
 
 // Decode into PAGES, split on the codec's page-break control byte 0x03.
 //

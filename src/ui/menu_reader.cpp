@@ -20,6 +20,7 @@
 #include "ui/status_reader.h"
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
+#include "ui/target_group_reader.h"
 #include "core/game_text.h"
 #include "core/message_macro.h"
 #include "core/hooks.h"
@@ -852,6 +853,7 @@ bool Init() {
     ok     &= ChoiceReader::Init();       // the option-list selection tick; see ui/choice_reader.h
     AirshipReader::Init();                // Strahl destination map: a node graph, not a list
     ok     &= BattleTargetReader::Init(); // battle target-selection readout (FUN_00329220 + ctx+0xde0)
+    ok     &= TargetGroupReader::Init();  // target list groups: the title on L1/R1 + the Reserve rows
     ok     &= LicenseReader::Init();      // license board / job select / char-select + U -> LP
     ok     &= AbilitySummaryReader::Init(); // the `F` ability/magick summary pages
     // BEFORE ShopReader: its FUN_002cc4f0 hook must be live so a snapshot already exists by the
@@ -882,6 +884,7 @@ void Shutdown() {
     IngameMenuReader::Shutdown();
     CharSelectReader::Shutdown();
     BattleTargetReader::Shutdown();
+    TargetGroupReader::Shutdown();
     LicenseReader::Shutdown();
     AbilitySummaryReader::Shutdown();
     StatusReader::Shutdown();

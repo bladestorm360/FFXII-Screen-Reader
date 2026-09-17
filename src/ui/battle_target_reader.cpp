@@ -16,6 +16,7 @@
 #include "navigation/player_state.h"   // ReadSceneObjectPos (target world pos)
 
 #include <Windows.h>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -75,6 +76,11 @@ int32_t  g_targetHandle = 0;
 // It is keyed on the target HANDLE, not on the spoken text, and HookedNameplate resets it to 0 the
 // moment selection ends — so leaving targeting and coming back re-announces.
 int32_t  g_lastHandle   = 0;
+// Deadline (GetTickCount64) until which the next target announce QUEUES instead of interrupting -- set
+// by ReannounceQueued when a target-list group title has just been spoken. A deadline, not a flag, so an
+// arm nothing consumed cannot turn some later, unrelated announce into a queued one.
+std::atomic<uint64_t> g_queueAnnounceUntil{0};
+constexpr uint64_t kQueueAnnounceMs = 1500;
 
 // Target cache for the `p`-key route. Written on the render/game thread whenever the target
 // nameplate redraws (HookedSnapshot — EVENT-driven, NOT per-frame); read on the input thread
@@ -432,10 +438,14 @@ void AnnounceTargetBc(void* bc, const std::wstring& name, bool ally) {
     char utf8[256];
     Log::ToUtf8(text, utf8, sizeof(utf8));
     char line[320];
-    snprintf(line, sizeof(line), "handle=0x%x %s \"%s\"", g_targetHandle, ally ? "ally" : "enemy", utf8);
+    const uint64_t until = g_queueAnnounceUntil.exchange(0, std::memory_order_relaxed);
+    const bool queue = until != 0 && GetTickCount64() <= until;
+    snprintf(line, sizeof(line), "handle=0x%x %s \"%s\"%s", g_targetHandle, ally ? "ally" : "enemy", utf8,
+             queue ? " (queued behind the group title)" : "");
     Log::Write("TARGET", line);
 
-    Speech::Output(text, /*interrupt=*/true);
+    if (queue) Speech::SpeakQueued(text);
+    else       Speech::Output(text, /*interrupt=*/true);
 }
 
 // FUN_002bfd20 render. If this call is drawing the CURRENT target (panel+0x288 == P+0x9FD8) while
@@ -837,6 +847,16 @@ bool SpeakTargetDetail() {
     Log::Write("TARGET", (std::string("o: ") + utf8).c_str());
     Speech::Output(text, /*interrupt=*/true);
     return true;
+}
+
+std::wstring AllyHpClause(void* bc) { return bc ? HpClause(bc, /*ally=*/true) : std::wstring(); }
+
+void ReannounceQueued() {
+    // g_lastHandle is the documented per-frame guard on the nameplate render; zeroing it is the same
+    // re-arm leaving selection already performs, applied to a group switch -- which is re-entering a
+    // surface, and re-entering a surface must say where the player landed.
+    g_lastHandle = 0;
+    g_queueAnnounceUntil.store(GetTickCount64() + kQueueAnnounceMs, std::memory_order_relaxed);
 }
 
 } // namespace BattleTargetReader

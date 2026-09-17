@@ -73,4 +73,15 @@ bool SpeakTargetStatus();
 // short line; the "Libra not active" line is NEVER part of that path. Thread-safe (input thread).
 bool SpeakTargetDetail();
 
+// ", HP <cur>/<max>" for a party-side BtlChr -- the ally half of the target line, from the one place it
+// is worded. For a target that has no field unit (a RESERVE member in the target list), which this
+// reader's nameplate path can never see.
+std::wstring AllyHpClause(void* bc);
+
+// The target list just switched GROUP and its title was spoken (TargetGroupReader). Re-arm the per-frame
+// guard so the next target render announces even when the switch landed on the unit last named, and
+// QUEUE that announce behind the title instead of interrupting it. The queue half lapses on its own
+// after a short deadline. Game thread.
+void ReannounceQueued();
+
 } // namespace BattleTargetReader

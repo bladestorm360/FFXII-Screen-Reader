@@ -57,6 +57,10 @@ bool BattleCommandActive();
 void ClearBattleCommandActive();
 void OnBattleCommandFocus(void* owner, int index);
 
+// The battle panel's per-row draw callback, *( *(panel+0x1510) + 0x120 ): the game's own record of which
+// list the panel holds, and the identity every battle-list reader gates on. Null when unreadable.
+void* BattleListDrawCallback(void* panel);
+
 // Field pause menu command column (owner class FUN_00280de0). Its entry announce is DEFERRED, unlike
 // every other pane: FUN_00244830 fires at the start of construction, so MenuReader::HookedFocusSet
 // stashes the entry focus via ArmPaneEntry instead of speaking, and the menu's own SHOW message
