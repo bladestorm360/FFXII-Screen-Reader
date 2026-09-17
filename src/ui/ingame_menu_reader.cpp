@@ -172,8 +172,11 @@ constexpr uint32_t RVA_DRAW_CHOOSER= 0x15D240; // FUN_0027d240 (Magicks/Technick
 constexpr uint32_t RVA_DRAW_MAGICK = 0x15CE70; // FUN_0027ce70 (spell/technick list, cat 0x14)
 constexpr uint32_t RVA_DRAW_ITEM   = 0x15E530; // FUN_0027e530 -- MISNAMED "items": S184 found FUN_0027e050's
                                               // 0x10-0x13 arm is its ONLY assignment, i.e. it is the
-                                              // TARGET list draw (Foes/Party/Allies, rows = u32 unit
-                                              // handles). Behaviour unchanged; see debug.md S184.
+                                              // TARGET list draw (Foes/Party/Allies), whose rows are u32
+                                              // unit handles. This branch reads a row as a u16, so it
+                                              // resolves none of them and has never spoken on those lists
+                                              // in any log -- the nameplate reader owns them. Left as it
+                                              // is; the name is what was wrong (debug.md S184).
                                               // (FUN_0035d330's record walk moved to
                                               // battle/battle_state.cpp as DefName -- shared with
                                               // the combat log; FUN_00272cb0, the item name codec,

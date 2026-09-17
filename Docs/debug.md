@@ -64,15 +64,17 @@ kind->id table is wrong); `reserve row i/n charId=N slot=4..8 flags=0x.. (queued
 A `reserve row NOT spoken:` line names the failed gate. Silence with no `group switch accepted` means the hook
 never fired, so the stepper identity is wrong.
 
-**Not built, and why:**
-- **No title when targeting OPENS.** It would add a word to every attack and spell. If a list opens straight on
-  Reserve, its rows still read, but without the word "Reserve". Offer it; do not add it unasked.
-- **The dim flag is not spoken.** Bit 1 at `panel+0x514+i*8` means "this item cannot target this member". It is
-  logged only; speaking it needs a new phrasebook word, which needs permission.
-- **`RVA_DRAW_ITEM` (`FUN_0027e530`) is mislabelled "items"; it is the Foes/Party/Allies row draw**, and
-  `TrySpeakBattleCommand` feeds it a u16-truncated handle. It has never spoken in any log, and the nameplate reader
-  owns those rows. The latent risk is that a truncated handle decodes to a real object's name. Recorded; not
-  changed in this build.
+**Three follow-ups were offered at the close and the user CLOSED ALL THREE. Do not re-open them:**
+- **A title when targeting OPENS — not wanted.** *"Group title on entry is unnecessary as it always starts on
+  the party members targeting screen."* The opening group is always PARTY, which the nameplate reader already
+  names; a word before every attack and spell would be filler.
+- **The dim flag stays unspoken — not wanted.** *"we do not need special handling for dimmed rows, as I said
+  before."* Bit 1 at `panel+0x514+i*8` ("this item cannot target this member") remains log-only. No phrasebook
+  word is needed anywhere in this feature.
+- **The u16-truncated handle in `RVA_DRAW_ITEM` — CLOSED, no evidence.** *"I don't know what you mean by
+  theoretically reading the wrong row. close it unless we have evidence of such."* Correct: it has never spoken
+  in any log, and no measurement says it can. It was a hypothesis dressed up as an open item (`L-92`). What
+  survives is the FACT, which is measured: `FUN_0027e530` is the Foes/Party/Allies row draw, not an item list.
 
 ### CLOSED S184 (was TO VERIFY) — reserve party member selection in the BATTLE menu's target list
 

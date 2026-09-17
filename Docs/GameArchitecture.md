@@ -6812,8 +6812,12 @@ the same walk as `BattleState::CharacterName`; it dims a row whose flag has bit 
 
 **`FUN_0027e530` IS THE TARGET-LIST DRAW, NOT AN ITEM LIST — STRIKES the "items" label.** Its row value is a
 unit handle; `FUN_00272cb0(handle)` decodes the handle and returns that object's name, `FUN_00272c80` a number
-drawn beside it. The mod's `RVA_DRAW_ITEM` branch (ingame_menu_reader) still feeds it a u16-truncated handle;
-never observed to speak, left unchanged, recorded in debug.md.
+drawn beside it. The mod's `RVA_DRAW_ITEM` branch (ingame_menu_reader) reads that row as a u16, so it never
+resolves one of these handles and has never spoken on any of these lists in any log — the nameplate reader owns
+them. Left exactly as it is (user, S184 close: no evidence, so nothing to fix).
+
+**Targeting always OPENS on the PARTY group** (user, S184 close), which is why the mod names the group only when
+L1/R1 change it.
 
 **The group step.** `FUN_0027b430` (RVA `0x15B430`, args controller / panel / parent / direction, returns 1 on a
 change) is the only stepper. Callers: the controller's pad case with bits **`0x0400` → −1 and `0x0800` → +1**,

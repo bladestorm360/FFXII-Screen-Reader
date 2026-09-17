@@ -3384,6 +3384,8 @@ the battle target list" check is answered by the same pass.
 
 **Falsifiers and the not-built list:** debug.md's S184 entry at the top of Tried & Failed. Grep `TGTGROUP`.
 
-**Still offered, not built** (user declined none of them explicitly -- they were simply not needed for this
-defect): a group title when targeting OPENS, speaking the "cannot target" row flag (would need a phrasebook
-word), and the u16-truncated handle in the mislabelled `RVA_DRAW_ITEM` branch.
+**All three follow-ups offered at the close were CLOSED by the user, same day:** a title when targeting opens
+is unnecessary (*"it always starts on the party members targeting screen"*); dimmed rows need no special
+handling (*"as I said before"*); and the truncated-handle note was closed for want of evidence (*"close it
+unless we have evidence of such"*) -- a theoretical risk is not an open item, `L-92`. The measured half of that
+last one stands: `FUN_0027e530` is the target-list row draw, not an item list.

@@ -37,7 +37,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
-| writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
+| writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
@@ -729,6 +729,22 @@ are a separate commit made *before* the trigger" — is a rule about **scope**, 
 quietly rewriting the readme; it was misread as a prohibition on fixing anything. The user removed it
 in one sentence at the V0.6.4 trigger. **Related:** the changelog is the USER's artifact and it lives
 on Discord — the readme describes the mod as it is now.
+
+### L-92 A RISK YOU CANNOT SHOW IS NOT AN OPEN ITEM — CLOSE IT OR MEASURE IT
+**Do not hand the user a "latent risk", a "could in theory", or a "watch this" that no log, no
+measurement and no code path actually demonstrates.** An open item is a claim with evidence behind
+it; anything else is a hypothesis wearing an open item's clothes, and it costs the reader a decision
+they have no way to make. Either produce the measurement that shows it can happen, or close it and
+keep only the part that IS measured.
+**Why:** S184 close. The target-list row draw was correctly re-identified (`FUN_0027e530` is not an
+item list), and that fact was measured. Beside it I left "the latent risk is that a truncated handle
+decodes to a real object's name" — never observed in any log, with nothing establishing it could be.
+The user: ***"I don't know what you mean by theoretically reading the wrong row. close it unless we
+have evidence of such."*** The same close struck two more offered follow-ups the user had already
+ruled on, one of them *"as I said before"* — **an offer repeated after a ruling is not diligence
+either** (sibling of [L-68]).
+**The tell:** a "not built, and why" bullet whose justification is a sentence beginning "it could" or
+"in theory", with no log line, no measurement and no reproduction to point at.
 
 ---
 
