@@ -270,8 +270,15 @@ See `debug.md` for tried-and-failed approaches and solved problems, and
       key has answered "No path" to it, until a door/waterfall moves or the area changes. Built, UNPLAYED
 - [~] **Script-closed floors are CUT by the router** (S182, always on) — shut doors and Sochen's waterfalls are
       never routed through. Built, UNPLAYED
-- [ ] **Falls of Time (map 184): no route through class-refused water** — user ruling 2026-09-17, map-specific
-      `map_route_rules` table; spec in debug.md "routes buy their way through the waterfalls". NOT BUILT
+- [x] **Falls of Time (map 184): no route through class-refused water** — `map_route_rules` table (S183),
+      play-confirmed 2026-09-17
+- [x] **Audio beacon no longer silent on maps with image overlays** (Pharos, Trial Mode, gauges) — S183,
+      play-confirmed 2026-09-17
+- [x] **Sigils of Sacrifice spoken with their colour** (Pharos Third Ascent) — S183, play-confirmed 2026-09-17
+- [x] **A route never becomes invalid mid-walk** — failed re-plans keep the live route; `\` re-speaks it (S183),
+      play-confirmed 2026-09-17
+- [ ] **Two silent screens behind L1/R1 (`1`/`3`)** — using items on characters not in the party, and a second
+      screen of unknown purpose. Reported 2026-09-17; see debug.md OPEN entry. NOT STARTED
 - [~] **Doors by script evidence** (S179) — routine calls `mapjump`, or opens the closed floor it stands in. UNPLAYED
 - [x] Hunt-reward panel: reader built in S178 (`questresultwindow` -> `FUN_003f4330`), play-confirmed 2026-09-15
 - [ ] Dungeon-device ("power conduit") navigation friction — logged in `debug.md`, needs a save there

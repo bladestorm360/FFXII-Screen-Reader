@@ -180,4 +180,13 @@ void PromoteDoors(std::vector<Entity>& out) {
     }
 }
 
+const MapScript::RoutineFacts* RoutineOf(void* sceneObj) {
+    if (!sceneObj || MapScript::ObjectContainerId(sceneObj) != 0) return nullptr;   // facts are container 0
+    EnsureCache();
+    if (!g_cache.ok) return nullptr;
+    const int ri = MapScript::RoutineIndexOfObject(g_cache.facts, sceneObj);
+    return (ri >= 0 && ri < static_cast<int>(g_cache.facts.size())) ? &g_cache.facts[static_cast<size_t>(ri)]
+                                                                    : nullptr;
+}
+
 } // namespace DoorBinding

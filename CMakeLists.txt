@@ -120,6 +120,9 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/door_binding.cpp
     src/navigation/reach_gate.cpp
     src/navigation/route_query.cpp
+    src/navigation/route_keep.cpp
+    src/navigation/map_route_rules.cpp
+    src/navigation/sigil_colours.cpp
     src/navigation/nav_hooks.cpp
     src/navigation/nav_common.cpp
     src/navigation/entity_list.cpp

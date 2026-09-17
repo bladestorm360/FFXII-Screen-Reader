@@ -10,6 +10,7 @@
 #include "ui/choice_reader.h"
 #include "ui/message_reader.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -355,11 +356,51 @@ bool Init() {
     return ok;
 }
 
+// A registered window that carries NO TEXT is an image overlay, not a box (S183).
+//
+// `shapewin` (script native 0x17C, FUN_0033f950) builds its window through the same content setter
+// FUN_002e16b0 with a NULL text pointer, and the window constructor FUN_002a2c00 substitutes the
+// binary's shared empty-string literal DAT_01ceb638 (RVA 0x1BCB638) -- which FUN_002b3d50 then stores
+// at widget+0x28. So such a window's text base reads as "". Every Pharos map opens two of them for its
+// floor display (`floor_disp_ctrl`, slots 2 and 3, 1920x1080) and never closes them, and a census of
+// the shipped scripts finds the same call in Trial Mode, gauge and timer overlays and several dungeon
+// Map_Directors -- which is how the beacon went silent for a whole dungeon.
+//
+// Only a READABLE, NON-NULL pointer to a zero byte excludes a window. A window whose text pointer is
+// null or unreadable still counts, exactly as before, so nothing that suspended the beacon yesterday
+// can stop suspending it today on a read failure.
+namespace {
+
+bool IsTextlessWindow(void* window) {
+    void* widget = static_cast<char*>(window) + OFF_TEXT_BLOCK;
+    void* text   = MemRead::PtrAt(widget, OFF_W_TEXT);
+    if (!text) return false;
+    uint8_t first = 0xFF;
+    if (!MemRead::SafeReadU8(text, 0, &first)) return false;
+    return first == 0;
+}
+
+// Log each text-less window ONCE per window pointer per slot. IsBoxLive runs every field frame from
+// the beacon and the pad router, so this is a change detector on a per-frame path (the beacon's
+// OnGameFrame / PadRouter::OnGameFrame), not a speech dedup -- nothing here speaks.
+std::atomic<void*> g_textlessLogged[MSGWIN_SLOTS];
+
+} // namespace
+
 bool IsBoxLive() {
     void* reg = Hooks::ResolveRva(RVA_MSGWIN_REG);
     if (!reg) return false;
     for (int i = 0; i < MSGWIN_SLOTS; ++i) {
-        if (MemRead::PtrAt(reg, static_cast<uint32_t>(i) * MSGWIN_STRIDE)) return true;
+        void* window = MemRead::PtrAt(reg, static_cast<uint32_t>(i) * MSGWIN_STRIDE);
+        if (!window) continue;
+        if (!IsTextlessWindow(window)) return true;
+        if (g_textlessLogged[i].exchange(window, std::memory_order_relaxed) != window) {
+            char m[176];
+            snprintf(m, sizeof(m),
+                     "message-window slot %d holds a TEXT-LESS window %p (a shapewin image overlay) -- "
+                     "not counted as a box on screen", i, window);
+            Log::Write("DIALOGUE", m);
+        }
     }
     return false;
 }

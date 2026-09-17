@@ -10,6 +10,7 @@
 #include "navigation/nav_reach.h"
 #include "navigation/reach_gate.h"
 #include "navigation/route_query.h"
+#include "navigation/route_keep.h"
 #include "navigation/nav_trace.h"
 #include "navigation/map_names.h"
 #include "navigation/path_directions.h"
@@ -64,6 +65,10 @@ int                   g_seamGroup = 0;
 // beacon re-aiming itself is not something the player asked to hear, and "No path" spoken out of
 // nowhere because they walked round a corner would be worse than the stale beacon it replaced.
 bool                  g_silent = false;
+// Is this request for the destination the beacon is ALREADY leading to (S183)? Decided at Request() time,
+// before the objective snapshot below is overwritten; RequestReplan is by definition the same objective.
+// Only a request for the same objective may keep the live route when it fails -- see route_keep.h.
+bool                  g_sameObjective = false;
 
 // ---- the BEACON'S OBJECTIVE (guarded by g_mutex, same as the request above) --------------------
 //
@@ -142,6 +147,7 @@ bool RequestReplan() {
     g_seamGroup    = g_objSeamGroup;
     g_silent       = true;
     g_seedBeacon   = true;
+    g_sameObjective = true;
     g_reqEpoch   = g_epoch.load(std::memory_order_acquire);
     g_waitDeadlineMs = GetTickCount64() + kWaitMs;
     ++g_reqSeq;
@@ -167,6 +173,16 @@ void Request(const FVec3& target, const std::wstring& label, bool isTransition,
     g_seedBeacon   = seedBeacon;
     g_seamGroup    = seamGroup;
     g_silent       = false;
+    // The same objective = the same label AND either the same place (half a metre: a stationary object reads
+    // back identically) or, for an exit, the same map-jump group -- an exit's target is the seam vertex
+    // nearest the player when the list was scanned, so it can move along the seam as they walk.
+    // Checked BEFORE the snapshot below is overwritten.
+    {
+        const float dx = target.x - g_objTarget.x, dy = target.y - g_objTarget.y, dz = target.z - g_objTarget.z;
+        const bool samePlace = (dx * dx + dy * dy + dz * dz) <= 0.25f;
+        const bool sameSeam  = seamGroup != 0 && seamGroup == g_objSeamGroup;
+        g_sameObjective = seedBeacon && g_haveObjective && label == g_objLabel && (samePlace || sameSeam);
+    }
     // ONLY A REQUEST THAT ARMS THE BEACON BECOMES ITS OBJECTIVE. `p` passes seedBeacon=false because it
     // has no business steering the beacon; that same flag is what stops it redirecting one that is
     // already running.
@@ -275,7 +291,7 @@ void OnGameFrame() {
     if (!g_hasRequest.load(std::memory_order_acquire)) return;   // O(1) common case
 
     FVec3 target; std::wstring label; uint32_t reqEpoch; uint64_t seq;
-    bool isTransition; float bandLo, bandHi, reach; bool silent, seedBeacon; int seamGroup;
+    bool isTransition; float bandLo, bandHi, reach; bool silent, seedBeacon, sameObjective; int seamGroup;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         if (!g_hasRequest.load(std::memory_order_relaxed)) return;
@@ -283,6 +299,7 @@ void OnGameFrame() {
         isTransition = g_isTransition;
         bandLo = g_bandLo; bandHi = g_bandHi; reach = g_reach;
         silent = g_silent; seedBeacon = g_seedBeacon; seamGroup = g_seamGroup;
+        sameObjective = g_sameObjective;
     }
 
     // Map changed since the request was made -> un-revivably stale; drop silently.
@@ -330,10 +347,12 @@ void OnGameFrame() {
             char lm[128]; LabelForLog(label, lm, sizeof(lm));
             char m[208];
             snprintf(m, sizeof(m), "drain: gave up (never nav-safe within window) for \"%s\" -> Route unavailable%s",
-                     lm, silent ? " (silent replan; not spoken)" : "");
+                     lm, silent ? " (silent replan; not spoken; the live route is KEPT -- S183)" : "");
             Log::Write("NAV-ROUTE", m);
-            if (silent) AudioBeacon::Stop();
-            else        Speech::Output(Phrase::Get(Phrase::Id::RouteUnavailable), true);
+            // A re-plan that never got to run says nothing about the route (S183): it used to Stop() the
+            // beacon here. The beacon suspends itself while the field is not drivable and stops on a map
+            // change, so keeping the route cannot lead anybody anywhere a stop would not.
+            if (!silent) Speech::Output(Phrase::Get(Phrase::Id::RouteUnavailable), true);
         }
         return;
     }
@@ -387,12 +406,19 @@ void OnGameFrame() {
     std::vector<FVec3> rawPoly, poly;
     PathSearch::Stats st;
     PathSearch::Plan r = RouteQuery::Search(q, from, curEpoch, rawPoly, poly, st);
+    // A ROUTE NEVER BECOMES INVALID MID-WALK (S183, route_keep.h). A request for the objective the beacon is
+    // already leading to that comes back without a Route keeps the live route, unless the goal is proven
+    // disconnected or a script has since closed a floor across it. `liveCorners` is that route's rest.
+    std::vector<FVec3> liveCorners;
+    const bool keptLive = seedBeacon && r != PathSearch::Plan::Route &&
+                          RouteKeep::Decide(sameObjective, from, target, curEpoch, st, seq, liveCorners);
     // THE UNREACHABLE FILTER'S ONLY INPUT (S182): the answer this request is about to SPEAK. A Frontier is
     // spoken as "No path", so for the filter it is exactly that. Not recorded when the player will not hear
     // it (a silent beacon replan), nor when the search could not place the player at all -- that is no
     // answer about the target. Storing it is a lock and a short vector scan; the filter never searches.
+    // A kept live route is spoken as a route, so it is recorded as one.
     if (!silent && RouteQuery::AnsweredAboutTarget(st))
-        ReachGate::NoteRouteResult(label, target, r == PathSearch::Plan::Route);
+        ReachGate::NoteRouteResult(label, target, r == PathSearch::Plan::Route || keptLive);
 
     const char* planName = (r == PathSearch::Plan::Route)    ? "Route"
                          : (r == PathSearch::Plan::Frontier) ? "Frontier"
@@ -485,6 +511,18 @@ void OnGameFrame() {
     std::wstring say;
     if (r == PathSearch::Plan::Route) {
         say = PathDirections::Describe(rawPoly, facingRad, seedBeacon ? &legPoints : nullptr);
+    } else if (keptLive) {
+        // THE LIVE ROUTE, FROM HERE (S183). A silent re-plan changes nothing -- the beacon keeps its legs and
+        // holds further automatic re-plans on this leg (below). The player's own `\` hears the remaining
+        // legs from where they stand, described by the same call every route is, so the words and the
+        // re-seeded beacon cannot disagree.
+        if (!silent) {
+            std::vector<FVec3> live;
+            live.reserve(liveCorners.size() + 1);
+            live.push_back(from);
+            live.insert(live.end(), liveCorners.begin(), liveCorners.end());
+            say = PathDirections::Describe(live, facingRad, &legPoints);
+        }
     } else {
         // A PARTIAL ROUTE IS A FAILURE, AND IS NO LONGER SPOKEN AS A ROUTE (Session 96).
         //
@@ -514,9 +552,12 @@ void OnGameFrame() {
     }
 
     if (seedBeacon) {
-        // An empty list (no route, or a route under half a step) stops the beacon -- which is also
-        // the right answer for a failed silent re-plan, so it needs no separate branch.
-        AudioBeacon::Seed(legPoints, curEpoch);
+        // An empty list (no route, or a route under half a step) stops the beacon. It USED to be "the right
+        // answer for a failed silent re-plan" too, and that was the S183 defect: a route the player was
+        // walking vanished because the re-plan from one awkward spot failed. A kept silent re-plan leaves
+        // the beacon untouched and holds its automatic re-plans on this leg instead.
+        if (keptLive && silent) AudioBeacon::HoldAutoReplans();
+        else                    AudioBeacon::Seed(legPoints, curEpoch);
     }
 
     // Log the spoken directions (ASCII cardinals/digits) so the exact leg text is diagnosable.
@@ -525,9 +566,11 @@ void OnGameFrame() {
         for (wchar_t wc : say) { if (n + 1 >= sizeof(t)) break; t[n++] = (wc < 128) ? static_cast<char>(wc) : '?'; }
         t[n] = '\0';
         char mt[256];
-        snprintf(mt, sizeof(mt), "drain seq=%llu: say=\"%s\"%s beaconLegs=%zu",
+        snprintf(mt, sizeof(mt), "drain seq=%llu: say=\"%s\"%s%s beaconLegs=%zu",
                  (unsigned long long)seq, t,
-                 silent ? " (SILENT replan -- not spoken)" : "", legPoints.size());
+                 silent ? " (SILENT replan -- not spoken)" : "",
+                 keptLive ? (silent ? " (live route KEPT, beacon untouched)" : " (live route KEPT, re-spoken)") : "",
+                 keptLive && silent ? liveCorners.size() : legPoints.size());
         Log::Write("NAV-ROUTE", mt);
     }
 

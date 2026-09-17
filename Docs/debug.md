@@ -7,6 +7,115 @@ This file is structured for keyword searching. **Always grep before proposing so
 Approaches that were attempted and did NOT work. Each entry tagged with `KEYWORDS:` for
 grep. Check this FIRST to avoid repeating failed approaches.
 
+### OPEN (reported 2026-09-17, end of S183) — two unvoiced screens behind L1 / R1 (`1` / `3` on the keyboard)
+
+KEYWORDS: L1 R1 key 1 key 3 use item on character not in party reserve member target list silent screen
+unknown screen vocalization menu reader NOT STARTED
+
+**Reported by the user, verbatim:** *"there is a screen (accessed by pressing la/r1 (1 or 3 on keyboard)) that
+allows the use of items on characters not in the current party, as well as another screen that I am unsure the
+purpose of. these screens both need vocalization."* The user played S183's build and confirmed everything else
+works; these two screens are simply silent. Nothing was investigated this session.
+
+**Existing records to read FIRST (leads, not conclusions -- none of them was written about these screens):**
+- `Controls.md` pad table: **R1 in battle "Selects Reserve in the target list"**; L1 is Speed mode. The
+  item-on-a-reserve-member screen is most likely that reserve target list, reached from an item target list.
+- `Controls.md` Session 44 correction: in the field, keyboard `1`/`2`/`3` all change GAME SPEED. The user says
+  `1`/`3` open these screens, so the context they were pressed in (which menu was open) decides what they do --
+  establish that from the log before assuming either reading.
+- `Controls.md` status screen: "Character switching is L1/R1" (S147 `FUN_002c2c50` re-read). A different surface.
+
+**First step next session:** ask the user which menu they were in when they pressed `1`/`3`, then grep the
+latest log for `[READER] unclaimed pane:` lines around that moment -- the menu reader already logs the window
+class RVA of any pane no reader spoke for, which names both screens' classes without a probe.
+
+### SOLVED S183, PLAY-CONFIRMED — the audio beacon went silent for whole dungeons: an IMAGE window read as "a dialogue box is on screen"
+
+KEYWORDS: beacon disabled map Pharos Third Ascent 1141 suspended dialogue or message box never resumed
+IsBoxLive shapewin text-less window floor_disp_ctrl DAT_01ceb638 empty string pad router FieldBusy t key
+
+**Reported:** "the audio beacon is completely disabled on this map" (own log 09-17 08:00, map 1141 Spire
+Ravel - 2nd Flight), and testers see the same in other dungeons.
+
+**The log said it in one line:** `[BEACON] suspended -- dialogue or message box on screen`, on the first
+seeded route of the map, with no `resumed` after it for the rest of the session. At map entry two message
+windows had logged `page[wnd=… off=0 mode=1] carries no speakable text`.
+
+**Root cause (conf 0.98, GameArchitecture.md "Message-window registry slots…"):** `rbl_n02`'s
+`floor_disp_ctrl` calls `shapewin` twice (slots 2 and 3, full screen) and never closes them. `shapewin`
+registers its window through the same builder a conversation uses, with a null text pointer that the
+constructor replaces with the binary's empty-string literal. S157's gate, `DialogueReader::IsBoxLive`, asked
+only "does any slot hold a window", so every Pharos map — and, per a census of 258 scripts, Trial Mode,
+gauge and timer overlays and several dungeon Map_Directors — held the beacon suspended for the whole map. The
+same predicate put the gamepad router in `FieldBusy` and kept `t` re-reading stale lines there.
+
+**Fix:** `IsBoxLive` skips a window whose text pointer is readable, non-null and points at a zero byte; a
+null or unreadable pointer still counts, as before. One `DIALOGUE` line per text-less window per slot:
+`message-window slot N holds a TEXT-LESS window … not counted as a box on screen`.
+
+**Falsifiers:** on any Pharos map, two `TEXT-LESS window` lines at entry and a `[BEACON] seed` followed by
+pings (no `suspended -- dialogue` line while no conversation is up). A conversation on the same map must
+still log `suspended -- dialogue…` then `resumed`. If a real conversation ever fails to suspend the beacon,
+dump that window's text pointer — that would be a box built with empty text, the one case this test misses.
+
+### SOLVED S183, PLAY-CONFIRMED — routes vanished mid-walk: a failed re-plan deleted the live route
+
+KEYWORDS: path invalid mid walk No path near door silent replan stuck off route beacon stop seq 152 214 218
+Destiny's March 192 oracle IN component search giving up keep live route RouteKeep HoldAutoReplans
+
+**Reported:** "walking too close to a door or removing straight line access to a path invalidates the path,
+even though it's technically still valid … pathways should never become suddenly invalid mid walk" (own log
+09-17 06:26, map 192).
+
+**The log:** three `replan: silent re-run of the BEACON OBJECTIVE` requests ended `plan=NoPath` →
+`[BEACON] stop` → `say="No path" (SILENT replan -- not spoken)` — seq 152 (stuck beside Ancient Door 3),
+214 and 218. Each: the corridor march CLEAR, the first leg from the player's spot breaching (`why=sweep` /
+`why=march`) where its straight line clips a door frame or a ramp lip, every repair rung failing, and
+`oracle: goal poly … is IN the start poly's adjacency component -- … the SEARCH giving up`. Then the player's
+own `\` from the same spot said "No path" twice (seq 215/216); from four metres further on it routed (217).
+
+**Root cause, one comment:** path_planner's drain seeded the beacon with the re-plan's legs, and its comment
+called an empty list "also the right answer for a failed silent re-plan". So one awkward spot deleted a
+route the player was walking.
+
+**Fix — the user's rule, `navigation/route_keep.{h,cpp}`:** a request for the SAME objective the beacon is
+leading to that comes back without a Route keeps the live route. A silent re-plan leaves the beacon untouched
+and holds further automatic re-plans on that leg (`AudioBeacon::HoldAutoReplans`, cleared at the next corner
+or a new route), so it adds no game-thread searches the old behaviour did not make. The player's own `\`
+re-speaks the remaining legs from where they stand and re-seeds the beacon (the user's choice). Two failures
+still end the route: the oracle proves the goal disconnected, or the rest of the live route now crosses a
+script-closed floor (sampled every 0.5 m). The give-up-before-nav-safe branch no longer stops the beacon
+either. Same objective = same label and (within 0.5 m, or the same map-jump group for an exit).
+
+**Log lines:** `keep-route: seq=N KEPT -- …` / `NOT kept -- …`; the drain's `say=` line gains
+`(live route KEPT, beacon untouched)` or `(live route KEPT, re-spoken)`; `[BEACON] stuck|off route on leg
+i/n -- automatic re-plan HELD`.
+
+**Not changed:** the search itself, the repair ladder and validation. A `\` to a different target still
+answers "No path" and stops the old route. Falsifier: a `KEPT` route that walks the player into something
+the game has closed — that would mean a barrier the closed-floor sample missed.
+
+### SOLVED S183, PLAY-CONFIRMED — the Sigils of Sacrifice all had one name
+
+KEYWORDS: Pharos Sigil of Sacrifice colour coding white yellow pink purple glow effect bgeffectplay
+s_warp SigilColours altar class0+0x93d label
+
+**Asked:** colour-code the Sigils of Sacrifice, from the game's own data, on every ascent.
+
+**Found (GameArchitecture.md "Pharos Way Stones and the Sigils of Sacrifice"):** fourteen, all in the Third
+Ascent scripts `rbl_n01`/`rbl_n02` — no other script names a sigil. Eight sit in two four-sigil rooms and
+test the saved altar choice; six are the single wrong-choice Sigil of Sacrifice in the Black/Green/Red rooms.
+The user expected twelve, four per ascent; the full routine code was re-read at their request and the split
+is the script's own. All fourteen are coloured by ONE rule: the sigil routine's own glow effect id.
+
+**Shipped:** `navigation/sigil_colours.{h,cpp}` appends ", White|Yellow|Pink|Purple" to the label during the
+scan; `MapScript::RoutineFacts::bgEffect` (first `bgeffectplay` literal) and `DoorBinding::RoutineOf` feed it.
+Phrasebook: 4 new colour words. Log: `sigil-colour: [c:s] routine[i] "s_warp_…" glow effect 0x.. -> Colour`.
+
+**Falsifiers:** on map 1141's dais, `s_warp_iii_1` must log Purple, `iii_2` White, `iii_3` Yellow and
+`iii_4` Pink (effects 0x3A, 0x31, 0x34, 0x36). A
+`sigil-colour` line on a map other than the Spire Ravel ones means the prefix gate leaked.
+
 ### FAILED (S179), REBUILT S182 (background searches REVOKED), UNPLAYED — the Unreachable filter judged a flood, and the flood was not the router
 
 KEYWORDS: unreachable filter hides nothing Pilgrim's Door 1 No path still listed ReachGate Judge flood open
@@ -80,7 +189,16 @@ own, which the user has ruled out.
 - The door listed again after the puzzle opens it (the override table changes, so the record lapses).
 - No `reach-gate:` line of any kind without a route press before it, and no `STALL ReachGate` line ever.
 
-### BUILT S182, UNPLAYED — routes buy their way through the waterfalls (A* now CUTS script-closed floors); MAP-184 WATER FIX SPECIFIED, NOT BUILT
+### BUILT S182, UNPLAYED — routes buy their way through the waterfalls (A* now CUTS script-closed floors); MAP-184 WATER FIX BUILT S183, PLAY-CONFIRMED
+
+**S183: THE SPEC BELOW IS BUILT, as written.** `navigation/map_route_rules.{h,cpp}` (row: map 184,
+`refuseTerrain`); `PathSearch::Run` reads the map id once and CUTS a neighbour that is `!Walkable` or
+`TerrainRefused`, exempting the start poly, the goal poly and the goal's own map-jump group (the last is an
+addition to the spec: an exit's goal surface can be several polys); `PathMarch::StrictTerrainScope` makes the
+march refuse to graze into an existing-but-refused neighbour for the whole request (true boundaries, vertex
+grazes and arrival forgiveness unchanged). One line per request on the flagged map: `map-rule: map 184
+refuses class-refused ground -- N crossing(s) CUT, M graze(s) refused; first at poly P (x,y,z)`. S182's
+filter/cut build shipped to the game for the first time in the same deploy.
 
 KEYWORDS: routing through water waterfall Falls of Time map 184 closed floor price kClosedFloorPenalty
 closedAware UnreachableFilterOn path_search 244 terrain 4000 blocked recorded material 3 4 setmapidfloor
@@ -538,6 +656,10 @@ gate built on it once killed the field object scan for a whole fight.
 
 **Residual:** a cutscene with no message box is still uncovered. Most FFXII scenes caption through the
 paginated box, so `IsBoxLive()` should carry them; a silent camera scene has no measured signal yet.
+
+**S183 — `IsBoxLive()` WAS TOO BROAD.** "Does any slot hold a window" is also true for `shapewin` image
+overlays, which every Pharos map keeps open all map long, so the beacon stayed suspended for whole dungeons.
+It now skips text-less windows. See the S183 entry at the top of Tried & Failed.
 
 ### WITHDRAWN SAME SESSION (S157) — the strike on "`mrm_c01` is the Stilshrine's boss/event room"
 

@@ -73,6 +73,18 @@ struct LegSnapshot {
 };
 bool GetLegSnapshot(LegSnapshot& out);
 
+// GAME THREAD. The corners still ahead on the live route -- the one being steered at first, the
+// destination last. False (and `out` empty) when no route is active. For PathPlanner's keep-the-live-route
+// answer (S183), which re-speaks exactly the route the beacon is already leading along.
+bool RemainingCorners(std::vector<FVec3>& out);
+
+// GAME THREAD. A silent re-plan from the current leg found no route, and the planner KEPT the live route
+// (S183: a route never becomes invalid mid-walk). Until the player reaches this leg's corner, or a new
+// route is seeded, the stuck and off-route detectors stop asking for re-plans: the answer from here is
+// already known, and asking again every two seconds would add game-thread searches the old behaviour --
+// which simply ended the route -- never made. The player's own `\` is unaffected.
+void HoldAutoReplans();
+
 // Stop and forget the route. Safe from any thread. The reason defaults to External so an unlabelled
 // caller cannot leave a stale, more specific reason standing.
 void Stop(StopReason reason = StopReason::External);

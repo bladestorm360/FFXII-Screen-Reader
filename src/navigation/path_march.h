@@ -98,4 +98,25 @@ struct MarchResult {
 // end against exit seams, shopfronts and notice boards.
 MarchResult MarchLeg(const FVec3& a, const FVec3& b, float endTol);
 
+// ---- Strict terrain, for ONE request on a flagged map (S183, map_route_rules.h) ------------------
+//
+// While a scope is open, a crossing into a neighbour that EXISTS but the leader's class refuses is a
+// breach at once: no graze rescue carries the chord across it. That graze is how the 09-16 Falls of Time
+// routes validated (`marchGraze=15`, corridor march `grazes=58`) while the player walked into the water.
+// A true boundary (no neighbour), a vertex graze and the arrival forgiveness are unchanged. PathSearch::Run
+// opens the scope for the whole request; every march in the process (validation, repair, corridor march,
+// frontier, surface goal) runs inside it. GAME THREAD ONLY, not re-entrant.
+class StrictTerrainScope {
+public:
+    explicit StrictTerrainScope(bool on);
+    ~StrictTerrainScope();
+    StrictTerrainScope(const StrictTerrainScope&) = delete;
+    StrictTerrainScope& operator=(const StrictTerrainScope&) = delete;
+private:
+    bool prev_;
+};
+
+// Crossings the strict rule refused since the current scope opened -- the log's `graze(s) refused`.
+int StrictGrazesRefused();
+
 } // namespace PathMarch

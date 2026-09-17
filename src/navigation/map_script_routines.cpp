@@ -18,6 +18,9 @@ constexpr uint16_t FLOOR_CLASS_LEADER      = 0;   // class 0 -> material bit 23
 constexpr uint16_t FLOOR_STATE_OPEN        = 1;   // state 1 forces the refusal bit OFF
 constexpr uint16_t MATERIAL_ID_COUNT       = 32;  // the material bank is entries 0x00-0x1F
 
+// `bgeffectplay(id)` compiles to one push-immediate and the native call: `4f <id> 5d c3 00` (S183).
+constexpr uint8_t  NATIVE_BGEFFECTPLAY_LO  = 0xC3;
+
 std::string AsciiSafe(const std::string& s) {
     std::string o;
     for (char c : s) o.push_back((c >= 0x20 && c < 0x7f) ? c : '?');
@@ -71,6 +74,11 @@ bool ReadRoutineFacts(std::vector<RoutineFacts>& out) {
         }
         if (span < 0x40) continue;
         f.codeRead = true;
+        for (size_t o = 0; o + 6 <= code.size() && f.bgEffect < 0; ++o) {
+            if (code[o] == OP_PUSH_U16 && code[o + 3] == OP_CALLACTPOPA &&
+                code[o + 4] == NATIVE_BGEFFECTPLAY_LO && code[o + 5] == 0)
+                f.bgEffect = U16(code, o + 1);
+        }
         for (size_t o = 0; o + 12 <= code.size(); ++o) {
             if (code[o] != OP_PUSH_U16 || code[o + 3] != OP_PUSH_U16 || code[o + 6] != OP_PUSH_U16) continue;
             if (code[o + 9] != OP_CALLACTPOPA || code[o + 10] != NATIVE_SETMAPIDFLOOR_LO || code[o + 11] != 0)

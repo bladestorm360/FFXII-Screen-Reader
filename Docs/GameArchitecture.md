@@ -391,7 +391,9 @@ Live-widget gate: `FUN_002e16b0` stores the window it builds in **`DAT_0215f200`
 — 8 slots, stride `0x68`, window pointer at `+0x00` — and the text widget is `window+0xD0`.
 Membership there is what separates a paginated message from every other text block the same dispatch
 slot lays out (the party menu shares the `FUN_002a6190` window class, so class identity alone is not
-enough). Shipped in `src/ui/dialogue_reader.cpp`.
+enough). Shipped in `src/ui/dialogue_reader.cpp`. **Membership is NOT "a box is on screen" (S183):**
+`shapewin` image overlays register through the same setter with no text and stay for a whole map — see
+"Message-window registry slots, and the TEXT-LESS (`shapewin`) window" near the end of this file.
 
 **⚠ `widget+0xC0` (end of message) IS A LEVEL, NOT AN EVENT** (S149). `FUN_002a8c50` sets it to 1 at
 the codec `0x00` terminator (`:136-146`); the **next** call takes the skipped path at `:100` and sets
@@ -6668,3 +6670,98 @@ So a door opened out of turn stalls the sequence until the module reloads, which
 `0x1F` (`map_ダミーＰＣ`) entry 11 `ターン` to turn the player toward the door, then entry 1
 `扉オープン` to open it. That is how `rui_b01`'s `REQEW(1, 0x28, 2)` was read as `secret_door`
 entry 2.
+
+## Message-window registry slots, and the TEXT-LESS (`shapewin`) window — Session 183
+
+The registry the dialogue reader, the `t` key, the audio beacon and the pad router all consult is
+`DAT_0215f200` (RVA `0x203F200`), 8 slots, stride `0x68`. Slot fields, read off the per-frame updater
+`FUN_002e09a0` (RVA `0x1C09A0`), the builder `FUN_002e16b0` (RVA `0x1C16B0`) and the per-field setters
+`FUN_002e1d90` / `FUN_002e1e00` / `FUN_002e1e40` / `FUN_002e1e70` / `FUN_002e1ea0` / `FUN_002e1f80` /
+`FUN_002e1fd0` (conf 0.98 for the layout; meanings where stated):
+
+| slot + | type | meaning |
+|---|---|---|
+| `0x00` | ptr | the window (`0` = empty slot) |
+| `0x08` | i32 | slot state, derived each frame from the window's mode by `FUN_002a2a60`; `6` closing, `7` closed |
+| `0x10..0x17` | 4 x s16 | requested rect x, y, w, h (`FUN_002e1f80`); `+0x3A` = 1 marks it set |
+| `0x38` | u8 | set by `ames`/`aask` (`FUN_002e1e00`) |
+| `0x3C` | u8 | window KIND for the next build (`FUN_002e11b0` maps it); the builder copies it to `+0x40` and resets it to 1 |
+| `0x3D` | u8 | style (`FUN_002e1ea0`: 0-4) |
+| `0x3E` | u8 | bit 0 / bit 1 flags (`FUN_002e1e40` / `FUN_002e1e70`) |
+| `0x40` | u8 | the kind the live window was built with; `0xFE` after a close |
+| `0x42` | u8 | set to 1 ONLY by `shapewin`; read and then CLEARED by the builder (the u16 write at `+0x41`), so it is **not** a marker on a live window |
+
+**`shapewin(slot, x, y, w, h, style)` = script native `0x17C`** (impl `FUN_0033f950`, RVA `0x21F950`). It
+builds the window through the same `FUN_002e16b0(0, slot, NULL, 0)` every message uses, with **no text**.
+The constructor `FUN_002a2c00` substitutes `DAT_01ceb638` (RVA `0x1BCB638`) for a null text pointer, and
+`FUN_002b3d50` stores it at **widget `+0x28`** (window `+0xF8`). `DAT_01ceb638` is the binary's shared
+EMPTY-STRING literal: 113 references, every one a zero-length `memmove` source or an empty-string assign
+(conf 0.98). **So a text-less image window's text base reads as a pointer to a zero byte.** That is the
+test `DialogueReader::IsBoxLive` applies since S183; a null or unreadable text pointer still counts as a
+box, as before.
+
+**Who opens them (census, `FFXII-Decompile\output\shapewin_census_s183.txt`, 258 scripts):** every Pharos
+map (`rbl_*`, routine `floor_disp_ctrl`, two full-screen windows in slots 2 and 3, `1920x1080`, open for the
+whole map), all 100 Trial Mode stages (`tri_*`), the gauge overlays (`byu_*` shout gauge, `frs_*`/`srb_*`/
+`mnt_d01` mog gauges, `alc_*` quest accept), `gil_*` timers, and `Map_Director`/`MapDirector` routines on
+`mic_*`, `sav_*`, `rwg_b*`, `rsn_*`, `rrp_a02/03`, `naf_a01`, plus two boss routines (`rui_e01`,
+`rwf_d01`). Several are persistent; any of them read as "a dialogue box is on screen" to the pre-S183 gate.
+
+**KEYWORDS: shapewin 0x17C FUN_0033f950 text-less window empty string DAT_01ceb638 widget+0x28 IsBoxLive
+message window registry slot layout 0x68 floor_disp_ctrl Pharos beacon suspended forever pad FieldBusy**
+
+## Pharos Way Stones and the Sigils of Sacrifice — Session 183
+
+Offline, from the extracted room scripts (`FFXII-Decompile\output\rbl_n01_ebp_disasm.txt`,
+`rbl_n02_ebp_disasm.txt`, `rbl_j02_ebp_disasm.txt`; note `FFXII-Decompile\notes\pharos_sigils_s183.md`).
+
+**Scripts.** `rbl_*` is the Pharos at Ridorana. `rbl_n02` is map **1141** "Spire Ravel - 2nd Flight"
+(Pharos - Third Ascent) — its routine table `+0x1C170`, 74 routines, name pool `+0x1D260` match the live
+log exactly — and it also serves map 1140 (`nowmap == 0x474` branches). `rbl_n01` holds the other Spire
+Ravel Way Stones. The per-map NAME TABLE the `fieldsign` native indexes is the container section at
+**file `+0x1C`** (`[u32 offsets][codec strings]`); `fieldsign(N)` names the object `names[N]`. (The
+message table at file `+0x18` carries a flag in each offset's high word, `0x0001xxxx`, which
+`tools\ebp_msg_decode.py` rejects; mask it to decode.)
+
+**Way Stones are routines `s_warp_*`** — only these two scripts use that prefix. Entry 0 runs only for one
+arrival (`nowjumpindex`), names the object, enables it and plays its glow: `bgeffectplay(id)` first thing.
+Names in the game's table: "Way Stone - Black Sigil", "- Green Sigil", "- Red Sigil", "- Sigil of
+Sacrifice", or plain "Way Stone".
+
+**The glow effect ids sort by appearance, across both scripts** (conf 0.98): Black `0x20-0x24` (all 5),
+Green `0x25-0x2A` (all 6), Red `0x2B-0x2E` (all 4), Sigil of Sacrifice `0x2F-0x3C` (all 14), plain Way
+Stone `0x3D-0x3F` (all 3) — every named sigil in its own contiguous block, and within each block the
+`rbl_n02` ids precede the `rbl_n01` ids.
+
+**The sacrifice.** The Second Ascent altars are `rbl_j02` routines `statusgmk_*`; each ORs one bit into
+save byte **`class0+0x93d`** (u8; descriptor `0x0000093D`): **1 = Altar of Steel** (`statusgmk_nw`, name 5),
+**2 = Altar of Magicks** (`_sw`, 6), **4 = Altar of Knowledge** (`_se`, 7), **8 = Altar of Wealth** (`_ne`, 8)
+— names joined through each routine's own `fieldsign` id. `rbl_n02` is the only other script that reads the
+byte: its two four-sigil rooms, `s_warp_4_1..4` (arrival 2) and `s_warp_iii_1..4` (arrival 6), each warp to
+`1141` entrance 3 when `v17 & bit` holds and otherwise count a wrong choice (second wrong one jumps to
+`1140` entrance 9).
+
+| routine | bit / altar | glow | colour |
+|---|---|---|---|
+| `s_warp_4_4`, `s_warp_iii_2` | 1 Steel | `0x30`, `0x31` | White |
+| `s_warp_4_3`, `s_warp_iii_3` | 8 Wealth | `0x33`, `0x34` | Yellow |
+| `s_warp_4_2`, `s_warp_iii_4` | 4 Knowledge | `0x35`, `0x36` | Pink |
+| `s_warp_4_1`, `s_warp_iii_1` | 2 Magicks | `0x39`, `0x3A` | Purple |
+
+Colour per altar: two walkthroughs agree (jegged: Pink = Knowledge, Purple = Magicks, White = Steel, Yellow =
+Wealth; gamerguides: pink = mini-map/Knowledge, purple = magicks, yellow = items, white = weapons). Position
+check against gamerguides' "pink southwest, purple southeast, yellow northwest, white northeast" with the
+mod's compass (north = −z, east = +x): `iii_1` (138,74) purple SE, `iii_2` (138,62) white NE, `iii_3`
+(126,62) yellow NW, `iii_4` (126,74) pink SW — 4 of 4.
+
+**The six single Sigils of Sacrifice** (`rbl_n02` `s_warp_3_2` `0x3B`, `s_warp_5_1` `0x2F`, `s_warp_ii_4`
+`0x37`; `rbl_n01` `s_warp_1_4` `0x3C`, `s_warp_2_1` `0x32`, `s_warp_2_4` `0x38`) sit beside a Black, Green
+and Red sigil in the order-puzzle rooms, run the same warp code with no altar test, and are always a wrong
+choice. Their colour follows from the block ordering above: 0x2F/0x32 White, 0x37/0x38 Pink, 0x3B/0x3C
+Purple (the only assignment that keeps every colour block contiguous with `rbl_n02` ids first).
+
+Shipped as `SigilColours` (label suffix, from `MapScript::RoutineFacts::bgEffect` read live).
+
+**KEYWORDS: Pharos Ridorana rbl_n01 rbl_n02 map 1141 1140 Spire Ravel Third Ascent Way Stone Sigil of
+Sacrifice s_warp bgeffectplay 0xC3 glow effect colour white yellow pink purple class0+0x93d altar Steel
+Magicks Knowledge Wealth statusgmk rbl_j02 fieldsign name table file+0x1C**

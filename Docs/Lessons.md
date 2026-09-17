@@ -31,10 +31,10 @@ task.** Nine times out of ten the relevant lesson is one of six.
 
 | your task looks like… | grep tag | lessons |
 |---|---|---|
-| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87 |
+| about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
-| adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83 |
+| adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68 |
@@ -221,6 +221,22 @@ were in the extracted file. S180 re-tested it in one step: `mrm_b03` var `0x0D` 
 `+0x9B1`, exactly S156's live measurement. The whole Sochen puzzle was then solved from scripts alone.
 **The tell:** a negative capability claim ("not reachable", "cannot answer") older than a format fix it
 depends on. Related: L-38 (strike, do not append), L-08 (map-data questions are decompile questions).
+
+### L-90 A LATER FAILURE TO REPRODUCE AN ANSWER IS NOT A RETRACTION OF IT
+**When the mod has already given the player an answer they are acting on -- a route they are walking --
+a re-derivation that fails from a worse vantage point must not delete it. Only a failure that is a fact
+about the GOAL (proven disconnected, a barrier the game has since declared) may end it. "I could not work
+it out again from here" and "it is no longer true" are different results, and only the second one is news
+for the player.**
+**Why:** S183. The beacon re-planned silently whenever the player was slow or off the line, and the drain
+seeded the beacon with whatever came back -- so a re-plan from beside a door frame, where the first leg's
+straight line clipped the frame and every repair failed, STOPPED a route the player was walking. The log
+said three times in five minutes, in plain text, that the mesh still connected them to the goal and the
+search had given up. The comment on the line that did it called the empty list "also the right answer for
+a failed silent re-plan". The user: *"pathways should never become suddenly invalid mid walk, that is a
+bug."*
+**The tell:** a refresh path that REPLACES a live result with its own output unconditionally, including
+when its output is a failure. Ask what the failure actually proves before letting it overwrite anything.
 
 ### L-69 A FIELD THAT MEANS DIFFERENT THINGS IN DIFFERENT STATES WILL HAND YOU A PLAUSIBLE WRONG NUMBER
 **Read the state byte BEFORE you read anything the state byte governs. A reused field does not fail
@@ -495,6 +511,18 @@ constant, and sanity-check it against a NEIGHBOURING constant already in the fil
 -> `0x1E63530` sits on the same page and would have flagged this instantly).
 
 ---
+
+### L-89 MEMBERSHIP IN THE GAME'S REGISTRY IS NOT THE STATE YOU NAMED IT FOR
+**A registry lists everything its builder builds. Before a predicate "X is on screen" rests on "a slot holds
+an X", find every caller of the builder and check that each one builds the thing you mean. Then test the
+property you need (here: the window carries text), not the membership.**
+**Why:** S183. `DialogueReader::IsBoxLive` asked the message-window registry "does any slot hold a window"
+and three features trusted it as "a dialogue box is on screen": the audio beacon's suspend, the gamepad
+router's `FieldBusy`, and the `t` key. `shapewin` -- a script native that draws a full-screen IMAGE -- builds
+through the same setter with no text, and every Pharos map keeps two open for the whole map. The beacon went
+silent for entire dungeons. The builder's caller list (five natives) would have shown it in one grep; S130
+had even written down "open, unmeasured: whether the game nulls its slots" and moved on.
+**The tell:** a boolean named for what the player SEES, implemented as "the collection is non-empty".
 
 ### L-83 A DETECTOR WHOSE FAILURE MODE IS ITS DEFAULT ANSWER CANNOT BE SEEN TO FAIL
 **If "could not tell" and "it is the ordinary case" produce the same behaviour, the feature is

@@ -27,6 +27,10 @@ struct RoutineFacts {
     int         index          = -1;
     uint64_t    entryTable     = 0;   // live address of the routine's entry table; 0 when unreadable
     uint32_t    opensFloorMask = 0;   // bit N set: the routine calls setmapidfloor(N, class 0, open)
+    // S183: the literal id of the FIRST `bgeffectplay(id)` (native 0x00C3) in the routine's code, -1 when it
+    // plays none. A Pharos Way Stone plays its own coloured glow first thing in entry 0, so this is the
+    // game's own visual identity for it -- see sigil_colours.h.
+    int         bgEffect       = -1;
     bool        codeRead       = false;
     std::string name;                 // printable-ASCII form, for the log only (most are Shift-JIS)
 };

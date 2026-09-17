@@ -198,6 +198,12 @@ const Row kTable[] = {
     EN(L"Door puzzle"),
     EN(L"step"),
     EN(L"A door was opened out of turn, so the count has stopped. Leave the area and come back to start again."),
+
+    // S183: Sigil of Sacrifice colours -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"White"),
+    EN(L"Yellow"),
+    EN(L"Pink"),
+    EN(L"Purple"),
 };
 
 #undef EN

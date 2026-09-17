@@ -61,7 +61,12 @@ void ForgetLivePages();
 // scan for an entire fight (entity_list.cpp:254, debug.md). It is not a menu/field discriminator and
 // it never was.
 //
-// Cheap: 8 guarded pointer reads, and it is only called from the input thread on a keypress.
+// A slot whose window carries NO TEXT does not count (S183): `shapewin` image overlays -- every Pharos
+// map's floor display, Trial Mode, gauge and timer overlays -- sit in this registry for the whole map
+// and had the audio beacon and the pad router reading "a box is on screen" forever. See the .cpp.
+//
+// Cheap: up to 8 slots x 3 guarded reads. Callers: the `t` key (input thread), and every field frame
+// from AudioBeacon::OnGameFrame and PadRouter::OnGameFrame (game thread).
 bool IsBoxLive();
 
 } // namespace DialogueReader

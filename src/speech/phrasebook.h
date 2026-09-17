@@ -237,6 +237,12 @@ enum class Id {
     // OfJoiner. Wording is ours; flag any reword to the user.
     SochenWaterfall, SochenDoorPuzzle, SochenStep, SochenOutOfTurn,
 
+    // S183: the Pharos Third Ascent's Sigils of Sacrifice (sigil_colours.cpp). USER-AUTHORIZED 2026-09-17:
+    // "this puzzle needs color coding". The game names only the Black, Green and Red sigils; the four
+    // Sigils of Sacrifice are told apart by their glow alone, which has no text anywhere. Appended at the
+    // END; flag any reword to the user.
+    SigilWhite, SigilYellow, SigilPink, SigilPurple,
+
     Count
 };
 

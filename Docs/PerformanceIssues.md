@@ -50,6 +50,14 @@ deleted; the filter now only records the route key's own answers). Split candida
 next opened for a feature: the post-search outcome block (histogram, surface goal, oracle, frontier -- ~220
 lines) is a clean seam.
 
+**Session 183 (2026-09-17), measured:** `navigation/path_search.cpp` **1253** (+43: the per-map terrain cut and
+its `map-rule:` logger, which live inside the A* loop they describe; the outcome-block seam above still
+stands). `navigation/path_planner.cpp` **581** (+43: keep-the-live-route wiring; the policy itself went to
+the new `navigation/route_keep.cpp`, 90, precisely so the planner would not take it). `navigation/
+audio_beacon.cpp` **569** (was 525 -- NEWLY OVER: the re-plan hold. Seam when paid: the stuck/off-route
+detectors, ~130 lines, are separable from the ping and leg-advance core). `navigation/entity_scan.cpp`
+**1083** (+4). New files, all small: `map_route_rules.cpp` 26, `route_keep.cpp` 90, `sigil_colours.cpp` 67.
+
 Re-measured **2026-07-30 (Session 94)**. The same four files are over, and none of them grew materially:
 `menu_reader.cpp` took the two-line gambit dispatch branch and `ingame_menu_reader.cpp` a corrected
 comment, both of which had to land in those files -- the dispatch is the one choke point for `0x8000`,

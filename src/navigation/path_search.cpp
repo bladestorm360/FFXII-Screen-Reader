@@ -11,6 +11,9 @@
 #include "navigation/nav_blocked.h"
 #include "navigation/player_state.h"
 #include "navigation/reach_gate.h"
+#include "navigation/map_names.h"
+#include "navigation/map_route_rules.h"
+#include "navigation/path_march.h"
 #include "core/logger.h"
 
 #include <windows.h>
@@ -267,6 +270,32 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
     uint32_t closedMatsCut = 0;
     PolyId   closedSample  = kNoPoly;
 
+    // ---- PER-MAP RULE: class-refused ground is CUT on a flagged map (S183, map_route_rules.h) --------
+    // Falls of Time only, by the user's ruling. The map id is read ONCE per request. The march refuses
+    // to graze across the same ground for the whole request (the scope below), and one `map-rule:` line
+    // on every request on a flagged map -- written by the logger's destructor, so every return path
+    // after this point reports -- says how many crossings were cut and how many grazes were refused.
+    const int  ruleMapId     = MapNames::CurrentMapId();
+    const bool refuseTerrain = MapRouteRules::MapRefusesTerrain(static_cast<uint32_t>(ruleMapId));
+    PathMarch::StrictTerrainScope strictTerrain(refuseTerrain);
+    int    refRuleCut    = 0;
+    PolyId ruleCutSample = kNoPoly;
+    struct RuleLog {
+        bool on; int mapId; const int& cut; const PolyId& sample;
+        ~RuleLog() {
+            if (!on) return;
+            char where[96] = "";
+            FVec3 sc{};
+            if (sample != kNoPoly && NavMesh::PolyCentroid(sample, sc))
+                snprintf(where, sizeof(where), "; first at poly %d (%.1f,%.1f,%.1f)", sample, sc.x, sc.y, sc.z);
+            char m[288];
+            snprintf(m, sizeof(m),
+                     "map-rule: map %d refuses class-refused ground -- %d crossing(s) CUT, %d graze(s) "
+                     "refused%s", mapId, cut, PathMarch::StrictGrazesRefused(), where);
+            Log::Write("NAV-ROUTE", m);
+        }
+    } ruleLog{ refuseTerrain, ruleMapId, refRuleCut, ruleCutSample };
+
     // ---- THE GOAL SURFACE, observed but never obeyed ------------------------------------------
     // `seamPolys` is the map-jump surface the target belongs to, or null for everything that is not
     // a walk-onto transition. The search's behaviour does NOT change: this set is only tested on a
@@ -435,6 +464,19 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
                         if (closedSample == kNoPoly) closedSample = n;
                         continue;
                     }
+                }
+
+                // THE PER-MAP CUT (S183): on a map whose row refuses class-refused ground, water and
+                // every other ground the leader's class refuses is not expanded -- except the route's own
+                // start and goal polys and the goal's own map-jump surface, because two of Falls of
+                // Time's exits sit on refused polys (2751, 2727) and a player standing on one must still
+                // route off it.
+                if (refuseTerrain && n != start && n != goal &&
+                    !(goalGroup != 0 && NavMesh::MapJumpGroup(n) == goalGroup) &&
+                    (!NavMesh::Walkable(n) || NavMesh::TerrainRefused(n))) {
+                    ++refRuleCut;
+                    if (ruleCutSample == kNoPoly) ruleCutSample = n;
+                    continue;
                 }
 
                 FVec3 nc{};
@@ -1106,6 +1148,7 @@ Plan Run(const FVec3& from, const FVec3& to, uint32_t epoch,
         const int n = NavMesh::FloodFrom(start, comp);
         bool inComponent = false;
         for (const PolyId p : comp) if (p == goal) { inComponent = true; break; }
+        stats.goalConnected = inComponent ? 1 : 0;   // read by the planner's keep-the-live-route test
         char om[288];
         snprintf(om, sizeof(om),
                  "oracle: goal poly %d is %s the start poly %d's adjacency component (%d polys) -- %s",

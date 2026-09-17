@@ -3281,3 +3281,57 @@ on a flagged map A* CUTS class-refused ground (goal and start polys exempt, sinc
 refused polys) and the march refuses to graze across it; one `map-rule:` line per request. Recorded
 accurately that the Northern Sluiceway fix itself was global — the per-map precedent is S121's
 mechanism-flagged table (`PathDanger::MapUsesEngineCatch`).
+
+## Session 183 — 2026-09-17 — [nav] Beacon silent in the Pharos, Sigils of Sacrifice by colour, Falls of Time water rule, routes that vanished mid-walk (PLAY-CONFIRMED)
+
+KEYWORDS: audio beacon disabled Pharos Third Ascent 1141 IsBoxLive shapewin text-less window floor_disp_ctrl
+DAT_01ceb638 Sigil of Sacrifice colour white yellow pink purple bgeffectplay s_warp class0+0x93d altar
+map_route_rules map 184 Falls of Time refuseTerrain StrictTerrainScope map-rule keep live route RouteKeep
+HoldAutoReplans silent replan No path near door Destiny's March L-89 L-90
+
+**Asked (own logs: 09-17 08:00 Pharos map 1141, and 06:26 Sochen):** (1) the audio beacon is completely
+disabled on this map, and testers see it in other dungeons; (2) colour-code the Sigils of Sacrifice from the
+game's data, for every ascent; (3) finish the documented Falls of Time water fix, and fix routes that become
+"No path" mid-walk when the player walks close to a door or loses the straight line to the path.
+
+**(1) Found:** `[BEACON] suspended -- dialogue or message box on screen` on the first route of the map, never
+resumed. The Pharos script's `floor_disp_ctrl` opens two `shapewin` full-screen IMAGE windows through the same
+message-window builder a conversation uses, with no text, for the whole map. `IsBoxLive` counted any registered
+window. A census of 258 scripts: all Pharos maps, all of Trial Mode, gauge/timer overlays, several dungeon
+Map_Directors. **Built:** `IsBoxLive` skips a window whose text pointer reads as the empty-string literal. Also
+fixes the pad router's `FieldBusy` and `t` on those maps. `L-89`.
+
+**(2) Found:** fourteen Sigils of Sacrifice, all in `rbl_n01`/`rbl_n02` (Spire Ravel); no other script names a
+sigil. Eight test the Second Ascent altar byte `class0+0x93d` (bits Steel 1, Magicks 2, Knowledge 4, Wealth 8,
+names joined through `rbl_j02`'s own fieldsign ids); six are the single wrong-choice sigil in the Black/Green/Red
+rooms. The user expected twelve (four per ascent) and asked for a re-check; the routine code was re-read and the
+split is the script's own. All fourteen are coloured by one rule: each routine's own glow effect id, which the
+two scripts number in contiguous blocks by appearance. Colours per altar from two agreeing walkthroughs, and the
+four dais sigils on map 1141 sit on the walkthrough's compass corners 4 of 4. **Built:** `SigilColours` appends
+", White|Yellow|Pink|Purple"; `RoutineFacts::bgEffect`; `DoorBinding::RoutineOf`. Phrasebook: 4 colour words
+(new wording, flagged). The user can play-test only the Third Ascent dais they are on.
+
+**(3a) Built as specified in debug.md:** `map_route_rules` (row: 184); A* cuts class-refused ground on the
+flagged map (start, goal and the goal's own seam group exempt); the march refuses grazes into refused neighbours
+for the request; one `map-rule:` line per request.
+
+**(3b) Found (06:26 log, map 192):** seq 152, 214, 218 -- silent re-plans from beside a door or round a corner
+failed (first leg clips a frame, repairs fail, oracle: goal connected, "the SEARCH giving up") and the drain's
+empty seed STOPPED the live route; seq 215/216 then answered "No path" to `\` from the same spot. **Built
+(user's ruling: a route never becomes invalid mid-walk; `\` re-speaks the live route):** `RouteKeep::Decide` --
+a same-objective request that fails keeps the live route unless the goal is proven disconnected or the rest of
+the route crosses a script-closed floor; silent re-plans leave the beacon untouched and hold automatic re-plans
+on that leg; `\` re-speaks the remaining legs. `L-90`.
+
+**Shipped:** clean build, 0 warnings, deployed, `cmp` identical. This deploy is also the first to carry S182.
+
+**PLAY-CONFIRMED by the user, same day:** *"all works as intended."* Committed and pushed at session close.
+
+**Falsifiers:** debug.md, the three S183 entries at the top of Tried & Failed, and the S182 water entry's S183
+block. Grep: `TEXT-LESS window`, `sigil-colour:`, `map-rule:`, `keep-route:`, `automatic re-plan HELD`.
+
+**Recorded for next session, NOT started (user, at close):** two silent screens reached with L1/R1 (`1`/`3` on
+the keyboard) -- one uses items on characters not in the current party, the other's purpose is unknown. Both
+need vocalization. debug.md has the OPEN entry with the existing leads (`Controls.md`: R1 selects Reserve in the
+battle target list; keyboard `1`/`2`/`3` are game speed in the field) and the first step: ask which menu was
+open, then read the log's `unclaimed pane:` lines for the two window classes.

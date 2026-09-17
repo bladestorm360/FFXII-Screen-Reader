@@ -50,6 +50,10 @@ constexpr float kGrazeAllow = 1.0f;
 // strip can be stepped over.
 constexpr float kResampleStep = 0.25f;
 
+// StrictTerrainScope's state (S183). Game thread only -- every march runs inside PathSearch::Run.
+bool s_strictTerrain  = false;
+int  s_strictRefused  = 0;
+
 } // namespace
 
 FVec3 Lift(const FVec3& p) { return FVec3{ p.x, p.y + kBodyPad, p.z }; }
@@ -277,7 +281,14 @@ MarchResult MarchLeg(const FVec3& a, const FVec3& b, float endTol) {
         // Graze scan: a taut chord kissing an inset corner or an edge sliver leaves the mesh for
         // less than a body diameter and the depenetration slide survives it in play. Only when no
         // walkable mesh exists within the allowance is the refusal real.
-        if (GrazeScan(a, b, legLen, bestT, exitY, P, tCur, r.grazes)) continue;
+        //
+        // EXCEPT on a map whose row refuses class-refused ground (S183): there a neighbour that
+        // exists and is refused is water the user ruled a route may not cross, so it is never grazed.
+        if (s_strictTerrain && n != NavMesh::kNoPoly) {
+            ++s_strictRefused;
+        } else if (GrazeScan(a, b, legLen, bestT, exitY, P, tCur, r.grazes)) {
+            continue;
+        }
 
         r.verdict  = MarchVerdict::Breach;
         r.hitPoint = FVec3{ bestCx, exitY, bestCz };
@@ -292,5 +303,14 @@ MarchResult MarchLeg(const FVec3& a, const FVec3& b, float endTol) {
     r.why = "poly-cap";
     return r;                                                      // NoVerdict
 }
+
+StrictTerrainScope::StrictTerrainScope(bool on) : prev_(s_strictTerrain) {
+    s_strictTerrain = on;
+    s_strictRefused = 0;
+}
+
+StrictTerrainScope::~StrictTerrainScope() { s_strictTerrain = prev_; }
+
+int StrictGrazesRefused() { return s_strictRefused; }
 
 } // namespace PathMarch

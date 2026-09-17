@@ -99,6 +99,31 @@ float              g_motionAccum   = 0.0f;    // 2D displacement since the stuck
 FVec3              g_lastPos{};               // previous frame's position, for the accumulator
 bool               g_motionValid   = false;   // g_lastPos holds a real position
 StopReason         g_lastStopReason = StopReason::None;
+// S183: automatic re-plans held on this leg after one failed and the route was kept (HoldAutoReplans).
+// `g_holdLogged` makes the "held" log line fire once per hold -- a transition, not a speech dedup.
+bool               g_replanHeld     = false;
+size_t             g_replanHeldLeg  = 0;
+bool               g_holdLogged     = false;
+
+void ClearReplanHold() {
+    g_replanHeld = false;
+    g_holdLogged = false;
+}
+
+// True when this frame's stuck / off-route re-plan must not be requested. Logs the first refusal.
+bool ReplanHeld(const char* which) {
+    if (!g_replanHeld || g_replanHeldLeg != g_current) return false;
+    if (!g_holdLogged) {
+        g_holdLogged = true;
+        char m[200];
+        snprintf(m, sizeof(m),
+                 "%s on leg %zu/%zu -- automatic re-plan HELD: the last one from this leg found no route and "
+                 "the live route was kept (clears at this corner, on a new route, or on the player's own \\)",
+                 which, g_current + 1, g_legs.size());
+        Log::Write("BEACON", m);
+    }
+    return true;
+}
 
 // Distance -> repeat period. Linear between the two anchors, clamped outside them.
 float IntervalFor(float dist) {
@@ -186,6 +211,7 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
     g_current = 0;
     g_epoch   = epoch;
     g_lastReplanMs = GetTickCount64();
+    ClearReplanHold();          // a new route: its legs have not been re-planned from yet
     ResetPhase();               // owns g_straySinceMs, along with the leg and stuck state
     FVec3 p;
     g_legStart = PlayerState::ReadPlayerPos(p) ? p : legPoints.front();
@@ -218,9 +244,24 @@ void Stop(StopReason reason) {
     }
     g_legs.clear();
     g_current = 0;
+    ClearReplanHold();
 }
 
 bool Active() { return g_active.load(std::memory_order_acquire); }
+
+bool RemainingCorners(std::vector<FVec3>& out) {
+    out.clear();
+    if (!g_active.load(std::memory_order_acquire) || g_current >= g_legs.size()) return false;
+    out.assign(g_legs.begin() + static_cast<ptrdiff_t>(g_current), g_legs.end());
+    return true;
+}
+
+void HoldAutoReplans() {
+    if (!g_active.load(std::memory_order_acquire)) return;
+    g_replanHeld    = true;
+    g_replanHeldLeg = g_current;
+    g_holdLogged    = false;
+}
 
 StopReason LastStopReason() { return g_lastStopReason; }
 
@@ -427,6 +468,7 @@ void OnGameFrame() {
         //
         // The route's own corners are right here in g_legs, so the leg is corner[N-1] -> corner[N].
         g_legStart = g_legs[g_current - 1];
+        ClearReplanHold();      // a new leg: a re-plan from here is a new question
         ResetPhase();
         char m[128];
         snprintf(m, sizeof(m), "leg reached -> advancing to leg %zu of %zu (silent)",
@@ -457,7 +499,8 @@ void OnGameFrame() {
     } else if (g_stuckSinceMs != 0 && (now - g_stuckSinceMs) >= kStuckMs &&
                (now - g_lastReplanMs) >= kReplanCooldownMs &&
                (InputTracker::MovementHeld() || AutoWalk::Engaged() ||
-                g_motionAccum >= kStuckMotionMinM)) {
+                g_motionAccum >= kStuckMotionMinM) &&
+               !ReplanHeld("stuck")) {
         g_lastReplanMs  = now;
         g_stuckSinceMs  = now;
         const float motion   = g_motionAccum;
@@ -486,7 +529,8 @@ void OnGameFrame() {
     const float perp = PerpDist(me, g_legStart, goal);
     if (perp > kStrayDist) {
         if (g_straySinceMs == 0) g_straySinceMs = now;
-        if ((now - g_straySinceMs) >= kStrayMs && (now - g_lastReplanMs) >= kReplanCooldownMs) {
+        if ((now - g_straySinceMs) >= kStrayMs && (now - g_lastReplanMs) >= kReplanCooldownMs &&
+            !ReplanHeld("off route")) {
             g_straySinceMs = 0;
             g_lastReplanMs = now;
             if (PathPlanner::RequestReplan()) {

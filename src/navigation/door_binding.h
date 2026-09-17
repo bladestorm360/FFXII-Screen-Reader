@@ -2,6 +2,7 @@
 
 #include <vector>
 #include "navigation/entity_scan.h"
+#include "navigation/map_script_routines.h"
 
 // DOORS BY WHAT THE MAP SCRIPT SAYS THE OBJECT DOES -- Session 179.
 //
@@ -28,5 +29,10 @@ namespace DoorBinding {
 
 // Caller holds the entity-list lock (it is part of EntityScan::Build).
 void PromoteDoors(std::vector<EntityScan::Entity>& out);
+
+// The container-0 routine a scene object runs, from the same per-map cache PromoteDoors reads (pointer
+// identity on the entry table), or null when the object binds to none. Caller holds the entity-list lock.
+// S183: the sigil colour pass reads each Way Stone's own glow effect through this.
+const MapScript::RoutineFacts* RoutineOf(void* sceneObj);
 
 } // namespace DoorBinding

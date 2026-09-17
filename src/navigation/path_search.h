@@ -55,6 +55,10 @@ struct Stats {
     // means the route shipped is the un-pulled one -- the corridor was fine and the shortcut was not.
     int  repaired = 0;
     float shortfall = 0.0f;       // Frontier only: metres from the frontier point to the goal
+    // S183 -- what the failure-path oracle measured, for the planner's keep-the-live-route decision.
+    // -1 = the oracle did not run (a validated route, an off-mesh goal); 1 = the mesh connects start and
+    // goal, so the SEARCH gave up; 0 = no walkable chain between them at all.
+    int  goalConnected = -1;
 };
 
 // Plan a route from `from` to `to` on the map identified by `epoch`.

@@ -11,6 +11,7 @@
 #include "navigation/exit_scan.h"
 #include "navigation/item_scan.h"
 #include "navigation/door_binding.h"
+#include "navigation/sigil_colours.h"
 #include "navigation/treasure_state.h"
 #include "navigation/path_march.h"     // GroundY -- a trap record carries no Y of its own
 #include "speech/phrasebook.h"         // CatTrap -- the trap label is a mod word, not a game string
@@ -923,6 +924,9 @@ int BuildLocked(std::vector<Entity>& out, bool* outDetail) {
     // S179: an interactable whose own routine jumps to a map, or opens the closed floor it stands in,
     // is a Door -- on every map, including the ones TagDoorways returns early on (no +0x70 table).
     DoorBinding::PromoteDoors(out);
+    // S183: the Pharos Sigils of Sacrifice share one game name; their colour comes from each one's own glow
+    // effect in the map script. Before the fallback labels, after the routine cache is warm.
+    SigilColours::Apply(out);
     // Category words LAST, so `doorway` is set by the time an unnamed sign is named. Anything still
     // unlabelled here is an object the game refused to name that is nonetheless offering a prompt.
     ApplyFallbackLabels(out);
