@@ -249,6 +249,80 @@ Newest first. One entry per release, written at step 4. `Releases\` is gitignore
 the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
 which is most of the argument for tagging: a record can be edited, a tag points at a tree.
 
+## V1.0 (re-cut) — 2026-09-17
+
+**THE SAME VERSION NUMBER, RE-CUT THE SAME DAY.** The user's instruction: *"update the release and
+push that. make sure the version number stays V1.0."* So `FFXII_SR_VERSION` is untouched at `1.0`,
+the directory is still `Releases\V1.0\`, the zip is still `FFXII-Screen-ReaderV1.0.zip`, and the tag
+`V1.0` was **moved** to the commit carrying this record. The original V1.0 record below is kept as
+written — it is the record of a different binary and must not be edited to describe this one.
+
+> **THIS IS THE FIRST TIME THIS PROCEDURE HAS OVERWRITTEN A RELEASE DIRECTORY**, which its own
+> Preconditions forbid ("`Releases\V<version>\` does not already exist — if it does, stop and
+> report"). It was done on an explicit instruction that named the version and said to keep it, which
+> is the only thing that licenses it. The superseded `dinput8.dll` (947,712 bytes,
+> `7dde57ac…`) and its zip are NOT in the repo and NOT on GitHub any more — the only copies are
+> whatever users downloaded between 13:11 and 14:31 on the day. **The moved tag is the real cost:**
+> anyone who fetched `V1.0` before the move has a tag pointing at `48ded58` and will not see it
+> change. If a bug report cites "V1.0", ask for the `Build:` line from their log — the two builds
+> stamp different hashes and that is the only way to tell them apart.
+>
+> **Do not take this as precedent.** A re-cut under the same number is a one-off the user asked for,
+> not a workflow; the next change gets a new number.
+
+**Built from:** `7588345`. **Stamp verified in the shipped binary:** the string `7588345` is present
+and `48ded58`, `f37f692` and `c20bee4` are absent, so a V1.0 log from this build opens
+`Build: V1.0 (7588345)` and is distinguishable from the first cut. Covers **Session 185** since the
+original V1.0's `b21034c`.
+
+**Artifacts.**
+
+```
+dinput8.dll                   960,000  sha256 34bd585c463132736449ff13583c654c6e10f174ea3bd2235d1b48157e066ec3
+SDL3.dll                    1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll                      122,368  sha256 c4fb11d3ed236f27532c7ab8370ebde75133f322a069450f17e38d7548197225
+nvdaControllerClient64.dll    153,600  sha256 41c1f5df5997e798fcfbf7c8f2589de811e768b069a60710600cf57cb23a0b09
+ReadMe.txt                     28,365  sha256 7572f34e3afbd3ffc58eb8e932e2584cba7017838f0757a88f6dfdbf4c866d7d
+zip                         1,281,810  sha256 93e1bf6fb6c117a731cb82a205c6a2bf526347088b98f2439b58b4ccfcbdc0a5
+```
+
+`Tolk.dll` and `nvdaControllerClient64.dll` are byte-identical to the first cut (carried forward, not
+re-sourced). All four DLLs verified `8664`.
+
+**`ReadMe.txt` CHANGED** — 25,603 → 28,365 bytes. The controller section was rewritten end to end, the
+`F6` section was rewritten, and a paragraph was added on NPCs being nameless until spoken to.
+
+**The converter was validated the strong way, and it passed first try.** Rebuilt from step 2's rules,
+run against `git show 48ded58:README.md`, and `cmp` against the shipped V1.0 `ReadMe.txt` — byte
+identical. So the rules in step 2 are now known sufficient to regenerate a V1.0-era artifact from
+source with no undocumented step, which is what V0.6.4's record claimed and could not support. Output
+re-checked: zero `#` lines, exactly one backtick (the literal `` ` `` key name), zero doubled spaces,
+zero trailing-whitespace lines, ends with exactly one CRLF.
+
+**What changed in the build (Session 185).**
+
+- **Controller scheme rev 3.** `L1` is the interact readout (`;`) and is taken from the game's Speed
+  mode; `R1` routes in battle as well as on the field; `L3` is the reachability filter, `R3` the
+  audio beacon, and `L3`+`R3` together is the intercept's kill switch; mod mode is X/Y/A/B/Start.
+- **`F6` opens a real edit field** instead of reading the clipboard, and asks a Yes/No question
+  before clearing a name the player already set.
+- **`Escape` closes the mod menu.**
+- **`'` (the nav diagnostic probe) is unbound** — a development key with nothing for a player to act
+  on. The handler is untouched; only the edge that fires it is gone.
+- **`pass=corridor-march`** — the route fix. Play-confirmed by the user against the defect that
+  triggered it.
+
+**KEY AUDIT — every key that moved was grepped in the readme and EVERY hit read (L-67).** `F6` has
+four hits (the key list entry at line 100 and the three prose paragraphs at 131/135/137); all four
+describe the dialog, and the old "taken from the clipboard" wording survives in none of them. `'`
+had one hit and it is gone with the binding. `Escape` is listed on the mod-menu row and in the
+controller section. `L1` and `R1`: the game-key list no longer claims `1` is "the same as L1 on a
+controller", because it is not any more. **No key is missing from the readme and no listed key
+describes behaviour this build does not have.**
+
+**Published.** Tag `V1.0` (annotated) moved to the commit carrying this record and force-pushed to
+`origin`; the GitHub Release's asset was replaced with the new zip.
+
 ## V1.0 — 2026-09-17
 
 **THE FIRST PUBLIC RELEASE, AND THE FIRST ONE THIS PROCEDURE PUBLISHED ITSELF.** Every release
