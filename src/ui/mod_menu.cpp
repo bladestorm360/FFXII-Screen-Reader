@@ -314,7 +314,18 @@ bool OnMenuNavKey(int vk) {
         // is what makes that true: with the menu shut the key is offered to the status buffer and the
         // Clan Primer, both of which ignore it, and nothing happens. As always the mod does not
         // swallow it, so if the game has its own use for Esc that still happens as well.
+        //
+        // BACKSPACE JOINS IT (S192, user instruction: *"also make backspace close the menu"*). It is
+        // the other key a player reaches for to back out of a screen, and like Escape it is a way
+        // OUT of the menu only -- neither opens it, so neither is claimed while the menu is shut.
+        //
+        // BOTH ARE NOW SWALLOWED while the menu is open, which is the part that changed at S192 and
+        // the reason the comment above is no longer the whole story: Escape closed the menu AND
+        // reached the game, so every exit also opened the game's pause screen. See
+        // InputTracker::MaskModMenuKeys -- the mask is scoped to these two keys and to this menu
+        // being open, and it is the mod's one chartered key swallow.
         case VK_ESCAPE:
+        case VK_BACK:
             Toggle();
             return true;
         // Left and right are now DIRECTIONAL. They used to both advance, on the reasoning that every

@@ -20,6 +20,7 @@
 #include "ui/status_reader.h"
 #include "ui/popup_reader.h"
 #include "ui/battle_target_reader.h"
+#include "ui/mod_menu.h"               // AutoDetailOn -- the description is VOLUNTEERED on highlight
 #include "ui/target_group_reader.h"
 #include "core/game_text.h"
 #include "core/message_macro.h"
@@ -430,6 +431,42 @@ void OnFocus(void* owner, int index, bool fromPaint) {
 
 // Fired right after the painter fills an owner's item map — replay a menu-entry
 // focus whose text wasn't ready yet.
+// ---- AUTO DETAIL: the `o` description, volunteered on highlight (S192, user instruction) --------
+//
+// THE SETTING EXISTED AND DID ALMOST NOTHING. Its own definition is "any information that would
+// normally be read with the O key should be vocalized on menu option highlight" (the user, 2026-09-18),
+// and until now it reached exactly three surfaces -- the equipment comparison, the shop's copy of
+// that same comparison, and Libra in the battle target list. The DESCRIPTION, which is what `o`
+// answers with on every other menu in the game, was never volunteered anywhere: highlighting a
+// magick, a technick, an item or a config row with Auto detail On sounded identical to having it
+// Off. That is the defect; this is the missing half.
+//
+// QUEUED, NEVER INTERRUPTING. The row line is spoken first (interrupt=true, by whichever reader owns
+// the surface) and this goes behind it -- `README.md` has promised "after the short line, never
+// instead of it" since the setting shipped, and a second interrupting Output would cut off the name
+// the player is waiting for.
+//
+// IT DOES NOT GATE THE KEY. `o` still reads the same text on demand with the setting Off; the only
+// thing the setting decides is whether the player has to ask. (mod_menu.h:102, and the same
+// reasoning equip_compare.cpp:401 records for its own gate.)
+//
+// ONE UTTERANCE PER FOCUS is guaranteed by TakeFocusDetail's generation latch, not by this function,
+// which is why it is safe to call from both of the paths below. A description that does not exist
+// yet when the first one asks is still found by the second.
+//
+// NOTHING REPEATS ITSELF. A description belongs to a focus generation, so a pane whose static help
+// bar is set once on entry is volunteered once on entry -- walking its rows afterwards finds
+// g_helpTextGen stale and says nothing. This is the generation design doing the work that a
+// same-as-last-time filter would otherwise be reached for, and it is why none is needed here
+// (CLAUDE.md forbids one).
+void VolunteerDetail() {
+    if (!ModMenu::AutoDetailOn()) return;              // Off: one relaxed load and out
+    const std::wstring detail = TextCapture::TakeFocusDetail();
+    if (detail.empty()) return;                        // no description for this focus, or already said
+    Log::WriteW("READER", "  autodetail: ", detail);
+    Speech::Output(detail, /*interrupt=*/false);
+}
+
 void OnMenuPainted(void* owner) {
     STALL_SCOPE("MenuReader::OnMenuPainted");
     // Focus-pending replay (deferred focus speech, incl. the 1-frame settle).
@@ -466,9 +503,27 @@ void OnMenuPainted(void* owner) {
             }
         }
     }
+
+    // AUTO DETAIL, call site 2 of 2: the surfaces whose description is not in place by the time the
+    // focus dispatch returns. The paint is the moment everything for this focus has settled, and it
+    // is already this function's job to replay deferred focus speech, so a description that arrives
+    // with the draw is picked up here. Costs nothing when site 1 already spoke -- the generation
+    // latch hands this one an empty string.
+    VolunteerDetail();
 }
 
 uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
+    // AUTO DETAIL, call site 1 of 2. FUNCTION-SCOPED ON PURPOSE, and it must stay that way: the
+    // description is set by the game DURING s_origDispatch (that is what HookedDescBattle's own
+    // comment records -- the focus 0x8000 drives FUN_0027b880 and therefore the setter), and the
+    // MSG_FOCUS branch has several `return s_origDispatch(...)` exits of its own plus the
+    // fall-through at the end of the function. A destructor runs AFTER the return expression is
+    // evaluated, so this fires after s_origDispatch on EVERY one of those paths -- which a guard
+    // scoped to the `if` block would not do for the fall-through, the commonest path of all.
+    struct DetailGuard {
+        bool focus;
+        ~DetailGuard() { if (focus) VolunteerDetail(); }
+    } _detail{ msg == MSG_FOCUS };
     if (msg == MSG_FOCUS) {
         STALL_SCOPE("MenuReader::HookedDispatch");
         // Bump the tooltip focus generation BEFORE the game handles the focus, so

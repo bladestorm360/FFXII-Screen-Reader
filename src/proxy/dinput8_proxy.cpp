@@ -349,6 +349,12 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
                 // construction, which is what lets a real key suppress injection in the same poll.
                 // With the Auto-walk toggle off, this returns on its first line.
                 AutoWalk::OnDevicePoll(reinterpret_cast<unsigned char*>(lpvData));
+                // S192, THE ONE SANCTIONED KEY SWALLOW (user-authorized; see
+                // InputTracker::MaskModMenuKeys and CLAUDE.md). LAST, and after the tracker was fed:
+                // the mod must see the real Escape/Backspace press -- that press is what closes the
+                // menu -- while the game must not, or closing the mod menu also opens the pause
+                // screen. With the mod menu shut this writes nothing.
+                InputTracker::MaskModMenuKeys(reinterpret_cast<unsigned char*>(lpvData));
             } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
     }

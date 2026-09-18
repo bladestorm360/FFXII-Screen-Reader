@@ -3,6 +3,7 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "ui/text_prompt.h"
+#include "ui/mod_menu.h"          // IsOpen -- the close-key mask below is scoped to it
 #include "core/mem_read.h"
 #include "speech/speech.h"
 #include "speech/phrasebook.h"
@@ -171,6 +172,9 @@ constexpr int DIK_LCTRL = 0x1D, DIK_RCTRL = 0x9D, DIK_LALT = 0x38, DIK_RALT = 0x
 // game does own Esc, both things happen -- which is the same accepted cost the arrow keys carry
 // inside this menu, and it only applies while the menu is open.
 constexpr int DIK_ESCAPE = 0x01;
+// Backspace closes the menu too (S192, user instruction). Same claim, same scope: a way out of the
+// mod menu, never a way in, so it is only ever taken while the menu is open.
+constexpr int DIK_BACK = 0x0E;
 // Windows keys, for the same guard: Win+F-key is a shell chord and belongs to the shell.
 constexpr int DIK_LWIN = 0xDB, DIK_RWIN = 0xDC;
 // DIK_SPACE / DIK_RETURN are gone with the Confirm observation. The mod has no reason to watch the
@@ -181,7 +185,7 @@ constexpr int DIK_LWIN = 0xDB, DIK_RWIN = 0xDC;
 // NOTE: indices here are just slots in this array; the dispatch token is the VK passed to DInputEdge.
 // Growing this array was once suspected of breaking 4/5/6 -- it never was; that was a missing
 // pointer dereference in party_status.cpp. Keep the bound in step with the entries below.
-std::atomic<bool> g_extraDown[29]{};   // 0-15 + 20-28 the keys below; 16-19 the arrow keys (status buffer)
+std::atomic<bool> g_extraDown[30]{};   // 0-15 + 20-29 the keys below; 16-19 the arrow keys (status buffer)
 std::atomic<int>  g_bracketDiag{0};   // targeted [ vs ] confirmation (capped)
 
 // Edge-detect one key from the per-frame DIK state and post its action (on the
@@ -543,6 +547,9 @@ void FeedDInputKeyboard(const unsigned char* dik) {
     // reaches the virtual buffers, is declined by all of them, and ends there.
     DInputMenuNavEdge(VK_ESCAPE, g_extraDown[28],
                       !fkeyModifierHeld && (dik[DIK_ESCAPE] & 0x80) != 0, false);
+    // Backspace -> the same close. Identical treatment to Escape, including the bare-press guard.
+    DInputMenuNavEdge(VK_BACK,   g_extraDown[29],
+                      !fkeyModifierHeld && (dik[DIK_BACK] & 0x80) != 0, false);
     DInputEdge(VK_OEM_MINUS,  g_extraDown[0],(dik[DIK_MINUS]      & 0x80) != 0, true);  // -  prev category
     DInputEdge(VK_OEM_PLUS,   g_extraDown[1],(dik[DIK_EQUALS]     & 0x80) != 0, true);  // =  next category
     // `'` (the NavProbe diagnostic dump) IS NO LONGER BOUND -- removed for the public 1.0 at the
@@ -605,6 +612,39 @@ bool MovementHeld() { return g_moveHeld.load(std::memory_order_relaxed); }
 
 // The tracker's own dispatch gate, exposed (Session 100) -- see the header.
 bool GameForeground() { return GameIsForeground(); }
+
+// ---- THE MOD MENU'S CLOSE KEYS ARE TAKEN FROM THE GAME WHILE IT IS OPEN (S192) ------------------
+//
+// THE MOD'S ONE CHARTERED KEY SWALLOW, and it is a new category: CLAUDE.md's read-only-input rule
+// says the mod "never swallows a key". The user asked for exactly this, in as many words: *"when
+// closing the mod menu, escape key is not intercepted so it pauses the game. fix that"*. Escape
+// closed the menu and then reached the game as well, so every exit from the mod menu also opened
+// the game's pause screen -- and for a blind player that is two screens deep with no warning.
+//
+// A CLAIM IS A LEVEL, NOT AN EDGE (`L-99`, and it applies to the keyboard exactly as it did to the
+// pad). Clearing the byte only while the menu is open is NOT enough: the close is dispatched to the
+// input thread, so within a poll or two the menu is already shut while the player is still holding
+// the key -- and that poll would hand the game the press after all, which is the very defect being
+// fixed, just later. `s_latched` is what makes the claim outlive the close; it lifts on release.
+//
+// SCOPE, and nothing wider: these two keys, while the menu is open or still held from when it was.
+// With the menu shut and nothing latched, this function does not write a byte -- the buffer the
+// game receives is bit-identical to the one it would receive with no mod installed.
+//
+// NOT the arrow keys. They are claimed by the menu too and they still reach the game, which is why
+// the readme warns that the character walks while the menu is open. Widening this mask to them is a
+// bigger behavioural change than was asked for and would need its own instruction.
+void MaskModMenuKeys(unsigned char* dik) {
+    if (!dik) return;
+    static const int  kScan[2] = { DIK_ESCAPE, DIK_BACK };
+    static bool       s_latched[2] = {};
+    const bool open = ModMenu::IsOpen();
+    for (int i = 0; i < 2; ++i) {
+        if ((dik[kScan[i]] & 0x80) == 0) { s_latched[i] = false; continue; }   // released: claim ends
+        if (open) s_latched[i] = true;                                          // claimed on this press
+        if (s_latched[i]) dik[kScan[i]] = 0;                                    // ...and stays claimed
+    }
+}
 
 
 } // namespace InputTracker

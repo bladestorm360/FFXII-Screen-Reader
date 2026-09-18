@@ -4192,3 +4192,87 @@ session did NOT separately measure:
 **Flagged to the user, not acted on:** the request said "off by default, same as audio beacon and target
 beacon". The soundscape is off by default as instructed; `audio_beacon` and `target_beacon` have both
 actually defaulted to **On** since S95. Neither was touched. Recorded in `mod_menu.h` beside the quote.
+
+## Session 192 — 2026-09-18 — Auto detail never volunteered a description; the mod menu's exit paused the game
+
+KEYWORDS: autodetail, auto detail, AutoDetailOn, TakeFocusDetail, VolunteerDetail, DetailGuard,
+g_detailTakenGen, CurrentHelpText, g_helpGen, g_helpTextGen, g_itemDescGen, generation gate,
+HookedDispatch, MSG_FOCUS, OnMenuPainted, s_origDispatch, FUN_0027b880, description on highlight,
+MaskModMenuKeys, DIK_ESCAPE, DIK_BACK, backspace closes mod menu, escape pauses the game, key swallow,
+chartered exception, level not edge, L-99, latch until release, HookedGetDeviceState,
+FeedDInputKeyboard, AutoWalk::OnDevicePoll, g_extraDown 30, DInputMenuNavEdge, OnMenuNavKey
+
+**Reported by testers and confirmed by the user: Auto detail did nothing.** The user's definition,
+verbatim: *"autodetail means that any information that would normally be read with the O key should be
+vocalized on menu option highlight. that is not currently happening, so autodetail is essentially
+no-op."*
+
+**That is exactly what the code said, once it was read.** `AutoDetailOn()` had three consumers in the
+whole mod — `equip_compare.cpp:405` (the stat preview), `shop_reader.cpp:145` (the same preview on the
+shop list) and `battle_target_reader.cpp:433` (Libra behind the target line). **The DESCRIPTION — the
+thing `o` actually answers with on every other menu in the game — was never volunteered anywhere.** So
+on the magick list, the technick list, the item list, the equipment list and the config screen,
+Auto detail On and Auto detail Off produced byte-identical speech. The setting was not broken; the
+larger half of it had never been built, and its readme entry has been describing that half since it
+shipped.
+
+**The fix is one funnel, not a per-reader patch.** `TextCapture::TakeFocusDetail()` hands back exactly
+what `CurrentHelpText()` would give the `o` key — same arbitration, deliberately, because "what `o`
+would say" IS the definition of the setting and the two must not be able to drift. It hands it back
+**once per focus generation** (`g_detailTakenGen`), and `MenuReader::VolunteerDetail()` speaks it
+QUEUED (`interrupt=false`) so it lands behind the row line rather than cutting it off — which is what
+`README.md` has promised all along ("after the short line, never instead of it").
+
+**Two call sites, and the latch is what makes two safe.**
+
+1. `HookedDispatch`, via a **function-scoped** RAII guard. The description is set by the game DURING
+   `s_origDispatch` — `HookedDescBattle`'s own comment already recorded that the focus `0x8000` drives
+   `FUN_0027b880` and therefore the setter — so the volunteer has to happen after that call. A
+   destructor runs after the return expression is evaluated, which covers the branch's several
+   `return s_origDispatch(...)` exits AND the fall-through at the end of the function. **Scoping the
+   guard to the `if (msg == MSG_FOCUS)` block would have fired it before `s_origDispatch` on the
+   fall-through, the commonest path of all** — it is function-scoped on purpose.
+2. `OnMenuPainted`, for surfaces whose description is not in place by the time the dispatch returns.
+
+Either may be first; the generation latch means the other gets an empty string. **The failure mode is
+silence, never wrong speech:** if a description arrives so late that the player has already moved, the
+generation has bumped and the stale text can no longer be returned at all.
+
+**No same-as-last-time filter was added, and none is needed** (CLAUDE.md forbids one). A description
+belongs to a focus generation, so a pane that sets its static help bar once on entry is volunteered
+once on entry — walking its rows afterwards finds `g_helpTextGen` stale and says nothing. The
+generation design was already doing the work a dedup filter would have been reached for.
+
+---
+
+**The mod menu's exit also opened the game's pause screen.** *"when closing the mod menu, escape key
+is not intercepted so it pauses the game. fix that, and also make backspace close the menu."*
+
+Escape has closed the mod menu since S185, but the mod does not swallow keys, so the game saw the same
+press and paused — every exit from the mod menu left a blind player two screens deep with no warning.
+Backspace now closes it too, and both are taken from the game while the menu is open.
+
+**THIS IS A NEW CATEGORY AND IT IS CHARTERED.** CLAUDE.md's read-only-input rule says the mod "never
+swallows a key"; the user asked for this one in as many words, so `InputTracker::MaskModMenuKeys` joins
+auto-walk and the controller as a named exception with its own bounds written at the function. It
+clears exactly two scan codes, only while the mod menu is open, and writes no byte at all otherwise —
+with the menu shut the buffer the game receives is bit-identical to the no-mod case.
+
+**`L-99` applied on the keyboard this time: a claim is a LEVEL, not an edge.** Clearing the byte only
+while the menu is open is not enough. The close is dispatched to the input thread, so within a poll or
+two the menu is already shut while the player is still holding the key — and that poll hands the game
+the press after all, which is the same defect arriving late. The mask latches on the press and lifts
+on release. This is the second time an edge-shaped claim has been the bug (S187 was the pad); the
+lesson transferred without needing to be relearned.
+
+Ordering at the call site matters and is commented: the tracker is fed the REAL buffer first (that
+press is what closes the menu), and the mask runs last, after `AutoWalk::OnDevicePoll`.
+
+**Not the arrow keys.** They are claimed by the menu too and still reach the game — the readme warns
+the character walks while the menu is open. Masking them is a bigger change than was asked for.
+
+**UNPLAYED — the user tests before this is packaged.** Two things to listen for, both flagged at the
+time: whether the game reads Escape through DirectInput at all (if it takes it from a window message
+instead, the mask cannot reach it — the evidence that it does is that the game's own menus are driven
+by that poll), and whether the equipment screen is now too talkative, since the stat preview and the
+description are both volunteered there and each was specified separately.

@@ -2779,6 +2779,55 @@ so don't look for a lock flag.)
 
 ## Solved Problems
 
+### Auto detail was a no-op on every ordinary menu - FIXED (Session 192, 2026-09-18), UNPLAYED
+
+KEYWORDS: autodetail auto detail no-op does nothing not working AutoDetailOn description on highlight
+o key TakeFocusDetail VolunteerDetail DetailGuard g_detailTakenGen CurrentHelpText generation gate
+HookedDispatch MSG_FOCUS OnMenuPainted magick technick item equipment config row F7
+
+**Reported by testers, confirmed by the user, and the code said so plainly once it was read.**
+`ModMenu::AutoDetailOn()` had exactly THREE call sites in the mod -- `equip_compare.cpp:405`,
+`shop_reader.cpp:145` and `battle_target_reader.cpp:433`. **The description that the `o` key answers
+with -- which is the whole definition of the setting -- was volunteered nowhere**, so on the magick,
+technick, item and equipment lists and the config screen, On and Off produced identical speech. Not a
+regression: that half was never built, and it shipped through fourteen releases and a public 1.0.
+
+**Fixed with one funnel, not a patch per reader.** `TextCapture::TakeFocusDetail()` returns what
+`CurrentHelpText()` would give `o` (same arbitration deliberately -- they must not drift), once per
+focus generation; `MenuReader::VolunteerDetail()` speaks it with `interrupt=false` so it queues behind
+the row line. Called from two places -- a function-scoped RAII guard in `HookedDispatch` (the
+description is set DURING `s_origDispatch`, so it must run after it, and a destructor does) and from
+`OnMenuPainted` for surfaces whose description lands with the draw. The generation latch is what makes
+two call sites safe: whichever asks first speaks, the other gets an empty string.
+
+**Degrades to silence, never to wrong speech:** if a description arrives after the player has moved on,
+the generation has bumped and the stale text cannot be returned at all. No same-as-last-time filter was
+added and none is needed - a static help bar set once on entry is volunteered once on entry, because
+it belongs to that focus's generation. See `L-107`.
+
+### Closing the mod menu also opened the game's pause screen - FIXED (Session 192, 2026-09-18), UNPLAYED
+
+KEYWORDS: escape pauses game mod menu close not intercepted swallow key MaskModMenuKeys DIK_ESCAPE
+DIK_BACK backspace closes mod menu latch level not edge L-99 HookedGetDeviceState chartered exception
+
+Escape has closed the mod menu since S185, but the mod does not swallow keys, so the game saw the same
+press and paused - every exit left a blind player two screens deep. `InputTracker::MaskModMenuKeys`
+now clears Escape and Backspace (Backspace is new, and closes the menu too) from the buffer the GAME
+reads, while that menu is open. **A chartered exception to the read-only-input rule, asked for by the
+user in as many words**, scoped to two scan codes and to the menu being open; it writes no byte
+otherwise.
+
+**The claim is a LEVEL, not an edge (`L-99`, on the keyboard this time).** Clearing the byte only
+while the menu is open is not enough: the close is dispatched to the input thread, so a poll or two
+later the menu is shut while the key is still held, and that poll hands the game the press after all.
+The mask latches on the press and lifts on release. Ordering at the call site is load-bearing and
+commented - the tracker is fed the REAL buffer first, and the mask runs last.
+
+**If it is still pausing after this:** the question is whether the game takes Escape from a window
+message rather than from the DirectInput poll this mask reaches. The evidence that it does not is that
+the game's own menus are driven by that same poll.
+
+
 ### Dialogue choices silent on highlight - SOLVED (Session 175, 2026-08-30), PLAY-CONFIRMED
 
 **PLAY-CONFIRMED 2026-08-30 by the user: "the dialogue choice works".** Which prompts were

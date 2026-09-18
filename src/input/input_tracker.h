@@ -93,6 +93,15 @@ void SetModMenuDescribeCallback(DescribeInterceptCallback cb);
 // dispatches describe/reread/nav on rising edges (game-foreground only).
 void FeedDInputKeyboard(const unsigned char* dikState);
 
+// Clear the mod menu's close keys (Escape, Backspace) from the buffer the GAME is about to read,
+// while that menu is open -- so closing the mod menu does not also open the game's pause screen.
+// S192, user instruction; the mod's one chartered key swallow (CLAUDE.md's input rule otherwise
+// forbids swallowing a key). Call on the game thread from the DirectInput keyboard poll, strictly
+// AFTER FeedDInputKeyboard, so the mod still sees the real press that closes the menu. The claim is
+// LEVEL-shaped and latches until the key is released (`L-99`). A no-op -- not one byte written --
+// when the menu is shut and neither key is still held.
+void MaskModMenuKeys(unsigned char* dikState);
+
 // ---- DEVICE-INDEPENDENT DISPATCH (Session 173) -------------------------------------------------
 //
 // Post one of the mod's own hotkeys to this tracker's message thread from a device that is NOT the

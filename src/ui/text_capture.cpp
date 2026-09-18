@@ -115,6 +115,13 @@ uint32_t g_helpTextGen = 0xffffffffu;   // != g_helpGen until a description is s
 std::wstring g_itemDesc;
 uint32_t g_itemDescGen = 0xffffffffu;
 
+// AUTO DETAIL (S192): the focus generation whose description has already been VOLUNTEERED. The `o`
+// key is unaffected -- it may be pressed as often as the player likes -- but the auto readout is
+// one per focus, and this is what guarantees that no matter how many call sites ask. Deliberately
+// NOT latched on an empty answer: the description does not always exist yet when the first caller
+// asks, so a later one for the same focus must still be able to find it.
+uint32_t g_detailTakenGen = 0xffffffffu;
+
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
 bool g_initialized = false;
@@ -461,6 +468,7 @@ void Shutdown() {
     g_paintOwner = nullptr; g_curIdx = -1; g_intercepting = false;
     g_helpText.clear(); g_helpGen = 0; g_helpTextGen = 0xffffffffu;
     g_itemDesc.clear(); g_itemDescGen = 0xffffffffu;
+    g_detailTakenGen = 0xffffffffu;
     g_initialized = false;
     Log::Write("TEXT", "TextCapture shut down");
 }
@@ -496,6 +504,19 @@ std::wstring CurrentHelpText() {
     // back to the bar keeps every surface that only has one of the two working exactly as before.
     if (g_itemDescGen == g_helpGen && !g_itemDesc.empty()) return g_itemDesc;
     return (g_helpTextGen == g_helpGen) ? g_helpText : std::wstring();
+}
+
+// AUTO DETAIL: the same answer CurrentHelpText would give the `o` key, handed out ONCE per focus.
+// Same arbitration, deliberately -- "what `o` would say" is the whole definition of the setting, so
+// the two cannot drift apart.
+std::wstring TakeFocusDetail() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    if (g_detailTakenGen == g_helpGen) return std::wstring();   // already volunteered for this focus
+    std::wstring out;
+    if (g_itemDescGen == g_helpGen && !g_itemDesc.empty()) out = g_itemDesc;
+    else if (g_helpTextGen == g_helpGen)                  out = g_helpText;
+    if (!out.empty()) g_detailTakenGen = g_helpGen;
+    return out;
 }
 
 void NotifyFocusChanged() {

@@ -252,13 +252,13 @@ In mod mode, press Back and then:
 reach the map button it costs you.
 * Anything else ends mod mode and says "Cancelled".
 
-While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so does Escape on the keyboard.
+While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so do Escape and Backspace on the keyboard.
 
 Everything else the mod can do is on the keyboard, and the mod menu reaches every setting. A controller has few buttons and the ones above are the ones worth spending.
 
 #### The mod menu (F8)
 
-F8 opens the mod's own settings. F8 again closes it, and so does Escape. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
+F8 opens the mod's own settings. F8 again closes it, and so do Escape and Backspace. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
 
 The settings it holds:
 
@@ -267,7 +267,7 @@ The settings it holds:
 * Audio beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Target beacon — On or Off. The separate sound that tracks the enemy your party is fighting, described above. On is the default.
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
-* Auto detail — Off or On. Off reads the extra detail only when you ask for it: the equipment comparison on 4 to 9, and Libra on O. On also reads it as you move — the equipment comparison as you go down a shop list, and the Libra readout as you move the target cursor between enemies — after the short line, never instead of it. Both keys keep working either way. Off is the default.
+* Auto detail — Off or On. Off reads the extra detail only when you ask for it, on O and on 4 to 9. On reads it as you move instead: the description of whatever you have highlighted — a magick, a technick, an item, a piece of equipment, a config row — along with the equipment comparison as you go down a shop list and the Libra readout as you move the target cursor between enemies. It always comes after the short line, never instead of it, and every key keeps working either way. Off is the default.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: auto-walk watches the keyboard alone for that, and the left stick is passed straight to the game and never read, so pushing the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
 * Controller — On or Off. Whether the mod reads your controller, set out in full under Controller above. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support. Clicking both sticks in at once changes this setting without opening the menu.
 * Diacritics override — Standard or Polish translation. Which font the game is running, which is what decides how accented letters are read. On Standard the mod works it out from the game itself, and that covers the unmodified game in any language it shipped in. Set it to Polish translation if you are playing the PL fan patch and accented letters come out as the wrong letter — that setting is remembered and always wins. Standard is the default.

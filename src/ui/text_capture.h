@@ -51,6 +51,13 @@ std::wstring ResolveStringById(int id);
 // returned. Read on demand by the `i` hotkey.
 std::wstring CurrentHelpText();
 
+// AUTO DETAIL (S192, user instruction): what the `o` key would say for the CURRENT focus, handed
+// out at most ONCE per focus so a caller can volunteer it on highlight. Empty when there is no
+// description for this focus, or when it has already been taken -- so it is safe to ask from more
+// than one place, which is how the several focus paths are covered without any of them
+// double-speaking. Does not affect `o` itself.
+std::wstring TakeFocusDetail();
+
 // Bump the focus generation. The reader calls this on each focus change so a
 // description the game sets during that focus is attributed to it (and only it).
 void NotifyFocusChanged();

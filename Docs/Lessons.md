@@ -35,7 +35,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62, L-101 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
-| editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
+| editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94, L-107 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99, L-106 |
@@ -1232,3 +1232,24 @@ used; it cost a public release its PlayStation pads). Same instinct, milder cons
 Session-specific lessons still living only in the memory topic files (navigation-heavy: S64–S124
 route/seam/funnel findings). Move them here as they come up rather than in one pass — a lesson is
 worth migrating at the moment it is needed again, which is also when its wording gets tested.
+
+### L-107 A SETTING THAT EXISTS IS NOT A FEATURE THAT IS WIRED -- GREP ITS ACCESSOR'S CALL SITES
+**A toggle in a menu, a row in a settings table, a documented paragraph and a working accessor prove
+only that the setting can be STORED. What it DOES is the set of places that call it, and that set is
+one grep away. Run it before believing a feature exists.**
+**Why:** S192. `Auto detail` had a mod-menu row, two description strings, a keyboard shortcut (`F7`),
+a readme paragraph and a correct `AutoDetailOn()` -- and three call sites, all of them narrow
+(the equipment stat preview, the shop's copy of it, Libra behind the battle target line). The thing
+the setting is FOR -- the `o` description, volunteered on highlight -- was never wired anywhere, so on
+every ordinary menu in the game On and Off produced identical speech. It shipped that way through
+**fourteen releases and a public 1.0**, and it was testers playing the game who found it, not any of
+the reviews that read the row, the strings, the shortcut and the paragraph and saw a feature.
+**The tell:** you are reasoning about what a setting does from its DEFINITION -- its row, its name, its
+description text, its readme entry -- rather than from its consumers. Every one of those artifacts is
+written by someone stating an intention; only the call sites are the program.
+**How to apply:** `grep -rn "<Accessor>" src/` and read the list before you touch anything, and
+compare that list against the one-sentence definition of the setting. If the definition says "any
+information that would normally be read with the `o` key" and the call sites are three specific
+readouts, the gap IS the defect -- do not start by debugging the three that are there. The same grep
+is the cheapest possible review of any *new* setting: a row whose accessor has no callers yet is a
+feature that does not exist, however complete the rest of it looks.
