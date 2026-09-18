@@ -1,5 +1,5 @@
 #include "input/pad_hook.h"
-#include "input/pad_router.h"
+#include "input/gamepad_sdl.h"
 #include "core/logger.h"
 #include "core/hooks.h"
 #include "core/mem_read.h"
@@ -23,8 +23,10 @@ std::atomic<bool>   g_faulted{false};        // a fault latches the hook off for
 // survey's silence mean something.
 std::atomic<bool>   g_sawPad{false};
 
-// ERROR_SUCCESS from XInputGetState. Named rather than inlined so the guard below reads as intent.
-constexpr uint32_t kXiOk = 0;
+// ERROR_SUCCESS / ERROR_DEVICE_NOT_CONNECTED from XInputGetState. Named rather than inlined so the
+// guards below read as intent.
+constexpr uint32_t kXiOk           = 0;
+constexpr uint32_t kXiNotConnected = 0x48F;
 
 // Swap one pointer-sized cell (aligned pointer write = atomic on x64). Same helper shape as
 // dinput8_proxy.cpp's PatchVtableEntry -- kept separate because that one indexes a vtable and this
@@ -76,34 +78,46 @@ void** FindImportSlot(const char* dllPrefix, const char* wantFn) {
     return nullptr;
 }
 
-// THE HOOK. Runs on whichever thread the game polls the pad from, once per poll.
+// THE GAME'S PAD, BUILT FROM SDL3. Runs on whichever thread the game polls XInput from.
 //
-// Contract, in order, and the order is the contract:
-//   1. call the original and keep its result verbatim -- we never invent a pad state;
-//   2. on anything other than a connected pad, return untouched;
-//   3. hand the PRE-consumption state to the router (every mod-side observation sees the player's
-//      real input, exactly as FeedDInputKeyboard is fed the pre-injection keyboard buffer);
-//   4. apply the router's consumption mask to what the GAME will see.
-// A fault anywhere in 3-4 latches the hook off for the session rather than propagating into the
-// game's input thread.
+// IT NO LONGER READS THE HARDWARE AND IT NO LONGER MASKS BITS. `GamepadSDL` is the mod's one and
+// only pad reader, for every controller type, and this function hands the game the state that reader
+// produced minus whatever `PadRouter` claimed. The real `XInputGetState` result is discarded when the
+// mod is driving -- which is the point: an Xbox pad, a DualSense, a Switch Pro pad and a handheld's
+// built-in sticks all reach the game through these same lines, so there is no per-device path left to
+// test separately. See gamepad_sdl.h.
+//
+// WHY THIS ALSO MAKES NON-XBOX PADS WORK AS GAME CONTROLLERS. A DualSense does not speak XInput, so
+// the real call here returns ERROR_DEVICE_NOT_CONNECTED for it. Building the state ourselves means
+// the game gets a working XInput pad regardless of what the player actually holds -- the same service
+// Steam Input performs, done by the mod, for free.
+//
+// Contract, in order:
+//   1. mod not driving (no pad, or `Controller` off) -> return the original call VERBATIM. "Off"
+//      means byte-identical, so nothing is written over the game's own input path.
+//   2. only index 0 carries the pad; 1-3 report not connected, because the mod opens one controller.
+//   3. refresh SDL for this frame, then fill `state` from it.
+// A fault anywhere latches the whole thing off for the session and the pad reverts to the game's.
 uint32_t WINAPI HookedXInputGetState(uint32_t userIndex, PadHook::State* state) {
-    const uint32_t hr = g_orig ? g_orig(userIndex, state) : 0x48F /*ERROR_DEVICE_NOT_CONNECTED*/;
-    if (hr != kXiOk || !state) return hr;
-    if (!g_sawPad.exchange(true)) {
-        char m[112];
-        snprintf(m, sizeof(m), "controller CONNECTED on index %u -- pad lines below are real data",
-                 userIndex);
-        Log::Write("PAD", m);
-    }
-    if (g_faulted.load(std::memory_order_relaxed)) return hr;
+    if (g_faulted.load(std::memory_order_relaxed) || !GamepadSDL::DriveGame())
+        return g_orig ? g_orig(userIndex, state) : kXiNotConnected;
 
+    if (!state) return kXiNotConnected;
+    if (userIndex != 0) return kXiNotConnected;
+
+    uint32_t hr = kXiNotConnected;
     __try {
-        PadRouter::OnPoll(userIndex, state);
+        GamepadSDL::PollIfStale();
+        if (GamepadSDL::BuildGameState(state)) {
+            if (!g_sawPad.exchange(true))
+                Log::Write("PAD", "the game's pad is now being driven from SDL3 (XInput index 0)");
+            hr = kXiOk;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        // Latch off and say so once. A pad that keeps working beats a pad that is right.
         if (!g_faulted.exchange(true))
-            Log::Write("PAD", "EXCEPTION in the pad router -- intercept latched OFF for this session; "
-                              "the pad now passes through untouched");
+            Log::Write("PAD", "EXCEPTION building the game's pad state -- latched OFF for this "
+                              "session; the controller reverts to the game's own reading");
+        return g_orig ? g_orig(userIndex, state) : kXiNotConnected;
     }
     return hr;
 }
@@ -130,7 +144,7 @@ bool Init() {
     g_orig    = reinterpret_cast<Pfn_XInputGetState>(orig);
     g_iatSlot = slot;
     g_active.store(true, std::memory_order_release);
-    Log::Write("PAD", "gamepad intercept installed (XInputGetState, IAT)");
+    Log::Write("PAD", "XInput IAT patched -- the game's pad will be built from SDL3");
     return true;
 }
 

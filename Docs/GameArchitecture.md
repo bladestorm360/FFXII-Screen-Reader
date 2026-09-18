@@ -22,7 +22,7 @@ or class structure. **Read it first** before re-discovering.
 | DLL | Purpose | Hook surface? |
 |---|---|---|
 | `xinput1_3.dll` | Ships beside the game — **and the exe does NOT import it** | NO — overwriting breaks the game |
-| `XINPUT9_1_0.DLL` | **THE PAD PATH.** `FFXII_TZA.exe` statically imports `XInputGetState` + `XInputSetState` from it (2 imports, `output/imports.txt`) | **YES — the mod's IAT hook, `src\input\pad_hook.cpp`** |
+| `XINPUT9_1_0.DLL` | **ONE OF TWO PAD PATHS — Xbox pads only.** `FFXII_TZA.exe` statically imports `XInputGetState` + `XInputSetState` from it (2 imports, `output/imports.txt`). ~~THE PAD PATH~~ **STRUCK 2026-09-18** — it is not *the* pad path, see below | **YES — the mod's IAT hook, `src\input\pad_hook.cpp`, now SUPPRESSION ONLY** |
 | `dinput8.dll` (post-mod) | FF12 Module Loader (ffgriever, BSD-2) | YES — our injection vector |
 | `d3dcompiler_47.dll` | Microsoft redistributable | NO |
 | `SharpDX.dll`, `SharpDX.DirectInput.dll`, `SharpDX.DXGI.dll` | .NET; used by `FFXII_TZA_GameSetting.exe` | NO |
@@ -37,9 +37,29 @@ Established 2026-08-20 from the import table, the RTTI list and `FUN_002498b0`.
 `XINPUT9_1_0.DLL` → `XInputGetState` / `XInputSetState` (**the pad**).
 
 **2. Phyre device layer** (`output/rtti_classes.txt`): `PInputDevice`, `…Keyboard`, `…Mouse`,
-`…Pad`, `…PadDirectInput`, `…PadSteamController`, `…PadXInput`. A DirectInput pad path **exists in
-the engine**; whether this build ever uses it is being measured through the non-keyboard-device log
-line in `dinput8_proxy.cpp`. Do not record it as dead without that measurement.
+`…Pad`, `…PadDirectInput`, `…PadSteamController`, `…PadXInput`.
+
+> **MEASURED 2026-09-18 (S186): THE DIRECTINPUT PAD PATH IS LIVE, AND IT IS THE ONE MOST PLAYERS
+> USE.** The non-keyboard-device log line in `dinput8_proxy.cpp` caught it — a tester's DualSense:
+>
+> ```
+> [PAD] non-keyboard DirectInput device created: idx=1 guid=B861A230-F85C-11EE
+> [PAD] non-keyboard DirectInput device polled:  idx=1 cbData=272
+> ```
+>
+> `cbData=272` is `DIJOYSTATE2`. The game read that pad through **DirectInput** for the whole
+> session while `XInputGetState` never once returned a connected pad.
+>
+> **Which path a pad takes is decided by the DEVICE, not by the game.** XInput is the Xbox
+> protocol. An Xbox pad arrives on `XINPUT9_1_0`; a DualSense, DualShock 4, Switch Pro or generic
+> HID pad enumerates as a joystick and arrives on `DINPUT8` — unless a translation layer (Steam
+> Input, DS4Windows, ViGEm) is presenting it as an Xbox pad, in which case it takes the XInput path
+> instead. **Both are normal. A mod that handles only one handles only some players.**
+>
+> This is why the mod reads the pad through **SDL3** (`src\input\gamepad_sdl.cpp`) rather than
+> through either API directly: SDL's controller database normalizes every device into one button
+> layout. The two API hooks are kept purely to take a claimed input away from the game on whichever
+> path it arrived by. See `CLAUDE.md`'s second input-write exception.
 
 **3. The unified pad block — `FUN_002498b0`, RVA `0x1298B0`.** Rebuilt once per frame at Ghidra
 `0x02F97360` (RVA `0x2E77360`): **2 logical pads, stride `0x14`**, each **8 `u16` button words then

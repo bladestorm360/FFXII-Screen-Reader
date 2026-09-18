@@ -245,11 +245,14 @@ In mod mode, press Back and then:
 
 * **X:** your gil. In a fight, the enemy's name and HP instead.
 * **Y:** rescan and announce the area. In a fight, directions to the enemy your party is targeting instead.
-* **A:** the summoned Esper's HP. Silent when you have no Esper out.
-* **B:** open or close the mod menu. **Start** does the same.
+* **B:** the summoned Esper's HP. Silent when you have no Esper out.
+* **Start:** open the mod menu.
+* **A:** ends mod mode and says "Cancelled".
+* **Back again:** opens the game's map. Back is the mod's modifier, so pressing it twice is how you
+reach the map button it costs you.
 * Anything else ends mod mode and says "Cancelled".
 
-While the mod menu is open, the D-pad and the right stick move between settings and change them, A reads a description, and B, Start or Back closes it — and so does Escape on the keyboard.
+While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so does Escape on the keyboard.
 
 Everything else the mod can do is on the keyboard, and the mod menu reaches every setting. A controller has few buttons and the ones above are the ones worth spending.
 

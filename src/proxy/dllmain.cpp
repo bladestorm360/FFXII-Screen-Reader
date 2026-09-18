@@ -7,6 +7,7 @@
 #include "speech/speech.h"
 #include "input/input_tracker.h"
 #include "input/pad_hook.h"
+#include "input/gamepad_sdl.h"
 #include "ui/text_capture.h"
 #include "ui/menu_reader.h"
 #include "ui/title_reader.h"
@@ -80,10 +81,16 @@ static void DeferredInitImpl() {
     // so it must keep working on a session where MinHook fails and the player needs to hear why.
     ModMenu::Init();
 
-    // The gamepad intercept. AFTER ModMenu::Init, because the router asks it whether the Controller
+    // THE PAD, in two halves. AFTER ModMenu::Init, because the router asks it whether the Controller
     // setting is on before it reads or writes anything. Outside the Hooks block below for the same
-    // reason ModMenu and AudioEngine are: it installs no MinHook hook -- it patches one IAT cell --
-    // so it must keep working on a session where MinHook fails.
+    // reason ModMenu and AudioEngine are: neither half installs a MinHook hook, so both must keep
+    // working on a session where MinHook fails.
+    //
+    // GamepadSDL is the READER and it is the one that makes controller support work for controllers
+    // that are not Xbox pads -- SDL3 normalizes a DualSense, a DualShock 4, a Switch Pro pad and a
+    // generic stick into one button layout. PadHook is now only the XInput half of SUPPRESSION; it
+    // patches one IAT cell and no longer reads anything.
+    GamepadSDL::Init();
     PadHook::Init();
 
     // SDL3 audio for the navigation beacon. Outside the Hooks block for the same reason — it
@@ -227,6 +234,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             TextCapture::Shutdown();
             Hooks::Shutdown();
             PadHook::Shutdown();
+            GamepadSDL::Shutdown();
             InputTracker::Shutdown();
             Speech::Shutdown();
             Log::Shutdown();

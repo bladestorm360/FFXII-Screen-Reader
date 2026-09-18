@@ -130,11 +130,15 @@ void Say(Phrase::Id id) { InputTracker::DispatchSpeakPhrase(static_cast<int>(id)
 int ModModeKeyFor(uint16_t bit, bool fighting, const char** nameOut) {
     switch (bit) {
         case PadHook::kStart: *nameOut = "mod menu (F8)"; return VK_F8;
-        // B closes the mod menu -- and, with it shut, opens it: `F8` is a toggle and this is the same
-        // toggle the keyboard presses. Start still does it too; the user asked for both, and the two
-        // habits cost the scheme nothing because neither button has another job in here.
-        case PadHook::kB:     *nameOut = "mod menu (F8)"; return VK_F8;
-        case PadHook::kA:     *nameOut = "summoned Esper (8)"; return '8';
+        // A IS NOT IN THIS TABLE, AND ITS ABSENCE IS THE POINT. Mod + A falls through to `default`,
+        // which speaks "Cancelled" and ends the mode, so the modifier has exactly one opener (Start)
+        // and one canceller instead of two openers and no clean way out (S187).
+        //
+        // WHICH BUTTON CANCELS WAS SWAPPED AT S189, to the user's instruction: it is the one the GAME
+        // cancels with, so backing out of mod mode feels like backing out of anything else in FFXII.
+        // A also CLOSES the mod menu, from the `modMenuOpen` branch -- same button, same meaning, two
+        // contexts. The pair to it is below: B is the game's confirm, so B is what asks a question.
+        case PadHook::kB:     *nameOut = "summoned Esper (8)"; return '8';
         case PadHook::kX:
             *nameOut = fighting ? "enemy name and HP (;)" : "gil (g)";
             return fighting ? VK_OEM_1 : 'G';
@@ -379,8 +383,13 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             { PadHook::kDpadDown,  VK_DOWN,  "mod menu down"    },
             { PadHook::kDpadLeft,  VK_LEFT,  "mod menu left"    },
             { PadHook::kDpadRight, VK_RIGHT, "mod menu right"   },
-            { PadHook::kA,         'O',      "read description" },
-            { PadHook::kB,         VK_F8,    "close mod menu"   },
+            // B INSPECTS, A CLOSES -- the game's own confirm/cancel pair, not the Xbox letters
+            // (S189, the user's call). The mod menu is a menu; the button the player confirms with
+            // everywhere else in FFXII is the button that should read a row out, and the one they
+            // back out with everywhere else is the one that should shut it. Getting this backwards
+            // costs a blind player the muscle memory the rest of the game just taught them.
+            { PadHook::kB,         'O',      "read description" },
+            { PadHook::kA,         VK_F8,    "close mod menu"   },
             { PadHook::kStart,     VK_F8,    "close mod menu"   },
             // Back closes as well. Everywhere else it is now the mod-mode latch, so a player will
             // press it here expecting the mod to answer; letting it fall through would open the
@@ -410,6 +419,9 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             const int vk = ModModeKeyFor(bit, ctx == Context::Battle, &action);
             if (vk) {
                 Act(PadHook::ButtonName(bit), vk, action, ctx);
+            } else if (bit == PadHook::kBack) {
+                // Back, Back -- see the consume note below. The map speaks for itself.
+                Log::Write("PAD", "mod mode ended on Back; the map press passes through to the game");
             } else {
                 Say(Phrase::Id::ModCancelled);
                 char m[96];
@@ -419,8 +431,20 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             }
             // Consume the WHOLE rising set, not just the bit that resolved: every button of a fumble
             // was aimed at the mod, and letting the others through would fire a game verb the player
-            // never meant. Back cancelling itself falls out of this too -- it maps to nothing.
-            consume |= rising;
+            // never meant.
+            //
+            // BACK IS THE ONE EXCEPTION, AND IT IS DELIBERATE (S187, the user's ruling). Back is the
+            // modifier, so pressing it twice is the natural "I did not mean that" -- and the game's
+            // own map toggle is what Back costs the player everywhere else. Letting the second press
+            // through makes that cost recoverable and gives the map a pad route again: **Back, Back
+            // opens the map.** It used to be consumed, and the map opened anyway one frame later
+            // because the mask was edge-shaped (see gamepad_sdl.cpp) -- so the behaviour the player
+            // saw was right by accident. Now it is right on purpose.
+            //
+            // It does NOT speak "Cancelled" here: the map screen opening is the feedback, and
+            // announcing a cancel over a screen the player just deliberately opened would be filler
+            // that contradicts what happened.
+            consume |= static_cast<uint16_t>(rising & ~PadHook::kBack);
             g_modArmedMs.store(0, std::memory_order_relaxed);
         }
     } else {

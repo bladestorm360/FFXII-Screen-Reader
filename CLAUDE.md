@@ -398,30 +398,56 @@ and above all not the very thing the feature under repair is supposed to give th
      loss, map change, focus loss, menu open, field-tick stall, and a 15 s no-progress cap —
      it never keeps walking a character the player has lost control of.
 
-  **THE SECOND EXCEPTION — the GAMEPAD INTERCEPT, user-authorized 2026-08-20.** The mod may
-  **CONSUME** pad input: `PadRouter::OnPoll` (`src\input\pad_router.cpp`), reached only from the
-  `XInputGetState` IAT hook in `src\input\pad_hook.cpp`, may clear a button bit or zero a stick
-  axis in the `XINPUT_STATE` the game is about to read. Bounds, all non-negotiable:
-  1. **Consumption only, never injection.** It may clear a bit or zero an axis; it may NEVER set
-     one. This is the category line between it and Auto-walk, and it is what keeps "the mod cannot
-     press a button for you" true.
-  2. **One function.** `PadRouter::OnPoll` is the only code in the mod that writes an
-     `XINPUT_STATE`; nothing else may.
-  3. **The router is fed the PRE-consumption state**, always — every mod-side observation sees the
-     player's real input, exactly as `InputTracker::FeedDInputKeyboard` is fed the pre-injection
-     keyboard buffer.
-  4. **Off means byte-identical, not skipped.** With the `Controller` mod-menu row off, or the pad
-     absent, `OnPoll` WRITES NOTHING, so the `XINPUT_STATE` the game reads is what it was before this
-     file existed. A fault inside it latches the intercept OFF for the session.
-     **Amended S174:** it used to return on its *first* line; it now returns on the fourth, after the
-     foreground check, edge bookkeeping and the `L3` kill-switch test. The mod therefore still READS
-     one bit while off — that is what lets `L3` switch it back on, and a switch that can only be
-     thrown once is not an escape hatch. The byte-identical bound is on the WRITE and is unchanged.
-  5. **Game-foreground gated**, like every other dispatch in the mod.
-  6. **What may be consumed is decided on the GAME thread** and published stamped; the verdict
+  **THE SECOND EXCEPTION — the CONTROLLER, user-authorized 2026-08-20, REBUILT ON SDL3 2026-09-18
+  (S186) and WIDENED TO FULL PASSTHROUGH 2026-09-18 (S188, on explicit user instruction).**
+
+  **THE MOD IS THE CONTROLLER'S ONLY READER, AND THE GAME'S PAD IS BUILT FROM WHAT THE MOD READ.**
+  This is the FFPR model (`Core\GamepadManager.cs` + `Patches\InputPassthroughPatches.cs`) ported
+  whole: there, the engine's own gamepad devices are switched off and the mod injects SDL state back
+  for passthrough. Here:
+  - `src\input\gamepad_sdl.cpp` reads the pad through **SDL3 and nothing else**, for every device.
+  - `src\input\pad_hook.cpp` **synthesises** the `XINPUT_STATE` the game reads, from that SDL state
+    minus whatever `PadRouter` claimed. The real `XInputGetState` result is discarded while driving.
+  - `src\proxy\dinput8_proxy.cpp` **blanks** the game's DirectInput joystick, so the hardware cannot
+    also reach the game down a second road that nobody routed.
+
+  Bounds, all non-negotiable:
+  0. **ONE PATH, NO PER-DEVICE CODE.** Every controller — Xbox, DualSense, DualShock 4, Switch Pro, a
+     handheld's built-in sticks — is normalised by SDL's database and reaches the game through the
+     same synthesised state built by the same lines. **Testing on any pad tests the path every pad
+     uses.** Do NOT reintroduce a device-specific branch, an `rgbButtons[]` index table, an XInput
+     read, or a second reader of any kind. Reading the pad through `XInputGetState` is what shipped
+     broken in V1.0 (XInput is the Xbox protocol, so PlayStation pads were invisible); reading
+     through SDL while letting the game keep reading the hardware is what made S186–S187 need a
+     separate suppressor per API, each needing its own play pass. Both mistakes are closed.
+  1. **THE MOD MAY NOT ORIGINATE AN INPUT.** This is the bound that replaces the old "consumption
+     only, never set a bit". Every bit in the synthesised state came from a physical control SDL
+     reported as pressed **on that poll**. The mod can decline to forward an input; it can never
+     invent one, hold one, repeat one, or press one the player is not pressing. A feature that wants
+     the mod to press a button for the player is a NEW category and needs new permission. (Auto-walk
+     remains the one standing exception to that, on the keyboard, under its own charter.)
+  2. **Two writers, and only two.** `BuildGameState` (what the game receives) and `BlankDInputPad`
+     (closing the other road). Nothing else in the mod may write an `XINPUT_STATE` or a `DIJOYSTATE`.
+  3. **An axis's neutral is READ, never assumed.** A DirectInput axis carries whatever range the game
+     set via `DIPROP_RANGE`, so blanking one uses `GetProperty(DIPROP_RANGE)` (vtable slot 5). Writing
+     0 would be a hard deflection on an unsigned range. An axis whose range cannot be read is **left
+     alone** — a stick the game still sees beats a stick stuck hard over.
+  4. **Off means byte-identical, not inert.** With the `Controller` row off, or no pad open,
+     `DriveGame()` is false: the XInput hook returns the original call **verbatim** and the
+     DirectInput blanker touches nothing, so the game's input path is exactly what it would be with
+     no mod installed. `L3` + `R3` still reaches the router — that is what lets the pad be handed
+     back and taken again without reaching for the keyboard. A fault latches the whole thing off for
+     the session and the controller reverts to the game's own reading.
+  5. **Game-foreground gated**, like every other dispatch in the mod (`PadRouter::OnPoll` returns on
+     `InputTracker::GameForeground()`).
+  6. **A claim is a LEVEL, not an edge** (`L-99`). The router claims on a rising edge, but
+     `gamepad_sdl.cpp` latches the claim until the button is released, because the mod polls every
+     ~4 ms while the game reads once a frame. An edge-shaped hand-off is invisible at the reader's
+     rate: it let Start pause the game and Back open the map straight through a mask that said they
+     were consumed. Anything new that hands state to the game must ask whether it is a level.
+  7. **What may be consumed is decided on the GAME thread** and published stamped; the verdict
      expires ~250 ms after the field tick stops, so consumption ends by itself on a map change,
-     pause or stall. Widening consumption to a new control is a normal design change, not a new
-     category — but widening it to *injection* is a new category and needs new permission.
+     pause or stall. Widening consumption to a new control is a normal design change.
 
   **GAME-MEMORY WRITES, each user-authorized and each chartered in its own header:** sneak assist
   (`sneak_assist.h`, S107), the shout minigame's Instant success (`shout_fill.h`, 2026-08-05), and

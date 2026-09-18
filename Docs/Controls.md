@@ -543,9 +543,30 @@ speed is reachable from the options menu and from the keyboard's `1`/`2`/`3`, pa
 and a speed toggle is not what one is worth spending on. **`L3` + `R3` together**, or the `Controller`
 row in the `F8` menu, turns the whole thing off and hands the pad back untouched.
 
-The pad reaches the mod through an `XInputGetState` intercept, and **it can only take an input away
-from the game, never press one** — see the second input-write exception in `CLAUDE.md`. Anything not
-listed here arrives at the engine exactly as it would with no mod installed.
+**Every controller type works** — PlayStation (DualSense, DualShock 4), Xbox, Switch Pro and
+generic USB pads alike. The mod reads the pad through **SDL3**, whose controller database turns
+whatever the device actually reports into one layout, so the table above means the same thing on
+every pad. On a PlayStation controller the buttons named A, B, X and Y below are Cross, Circle,
+Square and Triangle — the same physical positions.
+
+> **This is fixed as of 2026-09-18 and was broken before it.** V1.0 read the pad through
+> `XInputGetState`, which is the Xbox protocol, so a PlayStation controller reached the mod not at
+> all and none of these controls did anything. If you are on V1.0, the whole of this page needs the
+> newer build — or, as a stop-gap on that build only, Steam's *PlayStation Controller Support*
+> (Steam → FFXII → Controller), which makes Steam present the pad to the game as an Xbox one.
+
+**The mod reads your controller and the game is handed what the mod did not use.** Anything not
+listed here reaches the game exactly as it would with no mod installed. The mod can decline to pass
+an input on; it can never press one for you — see the second input-write exception in `CLAUDE.md`.
+
+One consequence worth knowing: because the game is fed from SDL3 rather than reading your pad itself,
+**a PlayStation controller now works as a game controller too**, without Steam Input or DS4Windows in
+the way. Switching the `Controller` row off hands the hardware straight back to the game.
+
+On the field the mod takes the right stick completely, on every controller type — the camera does
+not move while it is driving the mod. That is deliberate and it matters: the camera decides which
+way "forward" is, so a camera drifting while you cycle destinations would leave every direction the
+mod just spoke pointing somewhere else. Off the field the stick is passed straight through.
 
 **Nothing is bound to A, B, X or Y in normal play.** Those are the game's own verbs, and a mod that
 eats one is a mod you cannot play through. Everything that would have wanted a face button lives
@@ -613,17 +634,26 @@ behind the modifier instead.
 
 ### Mod mode — press Back, then one button
 
-Back says **"Mod"**. The next button is a mod command and the mode ends. Anything unmapped — Back
-again, the D-pad, either shoulder, either stick click — says **"Cancelled"**, and so does five seconds
-of silence, so there is no mode to get stuck in.
+Back says **"Mod"**. The next button is a mod command and the mode ends. Anything unmapped — the
+D-pad, either shoulder, either stick click — says **"Cancelled"**, and so does five seconds of
+silence, so there is no mode to get stuck in.
 
 | Button | Out of combat | In a fight | Same as |
 |---|---|---|---|
 | X | Party gil | **The enemy: name and HP** | `g` / `;` |
 | Y | Rescan, and say the area name | **Directions to the active target** | `` ` `` / `p` |
-| A | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
-| B | Open or close the mod's settings menu | same | `F8` |
+| B | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
 | Start | Open or close the mod's settings menu | same | `F8` |
+| A | **Cancels.** Says "Cancelled" and hands the pad back | same | — |
+| Back | **Opens the game's map.** Back twice, deliberately — see below | same | — |
+
+**Back twice opens the map.** Back is the mod's modifier everywhere else, which costs you the game's
+own map button; pressing it a second time gives it back. It says nothing when it does — the map
+screen speaks for itself, and a "Cancelled" over a screen you meant to open would be a lie.
+
+**A cancels mod mode; it does not open the settings menu.** `Start` is the one way in. A is also how
+you *close* the menu once it is open, so the same button backs you out of both — and it is the button
+the game itself cancels with, so it is the one your hand already reaches for.
 
 > **FIVE BINDINGS, AND THE REST WENT BACK TO THE GAME AT S185.** License Points (`U`), the combat-log
 > step (`,` `.`), the re-read (`t`), the describe (`o`) and the target readout on `L1` all left this
@@ -644,7 +674,7 @@ of silence, so there is no mode to get stuck in.
 ### The mod menu, from the pad
 
 While the mod's settings menu is open it owns the pad: D-pad or right stick moves between settings
-and changes the focused one, **A** reads its description, **B**, **Start** or **Back** closes it. From
+and changes the focused one, **B** reads its description, **A**, **Start** or **Back** closes it. From
 the keyboard, `F8` and **`Escape`** both close it (S185). Everything the pad has no direct binding for
 is reachable this way — combat verbosity, autodetail, the availability filter, the volumes, and the
 `Controller` switch itself.

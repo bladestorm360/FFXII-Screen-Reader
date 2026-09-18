@@ -3,9 +3,12 @@
 #include "core/stall_probe.h"
 #include "core/frame_probe.h"
 #include "input/input_tracker.h"
+#include "input/gamepad_sdl.h"
+#include "input/pad_hook.h"
 #include "navigation/auto_walk.h"
 #include <Windows.h>
 #include <atomic>
+#include <cstring>
 #include <cstdio>
 
 // dinput8.dll function signatures (subset we proxy).
@@ -111,17 +114,21 @@ static std::atomic<bool> g_devPatched{false};
 static void*             g_kbDevices[8] = {};
 static std::atomic<int>  g_kbDeviceCount{0};
 
-// NON-KEYBOARD DirectInput devices, and why we bother.
+// NON-KEYBOARD DirectInput devices -- and as of S186 this is A LIVE PAD PATH, not a probe.
 //
 // The engine carries a `PInputDevicePadDirectInput` class alongside `PInputDevicePadXInput`
-// (rtti_classes), so a DirectInput pad path EXISTS in PhyreEngine. Whether this build's FFXII ever
-// uses it has never been measured, and "the exe imports XInput" does not answer it -- a DInput pad
-// would arrive through the very CreateDevice call below, not through XInput at all.
+// (rtti_classes), so a DirectInput pad path EXISTS in PhyreEngine. This logger was added to find out
+// whether FFXII ever uses it, because "the exe imports XInput" does not answer that -- a DInput pad
+// arrives through the very CreateDevice call below, not through XInput at all.
 //
-// It costs one comparison to find out: record any device that is not the keyboard, and log the size
-// of the first state buffer the game polls it with. 80 bytes = DIJOYSTATE, 272 = DIJOYSTATE2; a
-// mouse is 16/20. If a joystick-sized poll ever appears here, PadRouter has a second surface to
-// serve and we will know rather than assume.
+// IT DOES USE IT, AND THAT IS WHY V1.0's CONTROLLER SUPPORT WAS BROKEN. A tester's DualSense logged
+// `cbData=272` here (DIJOYSTATE2) for a whole session while the XInput side never saw a pad at all.
+// XInput is the Xbox protocol; a PlayStation pad does not speak it without Steam Input or DS4Windows
+// in the way. So this is the surface every non-Xbox controller reaches the game through, and it is
+// where the router's consume mask has to be applied for those players.
+//
+// 80 bytes = DIJOYSTATE, 272 = DIJOYSTATE2; a mouse is 16/20, which is what the `guid=6F1D2B60`
+// entries in older logs were.
 static void*             g_otherDevices[8] = {};
 static std::atomic<int>  g_otherDeviceCount{0};
 static std::atomic<bool> g_otherLogged[8]{};
@@ -138,6 +145,91 @@ static bool IsKeyboardDev(void* dev) {
     return false;
 }
 
+// ---- BLANKING THE GAME'S DIRECTINPUT JOYSTICK ---------------------------------------------------
+//
+// THE FFXII ANSWER TO FFPR's `DisableUnityGamepad()`. The mod reads the controller through SDL3 and
+// hands the game a pad built from that reading (pad_hook.cpp). For that to be the WHOLE story, the
+// physical device must not also reach the game down a second road: on a DualSense or any other
+// non-XInput pad, FFXII polls the stick directly through DirectInput, and anything arriving that way
+// has been routed by nobody and consumed by nobody.
+//
+// So when the mod is driving, this makes the game's joystick read look like a controller sitting
+// perfectly still. It is not a mapping and there is nothing device-specific in it -- no
+// `rgbButtons[]` index tables, no SDL binding lookups, no per-button confirmation. Those existed only
+// because the old design had to remove SOME inputs and keep others in a format it did not own. This
+// one removes all of them, and the inputs come back to the game through SDL3 like every other pad's.
+//
+// `DIJOYSTATE` and `DIJOYSTATE2` share the layout we touch:
+//     +0   lX lY lZ lRx lRy lRz      (LONG each)     +32  rgdwPOV[4]   (0xFFFFFFFF = centred)
+//     +24  rglSlider[2]                              +48  rgbButtons[] (high bit set = down)
+//
+// AN AXIS'S NEUTRAL IS NOT 0. A DirectInput axis carries whatever range the game asked for via
+// DIPROP_RANGE -- often 0..65535, centre 32768 -- so writing 0 would be a hard deflection, which on
+// the left stick would walk the player into a wall. The device is asked instead:
+// `IDirectInputDevice8::GetProperty(DIPROP_RANGE)`, vtable slot 5, once per axis per session.
+struct DIPropHeader { DWORD dwSize, dwHeaderSize, dwObj, dwHow; };
+struct DIPropRange  { DIPropHeader diph; LONG lMin, lMax; };
+typedef HRESULT (STDMETHODCALLTYPE* PFN_GetProperty)(void*, const GUID*, DIPropHeader*);
+static const GUID* const kDIPropRange = reinterpret_cast<const GUID*>(static_cast<uintptr_t>(4));
+constexpr DWORD kDIPH_ByOffset = 1;
+
+// The eight axis slots of DIJOYSTATE2, by byte offset.
+constexpr int kAxisOffsets[8] = { 0, 4, 8, 12, 16, 20, 24, 28 };
+
+struct AxisNeutral { LONG centre = 0; bool known = false; bool absent = false; };
+static AxisNeutral g_axisNeutral[8];
+static std::atomic<bool> g_blankLogged{false};
+
+// Ask the device where this axis's centre is. `absent` latches for an axis the data format has no
+// object at, which is normal -- most pads do not use all eight slots.
+static void LearnAxisNeutral(void* dev, int i) {
+    AxisNeutral& a = g_axisNeutral[i];
+    if (a.known || a.absent || !dev) return;
+
+    void** vtbl = *reinterpret_cast<void***>(dev);
+    auto getProp = reinterpret_cast<PFN_GetProperty>(vtbl[5]);
+    if (!getProp) { a.absent = true; return; }
+
+    DIPropRange r{};
+    r.diph.dwSize       = sizeof(DIPropRange);
+    r.diph.dwHeaderSize = sizeof(DIPropHeader);
+    r.diph.dwObj        = static_cast<DWORD>(kAxisOffsets[i]);
+    r.diph.dwHow        = kDIPH_ByOffset;
+    if (FAILED(getProp(dev, kDIPropRange, &r.diph)) || r.lMax <= r.lMin) { a.absent = true; return; }
+
+    a.centre = r.lMin + (r.lMax - r.lMin) / 2;
+    a.known  = true;
+    char m[160];
+    snprintf(m, sizeof(m), "DInput axis +%d: range %ld..%ld, neutral %ld (read from the device)",
+             kAxisOffsets[i], (long)r.lMin, (long)r.lMax, (long)a.centre);
+    Log::Write("PAD", m);
+}
+
+static void BlankDInputPad(void* dev, void* buf, DWORD cbData) {
+    if (!buf || (cbData != 80 && cbData != 272)) return;
+    if (!GamepadSDL::DriveGame()) return;          // off means byte-identical: touch nothing
+
+    if (!g_blankLogged.exchange(true))
+        Log::Write("PAD", "this pad also reaches the game through DirectInput -- blanking that road; "
+                          "the mod feeds the game from SDL3 instead");
+
+    auto* bytes = static_cast<uint8_t*>(buf);
+
+    for (int i = 0; i < 8; ++i) {
+        LearnAxisNeutral(dev, i);
+        const AxisNeutral& a = g_axisNeutral[i];
+        // An axis whose neutral we could not read is LEFT ALONE. Guessing one risks writing a hard
+        // deflection, and a stick that drifts is worse than one the game still sees.
+        if (a.known) *reinterpret_cast<LONG*>(bytes + kAxisOffsets[i]) = a.centre;
+    }
+
+    auto* povs = reinterpret_cast<uint32_t*>(bytes + 32);
+    for (int i = 0; i < 4; ++i) povs[i] = 0xFFFFFFFFu;
+
+    const int nButtons = (cbData == 272) ? 128 : 32;
+    memset(bytes + 48, 0, static_cast<size_t>(nButtons));
+}
+
 // Swap one COM vtable entry (aligned pointer write = atomic on x64).
 static void PatchVtableEntry(void* comObj, int index, void* detour, void** origOut) {
     void** vtbl = *reinterpret_cast<void***>(comObj);
@@ -147,6 +239,28 @@ static void PatchVtableEntry(void* comObj, int index, void* detour, void** origO
         vtbl[index] = detour;
         VirtualProtect(&vtbl[index], sizeof(void*), oldProt, &oldProt);
     }
+}
+
+// __try AND A SCOPED OBJECT CANNOT SHARE A FUNCTION (MSVC C2712), so the guard and the measurement
+// live in two functions rather than one block. `PollPadGuarded` holds the __try and owns no object
+// with a destructor; `PollPadMeasured` holds the STALL_SCOPE and owns no __try.
+static void PollPadGuarded() {
+    __try {
+        GamepadSDL::PollIfStale();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+static void PollPadMeasured() {
+    STALL_SCOPE("GamepadSDL::PollIfStale");
+    PollPadGuarded();
+}
+
+// Same split, for the pad-poll path: refresh the claim, then take away what was claimed.
+static void PollAndBlankGuarded(void* dev, void* lpvData, DWORD cbData) {
+    __try {
+        GamepadSDL::PollIfStale();
+        BlankDInputPad(dev, lpvData, cbData);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
 // IDirectInputDevice8 vtable: GetDeviceState = index 9. Runs on the game's input
@@ -166,6 +280,15 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
         // tell apart. StallProbe above only speaks above 100 ms and so can never report the normal
         // rate — the gap that left every tier-C constant unmeasurable. See core/frame_probe.h.
         FrameProbe::OnInputPoll();
+
+        // THE PAD READ, and this is the site that guarantees one happens at all: the game polls the
+        // keyboard every frame, menus and loads included, whereas it polls a pad only when one is
+        // attached. Kept OUTSIDE the `SUCCEEDED(hr)` gate below on purpose -- an unacquired keyboard
+        // (which this very log has caught happening) must not take the controller down with it.
+        //
+        // MEASURED, NOT ASSUMED (`L-88`). It is an event drain plus ~27 cached reads and it collapses
+        // to one read per frame however many hooks ask, but the budget report is what proves that.
+        PollPadMeasured();
     }
     // One line per non-keyboard device, the first time the game polls it. See g_otherDevices above.
     if (!IsKeyboardDev(self)) {
@@ -178,6 +301,25 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
                      (cbData == 80 || cbData == 272) ? " (JOYSTICK-SIZED -- a DInput pad path is live)"
                                                      : "");
             Log::Write("PAD", msg);
+        }
+        // ONLY THE GAME'S OWN DEVICES ARE SUPPRESSED, and `oi >= 0` is what says so.
+        //
+        // WHY THIS GATE IS LOAD-BEARING. `g_otherDevices` is filled by HookedCreateDevice, which
+        // only runs for devices created through OUR `DirectInput8Create` export -- that is, the
+        // game's. SDL reaches DirectInput a different way (`CoCreateInstance(CLSID_DirectInput8)`),
+        // so its devices never pass through that export and never land in the table. But SDL gets
+        // them from the SAME System32 dinput8 module, hence the SAME vtable we patched, so SDL's own
+        // joystick polls DO arrive in this hook.
+        //
+        // Without the gate we would clear consumed buttons out of SDL's read buffer as well as the
+        // game's -- the mod suppressing its own input. The router would see the button release
+        // itself on the next poll, level-triggered consumption would break, and every claimed button
+        // would flicker. `oi >= 0` means "the game created this device", which is exactly the set
+        // whose buffer we are entitled to touch.
+        if (oi >= 0) {
+            // Refresh SDL for this frame, then blank this road so the device cannot also reach the
+            // game un-routed -- see BlankDInputPad. A fault here must never reach the input thread.
+            PollAndBlankGuarded(self, lpvData, cbData);
         }
     }
     if (cbData >= 256 && IsKeyboardDev(self)) {

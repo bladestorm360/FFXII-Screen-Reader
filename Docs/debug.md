@@ -8039,3 +8039,40 @@ hovered node, with a change-check guarding that per-frame tick. Layout in `GameA
   unreachable place is announced, that is this, and the answer is in the unmodelled flags.
 - `node+0x54` / `+0x130` flag semantics unmodelled and unused; the cursor stops on nodes the render
   flag calls hidden, so they are not a selectability filter.
+
+## SOLVED — Controller support did nothing on PlayStation pads (V1.0, fixed S186 2026-09-18)
+
+**KEYWORDS: controller gamepad DualSense DualShock PlayStation Switch Pro generic pad dead no
+response XInput XInputGetState DirectInput DIJOYSTATE2 cbData 272 Xbox-only SDL3 GamepadSDL**
+
+**Symptom.** On a DualSense, no pad control did anything: L1 spoke no interact readout, R1 started
+no route, the D-pad selected no party member, the right stick read nothing, Back armed no mod mode,
+L3/R3 toggled nothing. Keyboard unaffected. The `Controller` row in `F8` was On.
+
+**Cause.** The mod read the pad through an IAT hook on `XInputGetState` and nowhere else. **XInput
+is the Xbox protocol.** A DualSense / DualShock 4 / Switch Pro / generic HID pad does not speak it
+on Windows — it enumerates as a joystick and reaches the game through DirectInput. It appears on
+XInput only when a translation layer (Steam Input's PlayStation Controller Support, DS4Windows,
+ViGEm) is running. With none of those, the mod's hook never fired at all.
+
+**Chain of evidence** (tester log, build `V1.0 (7588345)`):
+- `[PAD] gamepad intercept installed (XInputGetState, IAT)` — hook installed, import present.
+- `[PAD] non-keyboard DirectInput device created: idx=1 guid=B861A230-F85C-11EE` then
+  `polled: idx=1 cbData=272` — `DIJOYSTATE2`. The game read the pad through **DirectInput**.
+- **No `controller CONNECTED on index N` line anywhere.** That line is one-shot on the first
+  successful `XInputGetState`, fires before the mod-menu toggle is consulted, and was confirmed
+  present in the shipped binary (`grep -ac` on `Releases/V1.0/dinput8.dll` → 1). Its absence is a
+  real measurement, not a dedup artifact (`L-04`): XInput never returned a connected pad.
+
+**Fix.** SDL3 is now the only pad reader (`src\input\gamepad_sdl.cpp`), so SDL's controller database
+normalizes every device into one layout and the S185 scheme works unchanged on every pad type. The
+`XInputGetState` hook and a new `SuppressDInputPad` in `dinput8_proxy.cpp` are kept purely to take a
+claimed input away from the game on whichever path it arrived by. Detail: Session 186.
+
+**Stop-gap for anyone still on V1.0:** Steam → FFXII → Controller → enable *PlayStation Controller
+Support*. Steam then presents the pad as XInput and the V1.0 hook picks it up.
+
+**Read this before diagnosing any future "pad does nothing" report.** The first question is which
+API the pad arrived on, and the log answers it: `CONTROLLER CONNECTED via SDL3` says the mod sees
+it; a `non-keyboard DirectInput device polled ... cbData=80/272` line says the game is reading it
+through DirectInput. Lesson: `L-98`.

@@ -51,12 +51,26 @@
 //   Foes / Party / Reserve / Allies group step -- the switch S184 built the spoken titles for.
 //
 // MOD MODE -- armed by Back, spends itself on the NEXT button, expires after 5 s.
-//   Start  mod menu (`F8`)            B  mod menu (`F8`) -- closes it, and opens it when shut
-//   A      summoned Esper (`8`), silent when none is out
+//   Start  mod menu (`F8`) -- THE one way in
+//   A      CANCEL. Speaks "Cancelled" and ends the mode. (S187: one opener and one canceller beats
+//          two openers and no clean way out. A also CLOSES the menu, from the ModMenu context --
+//          same button, same meaning, two contexts. S189 moved this from B to A so it is the button
+//          the GAME cancels with.)
+//   Back   again -> ends the mode and PASSES THROUGH, so the game's map opens. **Back, Back is the
+//          map**, which is what gives the player back the control Back costs them everywhere else.
+//          Silent on purpose: the map screen is its own feedback.
+//   B      summoned Esper (`8`), silent when none is out -- B is the game's confirm, so it is the
+//          button that ASKS something, and A is the button that backs out (S189)
 //   X      gil (`g`)                  -- in a fight: enemy name and HP (`;`)
 //   Y      rescan + area (`` ` ``)    -- in a fight: directions to the target (`p`)
-//   Anything else -- Back again, the D-pad, either shoulder, either stick click -- ends the mode and
-//   speaks "Cancelled".
+//   Anything else -- the D-pad, either shoulder, either stick click -- ends the mode and speaks
+//   "Cancelled".
+//
+// CONSUMPTION IS A LEVEL, NOT AN EDGE, and that is not a detail (S187). The router claims on a
+// rising edge, but `gamepad_sdl.cpp` LATCHES the claim until the button is released, because the mod
+// polls every ~4 ms while the game reads its pad once a frame. An edge-shaped mask is simply not
+// visible at the game's read rate: Start paused the game and Back opened the map straight through
+// it. Anything added here is claimed correctly only because of that latch.
 //
 //   FIVE BINDINGS, AND THE REST WENT BACK (S185). License Points, the combat-log step, `t` and `o`
 //   left this table when the user set the layout above: the D-pad and the right stick now mean one

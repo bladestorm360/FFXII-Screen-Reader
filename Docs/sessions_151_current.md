@@ -3600,3 +3600,298 @@ defect until something a player can see follows from it — `L-97`.
 
 The reverted narrowing keeps its measurement in `debug.md` and its code in `git log` (`d2d3a72`). It is
 NOT an open item, and it does not get re-applied without a new report and a new log.
+
+## Session 186 — 2026-09-18 — Controller support rebuilt on SDL3: every pad type, not just Xbox
+
+**KEYWORDS: controller gamepad pad SDL3 SDL_OpenGamepad DualSense DualShock PlayStation Switch Pro
+XInput XInputGetState Xbox-only DirectInput DIJOYSTATE2 rgbButtons rgdwPOV suppression GamepadSDL
+PollIfStale SuppressDInputPad binding table CoCreateInstance vtable share V1.0 broken release PAD**
+
+### The defect, and it shipped to the public
+
+V1.0's controller support did not work for PlayStation controllers — or Switch Pro pads, or generic
+USB pads. It worked for Xbox pads and for anything a translation layer (Steam Input, DS4Windows,
+ViGEm) was presenting as one, and for nothing else.
+
+**Cause: the mod read the pad through `XInputGetState` only.** XInput is the Xbox protocol. Every
+other pad enumerates as a HID joystick and reaches the game through DirectInput.
+
+The tester log the user pointed at (Lirin, build `V1.0 (7588345)`, ~100 s) has it outright:
+
+```
+[PAD] gamepad intercept installed (XInputGetState, IAT)
+[PAD] non-keyboard DirectInput device created: idx=0 guid=6F1D2B60-D5A0-11CF   <- GUID_SysMouse
+[PAD] non-keyboard DirectInput device created: idx=1 guid=B861A230-F85C-11EE   <- the DualSense
+[PAD] non-keyboard DirectInput device polled:  idx=0 cbData=20                 <- DIMOUSESTATE2
+[PAD] non-keyboard DirectInput device polled:  idx=1 cbData=272 (JOYSTICK-SIZED ...)
+```
+
+`cbData=272` is `DIJOYSTATE2`. The game read that pad through DirectInput all session. On the XInput
+side, `controller CONNECTED on index N` — a one-shot line, verified present in the shipped binary —
+**never fired**, so `XInputGetState` never once returned a connected pad. Every pad feature (L1
+interact readout, R1 route, D-pad party slots, right-stick navigation, Back mod-mode, L3/R3) was
+unreachable.
+
+`[SPEAK-OUT] Controller, On` at +47 s is NOT a pad chord: it sits between `Auto detail` and
+`Diacritics override` with no `[MODMENU] set:` beside it — the player arrow-keying down the open F8
+menu.
+
+### What was built
+
+**SDL3 is now the only pad reader.** `src\input\gamepad_sdl.{h,cpp}` — ported from the FFPR mods'
+`Core/GamepadManager.cs`, which is the design the user specified when controller support was first
+asked for. `SDL_OpenGamepad` + SDL's controller database normalize DualSense / DualShock 4 / Switch
+Pro / Xbox / generic into one button layout, so **`pad_router.cpp` and the whole S185 scheme are
+unchanged** — only the source of its `PadHook::State` moved. SOUTH/EAST/WEST/NORTH map to the
+scheme's A/B/X/Y, i.e. Cross/Circle/Square/Triangle in the same physical positions.
+
+**SDL3 was already linked into this DLL** for the navigation beacon. `CMakeLists.txt` line 28 read
+"SDL3 (audio output for the navigation beacon; later, controller support)".
+
+**The two API hooks are now suppressors only.** `PadHook` no longer calls `PadRouter::OnPoll`;
+`GamepadSDL` is its one caller. The router writes its consume mask into a mod-owned snapshot, which
+is published and applied to whichever buffer the game actually reads:
+
+| game reads | suppressor | clears |
+|---|---|---|
+| XInput (Xbox pads) | `pad_hook.cpp` | button bits, right-stick axes |
+| DirectInput (everything else) | `SuppressDInputPad`, `dinput8_proxy.cpp` | `rgbButtons[i]` → 0, `rgdwPOV[i]` → centred, right-stick axes → device centre |
+
+Consume-only is intact, so this needed no new input-write category — `CLAUDE.md`'s second exception
+is updated to describe the new shape.
+
+**Poll site:** the keyboard `GetDeviceState` branch, which runs every frame including menus and
+loads, *outside* the `SUCCEEDED(hr)` gate — an unacquired keyboard (which this very log catches
+happening) must not take the pad down with it. `PollIfStale` collapses to one read per frame however
+many of the three call sites ask, so the mask is always current and no press leaks for a frame.
+Wrapped in `STALL_SCOPE` so the cost is measured, not asserted (`L-88`).
+
+### Three things that would have been bugs
+
+1. **SDL shares the vtable we patched.** SDL reaches DirectInput via
+   `CoCreateInstance(CLSID_DirectInput8)`, not via our `DirectInput8Create` export — so its devices
+   never enter `g_otherDevices`, but they come from the same System32 module and therefore the same
+   patched vtable. Unguarded, `SuppressDInputPad` would have cleared consumed buttons out of **SDL's
+   own read buffer**: the mod suppressing its own input, buttons flickering as the router saw a
+   release it caused. Gated on `oi >= 0` — only devices the game created.
+2. **The right stick had to be suppressed on the DInput path too — my first cut shipped it as an
+   accepted limitation and that was wrong.** The user's correction: *"moving the camera reorients the
+   player's walking direction, so if the camera is moving while they are cycling destinations the
+   directions will never be correct."* The swallow is load-bearing for navigation, not cosmetic.
+   The obstacle was only ever "what does centred MEAN on this device", and the device answers:
+   **`IDirectInputDevice8::GetProperty(DIPROP_RANGE)`, vtable slot 5**, returns the range the game
+   itself set, so the centre is read rather than guessed. Writing 0 would indeed have been a hard
+   deflection on an unsigned range — that part was right, the conclusion drawn from it was not.
+   - The axis is **identified before it is centred**: with the physical stick centred, the real
+     right-stick axis must sit at its own centre; one that moves anyway is driven by something else
+     and is rejected (3 agreements confirm, 4 disagreements reject). The identification test runs on
+     every poll, including polls where nothing is claimed — that is where the disconfirming evidence
+     lives.
+   - Any candidate offset SDL also calls a **left-stick** axis is refused outright. Centring that one
+     would stop the player walking, which is the one mistake with an unacceptable cost.
+   - A `GetProperty` failure is **logged loudly** (`UNSUPPRESSED ... REPORT THIS`) rather than
+     silently degrading, and no speculative fallback centre is invented.
+3. **Indices are confirmed, not assumed** (`L-02`). `SDL_GetGamepadBindings` says where a button
+   should sit in the raw report, but SDL and the game enumerate the device separately, so that is a
+   hypothesis about the game's buffer. A button is cleared only at an index observed DOWN in the
+   game's own buffer while SDL also reported it down; the first confirmation logs
+   `DInput suppression confirmed: <button> -> rgbButtons[i]`. Unconfirmed = left alone (reaches both
+   mod and game, the old double-action, strictly better than clearing the wrong bit).
+
+Also: priming on open (a button or stick held when the pad connects is masked until released, so it
+fires nothing), hot-plug via `SDL_EVENT_GAMEPAD_ADDED`/`REMOVED`, and
+`SDL_HINT_JOYSTICK_ENHANCED_REPORTS=0` — enhanced mode is a WRITE to the device and would change
+what the game's own reader sees.
+
+### State
+
+**BUILT, DEPLOYED, UNPLAYED.** Nobody in this session held a pad. The log lines that settle it, in
+order: `CONTROLLER CONNECTED via SDL3: "<name>"`, `SDL raw bindings: N of 14`, then `PAD survey`
+lines on press, then `DInput suppression confirmed:` per button. If the first line is absent SDL
+never saw the pad; if the third is absent the router is not being reached.
+
+`L-98` added. `CLAUDE.md` second input-write exception, `Docs\GameArchitecture.md` (the XInput-is-
+*the*-pad-path claim **STRUCK**), `Docs\Controls.md` and `Docs\Lessons.md` all updated.
+
+## Session 187 — 2026-09-18 — The consume mask was edge-shaped; mod mode gets one opener and one exit
+
+**KEYWORDS: controller pad consume mask edge level latch held release Start pause Back map mod mode
+Circle B cancel context mod menu XInput read rate 4ms 33ms regression S186 PAD**
+
+### Play result from S186
+
+Tester on an **Xbox One Controller**, build `V1.0 (e0675c3)`. The SDL3 rebuild works:
+
+```
+[PAD] CONTROLLER CONNECTED via SDL3: "Xbox One Controller" (SDL type 3, id 1)
+[PAD] SDL raw bindings: 14 of 14 mod-relevant buttons and 4 of 4 stick axes located in the device report
+[PAD] the GAME reads this pad through XInput on index 0 -- suppression for it runs here
+```
+
+Right stick, D-pad, mod mode, the mod menu and the scheme all dispatched correctly. Note the only
+DirectInput device on this machine is the **mouse** (`guid=6F1D2B60`, `cbData=20`), so the DInput
+suppressor was not exercised at all and remains unplayed.
+
+### Defect 1 — the consume mask was an EDGE at a rate the game never sampled (MY REGRESSION)
+
+Start paused the game; Back opened the map. The router was doing its job — `consume |= rising` — but
+`rising` is true for **one poll**, `GamepadSDL` polls every **~4 ms**, and the game reads its pad
+**once a frame, ~33 ms**. The mask was overwritten with 0 long before the game looked, so the button
+reached the game anyway. Only the right stick behaved, because `eatStick = onField` is a **level** and
+so was still true whenever the game happened to read.
+
+**S186 introduced this.** Before it, `PadRouter::OnPoll` ran FROM the XInput hook: edge detection and
+consumption were the same event against the same buffer, so an edge-shaped mask was exactly right.
+Decoupling the read from the write made it meaningless. The L3/R3 prologue had the right model all
+along and says so in its own comment — *"Consumed for as long as they are HELD, not on an edge"* —
+it was simply never generalised.
+
+**Fix, in `gamepad_sdl.cpp` rather than the router:** latch the claim until release.
+`g_heldConsume |= claimedNow; g_heldConsume &= buttons;` and publish the union. The router keeps its
+single edge-shaped consume path; the mask is now correct at any read rate. Primed buttons cannot
+enter the latch because `buttons` is the post-priming state.
+
+### Defect 2 — mod + B opened the mod menu; it should cancel
+
+`ModModeKeyFor` mapped `kB` to `F8` as a second way in. **Removed.** `mod + B` now falls to `default`,
+speaks "Cancelled" and ends the mode. `Start` is the one opener. B still **closes** the menu from the
+`modMenuOpen` branch — the same button answering the opposite job by context, which is what the user
+asked for and which already worked (`[PAD] B -> close mod menu` in the log).
+
+### Defect 3 — cancelling with Back opened the map; make that deliberate
+
+It did that because the mask leaked (defect 1), i.e. the behaviour the player saw was **right by
+accident**. The user's ruling: make it on purpose. `consume |= rising & ~PadHook::kBack` — the second
+Back ends the mode and passes through, so **Back, Back opens the map**, which is what gives the player
+back the control Back costs them everywhere else. It speaks nothing: the map screen is its own
+feedback, and "Cancelled" over a screen just deliberately opened would contradict what happened.
+
+### State
+
+**BUILT AND DEPLOYED, UNPLAYED.** What settles each: Start in mod mode opens the mod menu **without
+pausing**; Back-Back opens the map with no "Cancelled"; mod + B says "Cancelled" and opens nothing;
+B closes the menu when it is open. `Docs\Controls.md`, `README.md` and `pad_router.h`'s scheme comment
+all updated. Pathing was NOT tested this pass.
+
+## Session 188 — 2026-09-18 — ALL controller input through SDL3: the game's pad is built, not masked
+
+**KEYWORDS: controller SDL3 only reader passthrough synthesise XINPUT_STATE BuildGameState
+DisableUnityGamepad InputPassthroughPatches FFPR blank DirectInput DIPROP_RANGE one path injection
+charter category PAD**
+
+### The instruction
+
+> *"**ALL** CONTROLLER INPUT SHOULD BE HANDLED THROUGH SDL3 … that means no XInput, no DInput, none
+> of that unless SDL3 itself uses it … I do not want to see one more instance of 'You're on an XBox
+> controller so SDL3 and direct input haven't been tested.'"*
+
+S186 ported only HALF the FFPR model. It made SDL3 the reader and then let the game go on reading the
+hardware itself, which forced a **different suppressor per API** — one for `XINPUT_STATE`, one for
+`DIJOYSTATE2` — each with its own index tables, confirmation tests and its own play pass. That is why
+every report ended with a path that had not been exercised.
+
+### What FFPR actually does, which I had not read
+
+`Patches\InputPassthroughPatches.cs`, its own header:
+
+```
+/// 1. Suppress all game input when mod is consuming (mod menu, dialogs, mod mode)
+/// 2. Inject SDL controller state for game passthrough when not suppressing
+```
+
+and `GamepadManager.DisableUnityGamepad()` switches the engine's own gamepad devices **off**. The mod
+is the sole reader and the game is *fed*. Not "the mod reads too, and edits what the game saw".
+
+### The port
+
+| | |
+|---|---|
+| `gamepad_sdl.cpp` | reads the pad through SDL3, for every device. `BuildGameState` returns what SDL read **minus** the router's claim, with `dwPacketNumber` advancing only on real change |
+| `pad_hook.cpp` | **synthesises** the `XINPUT_STATE`. The real `XInputGetState` result is discarded while driving |
+| `dinput8_proxy.cpp` | **blanks** the game's DirectInput joystick — the FFXII answer to `DisableUnityGamepad()` |
+
+**One path for every controller.** An Xbox pad, a DualSense, a Switch Pro pad and a handheld's sticks
+all arrive at the game as the same synthesised state built by the same lines, so testing on any pad
+tests the path all pads use. The Xbox One controller the tester holds now exercises exactly what a
+DualSense would.
+
+**It also makes non-Xbox pads better off than before.** A DualSense does not speak XInput, so the real
+call returns `ERROR_DEVICE_NOT_CONNECTED`; building the state ourselves hands the game a working
+XInput pad regardless of the hardware — the same service Steam Input performs, done by the mod.
+
+### What this DELETED
+
+The whole device-specific layer, because nothing needs to describe another format any more: the
+`rgbButtons[]` index table, `SDL_GetGamepadBindings` lookups, per-button confirmation, the POV angle
+matcher, the right-stick axis identification with its agree/disagree counters and left-stick refusal,
+`RawElemFor`, `RawAxisFor`, `StickRaw`, `PadGeneration`, `ConsumedButtons`, `ConsumedStick`. Blanking
+needs no mapping — it zeroes every button, centres every POV, and neutralises every axis.
+
+### The two things that survived, because they are still true
+
+1. **An axis's neutral is READ, never assumed** — `GetProperty(DIPROP_RANGE)`, vtable slot 5. Writing
+   0 is a hard deflection on an unsigned range. An axis whose range will not read is left alone.
+2. **A claim is a LEVEL, not an edge** (`L-99`, S187). Still latched until release.
+
+### The charter changed, and it is a category change
+
+The mod no longer merely clears bits — it **constructs** the pad state the game reads. `CLAUDE.md`'s
+second input-write exception is rewritten. The bound replacing *"never set a bit"* is: **every bit in
+the synthesised state came from a physical control SDL reported as pressed on that poll.** The mod can
+decline to forward an input; it can never originate one. Off still means byte-identical — the hook
+returns the original call verbatim and the blanker touches nothing.
+
+### State
+
+**BUILT AND DEPLOYED, UNPLAYED.** Log line to look for: `the game's pad is now being driven from SDL3
+(XInput index 0)`. On a non-XInput pad, also `this pad also reaches the game through DirectInput --
+blanking that road` plus `DInput axis +N: ... neutral M (read from the device)`. Pathing still untested.
+
+## Session 189 — 2026-09-18 — S188 play-confirmed; A and B swapped to the game's own confirm/cancel
+
+**KEYWORDS: controller SDL3 play-confirmed driven from SDL3 XInput index 0 A B swap Cross Circle
+confirm cancel mod menu mod mode scheme PAD**
+
+### S188 IS PLAY-CONFIRMED
+
+Live log, Xbox One Controller:
+
+```
+[PAD] CONTROLLER CONNECTED via SDL3: "Xbox One Controller" (SDL type 3, id 1)
+[PAD] SDL has a full mapping for this controller
+[PAD] XInput IAT patched -- the game's pad will be built from SDL3
+[PAD] the game's pad is now being driven from SDL3 (XInput index 0)
+```
+
+That fourth line is the one that settles it: `BuildGameState` returned true, so **the state the game
+reads is the one the mod built from SDL3**. The scheme rode on top of it correctly — `R1 -> route +
+beacon`, `L1 -> target readout`, right-stick category/object stepping, D-pad arrows in menus — and the
+player navigated the game's own menus throughout, which is only possible if the synthesised pad is
+driving the game too. The only DirectInput device present is the mouse (`cbData=20`), so the blanker
+correctly never fired; there was no second road to close.
+
+**There is no longer a controller path that goes unexercised.** One path serves every device, and this
+pass exercised it end to end.
+
+### The scheme change
+
+**A and B swapped**, to the user's instruction, so the mod uses the same pair the game does:
+
+| | before | after |
+|---|---|---|
+| mod menu | A reads the description, B closes | **B reads the description, A closes** |
+| mod mode | A = summoned Esper, B = cancel | **B = summoned Esper, A = cancel** |
+
+The reasoning is the blind-player one: the button FFXII confirms with should be the button that asks
+the mod a question, and the button it cancels with should be the one that backs out. Getting it
+backwards spends the muscle memory the rest of the game just taught them.
+
+**Only the scheme moved.** The SDL -> XInput bit mapping in `gamepad_sdl.cpp` is untouched, so the
+game still receives the physical button the player actually pressed —
+`SDL_GAMEPAD_BUTTON_SOUTH -> kA`, `EAST -> kB`. Swapping *that* would have handed the game the wrong
+buttons and broken its own controls.
+
+### State
+
+Built, deployed and committed. `Docs\Controls.md`, `README.md` and `pad_router.h`'s scheme comment
+updated. **The swap itself is unplayed.** Pathing still untested.

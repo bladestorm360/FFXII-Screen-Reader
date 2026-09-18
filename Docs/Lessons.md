@@ -38,9 +38,9 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
-| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96 |
-| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58 |
+| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100 |
+| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
 bought it), then where the detail lives. `⟲` marks a lesson this project has learned **more than
@@ -1027,6 +1027,63 @@ Detail: `feedback_bat_files_crlf.md`, `feedback_validate_before_build.md`.
 
 ### L-58 STRING-PULL ONLY ON A REGULAR STAIRCASE
 Detail: `feedback_stringpull_only_regular_staircase.md`.
+
+### L-98 ⟲ AN API IS A DEVICE CLASS, NOT A CAPABILITY -- ASK WHO IS EXCLUDED
+**Before an input, audio or device API becomes the mod's ONLY path to something, name the hardware
+it silently leaves out.** "The exe imports it" proves the game uses that API for SOME devices; it
+never proves every device arrives that way. Which path a device takes is decided by the DEVICE.
+**Why:** S162 read the pad through `XInputGetState` because the exe imports it, and shipped that in
+**V1.0, to the public**. XInput is the **Xbox** protocol -- a DualSense, DualShock 4, Switch Pro or
+generic HID pad enumerates as a joystick and reaches the game through DirectInput instead, so every
+pad feature was unreachable for what the user describes as *"by far the most popular controller type
+in the blind community"*. The evidence was already in our own logs, twice over: `dinput8_proxy.cpp`
+had a probe watching for exactly this, and the XInput hook had a "pad connected" line that had never
+once fired in twenty-odd sessions. **Neither absence was read as a finding.**
+**The corollary, and it is the cheap half:** when a cross-platform library that already handles this
+is ALREADY LINKED, use it. SDL3 was compiled into this DLL for the audio beacon, `CMakeLists.txt`
+said in as many words "later, controller support", and the sibling FFPR mods had been reading pads
+through `SDL_OpenGamepad` for five games. The user had asked for SDL3 and named the reference
+implementation. Going device-native anyway cost a public release.
+**Check it against:** `L-01` (a sample is not a population -- one working pad is not all pads) and
+`L-04` (the absent "connected" line was a measurement nobody made). Detail:
+`Docs\sessions_151_current.md` Session 186, `Docs\GameArchitecture.md` "Input -- the four layers".
+
+### L-99 A MASK IS ONLY REAL AT THE RATE THE OTHER SIDE READS IT
+**When the mod publishes state for the GAME to consume, the shape of that state must survive the
+game's sampling rate -- an edge published faster than the reader samples is invisible.**
+**Why:** S187. `PadRouter` claims a pad button on its RISING EDGE, which is true for one poll. After
+S186 the mod polled every ~4 ms while the game read its pad once a frame (~33 ms), so the claim was
+almost always overwritten with 0 before the game looked: Start paused the game and Back opened the
+map straight through a mask that said they were consumed. Only the right stick worked, because
+`eatStick = onField` happens to be a LEVEL.
+**What makes it sting:** the correct model was already in the same file. The L3/R3 prologue consumes
+`buttons & (kLeftThumb|kRightThumb)` every poll and its comment says why -- *"Consumed for as long as
+they are HELD, not on an edge"*. One control had the right model and nothing generalised it.
+**The general form:** an edge is safe only while producer and consumer are THE SAME EVENT. S162's
+design was safe because the router ran inside the very hook that wrote the buffer. Decoupling a read
+from a write silently converts every edge-shaped hand-off into a race. When you decouple them, ask of
+each published value: is this a level, or an edge that now has to be latched?
+**Check it against:** `L-04` (a throttled line is not a measurement -- same family: the rate at which
+something is published decides what can be read from it). Detail: `Docs\sessions_151_current.md`
+Session 187, `src\input\gamepad_sdl.cpp` `g_heldConsume`.
+
+### L-100 ⟲ PORT THE WHOLE MODEL, NOT THE HALF YOU ALREADY UNDERSTOOD
+**When the user names a reference implementation, read what it does about the part you have not
+thought about yet -- usually the hand-BACK, not the read.**
+**Why:** S186 ported the FFPR controller model's READ (SDL3 opens the pad) and stopped there, leaving
+the game reading the hardware itself. That forced a different suppressor per input API, each with its
+own index tables and its own play pass, and every status report ended "that path is untested". The
+half never read was `InputPassthroughPatches.cs`, whose own header says the model plainly: *"Suppress
+all game input when mod is consuming / Inject SDL controller state for game passthrough"* -- plus
+`DisableUnityGamepad()`, which switches the engine's own devices OFF. **The mod is the sole reader and
+the game is FED.** Porting that removed the entire device-specific layer in one move.
+**The tell:** if an approach leaves you maintaining one code path per device/format/API, you have
+probably ported an interface and not an architecture. Ask what the reference does with the thing you
+are having to special-case; usually it has arranged not to have it.
+**The second tell, and it is the one the user said out loud:** if you keep reporting "X is still
+untested", the design has more paths than it needs. One path cannot go untested while another is
+exercised. Detail: `Docs\sessions_151_current.md` Session 188. Related: `L-98` (use the library and
+the reference the user named), `L-99` (a mask is only real at the reader's rate).
 
 ---
 

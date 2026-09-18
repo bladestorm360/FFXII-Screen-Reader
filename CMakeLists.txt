@@ -25,7 +25,7 @@ target_include_directories(MinHook PRIVATE
     ${CMAKE_SOURCE_DIR}/include/MinHook
 )
 
-# ---- SDL3 (audio output for the navigation beacon; later, controller support) ----
+# ---- SDL3 (audio output for the navigation beacon; gamepad input for controller support) ----
 # Built from source and LINKED, the same way DQ7R does it. Audio only — every other
 # subsystem is switched off so we are not compiling a renderer we never call.
 #
@@ -75,6 +75,7 @@ add_library(${PROJECT_NAME} SHARED
     src/audio/audio_engine.cpp
     src/audio/beacon_assets.rc
     src/input/input_tracker.cpp
+    src/input/gamepad_sdl.cpp
     src/input/pad_hook.cpp
     src/input/pad_router.cpp
     src/input/pad_survey.cpp
