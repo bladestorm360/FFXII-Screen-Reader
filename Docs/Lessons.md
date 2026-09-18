@@ -38,9 +38,9 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
-| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100 |
-| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98 |
+| something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99, L-106 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100, L-103, L-105 |
+| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98, L-104 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
 bought it), then where the detail lives. `⟲` marks a lesson this project has learned **more than
@@ -1126,6 +1126,94 @@ are having to special-case; usually it has arranged not to have it.
 untested", the design has more paths than it needs. One path cannot go untested while another is
 exercised. Detail: `Docs\sessions_151_current.md` Session 188. Related: `L-98` (use the library and
 the reference the user named), `L-99` (a mask is only real at the reader's rate).
+
+---
+
+### L-103 A BLOCKER RECORDED AGAINST A BIGGER VERSION OF A FEATURE IS NOT A BLOCKER ON THE ONE BEING ASKED FOR
+**Read the request against the blocker before you believe the blocker.**
+**Why:** S191. `plan.md` had carried the soundscape as unbuilt behind two named blockers for ninety-nine
+sessions. One of them -- *"the mod menu is a FLAT list whose cursor IS the `SettingId`, so the
+per-category toggles and volume sliders need submenu support first"* -- was perfectly true about the
+feature the S130 plan had imagined, which had a toggle and a slider **per category**. The user asked for
+**one toggle**. One toggle is one flat row; the submenu was never on the path, and a correct, specific,
+well-argued blocker had been quietly deterring the work it did not actually apply to.
+**The shape to watch for:** a blocker is a fact about a DESIGN, and designs drift while the sentence
+stays put. The older and better-argued the note, the more it reads as a fact about the FEATURE.
+**Corollary, the other half of the same session:** the second blocker (*"`AudioEngine` is a SINGLE voice
+and needs a software mixer"*) was true about the code and false about the requirement -- the library
+already did the mixing (`L-104`). Between them: **a carried-forward blocker names an obstacle someone
+once hit, never a property of the problem.** Re-derive it against today's request and today's library.
+
+### L-105 A CAP AND A SCHEDULER ARE DESIGN CAUTION, AND CAUTION DELETES INFORMATION
+**When a feature's job is to report what is there, ask what your safety margin is hiding before you add
+it.** A limit on how many things are reported, and a global cycle that reports them in turn, both feel
+like prudence. Both are edits to the answer.
+**Why:** S191. The soundscape shipped its first build with a nearest-ten cap and a 3 s global sweep, on
+reasoning that was sound in isolation -- thirty simultaneous sounds would be noise, and one ping per tick
+bounds the game-thread cost that `L-88` cares about. The user rejected both in one line: *"not nearest 10
+interactibles. there should be no limit other than the 20 step range... regarding the 3 second sweep,
+unnecessary. make it work the same way pathing already does, where entities are tracked in realtime and
+each entity plays its own sound."*
+**What each one actually cost:**
+* the **cap** silently hid entities that were in range. For a player whose only way to know a chest is
+  there is that it makes a noise, "the eleventh nearest thing does not exist" is not a safety margin.
+* the **sweep** replaced *where things are* with *where things were when the sweep started*, and made one
+  global rhythm out of what should have been N independent ones.
+**And the caution turned out to be unnecessary on its own terms.** The user's own scheme -- per-entity
+periods that differ slightly (1.0 s, 1.1 s, 1.2 s) -- prevents collisions better than the stagger did,
+because differing periods maintain their separation with no scheduler, while a stagger has to be kept.
+The same scheme self-thins a crowd, since the twentieth voice of a kind repeats every 3 s rather than
+every 1 s. **The constraint the cap existed to satisfy was already satisfied by the mechanism that told
+things apart.**
+**How to apply:** when you are about to bound the OUTPUT of a reporting feature, say out loud what the
+bound removes and whether the user asked for it removed. Bound the COST instead -- work per frame, memory,
+allocation -- and let the report be complete. `kMaxStartsPerFrame` (defer a voice one frame) is a cost
+bound; `kMaxPerSweep` (never mention the eleventh chest) was an answer bound wearing the same clothes.
+
+### L-106 A CONSTANT AND AN ASSET PROPERTY THAT MUST BE COMPARED WILL NOT BE, BECAUSE THEY LIVE APART
+**When a tuning constant has to hold against a property of the DATA -- a clip length, a text width, a
+table size -- neither file mentions the other, so the relationship is never checked. Compute it once,
+in code, and let the code enforce it.**
+**Why:** S191. The soundscape's repeat period was `1000 ms` for the first voice of each category, and
+`npc.wav` is `1.307 s`. Those two numbers live in different files and neither is wrong on its own, so
+the nearest NPC re-triggered 0.3 s before its own sound had finished and layered the clip over itself
+through a second voice of the pool -- from the first build, through a whole redesign, and through two
+review passes that read both files. What finally surfaced it was an unrelated change (pitching DOWN
+lengthens a clip) that forced the question *does it still fit?* -- a question nobody had asked when the
+answer was already no.
+**The tell:** any constant whose correctness depends on "how long/big is the thing it is applied to".
+The asset table in `debug.md` had recorded a 7.3x spread in clip durations and even warned that *"a
+loop period must be derived from each clip's own length; a single shared period would either truncate
+the long ones or leave the short ones silent"* -- written in S130, read during this session, and not
+applied. **A documented limit is not an enforced one** (`L-102`'s companion lesson, again).
+**How to apply:** derive the constant from the data instead of asserting it beside the data. Here the
+period is floored at the clip's own duration *at that voice's pitch* plus a gap, so the relationship
+cannot go stale when an asset is replaced or a pitch range widens. Then check the whole matrix, not the
+case you were looking at: the floor had to be added BEFORE the per-slot step, or two floored slots of
+one category would have come out with identical periods and lost the drift that keeps them apart.
+
+### L-104 ⟲ A REFERENCE IMPLEMENTATION CARRIES WHAT A HEADER CANNOT -- READ IT EVEN WHEN YOUR VERSION WOULD WORK
+**The API docs tell you what is legal. The working port tells you which legal thing survives contact.**
+**Why:** S191. The soundscape needed several sounds at once, and the plan was to verify the one
+architectural assumption -- that SDL mixes several streams -- with a purpose-built disk-driver test
+harness. The user: *"check pixel remasters for working implementation. sdl can most definitely play
+multiple separate streams, we have it working there for wall tones, audio beacon."* Five sibling mods
+had shipped it since before V1.0.
+**What reading it actually changed** -- none of which was wrong in the draft, and all of which was worse:
+* the draft opened the device *through* the beacon's stream (`SDL_OpenAudioDeviceStream`) and bound the
+  rest to it, so **the beacon owned the device** and destroying that one stream would have torn down the
+  pool. The reference opens the device on its own and binds every voice the same way. Symmetrical.
+* `SDL_GetAudioStreamQueued` **returns -1 on failure**, which a raw `<` comparison reads as "the most
+  idle voice" -- i.e. a broken stream would have been chosen every time. The reference clamps it. The
+  header says "-1 on failure" in a line nobody reads twice; the port says it by clamping.
+* the reference carries a comment that forgetting `SDL_ResumeAudioDevice` is a *silent* no-audio failure.
+**The point is not that the draft was broken** -- it would probably have worked. It is that a header
+documents an API and a port documents the API's *behaviour under use*: which of two legal call sequences
+tears down cleanly, and which return value bites. That is never in the header, and it cost one grep.
+**`⟲` because this is `L-98` again** (SDL3 + the FFPR mods were named for controller support and not
+used; it cost a public release its PlayStation pads). Same instinct, milder consequence, caught earlier
+-- by the user, not by me. **Check the FFPR mods FIRST for anything input-, audio- or menu-shaped**, and
+"my approach also works" is not a reason to skip it.
 
 ---
 

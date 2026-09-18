@@ -11,8 +11,31 @@
 namespace AudioClips {
 namespace {
 
-Clip g_objective;
-Clip g_activeTarget;
+// One row per AudioClips::Sound, in enum order. The static_assert under the table is what keeps
+// that true, so a new sound is added to the enum and to this table together or the build stops --
+// the same shape phrasebook.cpp and mod_menu.cpp already use for their positional tables.
+struct Entry {
+    int         resId;
+    const char* name;   // log only; never spoken
+};
+const Entry kSounds[] = {
+    { IDR_SND_OBJECTIVE,     "objective"     },
+    { IDR_SND_ACTIVE_TARGET, "active_target" },
+    { IDR_SND_EXIT,          "entrance"      },
+    { IDR_SND_DOOR,          "door"          },
+    { IDR_SND_SHOP,          "shop"          },
+    { IDR_SND_SAVE_CRYSTAL,  "save_crystal"  },
+    { IDR_SND_GATE_CRYSTAL,  "gate_crystal"  },
+    { IDR_SND_TREASURE,      "treasure"      },
+    { IDR_SND_NPC,           "npc"           },
+    { IDR_SND_OBJECT,        "interactable"  },
+    { IDR_SND_ENEMY,         "enemy"         },
+    { IDR_SND_ITEM,          "item"          },
+};
+static_assert(sizeof(kSounds) / sizeof(kSounds[0]) == static_cast<size_t>(Sound::Count),
+              "audio_clips.cpp kSounds and AudioClips::Sound are out of sync");
+
+Clip g_clips[static_cast<size_t>(Sound::Count)];
 bool g_ready = false;
 
 // The HMODULE of THIS dll, resolved from the address of a function inside it.
@@ -117,20 +140,32 @@ bool LoadOne(int resId, const char* name, Clip& out) {
 
 bool Init() {
     if (g_ready) return true;
-    const bool a = LoadOne(IDR_SND_OBJECTIVE,     "objective",     g_objective);
-    const bool b = LoadOne(IDR_SND_ACTIVE_TARGET, "active_target", g_activeTarget);
-    g_ready = a || b;   // one bad clip must not silence the other
-    if (!g_ready) Log::Write("AUDIO", "AudioClips: no sounds decoded — the beacon will stay silent");
+    int ok = 0;
+    for (size_t i = 0; i < static_cast<size_t>(Sound::Count); ++i)
+        if (LoadOne(kSounds[i].resId, kSounds[i].name, g_clips[i])) ++ok;
+    // ONE BAD CLIP MUST NOT SILENCE THE OTHERS. Get() answers null for whichever failed and its
+    // caller plays nothing; every other sound is unaffected. Only a total failure is worth a line
+    // of its own, because that one means the embed or the device is broken rather than one asset.
+    g_ready = ok > 0;
+    if (!g_ready) {
+        Log::Write("AUDIO", "AudioClips: no sounds decoded — the beacon and soundscape stay silent");
+    } else if (ok < static_cast<int>(Sound::Count)) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "AudioClips: %d of %d sounds decoded", ok, static_cast<int>(Sound::Count));
+        Log::Write("AUDIO", msg);
+    }
     return g_ready;
 }
 
 void Shutdown() {
-    g_objective   = Clip{};
-    g_activeTarget = Clip{};
+    for (Clip& c : g_clips) c = Clip{};
     g_ready = false;
 }
 
-const Clip* Objective()    { return g_objective.samples.empty()    ? nullptr : &g_objective; }
-const Clip* ActiveTarget() { return g_activeTarget.samples.empty() ? nullptr : &g_activeTarget; }
+const Clip* Get(Sound s) {
+    const size_t i = static_cast<size_t>(s);
+    if (i >= static_cast<size_t>(Sound::Count)) return nullptr;   // never fault on a bad id
+    return g_clips[i].samples.empty() ? nullptr : &g_clips[i];
+}
 
 } // namespace AudioClips

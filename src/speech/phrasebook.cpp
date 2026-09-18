@@ -204,6 +204,14 @@ const Row kTable[] = {
     EN(L"Yellow"),
     EN(L"Pink"),
     EN(L"Purple"),
+
+    // S191: the Soundscape rows -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"Soundscape"),
+    EN(L"A sound for each thing near you, repeating from the direction it is in."),
+    EN(L"Off plays nothing."),
+    EN(L"On gives every door, shop, chest, crystal, person, enemy and item within about twenty steps its own repeating sound, played from the direction it is in. Nearer things are louder. Where several of a kind are near you they are spread in pitch, higher and lower than normal, and each repeats at a slightly different rate, so you can tell them apart."),
+    EN(L"Soundscape volume"),
+    EN(L"How loud the soundscape plays."),
 };
 
 #undef EN

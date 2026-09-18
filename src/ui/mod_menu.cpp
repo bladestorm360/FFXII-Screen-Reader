@@ -129,6 +129,16 @@ const Setting kSettings[] = {
       { Id::BeaconOff,            Id::BeaconOn },
       { Id::SochenPuzzlesDescOff, Id::SochenPuzzlesDescOn },
       Id::SochenPuzzlesDesc, "sochen_puzzles", 0, &SochenDoors::InPalace },
+    // S191, user's request: the entity soundscape. Default OFF on the user's explicit instruction --
+    // it is continuous ambient audio over the game's own, so it must be something the player chose.
+    // Not context-gated: soundscape.cpp reads it on the field tick and is silent everywhere else on
+    // its own, and a row that disappeared in a menu would be a row nobody could turn on.
+    { Id::SettingSoundscape, Kind::Named, 2,
+      { Id::BeaconOff,         Id::BeaconOn },
+      { Id::SoundscapeDescOff, Id::SoundscapeDescOn },
+      Id::SoundscapeDesc, "soundscape", 0, nullptr },
+    { Id::SettingSoundscapeVolume, Kind::Percent, kVolumeSteps,
+      {}, {}, Id::SoundscapeVolumeDesc, "soundscape_volume", kVolumeSteps - 1 },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -416,6 +426,11 @@ bool PuzzleSkipOn()  { return EffectiveValue(SettingId::PuzzleSkip)  == static_c
 // false everywhere outside Sochen Cave Palace whatever the stored value says.
 bool SochenPuzzlesOn() { return EffectiveValue(SettingId::SochenPuzzles) == static_cast<int>(Beacon::On); }
 
+// S191. Game thread, on every field frame -- this is the load that makes the soundscape free when it
+// is off, so it must stay a relaxed atomic read and nothing more. NOT context-gated: the row has no
+// visibility predicate, so EffectiveValue here is just the stored value.
+bool SoundscapeOn() { return EffectiveValue(SettingId::Soundscape) == static_cast<int>(Beacon::On); }
+
 bool ControllerOn() {
     return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);
 }
@@ -428,6 +443,7 @@ bool UnreachableFilterOn() {
 
 float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }
+float SoundscapeVolume() { return GainOf(SettingId::SoundscapeVolume); }   // S191
 
 bool IsOpen() { return g_open.load(std::memory_order_relaxed); }
 

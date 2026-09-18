@@ -1,5 +1,6 @@
 #include "navigation/navigation.h"
 #include "navigation/nav_hooks.h"
+#include "navigation/soundscape.h"
 #include "navigation/nav_commands.h"
 #include "navigation/entity_list.h"
 #include "navigation/item_scan.h"
@@ -44,6 +45,8 @@ void Shutdown() {
     TreasureState::Shutdown();
     ItemScan::Shutdown();
     NavHooks::Shutdown();
+    // AFTER the hooks are gone, so the field tick can no longer be mid-sweep while we clear it.
+    Soundscape::Stop();
     PathPlanner::Shutdown();
 }
 

@@ -4,6 +4,7 @@
 #include "navigation/bullet_query.h"
 #include "navigation/path_planner.h"
 #include "navigation/audio_beacon.h"
+#include "navigation/soundscape.h"
 #include "navigation/auto_walk.h"
 #include "input/pad_router.h"
 #include "navigation/nav_probe.h"
@@ -168,6 +169,12 @@ uint64_t __fastcall HookedFieldFrame() {
         // AFTER the beacon, so the leg snapshot auto-walk steers by is post-advance -- same-frame
         // fresh, never a corner behind. One relaxed load when idle.
         { STALL_SCOPE("AutoWalk::OnGameFrame"); AutoWalk::OnGameFrame(); }
+        // Below the beacon/auto-walk pair above, which have a real ordering dependency on each other
+        // (the leg snapshot) that nothing may sit between. The soundscape only needs to be somewhere
+        // after the beacon: on a frame where both want to sound, the beacon's ping is then already
+        // queued on its own voice and the soundscape layers under it rather than racing it. One
+        // relaxed load when the row is off, which is the shipped default -- see soundscape.h.
+        { STALL_SCOPE("Soundscape::OnGameFrame"); Soundscape::OnGameFrame(); }
         // The pad router's context verdict. It MUST be computed here rather than on the input
         // poll: IsFieldNavSafe and PartyEngagement are game-thread reads (the latter walks the
         // actor pool), and the poll thread only ever reads the stamped result. The stamp is what

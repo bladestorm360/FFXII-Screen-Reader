@@ -93,6 +93,18 @@ enum class SettingId : int {
     // S180, visible ONLY while a Sochen Cave Palace script is live (SochenDoors::InPalace). On marks
     // the waterfall and clock puzzles solved in the save block. Default OFF -- it writes game state.
     SochenPuzzles,
+    // S191, user's request: the entity soundscape and its volume. Default OFF, in the user's own
+    // words -- *"soundscape should be toggled off by default, same as audio beacon and target
+    // beacon"*. Appended at the END so every existing row keeps the position the player knows, and
+    // deliberately NOT context-gated: it is a field feature, the field tick is what drives it, and a
+    // row that vanished off the field would just be a row the player could not find.
+    //
+    // ⚠ NOTE FOR WHOEVER READS THAT QUOTE NEXT: `audio_beacon` and `target_beacon` actually default
+    // to 1 (On) in kSettings, and have since S95. The instruction above is unambiguous about the
+    // soundscape itself and that is what is implemented; the comparison is recorded here as the
+    // user's words, not as a claim about the other two rows, and neither of them was touched.
+    Soundscape,
+    SoundscapeVolume,
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
@@ -128,12 +140,14 @@ bool UnreachableFilterOn(); // S179/S182: the list filter only -- never routing,
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
 bool SochenPuzzlesOn();    // S180: whether Sochen's two door puzzles are marked solved. Game thread
+bool SoundscapeOn();       // S191: whether the entity soundscape runs. Game thread, every field frame
 
 // Playback gain, 0..1, for each beacon. Never returns 0 -- the toggles above are how a beacon is
 // turned off, so the quietest step is still audible and "silent" is never a volume the player can get
 // stuck on without knowing why.
 float BeaconVolume();
 float TargetVolume();
+float SoundscapeVolume();
 
 // `F8` — open/close. Speaks "Mod menu. <setting>, <value>." on open, "Mod menu closed" on close.
 void Toggle();

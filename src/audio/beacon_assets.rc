@@ -3,9 +3,25 @@
 // Paths are relative to THIS FILE's directory (src/audio/), which is how rc.exe resolves them --
 // deliberately not relying on the RC include path being propagated by the generator.
 //
-// Only the two sounds the beacon actually plays are embedded. The other seven files in
-// `FF 12 SFX\` belong to the planned entity-spatialization layer; embedding them before that
-// feature exists would grow the DLL for nothing. See Docs/debug.md.
+// All twelve sounds in `FF 12 SFX\` are now embedded: the two the beacon plays (Session 92) and the
+// ten the soundscape plays (Session 191), one per EntityList::Category that has one. Together they
+// add ~0.92 MB of RCDATA to the DLL, which is the whole cost of the feature's assets -- there is
+// nothing to install and nothing to go missing.
+//
+// Category::Trap has NO sound and therefore no entry here. It is not an omission to fix by pointing
+// it at one of the others: every sound below means a specific thing, and a trap that announced
+// itself as an interactable would be worse than a trap that stays silent (Lessons L-35).
 
 IDR_SND_OBJECTIVE      RCDATA "../../assets/objective.wav"
 IDR_SND_ACTIVE_TARGET  RCDATA "../../assets/active_target.wav"
+
+IDR_SND_EXIT           RCDATA "../../assets/entrance.wav"
+IDR_SND_DOOR           RCDATA "../../assets/door.wav"
+IDR_SND_SHOP           RCDATA "../../assets/shop.wav"
+IDR_SND_SAVE_CRYSTAL   RCDATA "../../assets/save_crystal.wav"
+IDR_SND_GATE_CRYSTAL   RCDATA "../../assets/gate_crystal.wav"
+IDR_SND_TREASURE       RCDATA "../../assets/treasure.wav"
+IDR_SND_NPC            RCDATA "../../assets/npc.wav"
+IDR_SND_OBJECT         RCDATA "../../assets/interactable.wav"
+IDR_SND_ENEMY          RCDATA "../../assets/enemy.wav"
+IDR_SND_ITEM           RCDATA "../../assets/item.wav"

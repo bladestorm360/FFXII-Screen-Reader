@@ -143,13 +143,26 @@ movement, (2) 40m distance cap too small, (3) LOS smoothing cuts through walls.
 - [x] **Door / Shop categories** (Session 92) — split out of Interactables; Shop is a doorway with a
       same-named text-only sign beside it. **The Shop rule's evidence is one district — validate from
       the log before trusting it** (see `debug.md`).
-- [ ] Entity spatialization ("the soundscape") — every entity emitting its type's sound from its own
-      position. ~~Sounds exist for 7 of the categories; `SaveCrystal`/`GateCrystal`/`Items` still
-      needed.~~ **ALL TEN categories now have a sound** (2026-08-03). Designed in `debug.md` and, in
-      full, in the Session 130 plan; **not built**. Blockers, both real: `AudioEngine` is a SINGLE
-      voice (retrigger, no overlap, no looping, no distance gain) and needs a software mixer; and the
-      mod menu is a FLAT list whose cursor IS the `SettingId`, so the per-category toggles and volume
-      sliders need submenu support first. Radius 15 steps = 11.25 world units.
+- [x] **Entity spatialization ("the soundscape")** (Session 191, 2026-09-18) — every entity within
+      **20 steps** (the user's number; 15.0 world units at `g_unitsPerStep = 0.75`) sounding its
+      category's own sound from its own direction, **with no cap: the radius is the only limit**.
+      Each entity is tracked continuously and repeats on its own clock; its slot among the others of
+      its category sets both pitch and period: pitch alternates outward from normal in 5% steps to
+      **±30%** (1.00, +5, -5, +10, -10 …), and the period is `1000 + 100N` ms floored so the clip always
+      finishes before it repeats. The differing periods are what keep two of a kind off each other
+      without any scheduler. Every ping reads its entity's live position at the instant it sounds. Default **Off**, two mod-menu rows
+      (`Soundscape`, `Soundscape volume`). All twelve sounds now embed as RCDATA (+0.92 MB of DLL).
+      `Category::Trap` is the one category with no sound and is left out.
+      **Both recorded blockers turned out not to bind:**
+      * *"`AudioEngine` is a SINGLE voice and needs a software mixer"* — it needed no mixer. One
+        logical SDL device with nine bound streams; SDL does the summing. This is the shape the FFPR
+        mods already ship (`ff1-screen-reader\Utils\AudioEngine.cs`) and it was ported from there.
+      * *"the mod menu is a FLAT list, so per-category toggles need submenu support first"* — the
+        request was for ONE toggle, not per-category ones, so the flat menu took two rows and the
+        submenu was never needed. **A blocker written against a bigger version of a feature is not a
+        blocker on the version actually asked for** — check the request against it before believing it.
+      **PLAY-CONFIRMED 2026-09-18** (user, on the deployed build: *"soundscape works"*). See `debug.md`
+      (Session 92 section, now marked BUILT).
 - [ ] Map menu reading
 - [ ] Locale detection finalized via `GetUserDefaultLangID` hook
 - [ ] Phrasebook live across all 12 locales

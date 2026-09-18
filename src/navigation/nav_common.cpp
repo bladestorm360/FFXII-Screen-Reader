@@ -10,6 +10,7 @@ namespace {
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kRadToDeg = 180.0f / kPi;
+constexpr float kDegToRad = kPi / 180.0f;
 
 // World units per spoken "step". FFXII's field world is in METERS (offline: Bullet gravity
 // -10, char capsule height 0.8 + radius 0.6 ~= a 2 m humanoid). ~0.75 m stride => 1 step.
@@ -96,6 +97,17 @@ const wchar_t* CardinalOfHeading(float headingRad) {
 // a second caller deriving its own version of it.
 float RelativeBearingDeg(const FVec3& from, const FVec3& to, float facingRad) {
     return Norm360(BearingDeg(from, to) - CompassFaceDeg(facingRad));
+}
+
+void BearingToPan(const FVec3& from, const FVec3& to, float facingRad,
+                  float& outPan, float& outFront) {
+    const float dx = to.x - from.x;
+    const float dz = to.z - from.z;
+    if (std::fabs(dx) < 1e-4f && std::fabs(dz) < 1e-4f) { outPan = 0.0f; outFront = 1.0f; return; }
+    // 0 deg = forward, 90 = right, 180 = behind, 270 = left -> sin is the L/R axis, cos front/back.
+    const float rel = RelativeBearingDeg(from, to, facingRad) * kDegToRad;
+    outPan   = std::sin(rel);
+    outFront = std::cos(rel);
 }
 
 const wchar_t* CardinalBearingRelative(const FVec3& from, const FVec3& to, float facingRad) {

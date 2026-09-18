@@ -60,6 +60,19 @@ const wchar_t* CardinalOfHeading(float headingRad);
 // Two encodings of one angle must come from one number, or they drift apart in exactly this way.
 float          RelativeBearingDeg(const FVec3& from, const FVec3& to, float facingRad);
 
+// THE SAME NUMBER, rendered as the two values a stereo voice needs:
+//   pan   = sin(relative bearing)  -- -1 hard left .. 0 centre .. +1 hard right
+//   front = cos(relative bearing)  -- +1 dead ahead, 0 abeam, -1 directly behind
+// Degenerate (from == to) answers centre-and-ahead rather than dividing by zero.
+//
+// It lives here and not in whichever module happens to play a sound, for exactly the reason the
+// paragraph above gives: this IS the Session 92 bug's shape. The beacon had its own copy, the
+// soundscape would have made a second, and a third caller would have made a third -- each one a
+// fresh chance to flip a sign that `cos()` being even would hide. There is one bearing; these are
+// its two renderings; take them from here.
+void           BearingToPan(const FVec3& from, const FVec3& to, float facingRad,
+                            float& outPan, float& outFront);
+
 // The raw octant INDEX in the relative frame (0 = forward, 2 = right, 4 = behind, 6 = left,
 // clockwise), and the word for an index. EVEN indices are cardinal, ODD are diagonal —
 // PathDirections relies on that parity to enforce "a diagonal word only ever describes a genuinely

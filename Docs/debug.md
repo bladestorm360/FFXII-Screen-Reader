@@ -1718,13 +1718,64 @@ object → `setfieldsignlocationjumpinfo` link and stop using geometry as a stan
 relationship. Tester's definition to satisfy: *"doors are portals that have map data, shops are doors
 that also have signs with the same label within a close distance from them."*
 
-### Session 92 — PLANNED, NOT BUILT: entity spatialization (the other seven sounds)
+### Session 92 — entity spatialization (the other ten sounds) — **BUILT IN SESSION 191**
 
-Recorded so the intent survives; **none of this exists in code.** The audio beacon (Session 92) plays
-two of the nine sounds in `D:\Games\Dev\Custom\FFXII\FF 12 SFX\`. The other seven are for a **spatial
-positioning system**: every scanned entity emits its type's sound from its own world position, and the
-sound *moves with the entity*. That is a much larger feature than the beacon — many simultaneous
-sources instead of one, live per-source tracking, and a real distance model.
+> **STATUS CHANGED 2026-09-18 (S191): this is no longer a plan. It is shipped** as `Soundscape`, a
+> default-off mod-menu row driving `src\navigation\soundscape.cpp`. Everything below is kept because
+> the CONSTRAINTS it recorded are what the build had to satisfy, and three of them were decisive; each
+> is annotated with how it was answered. The asset table below is also still the canonical mapping.
+>
+> **What shipped, in one paragraph.** **Per-entity continuous voices, exactly as sketched below, and with
+> NO cap** — every interactable within 20 steps is tracked and repeats on its own independent clock. A
+> voice's slot among the others of its category sets both its pitch and its period, to the user's own
+> specification: *"NPC1: sound plays 1S apart at normal pitch / NPC2: plays 1.1S apart at 5% pitch
+> increase"*. Each ping reads its entity's LIVE position at the instant it sounds, so a voice follows a
+> walking NPC. All twelve sounds are now embedded as RCDATA. `Category::Trap` is the one category with no
+> sound and is left out rather than borrowed against.
+>
+> **A SWEEP WAS BUILT FIRST AND REJECTED BY THE USER, and the rejection is the useful record.** The first
+> build capped each cycle at the nearest ten and ran them as one global staggered sweep every 3 s. The
+> user: *"not nearest 10 interactibles. there should be no limit other than the 20 step range... regarding
+> the 3 second sweep, unnecessary. make it work the same way pathing already does, where entities are
+> tracked in realtime and each entity plays its own sound."* Both halves were design caution that cost
+> real information: the cap hid entities, and the sweep replaced "where things are" with "where things
+> were when the sweep started".
+>
+> **What that changed, mechanically, and it is worth understanding before touching the pacing:**
+> * **Overlap is prevented by ARITHMETIC, not by a scheduler.** Voices at 1.0 s and 1.1 s drift 100 ms
+>   apart every cycle and wrap; they cannot stay on top of each other, and nothing has to keep them in
+>   step. A stagger has to be maintained; a period difference maintains itself.
+> * **A slot is OWNED for as long as the entity is tracked** — handed out on arrival, released on
+>   departure, never re-derived from live distance. Re-deriving it would make two NPCs walking past each
+>   other swap pitch and period mid-loop, which is both an audible glitch and a re-phasing into the exact
+>   collision the slots exist to prevent.
+> * **Pitch spreads ±30%, alternating outward** (1.00, +5, -5, +10, -10 …), which is thirteen
+>   distinguishable voices per category rather than the seven a one-directional climb gave. Past ~30% a
+>   clip stops sounding like itself, so that is a ceiling; slots beyond it share the extremes and are
+>   separated by period alone. The period never stops growing, which also thins a crowd on its own.
+> * **A voice must finish before it repeats, and that is NOT automatic.** `npc` is 1.307 s against a
+>   1.0 s slot-0 period, so the nearest NPC was re-triggering before its own sound had finished — true
+>   from the first build, and pitching DOWN makes it worse (a clip at 0.70x runs 43% longer; four of the
+>   ten outlast a one-second period there). The period is now floored at the clip's own length at that
+>   slot's pitch plus a gap, with the per-slot step added ON TOP of the floor so two floored slots of one
+>   category still differ. Six of the ten sounds never reach the floor and keep 1.0 / 1.1 / 1.2 s exactly.
+> * **`kMaxTracked` / `kMaxStartsPerFrame` are safety bounds, not caps.** The first bounds a vector and
+>   LOGS if it ever clips (clipping would violate the no-limit rule); the second defers a voice by one
+>   frame, ~7-16 ms, so a crowd coming due together cannot become a frame spike.
+>
+> **The one thing still NOT as sketched:** *"voices phase-offset from a hash of the sceneObj pointer so
+> they never start together"*. The initial offset is a global join counter instead — deterministic, and it
+> spreads arrivals in the order they arrive, which a hash cannot do. It only has to break the initial
+> pile-up; the differing periods do the rest from there. Identity is still the scene-object pointer
+> (`EntityList::NearbyEntity::id`), which is also the handle each ping re-reads its live position through.
+>
+> **`a mod-menu submenu`** — not needed. The user asked for ONE toggle, so the flat menu takes two rows
+> (`Soundscape`, `Soundscape volume`) and the submenu blocker recorded in `plan.md` never applied.
+
+Original Session 92 sketch, kept from here down. The audio beacon plays two of the sounds in
+`D:\Games\Dev\Custom\FFXII\FF 12 SFX\`. The others are for a **spatial positioning system**: every
+scanned entity emits its type's sound from its own world position. That is a much larger feature than
+the beacon — many simultaneous sources instead of one, and a real distance model.
 
 **Asset inventory** (verified 2026-07-29 — ~~**all nine are mono, 44,100 Hz, 16-bit PCM**~~, so one
 loader path covers every one; the originals are DAW-library exports that are 60–90% metadata and must
@@ -1765,17 +1816,39 @@ sourcing sounds for those. That is a pending asset, not a design problem.
 - `AudioEngine` today is a **single stream playing one sound at a time** (retrigger, not overlap). A
   many-source version needs either several streams or a real mixer, plus a nearest-N cull — do not
   assume it scales by being called more often.
+  > **ANSWERED S191: several streams, and it is the FFPR pattern, not a local invention.** One logical
+  > device (`SDL_OpenAudioDevice`) with nine `SDL_AudioStream`s bound to it (`SDL_BindAudioStream`) --
+  > one for the beacon, eight for the soundscape pool -- and SDL mixes every bound stream itself. Ported
+  > from `D:\Games\Dev\Unity\FFPR\ff1\ff1-screen-reader\Utils\AudioEngine.cs`, whose own header reads
+  > *"One logical playback device with several SDL_AudioStreams bound to it; SDL mixes every bound stream
+  > automatically"* and which has shipped this for the FFPR wall tones and beacon.
+  > **A software mixer was considered and rejected**: summing ten clips of up to 1.3 s is ~1.7 M float
+  > ops in one game-thread call, a visible hitch every sweep. Per-stream costs one interleave per ping.
+  > **The nearest-N cull was NOT kept**: the user's instruction is that the 20-step radius is the only
+  > limit. Concurrency is bounded by the periods instead -- roughly `sum(clipLength / period)` over what
+  > is in range, which is about six voices for twenty entities and twelve for forty. The pool is sixteen.
 - Entity identity is the **scene-object pointer**, not the label (`entity_scan.h`). A voice must key
   on that: `EntityList::OnFieldFrame` rebuilds the list constantly and labels get numbered suffixes.
 - The **polled-monitor exemption** in `audio_beacon.h` covers one beacon. A per-entity version is a
   much bigger per-frame cost and needs its own approval and its own measurement.
+  > **ANSWERED S191: approved by the user in the request itself, and documented in `soundscape.h`.**
+  > The per-frame cost is bounded by construction rather than by care: off (the default) is one relaxed
+  > atomic load; on and between pings is a clock compare; on a ping tick it is ONE ping, never more than
+  > one per frame; and the entity gather runs once per 3 s sweep. `STALL_SCOPE("Soundscape::OnGameFrame")`
+  > is in the field-frame hook, so the measurement lands in every play log without asking for one.
 - The pan / behind-attenuation / lowpass math in `audio_engine.cpp` **is the reusable part** — extend
   it, do not stand up a second spatialization path (CLAUDE.md CENTRALIZE).
+  > **ANSWERED S191: obeyed literally.** Both channels go through one private `Render()`; pan, the three
+  > behind cues, the pitch clamp and the interleave exist exactly once. The bearing->pan conversion itself
+  > moved OUT of `audio_beacon.cpp` into `NavCommon::BearingToPan`, where the second caller could reach it
+  > -- `nav_common.h` had already asked for that in as many words after the S92 mirrored-pan bug.
 
-**KEYWORDS: spatialization spatial audio entity sounds positional 3D audio FF 12 SFX objective.wav
+**KEYWORDS: soundscape sweep spatialization spatial audio entity sounds positional 3D audio FF 12 SFX objective.wav
 Active_target.wav Entrance.wav door.wav shop.wav Treasure.wav npc.wav enemy.wav interactable.wav
 SaveCrystal GateCrystal Items missing sound category mapping AudioEngine voices nearest-N cull
-audio beacon SDL3 mono 44100 16-bit RCDATA beacon_assets.rc**
+audio beacon SDL3 mono 44100 16-bit RCDATA beacon_assets.rc SDL_BindAudioStream SDL_OpenAudioDevice
+logical device bound streams PlayScape SilenceScape Soundscape::OnGameFrame CollectNearby pitch spread
+Trap has no sound FFPR AudioEngine.cs reference implementation**
 
 ### Session 91 — STRUCK: pagination driven by an observed KEYPRESS; and the `FUN_003cb650` dialogue lead
 

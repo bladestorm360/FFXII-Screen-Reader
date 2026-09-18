@@ -179,6 +179,7 @@ add_library(${PROJECT_NAME} SHARED
     src/navigation/sochen_guide.cpp
     src/navigation/path_planner.cpp
     src/navigation/audio_beacon.cpp
+    src/navigation/soundscape.cpp
     src/navigation/auto_walk.cpp
 )
 

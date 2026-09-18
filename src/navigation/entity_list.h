@@ -158,4 +158,40 @@ struct NearbyNPC {
 // class of question against the same locked list.
 int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& out);
 
+// One listed entity, reduced to what a SPATIAL consumer needs: what it is, where it is, how far.
+// No label -- the soundscape plays a sound per category and never speaks, so carrying a wstring per
+// entity through a membership refresh would be copying text nobody reads.
+struct NearbyEntity {
+    Category cat    = Category::Object;
+    FVec3    pos;
+    float    dist2D = 0.0f;
+    void*    id     = nullptr;   // the scene object -- IDENTITY, stable for the life of the map, and
+                                 // also the handle a caller re-reads a live position through
+                                 // (PlayerState::ReadSceneObjectPos). Null for fixed exits, which
+                                 // have no scene node and do not move (entity_scan.h).
+};
+
+// Every listed entity within `maxDist` of `from`, nearest first, positions refreshed. Returns how
+// many were written. GAME THREAD callers only -- it reads live transforms.
+//
+// `maxOut` IS A SAFETY BOUND ON THE OUTPUT VECTOR, NOT A DESIGN CAP. Pass something larger than any
+// map can plausibly put inside the radius and treat a full result as the pathological case it is;
+// the soundscape deliberately has no nearest-N limit (user's instruction, S191: *"there should be no
+// limit other than the 20 step range"*), so anything that clips here is losing real entities.
+//
+// DELIBERATELY IGNORES THE CATEGORY AND AVAILABILITY FILTERS, which is the one thing that makes this
+// different from FilteredSortedLocked and the reason it is not built on it. `[` / `]` / `=` drive a
+// BROWSING cursor and the filters are how the player narrows what they are stepping through; a
+// soundscape is a picture of what is actually around them, and it would be a trap for the picture to
+// go quiet because the cursor happened to be parked on the Treasure category.
+//
+// `noBearing` entries are dropped: their `pos` is a map-atlas offset rather than a world position
+// (entity_scan.h), so a direction derived from one would be fabricated. Same rule reach_gate.cpp
+// applies, for the same reason.
+//
+// It does NOT rescan. OnFieldFrame already rebuilds the list when a handle-table container streams
+// in, and the caller here runs on a repeating clock forever -- an unconditional rescan on that
+// cadence is precisely the game-thread cost the mod is not allowed to spend on its own initiative.
+int CollectNearby(const FVec3& from, float maxDist, int maxOut, std::vector<NearbyEntity>& out);
+
 } // namespace EntityList

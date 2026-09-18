@@ -243,6 +243,14 @@ enum class Id {
     // END; flag any reword to the user.
     SigilWhite, SigilYellow, SigilPink, SigilPurple,
 
+    // S191: the Soundscape rows. The user asked for the feature by that name ("a soundscape for each
+    // type of interactible entity ... should, of course, be a toggle"), so the row NAME is their own
+    // word rather than one we invented; the two sentences are ours. The Off/On VALUES reuse
+    // BeaconOff/BeaconOn, and the volume row needs no value words at all (Kind::Percent renders a
+    // number). Appended at the END so no earlier positional row shifts. Flag any reword to the user.
+    SettingSoundscape, SoundscapeDesc, SoundscapeDescOff, SoundscapeDescOn,
+    SettingSoundscapeVolume, SoundscapeVolumeDesc,
+
     Count
 };
 

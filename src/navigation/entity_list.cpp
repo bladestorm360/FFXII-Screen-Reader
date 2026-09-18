@@ -602,6 +602,28 @@ int CollectNearestNPCs(const FVec3& from, int maxOut, std::vector<NearbyNPC>& ou
     return static_cast<int>(out.size());
 }
 
+int CollectNearby(const FVec3& from, float maxDist, int maxOut, std::vector<NearbyEntity>& out) {
+    out.clear();
+    if (maxOut <= 0 || maxDist <= 0.0f || !PlayerState::IsFieldActive()) return 0;
+
+    std::lock_guard<std::mutex> lk(g_mutex);
+    RefreshPositionsLocked(from);
+    for (const EntityScan::Entity& e : g_entities) {
+        // A map-atlas offset is not a world position, so there is no direction to pan it to.
+        if (e.noBearing || e.dist2D > maxDist) continue;
+        NearbyEntity n;
+        n.cat    = e.category;
+        n.pos    = e.pos;
+        n.dist2D = e.dist2D;
+        n.id     = e.sceneObj;
+        out.push_back(n);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const NearbyEntity& a, const NearbyEntity& b) { return a.dist2D < b.dist2D; });
+    if (static_cast<int>(out.size()) > maxOut) out.resize(static_cast<size_t>(maxOut));
+    return static_cast<int>(out.size());
+}
+
 std::wstring LabelForSceneObject(void* sceneObj) {
     if (!sceneObj) return std::wstring();
     std::lock_guard<std::mutex> lk(g_mutex);

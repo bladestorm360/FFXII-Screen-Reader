@@ -98,6 +98,12 @@ boundary. Session 152 added that clear and moved the reset into `ResetPhase()`.
 
 `auto_walk.cpp` (`kPendingFreshMs`, `kMaskStaleMs`, `kMinHoldMs`, `kFieldGapMs`, `kNoProgressMs`,
 `kUnstickMs`), `audio_beacon.cpp` (ping interval, `kStuckMs`, `kReplanCooldownMs`),
+`soundscape.cpp` (S191: `kBasePeriodMs`, `kPeriodStepMs`, `kPhaseStepMs`, `kTrackRefreshMs`,
+`kDropGraceMs` — all `GetTickCount64()` deadlines, no frame counts anywhere in that file, and its
+whole schedule is wall-clock by construction. `kMaxStartsPerFrame` IS a per-frame count and is the
+deliberate exception: it bounds WORK PER FRAME, which is the one thing a frame count legitimately
+measures — it never expresses a duration, and a voice it defers starts on the next frame rather than
+being dropped),
 `stall_probe.cpp` (`kStallMs`, `kStallLogIntervalMs`), `ingame_menu_reader.cpp` (the pane-pending
 arm stamp). All keyed to `GetTickCount64()`, so **frame rate cannot move them**.
 
@@ -219,9 +225,11 @@ them.
 > ### ⚠ SCOPE CORRECTION, same session — this claim is TRUE ONLY FOR THE FIELD-TICK CALLEES
 >
 > The sentence originally written here was *"Game speed is not a factor anywhere in this file"*, and
-> that is **an overreach that must not be built on.** It holds for the six callbacks dispatched from
-> `HookedFieldFrame` — `EntityList`, `PathPlanner`, `AudioBeacon`, `AutoWalk`, `NavProbe`,
-> `ShoutMeter` — because those hang off the OUTER function.
+> that is **an overreach that must not be built on.** It holds for the callbacks dispatched from
+> `HookedFieldFrame` — `EntityList`, `PathPlanner`, `AudioBeacon`, `AutoWalk`, `Soundscape` (S191),
+> `PadRouter`, `NavProbe`, `ShoutMeter`, `StatueDiag`, `StatueGuide`, `SochenDoors`, `SochenGuide` —
+> because those hang off the OUTER function. (It said "the six" until S191; the list had grown past
+> six long before that, which is exactly how a count in prose goes stale — the names are the claim.)
 >
 > **It says nothing about the tier-A hooks.** `FUN_0022a770`'s sim loop body calls a dozen subsystem
 > updates, including `FUN_00314020` — *the mod's own former drain point*, which `nav_hooks.cpp:137`

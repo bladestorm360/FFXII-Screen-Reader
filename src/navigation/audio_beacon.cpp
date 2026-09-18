@@ -133,30 +133,15 @@ float IntervalFor(float dist) {
     return kNearInterval + t * (kFarInterval - kNearInterval);
 }
 
-constexpr float kDegToRad = 3.14159265358979f / 180.0f;
-
-// Bearing to `to` in the player's movement frame -> the pan/front pair AudioEngine wants.
+// BEARING -> PAN MOVED TO NavCommon (Session 191), with `kDegToRad`, which had no other user here.
+// It was private to this file until the soundscape needed the identical two lines; the reasoning
+// that used to sit here now sits on NavCommon::BearingToPan, where both callers can read it.
 //
-// facingRad is the camera forward, which is the frame an UP push acts in and the frame the spoken
-// legs are phrased in. The angle comes from NavCommon::RelativeBearingDeg -- the SAME call the
-// spoken octant word is a rendering of -- so the ping and the words cannot disagree.
-//
-// SESSION 92 BUG, fixed here: this used to compute its own `atan2(dx, dz) - facingRad`, which is
-// the exact NEGATION of NavCommon's `atan2(dx, -dz) - CompassFaceDeg(facingRad)` (the Z axis is
-// reflected AND the yaw enters as `180 - yaw`, not `-yaw`). Negating an angle leaves `cos` alone
-// but flips `sin`, so front/back stayed correct while the pan came out MIRRORED: the route spoke
-// "Northwest" and the beacon panned hard right. Do not re-introduce a local bearing here -- the
-// plan for this feature called the pan and the word "two encodings of one value" that "must never
-// be computed twice", and computing it twice is precisely what broke it.
-void BearingToPan(const FVec3& from, const FVec3& to, float facingRad, float& pan, float& front) {
-    const float dx = to.x - from.x;
-    const float dz = to.z - from.z;
-    if (std::fabs(dx) < 1e-4f && std::fabs(dz) < 1e-4f) { pan = 0.0f; front = 1.0f; return; }
-    // 0 deg = forward, 90 = right, 180 = behind, 270 = left -> sin is the L/R axis, cos front/back.
-    const float rel = NavCommon::RelativeBearingDeg(from, to, facingRad) * kDegToRad;
-    pan   = std::sin(rel);
-    front = std::cos(rel);
-}
+// The short version, because it is the one thing never to undo: `facingRad` is the camera forward,
+// which is the frame an UP push acts in and the frame the spoken legs are phrased in, and the angle
+// comes from NavCommon::RelativeBearingDeg -- the SAME call the spoken octant word is a rendering
+// of -- so the ping and the words cannot disagree. Do NOT re-introduce a local bearing here: the
+// Session 92 bug was exactly that, and `cos` being even hid the flipped `sin` for a whole release.
 
 // Perpendicular distance from p to the segment a->b on the ground plane. Same helper shape as
 // PathDirections::PerpDist; kept local because that one is in an anonymous namespace and this file
@@ -225,7 +210,7 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
     float facingRad = 0.0f;
     PlayerState::ReadCameraForwardStable(facingRad);
     float pan0 = 0.0f, front0 = 1.0f;
-    BearingToPan(g_legStart, g_legs.front(), facingRad, pan0, front0);
+    NavCommon::BearingToPan(g_legStart, g_legs.front(), facingRad, pan0, front0);
 
     char m[240];
     snprintf(m, sizeof(m),
@@ -238,7 +223,7 @@ void Seed(const std::vector<FVec3>& legPoints, uint32_t epoch) {
 
 void Stop(StopReason reason) {
     if (g_active.exchange(false, std::memory_order_acq_rel)) {
-        AudioEngine::SilenceAll();
+        AudioEngine::SilenceBeacon();
         Log::Write("BEACON", "stop");
         g_lastStopReason = reason;
     }
@@ -354,7 +339,7 @@ void OnGameFrame() {
             Log::Write("BEACON", m);
         }
         if (busy) {
-            AudioEngine::SilenceAll();
+            AudioEngine::SilenceBeacon();
             g_nextPingMs = 0;
             return;
         }
@@ -414,15 +399,15 @@ void OnGameFrame() {
             // Engaged but nothing committed, or the target ping switched off: say nothing at all. A
             // beacon still leading you to a shop while something is chewing on you is worse than
             // silence, so the route half stays suspended here either way.
-            AudioEngine::SilenceAll();
+            AudioEngine::SilenceBeacon();
             g_nextPingMs = 0;
             return;
         }
         if (now < g_nextPingMs) return;
         const float dist = NavCommon::Distance2D(me, tgt);
         float pan = 0.0f, front = 1.0f;
-        BearingToPan(me, tgt, facingRad, pan, front);
-        AudioEngine::PlayPing(AudioClips::ActiveTarget(), pan, front,
+        NavCommon::BearingToPan(me, tgt, facingRad, pan, front);
+        AudioEngine::PlayPing(AudioClips::Get(AudioClips::Sound::ActiveTarget), pan, front,
                               ModMenu::TargetVolume(), 1.0f);
         g_nextPingMs = now + static_cast<uint64_t>(IntervalFor(dist) * 1000.0f);
         return;   // no arrival cue in combat -- you do not "arrive" at an enemy
@@ -444,7 +429,7 @@ void OnGameFrame() {
             // Arrival: the same sound pitched up, once, then done. Centred and ahead by construction,
             // so the behind cue cannot apply -- the arrival pitch is the whole point of this one.
             if (routeAudio)
-                AudioEngine::PlayPing(AudioClips::Objective(), 0.0f, 1.0f,
+                AudioEngine::PlayPing(AudioClips::Get(AudioClips::Sound::Objective), 0.0f, 1.0f,
                                       ModMenu::BeaconVolume(), kArrivalPitch);
             Log::Write("BEACON", "arrived at destination -> final cue, stop");
             g_lastStopReason = StopReason::Arrived;
@@ -560,8 +545,8 @@ void OnGameFrame() {
     if (!routeAudio) return;
     if (now < g_nextPingMs) return;
     float pan = 0.0f, front = 1.0f;
-    BearingToPan(me, goal, facingRad, pan, front);
-    AudioEngine::PlayPing(AudioClips::Objective(), pan, front,
+    NavCommon::BearingToPan(me, goal, facingRad, pan, front);
+    AudioEngine::PlayPing(AudioClips::Get(AudioClips::Sound::Objective), pan, front,
                           ModMenu::BeaconVolume(), 1.0f);
     g_nextPingMs = now + static_cast<uint64_t>(IntervalFor(dist) * 1000.0f);
 }

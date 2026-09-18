@@ -3971,3 +3971,224 @@ whatever other number happens to be cached**, which is what the old build effect
 ### State
 
 Built, deployed, play-confirmed, committed. Pathing still untested.
+
+## Session 191 — 2026-09-18 — [audio] The soundscape: every interactable sounding from where it is
+
+KEYWORDS: soundscape, entity spatialization, spatial audio, sweep, FF 12 SFX, RCDATA, beacon_assets.rc,
+AudioClips::Sound, AudioClips::Get, AudioEngine::PlayScape, SilenceScape, SilenceBeacon, OpenVoice,
+SDL_OpenAudioDevice, SDL_CreateAudioStream, SDL_BindAudioStream, SDL_ResumeAudioDevice,
+SDL_GetAudioStreamQueued, logical device, bound streams, voice pool, NavCommon::BearingToPan,
+EntityList::CollectNearby, NearbyEntity, ModMenu Soundscape, soundscape_volume, pitch spread,
+Category::Trap no sound, FFPR AudioEngine.cs, polled monitor, S92 planned not built, per-entity voices,
+Track, ClaimSlot, slot, period, kBasePeriodMs, kPeriodStepMs, kPitchStep, no cap, sweep rejected,
+realtime tracking, kMaxStartsPerFrame, kTrackRefreshMs, kDropGraceMs, hysteresis, PitchForSlot,
+PeriodForSlot, kPitchMaxStep, kMinGapMs, 30 percent each way, self-overlap, clip longer than period
+
+**The Session 92 plan that had sat unbuilt for ninety-nine sessions.** `debug.md` had it written up as
+"PLANNED, NOT BUILT: entity spatialization (the other seven sounds)", `plan.md` had it unticked with
+two blockers, and ten of the twelve sounds in `FF 12 SFX\` had never been embedded. The user asked for
+it in one message: *"a soundscape for each type of interactible entity... each entity and exit within
+say, 20 steps of the player play a sound... should, of course, be a toggle... slight pitch alteration
+to differentiate... toggled off by default"*.
+
+### What shipped
+
+**Per-entity continuous voices, and no cap: the 20-step radius is the only limit.** Every interactable
+in range is tracked and repeats on **its own clock**. Each ping reads that entity's LIVE position at the
+instant it sounds, so a voice follows a walking NPC rather than a stale listing; it is panned by bearing,
+attenuated by distance (full at your feet, 30% at the rim), and given the same behind treatment the
+beacons get — quieter, low-passed and pitched down across the whole rear hemisphere.
+
+**Two of a kind are told apart by slot**, to the user's own specification:
+
+> NPC1: sound plays 1S apart at normal pitch
+> NPC2: plays 1.1S apart at 5% pitch increase
+
+So slot N repeats every `1000 + 100N` ms, and slot 1 is +5%. Pitch is what makes them two
+*identifiable* things; **the period is what keeps them off each other**, and it does that with no
+scheduler at all — 1.0 s and 1.1 s drift 100 ms apart every cycle and wrap, so they cannot stay in
+phase. The period never stops growing, which is also what thins a crowd out on its own — the twentieth
+NPC in range sounds every 3 s rather than every 1 s.
+
+**Pitch goes 30% EACH WAY** — the user's correction on review: *"must be 30% each way, higher and
+lower"*. It alternates outward from normal in 5% steps (1.00, +5, -5, +10, -10 … ±30%), which keeps
+their original example intact (slot 1 IS +5%), gives **thirteen** distinguishable voices per category
+instead of seven, and puts adjacent slots on opposite sides of normal so the two nearest of a kind are
+10% apart rather than 5%. ±30% is a ceiling rather than a target: past roughly that, a clip stops
+sounding like itself, which trades "which NPC is that" for "what was that".
+
+### The pitch change surfaced a defect that was already there
+
+Lowering a playback rate LENGTHENS a clip: at 0.70x a sound runs 43% longer. Checking whether that
+still fits inside its own repeat period turned up something that had nothing to do with the change --
+**`npc.wav` is 1.307 s and slot 0's period was 1.0 s**, so the nearest NPC had been re-triggering 0.3 s
+before its own sound finished, layering the same clip on itself at the same pitch through a second
+voice of the pool. True since the file was first written, in both the sweep build and the per-entity
+one. At the new pitch floor, four of the ten sounds outlast a one-second period.
+
+**The period now has a floor**: the clip's own length *at that slot's pitch*, plus a 200 ms gap, with
+the per-slot step added ON TOP of the floor rather than to a bare constant. That last detail is the one
+that matters -- flooring alone would give two floored slots of one category the same period and kill
+the drift that keeps them apart. Six of the ten sounds never reach the floor and keep the user's
+1.0 / 1.1 / 1.2 s exactly; `npc` slot 0 becomes 1.51 s, which is as close to a second as a 1.3 s sound
+can get. Verified across every clip: no duplicate periods within a category, and no clip outlasting its
+own period at any slot. → `Lessons.md` **L-106**.
+
+**A slot is owned for as long as the entity is tracked** — claimed on arrival, released on departure,
+never re-derived from live distance. Re-deriving it would make two NPCs walking past each other swap
+pitch and period mid-loop: an audible glitch, and a re-phasing into the exact collision slots exist to
+prevent. A 1.5 s grace window on departure means hovering at the range boundary does not churn a
+voice's identity either.
+
+Two mod-menu rows, `Soundscape` (default **Off**) and `Soundscape volume`. Nothing speaks. Nothing
+routes. `\`, the beacon and auto-walk are untouched.
+
+### The first build had a cap and a sweep, and the user threw both out
+
+The first build of this session capped each cycle at the nearest ten and ran them as ONE global
+staggered sweep every 3 s. The user:
+
+> *"not nearest 10 interactibles. there should be no limit other than the 20 step range. regarding the
+> 3 second sweep, unnecessary. make it work the same way pathing already does, where entities are
+> tracked in realtime and each entity plays its own sound."*
+
+Both halves were design caution, both were reasonable in isolation, and both were edits to the answer:
+
+* the **cap** silently hid entities that were in range. For a player whose only way to know a chest is
+  there is that it makes a noise, "the eleventh nearest thing does not exist" is not a safety margin.
+* the **sweep** replaced *where things are* with *where things were when the sweep started*, and made
+  one global rhythm out of what should have been N independent ones.
+
+**And the caution was unnecessary on its own terms**, which is the part worth remembering. The two
+things the cap and the stagger existed to buy — collisions prevented, density bounded — both fall out
+of the user's slot scheme for free. Differing periods maintain their own separation (a stagger has to
+be *kept*; arithmetic keeps itself), and the growing period self-thins a crowd. **The constraint the cap
+existed to satisfy was already satisfied by the mechanism that told things apart.** → `Lessons.md`
+**L-105**.
+
+What survived from the first build is the plumbing: the engine's voice pool, the one shared `Render()`,
+`CollectNearby`, `NavCommon::BearingToPan`, the menu rows and the asset embed. Only the scheduling layer
+was replaced.
+
+### The one thing that was checked against the reference instead of invented
+
+`AudioEngine` was a single SDL stream with retrigger semantics, and `debug.md` said a many-source
+version "needs either several streams or a real mixer". The first draft of this session opened the
+extra streams by binding them to the device the beacon stream had opened — reasoned from the SDL
+headers, and about to be verified with a disk-driver test harness.
+
+**The user stopped that:** *"check pixel remasters for working implementation. sdl can most definitely
+play multiple separate streams, we have it working there for wall tones, audio beacon."* Correct, and
+it is the standing rule (`L-98`, `feedback_use_the_library_and_reference_the_user_named`): FF1–FF5's
+`Utils\AudioEngine.cs` has shipped exactly this since before V1.0 — *"One logical playback device with
+several SDL_AudioStreams bound to it; SDL mixes every bound stream automatically"*, eight streams, one
+per named source, for the wall tones and their own beacon.
+
+Reading it changed the code for the better, which is the whole point of the rule:
+
+| first draft | what FFPR does, and what shipped |
+|---|---|
+| `SDL_OpenAudioDeviceStream` for the beacon, extra streams bound to the device it opened | `SDL_OpenAudioDevice` for the device, then `SDL_CreateAudioStream` + `SDL_BindAudioStream` for **every** voice — symmetrical |
+| the beacon stream owned the device, so destroying it closed the pool's voices with it | nothing owns the device; teardown is streams, then `SDL_CloseAudioDevice`, in that order |
+| `SDL_ResumeAudioStreamDevice` on the one stream | `SDL_ResumeAudioDevice(device)` — FFPR carries a comment that skipping it is a silent no-audio failure |
+| `SDL_GetAudioStreamQueued` used raw | clamped: it returns **-1 on failure**, and a raw compare would have read a broken stream as the most idle voice. FFPR's `QueuedBytes` clamps for the same reason |
+
+**The lesson is not "the docs were wrong"** — they were right, and the draft would have worked. It is
+that a reference implementation carries the things a header cannot: which of two correct call sequences
+tears down cleanly, and which return value bites. Checking it cost one grep.
+
+### How the cost stays bounded without a scheduler
+
+`L-88` is absolute about the game thread, and per-entity voices with no cap is exactly the shape that
+could go wrong. It does not, and not by care — by construction:
+
+* **off** (the default) is one relaxed atomic load and a return, every field frame, forever;
+* **on, per frame**, a walk of the track list comparing one clock each. No game-memory reads at all on a
+  frame where nothing is due, which is most of them, and the camera is read only when something is;
+* **per voice that comes due**, one live position read and one ping — the same cost as a beacon ping;
+* **`kMaxStartsPerFrame = 4`** is a cost valve, not a cull: a voice that cannot start this frame starts
+  on the next, ~7-16 ms later, which is inaudible. A hundred voices coming due together can never become
+  a hundred interleaves in one game frame;
+* **every 200 ms**, one locked walk of the entity list refreshing live transforms — the same read `[` /
+  `]` already do on every press — to decide who is in range.
+
+No search, no flood, no rescan, no engine call. `STALL_SCOPE("Soundscape::OnGameFrame")` is in the
+field-frame hook, so the measurement lands in every play log without anyone having to ask for one.
+
+**`kMaxTracked = 96` bounds the gather vector and LOGS if it ever clips**, because clipping would be a
+real loss of entities and a violation of the no-limit rule — a silent bound there would be the cap coming
+back in through the window.
+
+The one part of the S92 sketch still not taken literally: *"voices phase-offset from a hash of the
+sceneObj pointer so they never start together"*. The initial offset is a global join counter instead —
+deterministic, and it spreads arrivals in the order they arrive, which a hash cannot. It only has to break
+the initial pile-up; the differing periods do the rest. Identity is still the scene-object pointer
+(`NearbyEntity::id`), which is now also the handle each ping re-reads its live position through.
+
+### Both recorded blockers were stale, and one was never about this feature
+
+`plan.md` named two: a software mixer, and mod-menu submenu support. Neither bound.
+
+The mixer was answered above. The submenu blocker was written against **per-category toggles and volume
+sliders** — a bigger feature than the one the user asked for. One toggle needs one flat row. **A blocker
+written against a larger version of a feature is not a blocker on the version actually requested**; read
+the request against the blocker before believing it. → `Lessons.md` **L-103**.
+
+### Centralization, both directions
+
+* `AudioClips`' two named accessors became one table + `Get(Sound)`. Twelve near-identical functions was
+  the alternative, and twelve chances to reach for the wrong one.
+* Pan / the three behind cues / the pitch clamp / the interleave now live in one private `Render()` that
+  both channels call — `debug.md` had asked for exactly that ("the pan / behind math IS the reusable
+  part — extend it, do not stand up a second spatialization path").
+* `BearingToPan` moved out of `audio_beacon.cpp` into **`NavCommon`**, where the second caller could
+  reach it. `nav_common.h` had already asked for this in as many words after the S92 mirrored-pan bug:
+  *"Every relative direction in the mod is a rendering of THIS number... Take it from here; never
+  re-derive it."* A local copy in `soundscape.cpp` would have been the S92 bug's exact shape.
+* `EntityList::CollectNearby` is one new accessor beside the three collectors that already existed, not
+  a second scan. It deliberately **ignores the category and availability filters**: those drive a
+  BROWSING cursor, and a picture of your surroundings that went quiet because the cursor was parked on
+  `Treasure` would be a trap.
+
+### Traps have no sound, and that is the shipped behaviour
+
+`Category::Trap` is the one category `FF 12 SFX\` has no file for. It is dropped from the sweep rather
+than pointed at a neighbour's sound: every sound there already means something specific, and a floor
+trap announcing itself with the interactable chime would be saying something false about a thing that
+hurts you (`L-35`, `L-37`). One row in `CategorySound` and one line in the `.rc` when a sound exists.
+
+### Cost, and the polled-monitor approval
+
+Approved by the user in the request itself; charter in `soundscape.h`. Bounded by construction, not by
+care: **off** (the default) is one relaxed atomic load and a return, every field frame, forever; **on,
+between pings**, a clock compare; **on a ping tick**, one interleave-and-enqueue; **once per 3 s sweep**,
+a locked walk of the entity list refreshing live transforms — the same read `[` / `]` already do on every
+press. No search, no flood, no rescan, no engine call. `STALL_SCOPE("Soundscape::OnGameFrame")` is in the
+field-frame hook, so the measurement is in every play log without anyone having to ask for one.
+
+DLL grew 1.84 MB -> 1.94 MB: the ten new sounds are 0.92 MB of RCDATA, stripped to bare `fmt ` + `data`
+from the DAW exports (which are 60-90% metadata). `gate_crystal` and `save_crystal` are **stereo** and
+are down-mixed at load by SDL, as they always were.
+
+### State
+
+**Built, deployed and PLAY-CONFIRMED 2026-09-18** — the user, on the deployed build: *"soundscape
+works"*. That is a confirmation of the feature as a whole, taken at face value; it is not a report on
+each of the items below, which were flagged before the play pass and are recorded here as what the
+session did NOT separately measure:
+
+1. **Density.** With no cap, a crowded Rabanastre street could put twenty or thirty voices in range at
+   once. The growing period thins that (slot 20 repeats every 3 s) and the concurrency works out at
+   roughly six sounding at once for twenty entities, twelve for forty — but whether that reads as a room
+   or as noise is a judgement only listening can make. `kBasePeriodMs` / `kPeriodStepMs` are the dials,
+   and raising `kPeriodStepMs` thins a crowd without touching the nearest few.
+2. **It keeps sounding in combat.** Enemies are a category with a sound and knowing where they are is the
+   point, so nothing is gated on engagement — but it layers under the target beacon and the combat log,
+   and that may be too much at once. One `if` if it should stop.
+3. **The pitch spread** (5% steps, alternating, out to ±30%) may be too subtle to hear under the behind
+   cue's own 0.8x drop, or too coarse. `kPitchStep` / `kPitchMaxStep`. Note the two interact: a voice
+   behind you is already pitched down 20%, so a slot that is 30% down sits at ~0.56x.
+
+**Flagged to the user, not acted on:** the request said "off by default, same as audio beacon and target
+beacon". The soundscape is off by default as instructed; `audio_beacon` and `target_beacon` have both
+actually defaulted to **On** since S95. Neither was touched. Recorded in `mod_menu.h` beside the quote.
