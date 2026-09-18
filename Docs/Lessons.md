@@ -33,10 +33,10 @@ task.** Nine times out of ten the relevant lesson is one of six.
 |---|---|---|
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90, L-95 |
 | a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97 |
-| reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62 |
+| reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62, L-101 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94 |
-| anything that makes the mod speak | `TAG:speech` | L-33…L-37 |
+| anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100 |
@@ -529,6 +529,27 @@ silence** (S127).
 **Why:** S93. The crossing oracle attributed departures to the nearest seam with no distance
 ceiling, and confidently blamed correct code for a gate-crystal teleport that crossed no seam.
 
+### L-101 ⟲ "THE LOG" NAMES A CORPUS YOU ALREADY KNOW, NOT A FILE TO GO AND FIND
+**When the user says "evidence in log", they are pointing at the one corpus the project already
+has. Go straight to it. A folder whose NAME matches is not a reason to open it.**
+**Why:** S190. On *"the orb count is not vocalized. Evidence in log."* the second tool call was
+`ls "Tester Logs"`, followed by reading a tester's log end to end — a folder under a flat,
+twice-hardened ban sitting in `CLAUDE.md`, written after this exact thing happened in S147 and
+again in S166. The dev log was where it always is: the game directory, beside the deployed DLL.
+**The tell is that the search HAPPENED AT ALL.** "Evidence in log" is not an instruction to locate
+a log; it presumes one, and if you cannot name which file it means, the question is one sentence to
+the user, not a `find` across the project.
+**Three failure shapes in one, worth separating:**
+- **A prose ban you have read is not a ban you will obey.** The rule was explicit, capitalised and
+  duplicated across `CLAUDE.md` and memory. It changed nothing. What changed the behaviour was a
+  PreToolUse hook making the access a permission prompt. **If a rule has now been broken twice, stop
+  rewording it and go make it mechanical** (`.claude\hooks\` here).
+- **An unnamed sweep evades every rule that names a directory.** The same session also ran
+  `find . -name "*.log"` from the project root, which walks the banned folder without ever typing
+  its name. Scope a sweep to the directory you actually mean.
+- **The tempting folder wins on name alone.** `Tester Logs\` looked like "logs", so it was opened
+  first — ahead of the corpus the project is built on. → L-01, L-06.
+
 ---
 
 ## Hooking and reading game state
@@ -745,6 +766,27 @@ The phrasebook existing is not a licence to invent words; adding to it needs per
 **Why:** S89 — an empty category spoke the *previous* row's text.
 
 ### L-37 REMOVE DEAD FALLBACKS — SILENCE BEATS WRONG SPEECH
+
+### L-102 A GARBAGE FILTER JUDGES BY THE SHAPE OF WHAT IT EXPECTS, AND A NUMBER IS THE WRONG SHAPE
+**Before blaming a reader for not reaching a value, check whether it reached it and then THREW IT
+AWAY.** A "is this real text?" predicate almost always requires a letter; legitimate output that is
+only digits fails it, silently, everywhere it is used.
+**Why:** S190. The Pharos Subterra orb-count rows were silent. The reader parsed the option block
+correctly, decoded row 0 to `"10"`, and dropped it — `IsMostlyPrintable` ends in `alpha >= 1`, which
+exists to reject binary rubbish from a stale pointer and cannot tell a quantity from garbage. Row 3
+spoke only because `"Cancel"` is a word. The defect was never in the hook, the block walk, or the
+escape framing; it was one clause in a predicate thirty call sites share. **So the fix went at the
+call site, not in the predicate** — widening `alpha >= 1` globally would have re-opened the
+stale-pointer hole it was written for.
+**The companion lesson, same session: A DOCUMENTED LIMIT IS STILL A BUG, and it comes due.**
+`message_macro.h` stated plainly that it cached ONE macro value so "a line carrying TWO macros would
+print the same number twice", and asserted "no line the mod reads today does that". This prompt
+carries FIVE. Writing a limit down is not the same as bounding it — when a comment names the input
+that would break the design, treat it as a defect waiting for that input, not as a disclosure.
+**And the coincidence that hid it:** the page rendered `"(Black orbs: 10    Already set: 10)"` and
+read as perfectly correct, because the save happened to have 10 orbs and 10 already set. Two
+different macros printing the same number is INVISIBLE whenever the numbers agree — the bug was on
+screen, spoken aloud, and looked like a pass. → L-03, L-04.
 
 ---
 

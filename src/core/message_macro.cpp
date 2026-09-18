@@ -25,7 +25,23 @@ std::atomic<int32_t> s_valB{0};
 std::atomic<bool>    s_have{false};
 std::atomic<bool>    s_logged{false};
 
+// THE TABLE, kept the shape the game stores it in: FUN_002E1B70 clamps slot to [0,7] and addresses
+// `(slot*0x20 + index)*8`, so a slot holds 0x20 indices. Same thread discipline as the pair above --
+// written by the script VM, read by whichever thread decodes text, each cell a lone 32-bit value.
+constexpr int kSlots   = 8;
+constexpr int kIndices = 0x20;
+std::atomic<int32_t> s_tblVal[kSlots][kIndices];
+std::atomic<int32_t> s_tblKind[kSlots][kIndices];
+std::atomic<bool>    s_tblHave[kSlots][kIndices];
+std::atomic<int>     s_lastSlot{-1};
+
 void __fastcall HookedSetMacro(int slot, int index, uint32_t a, uint32_t b) {
+    if (slot >= 0 && slot < kSlots && index >= 0 && index < kIndices) {
+        s_tblKind[slot][index].store(static_cast<int32_t>(a), std::memory_order_relaxed);
+        s_tblVal[slot][index].store(static_cast<int32_t>(b), std::memory_order_relaxed);
+        s_tblHave[slot][index].store(true, std::memory_order_relaxed);
+        s_lastSlot.store(slot, std::memory_order_release);
+    }
     s_valA.store(static_cast<int32_t>(a), std::memory_order_relaxed);
     s_valB.store(static_cast<int32_t>(b), std::memory_order_relaxed);
     s_have.store(true, std::memory_order_release);
@@ -54,6 +70,28 @@ bool Latest(int32_t* outValue, int32_t* outKind) {
     if (!s_have.load(std::memory_order_acquire)) return false;
     if (outValue) *outValue = s_valB.load(std::memory_order_relaxed);   // the VALUE (measured)
     if (outKind)  *outKind  = s_valA.load(std::memory_order_relaxed);   // the kind selector
+    return true;
+}
+
+bool ValueAt(int index, int32_t* outValue, int32_t* outKind) {
+    const int slot = s_lastSlot.load(std::memory_order_acquire);
+    if (slot < 0 || index < 0 || index >= kIndices) return false;
+    if (!s_tblHave[slot][index].load(std::memory_order_relaxed)) {
+        // A miss is the shape a WRONG SLOT takes, so say so once instead of printing another row's
+        // number. One line per session: a real miss repeats every frame the prompt is on screen.
+        static std::atomic<bool> s_missLogged{false};
+        if (!s_missLogged.exchange(true, std::memory_order_relaxed)) {
+            char m[192];
+            snprintf(m, sizeof(m),
+                     "macro index %d not written in slot %d -- that escape stays blank. If a number "
+                     "is missing on screen, the show path used a different slot than the writer did.",
+                     index, slot);
+            Log::Write("MESMACRO", m);
+        }
+        return false;
+    }
+    if (outValue) *outValue = s_tblVal[slot][index].load(std::memory_order_relaxed);
+    if (outKind)  *outKind  = s_tblKind[slot][index].load(std::memory_order_relaxed);
     return true;
 }
 

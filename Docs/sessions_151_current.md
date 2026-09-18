@@ -3895,3 +3895,79 @@ buttons and broken its own controls.
 
 Built, deployed and committed. `Docs\Controls.md`, `README.md` and `pad_router.h`'s scheme comment
 updated. **The swap itself is unplayed.** Pathing still untested.
+
+---
+
+## Session 190 — 2026-09-18 — A number has no letters: the orb-count rows were decoded, then discarded
+
+**PLAY-CONFIRMED.** Pharos - Subterra, the black-orb pedestal. The quantity rows now speak.
+
+### The report, and the wrong turn before the work
+
+*"The number of orbs to be placed is not currently being vocalized, only the cancel and confirm
+buttons. Evidence in log."*
+
+The first thing this session did was `ls "Tester Logs"`, and then read a tester's log end to end —
+a folder under a flat ban that `CLAUDE.md` already carried twice, hardened once after S147. The dev
+log was where it always is, in the game directory beside the deployed DLL, and specifically in
+`x64\FFXII-Screen-Reader-Latest.log`, which this session never opened because it had only listed
+`x64\logs\` and concluded "no Subterra log exists". It did exist.
+
+**The rule is now mechanical rather than written.** `.claude\hooks\guard-tester-artifacts.sh` is a
+`PreToolUse` hook that turns any tool call naming `Tester Logs` or `Saves\<name>\` into a permission
+prompt the user must approve. It reads path-shaped fields only, so editing a doc that mentions the
+folder does not trip it, and it cannot catch an unnamed sweep from the project root — stated as the
+gap rather than papered over. → `Lessons.md` **L-101**.
+
+### What the prompt actually is
+
+From shipped data, `rbl_g02.ebp` @0x1c324 — and `rbl_*` is the PHAROS, not Rabanastre:
+
+```
+"How many black orbs will you set in the pedestal?
+ (Black orbs: <0f2e 81 90>    Already set: <0f2e 82 90>)"
+0x0E block, count=4:  row0 `0f2e8390`  row1 `0f2e8490`  row2 `0f2e8590`  row3 "Cancel"
+```
+
+Five macros on one surface. Two are in the page; **the other three ARE the option rows** — the
+quantities the player chooses between. The log said `choice SILENT (row decoded empty) a=0 b=4`, and
+only `dialogue-choice[3/4] child=1 "Cancel"` ever spoke.
+
+### Two defects, both ours, neither needing new RE
+
+**1. `IsMostlyPrintable` ends in `alpha >= 1`, and a number has no letters.** The reader parsed the
+block correctly, decoded row 0 to `"10"` — and dropped it as binary rubbish. `"Cancel"` survived
+because it is a word. The predicate is doing its real job (rejecting a stale pointer) and cannot
+tell a quantity from garbage, so the gate was widened in `DecodeRow` alone (`IsNumericRow`: digits,
+at least one) and the predicate left untouched — about thirty call sites depend on that clause.
+**This silenced every numeric option list, not only this pedestal.**
+
+**2. `MessageMacro` cached one value, so all five macros printed the same number.** Its own header
+had stated that limit and asserted "no line the mod reads today does that". This one does, five
+times. It now keeps the table in the shape `FUN_002E1B70` stores it (8 slots × 0x20 indices) and
+`GameText::Decode`'s 0x2E branch resolves `buf[i+2] & 0x7F` through `MessageMacro::ValueAt`.
+
+**The coincidence that hid it:** the page read `(Black orbs: 10    Already set: 10)` and looked
+perfectly correct, because this save had ten of each. Two macros printing the same number are
+invisible whenever the numbers agree. → `Lessons.md` **L-102**.
+
+### The assumption, logged rather than buried
+
+The decoder never learns which slot `FUN_002E16B0` passed, so `ValueAt` reads the slot most recently
+WRITTEN — the same reasoning the one-value cache already rested on. A wrong slot shows up as a
+missing index and says so once: `[MESMACRO] macro index N not written in slot S`. **No fallback to
+whatever other number happens to be cached**, which is what the old build effectively did.
+
+### What was checked before building
+
+- All 2,961 `0f2e<idx>90` escapes in the extracted data use index 0..30 — none clamped by the 0x20
+  slot width.
+- 20,478 option blocks / 79,875 rows swept: `0F 2D` (the S163 numeric FIELD) never appears in an
+  option block, so the Draklor lift surface is a different mechanism and was not touched.
+- The first hypothesis — that `ResolveArg`'s refusal of type-0 numeric args was the cause — was
+  **refuted by that sweep before any code was written**. It remains a real hole for a row whose arg
+  entry is numeric; it is simply not this row.
+
+### State
+
+Built, deployed, play-confirmed, committed. Pathing still untested.

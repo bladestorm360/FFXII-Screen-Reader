@@ -30,9 +30,31 @@
 // sets the macro immediately before showing the line that uses it, so the most recent write IS the
 // value that line will print. Cheap, and it needs no part of the escape's parameter encoding.
 //
-// LIMIT, stated rather than buried: this holds one value, so a line carrying TWO macros would
-// print the same number twice. No line the mod reads today does that -- the shout messages carry a
-// single 0x2E -- and the log line below is what would show it if one ever did.
+// ---- WHY ONE CACHED VALUE WAS NOT ENOUGH (S190) -------------------------------------------------
+//
+// The old note here said: "this holds one value, so a line carrying TWO macros would print the same
+// number twice. No line the mod reads today does that." **The Pharos Subterra orb pedestal does**,
+// and it carries FIVE. Its prompt is, in shipped data (`rbl_g02.ebp` @0x1c324):
+//
+//     "How many black orbs will you set in the pedestal?
+//      (Black orbs: <0f2e 81 90>    Already set: <0f2e 82 90>)"
+//     0x0E block: row0 `0f2e8390`  row1 `0f2e8490`  row2 `0f2e8590`  row3 "Cancel"
+//
+// -- two macros in the page (indices 1 and 2) and THREE MORE as the option rows themselves
+// (indices 3, 4, 5), which are the quantities the player picks between. With one cached value all
+// five print the same number. In the log that read as "(Black orbs: 10    Already set: 10)", which
+// looked correct only because this save happened to have 10 orbs and 10 already set.
+//
+// So the value is now resolved BY THE ESCAPE'S OWN INDEX, which is what the game does: case 0x2E
+// indexes the table it was handed. The writer hook already sees `slot` and `index`, so the table is
+// simply kept instead of collapsed to its last write.
+//
+// **THE SLOT IS THE ONE ASSUMPTION, AND IT IS LOGGED.** The decoder sees codec bytes and never
+// learns which slot FUN_002E16B0 passed, so this tracks the slot most recently WRITTEN -- the same
+// reasoning the one-value cache already rested on (the script fills a slot immediately before
+// showing the line that reads it). `Unresolved()` counts the indices a decode asked for and did not
+// find, which is what a wrong slot would look like; it is logged once rather than papered over with
+// a fallback to "some other number we happen to hold".
 namespace MessageMacro {
 
 // Installs the writer hook. Non-fatal: without it macros stay blank, exactly as before.
@@ -49,5 +71,12 @@ bool Init();
 // `outKind` optionally returns the first word, which is still logged on every first write so a
 // non-zero kind (a different macro TYPE the mod has not seen) shows up rather than printing wrong.
 bool Latest(int32_t* outValue, int32_t* outKind = nullptr);
+
+// The value the macro at `index` was last given, within the slot most recently written. False when
+// that index has never been written -- the caller then prints NOTHING, because the alternative is
+// putting some other row's number in the player's ear.
+//
+// `index` is the escape's own parameter byte masked with 0x7F: `0f 2e 83 90` is index 3.
+bool ValueAt(int index, int32_t* outValue, int32_t* outKind = nullptr);
 
 } // namespace MessageMacro

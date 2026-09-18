@@ -498,9 +498,15 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
             // PURELY ADDITIVE: this selector already consumed its two parameters and emitted
             // nothing, so every line WITHOUT a 0x2E decodes byte for byte as before. Only the lines
             // that were silently losing a number change, which is the entire point.
-            else if (buf[i + 1] == kMacroSel) {
+            //
+            // RESOLVED BY THE ESCAPE'S OWN INDEX since S190. `0f 2e <idx|0x80> 90` names which macro
+            // it wants, and one line can carry several: the Pharos orb pedestal has five (two in the
+            // page, three as the option rows). Collapsing the table to its last write printed the
+            // same number for all of them -- see message_macro.h.
+            else if (buf[i + 1] == kMacroSel && i + 2 < n) {
                 int32_t v = 0;
-                if (MessageMacro::Latest(&v) && v >= 0 && v <= kMacroMax) {
+                const int idx = buf[i + 2] & 0x7F;
+                if (MessageMacro::ValueAt(idx, &v) && v >= 0 && v <= kMacroMax) {
                     const std::wstring digits = std::to_wstring(v);
                     cur->append(digits);
                 }

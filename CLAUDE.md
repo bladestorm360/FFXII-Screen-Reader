@@ -4,6 +4,31 @@
 
 Every rule below is **non-negotiable**. Violating any of them is a blocking failure.
 
+### WHERE THE LOGS ARE — read this before you go looking for one (CRITICAL)
+
+**"Evidence in the log", "check the log", "it's in the log", "the log shows" — every one of
+these ALWAYS means OUR OWN DEV LOG. The mod writes that log INTO THE GAME DIRECTORY, where
+the mod is installed. Never anywhere else.**
+
+```
+D:\Games\SteamLibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\
+    FFXII-Screen-Reader-Latest.log                      <- live, the running session
+    logs\FFXII-Screen-Reader-YYYY-MM-DD_HH-MM-SS.log    <- the archive; THE evidence corpus
+```
+
+The deployed DLL sits in that same `x64\` folder, so **the log is always beside the build
+that produced it** — which is why its `Build:` line is trustworthy. Listing that `logs\`
+directory newest-first is the FIRST move on any "in the log" report. Reading anything in
+there is always permitted and never needs asking.
+
+**`D:\Games\Dev\Custom\FFXII\Tester Logs\` IS NOT THAT, and is never the answer to "the
+log".** It is someone else's machine. It is now **MACHINE-BLOCKED**:
+`.claude\hooks\guard-tester-artifacts.sh` turns any tool call naming `Tester Logs\` or
+`Saves\<name>\` — Read, Grep, Glob, Bash, anything — into a permission prompt **the user
+must approve**. That prompt is the override, and it is the user's to give: do not route
+around it, and do not read the prompt as an invitation to try. Full rule and the reasoning:
+**THE LOG CORPUS** under Auditing rules.
+
 ### Game install & build directory
 
 - **NEVER** search, read, or modify the game installation directory
@@ -606,6 +631,26 @@ two-condition wording above was read as "a tester reported something, so conditi
 may go and look", which is exactly backwards: the report is what makes the folder tempting, not what
 makes it permitted. **Hence the flat ban. The only key is the user's explicit say-so.**
 
+**Why the rule is now MACHINE-ENFORCED (2026-09-18) — prose was not enough.** A session opened on
+*"the number of orbs is not being vocalized. Evidence in log."* Its second tool call was
+`ls "Tester Logs"`, and it then read a tester's log end to end. The flat ban above was already
+written, already hardened once, and sitting in the file being ignored. **The new failure shape is
+the two words "in log":** an unqualified mention of "the log" was taken as a licence to go and find
+*a* log, and the folder with a plausible name won. It is not a licence; it is a pointer at the dev
+corpus, which is the ONLY corpus. See **WHERE THE LOGS ARE** at the top of this file.
+- The rule is now a **PreToolUse hook**, `.claude\hooks\guard-tester-artifacts.sh` (+ the `.py`
+  beside it), registered in `.claude\settings.json`. Any Read / Grep / Glob / Bash / Write naming
+  `Tester Logs` or `Saves\<name>\` becomes a permission prompt the **user** must approve.
+- It inspects **path-shaped fields only** (`file_path`, `path`, `command`, `glob`, …), never file
+  content and never a Grep pattern — so editing or grepping a doc that merely *mentions*
+  `Tester Logs\` does not trip it. Eight payload shapes were tested when it was written.
+- **The prompt is the override and it belongs to the user.** Do not rephrase a call to slip past
+  the matcher, and do not treat a prompt appearing as permission to proceed.
+- **It cannot catch an unnamed sweep.** `find . -name "*.log"` or `grep -r` from
+  `D:\Games\Dev\Custom\FFXII\` walks straight into the folder without ever naming it — that same
+  session did exactly that too. **Never sweep from the project root**; name the directory you mean,
+  or exclude it (`--exclude-dir="Tester Logs"`).
+
 - **ALWAYS** check logs first when debugging — read the mod log before theorizing.
 - **ALWAYS** log all diagnostic data to external file. Every significant runtime decision
   must be logged. Previous sessions archived as
@@ -710,9 +755,11 @@ D:\Games\Dev\Custom\FFXII\
   `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII-Screen-Reader-Latest.log`
 - **Mod log ARCHIVE — our own dev sessions, and THE default evidence corpus:**
   `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\logs\`
-- **Tester-submitted logs — RESTRICTED, see THE LOG CORPUS under Auditing rules:**
-  `D:\Games\Dev\Custom\FFXII\Tester Logs\<name>\` — opened only on a reported issue **and** an
-  explicit pointer from the user. Never swept, never counted alongside ours.
+- **Tester-submitted logs — RESTRICTED AND MACHINE-BLOCKED, see THE LOG CORPUS under Auditing
+  rules:** `D:\Games\Dev\Custom\FFXII\Tester Logs\<name>\` — opened only on an explicit pointer
+  from the user to a specific file. Never swept, never counted alongside ours. A PreToolUse hook
+  (`.claude\hooks\guard-tester-artifacts.sh`) turns any call naming it into a user-approval prompt.
+  Same for tester `Saves\<name>\`.
 - **Tolk: runtime-only, NEVER vendored.** No `#include "Tolk.h"` anywhere; no
   build dependency. `speech.cpp` uses `LoadLibrary("Tolk.dll")` + `GetProcAddress`
   with hand-rolled typedefs. The user deploys `Tolk.dll` and

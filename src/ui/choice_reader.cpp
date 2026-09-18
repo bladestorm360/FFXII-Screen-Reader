@@ -140,6 +140,28 @@ std::wstring ResolveArg(void* window, uint32_t idx) {
 // deliberately excluded from GameText's space controls), so handing a whole entry to Decode runs the
 // columns together -- "ThexteraI". This yields "Thextera, I" instead. The trailing 0x0F icon escape
 // contributes no characters and simply drops out.
+// A ROW THAT IS ONLY A NUMBER IS STILL A ROW, and `IsMostlyPrintable` cannot say so: it ends in
+// `alpha >= 1 && printable >= 60%`, and a quantity like "10" has no letter in it. That letter
+// requirement is load-bearing where the predicate is used to reject binary rubbish read out of a
+// stale pointer (about thirty call sites), so it is not touched -- this widens the gate HERE only.
+//
+// **THIS IS WHAT SILENCED THE PHAROS SUBTERRA ORB PEDESTAL** (S190, log 2026-09-18 06:49:45.812:
+// `choice SILENT (row decoded empty) a=0 b=4`). Its three quantity rows decode to bare numbers and
+// were judged garbage; row 3 spoke only because "Cancel" is a word. Any numeric option list has the
+// same defect, so the fix belongs at the gate rather than at the pedestal.
+//
+// Digits only, and at least one of them: binary rubbish does not decode to an unbroken run of
+// digits and spaces, so nothing this rejected before is admitted now.
+bool IsNumericRow(const std::wstring& s) {
+    bool digit = false;
+    for (wchar_t ch : s) {
+        if (ch >= L'0' && ch <= L'9') { digit = true; continue; }
+        if (ch == L' ' || ch == L',' || ch == L'.') continue;
+        return false;
+    }
+    return digit;
+}
+
 std::wstring DecodeRow(const uint8_t* p, size_t len) {
     std::wstring out;
     size_t start = 0;
@@ -150,7 +172,7 @@ std::wstring DecodeRow(const uint8_t* p, size_t len) {
             std::vector<uint8_t> col(p + start, p + i);
             col.push_back(0);                       // entries are NOT null-terminated
             std::wstring c = GameText::Decode(col.data(), col.size());
-            if (!c.empty() && GameText::IsMostlyPrintable(c)) {
+            if (!c.empty() && (GameText::IsMostlyPrintable(c) || IsNumericRow(c))) {
                 if (!out.empty()) out += L", ";
                 out += c;
             }
