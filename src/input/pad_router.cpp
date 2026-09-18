@@ -391,10 +391,13 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             { PadHook::kB,         'O',      "read description" },
             { PadHook::kA,         VK_F8,    "close mod menu"   },
             { PadHook::kStart,     VK_F8,    "close mod menu"   },
-            // Back closes as well. Everywhere else it is now the mod-mode latch, so a player will
-            // press it here expecting the mod to answer; letting it fall through would open the
-            // game's map behind the overlay instead.
-            { PadHook::kBack,      VK_F8,    "close mod menu"   },
+            // Back is the pad's BACKSPACE (S192). Everywhere else it is the mod-mode latch, so a
+            // player will press it here expecting the mod to answer; letting it fall through would
+            // open the game's map behind the overlay instead. It used to send F8 and close the menu
+            // outright -- which left a pad with no way back out of the soundscape submenu except by
+            // closing the whole thing. VK_BACK backs out one level and closes at the top, so it does
+            // what it always did from the root and the new level is reachable from a pad at all.
+            { PadHook::kBack,      VK_BACK,  "back out / close mod menu" },
         };
         for (const MenuBind& m : kMenu) {
             if (rising & m.bit) {

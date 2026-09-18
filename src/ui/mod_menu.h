@@ -105,6 +105,38 @@ enum class SettingId : int {
     // user's words, not as a claim about the other two rows, and neither of them was touched.
     Soundscape,
     SoundscapeVolume,
+    // S192, user's request: the soundscape gets its OWN menu, one row per kind of thing plus a
+    // volume for each -- *"that way a user could toggle only the objects they want to make sounds
+    // and don't have to toggle them all on or off at once"*. `Soundscape` above is now the MASTER
+    // SWITCH the same request asked to keep, and it lives inside that submenu as its first row;
+    // `SoundscapeMenu` is the row in the ROOT menu that opens it.
+    //
+    // THE MASTER IS A GATE, NOT A BULK EDIT. Switching it off silences everything without touching
+    // a single per-kind row, so flipping it back on restores exactly the set the player had chosen.
+    // A master that rewrote all ten rows would satisfy the same sentence and quietly destroy their
+    // choices, which is why it does not.
+    //
+    // ORDER IS THE MENU'S ORDER (kSettings is one row per id, in enum order), so each kind is
+    // immediately followed by its own volume -- the player moves Down from "Doors" onto
+    // "Doors volume". The ten kinds are the ten that HAVE a sound; `Category::Trap` is deliberately
+    // absent because it has none (see soundscape.cpp's SoundFor), and `Category::All` is a filter
+    // pseudo-category that never appears on an entity.
+    //
+    // DEFAULT ON, every one of them, with the master still defaulting OFF. So the first time a
+    // player switches the soundscape on they hear the whole thing, exactly as S191 shipped it, and
+    // the per-kind rows are there to take things AWAY rather than something to go and discover
+    // before the feature works at all.
+    SoundscapeMenu,
+    ScapeExit,        ScapeExitVol,
+    ScapeDoor,        ScapeDoorVol,
+    ScapeShop,        ScapeShopVol,
+    ScapeSaveCrystal, ScapeSaveCrystalVol,
+    ScapeGateCrystal, ScapeGateCrystalVol,
+    ScapeTreasure,    ScapeTreasureVol,
+    ScapeNPC,         ScapeNPCVol,
+    ScapeObject,      ScapeObjectVol,
+    ScapeEnemy,       ScapeEnemyVol,
+    ScapeItems,       ScapeItemsVol,
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
@@ -148,6 +180,16 @@ bool SoundscapeOn();       // S191: whether the entity soundscape runs. Game thr
 float BeaconVolume();
 float TargetVolume();
 float SoundscapeVolume();
+
+// S192, the soundscape submenu's per-kind rows. GENERIC on purpose: twenty rows would otherwise mean
+// twenty named accessors that all say the same thing, and the caller already has to map its own
+// Category onto a SettingId either way -- soundscape.cpp does that in ONE switch, next to the switch
+// that picks the sound, so a kind cannot gain a sound without its row being noticed.
+//
+// `SettingOn` answers false for any id that is not a two-valued row, and `SettingVolume` answers 1.0
+// for anything that is not a volume row, so a mis-mapped id is quiet rather than wrong.
+bool  SettingOn(SettingId id);
+float SettingVolume(SettingId id);
 
 // `F8` — open/close. Speaks "Mod menu. <setting>, <value>." on open, "Mod menu closed" on close.
 void Toggle();

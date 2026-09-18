@@ -452,6 +452,14 @@ void DispatchModKey(int vk) {
         case VK_HOME: case VK_END:
             PostThreadMessageW(g_threadId, WM_MENUNAV, static_cast<WPARAM>(vk), 1);
             break;
+        // Backspace: the mod menu's "back out one level, close at the top" (S192). It MUST go to the
+        // menu-nav route rather than falling through to the nav-key switch below, because that switch
+        // does not answer it and the press would simply vanish -- which is what happened the first
+        // time the pad's Back button was pointed at this key. Same shape as the keyboard's own
+        // DInputMenuNavEdge(VK_BACK, ...), which is the point of this table.
+        case VK_BACK:
+            PostThreadMessageW(g_threadId, WM_MENUNAV, static_cast<WPARAM>(vk), 0);
+            break;
         // Everything else is a nav-key: NavCommands::OnNavKey owns the mod's whole key switch.
         default:
             PostThreadMessageW(g_threadId, WM_NAVKEY, static_cast<WPARAM>(vk), 0);

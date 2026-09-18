@@ -252,13 +252,13 @@ In mod mode, press Back and then:
 reach the map button it costs you.
 * Anything else ends mod mode and says "Cancelled".
 
-While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so do Escape and Backspace on the keyboard.
+While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so does Escape on the keyboard. Backspace comes back out of a settings menu one level at a time, and closes the mod menu when you are already at the top.
 
 Everything else the mod can do is on the keyboard, and the mod menu reaches every setting. A controller has few buttons and the ones above are the ones worth spending.
 
 #### The mod menu (F8)
 
-F8 opens the mod's own settings. F8 again closes it, and so do Escape and Backspace. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do.
+F8 opens the mod's own settings. F8 again closes it, and so does Escape, from wherever you are in it. Up and Down move between settings, Home and End jump to the first and last, Left and Right change the one you are on, and O reads a description of it. The description changes with the setting, so it always tells you what the setting is doing now rather than what it could do. A setting that opens a menu of its own is opened with Right, and Backspace comes back out of it — at the top level Backspace closes the menu.
 
 The settings it holds:
 
@@ -275,8 +275,15 @@ The settings it holds:
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 * Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.
-* Soundscape — Off or On. On gives every door, shop, chest, crystal, person, enemy and item within about twenty steps its own repeating sound, played from the direction it is in, so you can hear the shape of the room around you rather than asking for it a category at a time. Nearer things are louder, and a thing behind you sounds duller and lower than one in front. Where several of a kind are near you they are spread in pitch, higher and lower than normal, and each repeats at a slightly different rate, so two people standing together do not blur into one sound. It follows things that move. It speaks nothing and it is not a route — the audio beacon is still what leads you somewhere. Off is the default: it is continuous sound layered over the game's own, so it is something you switch on when you want it.
-* Soundscape volume — 20% up to 100%, in fifths. 100% is the default.
+* Soundscape settings — a menu of its own. Press Right to open it, Backspace to come back.
+
+The soundscape is a sound for each thing near you, repeating from the direction it is in, so you can hear the shape of the room around you rather than asking for it a category at a time. Nearer things are louder, and a thing behind you sounds duller and lower than one in front. Where several of a kind are near you they are spread in pitch and each repeats at a slightly different rate, so two people standing together do not blur into one sound. It follows things that move. It speaks nothing and it is not a route — the audio beacon is still what leads you somewhere.
+
+Its menu holds:
+
+* Soundscape — Off or On, the master switch for all of it. Off is the default: it is continuous sound layered over the game's own, so it is something you switch on when you want it. Turning it off silences everything without forgetting which kinds you had chosen.
+* Soundscape volume — 20% up to 100%, in fifths. 100% is the default. This sets the level of the whole soundscape; each kind below has its own volume within it.
+* Then two rows for each kind of thing — Exit, Door, Shop, Save Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy and Items. The first is Off or On for that kind, the second is its volume. Every kind starts On at 100%, so switching the master on gives you all of it, and you turn off the ones you do not want to hear. If you only want treasure and save crystals, switch the other eight off.
 
 F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 

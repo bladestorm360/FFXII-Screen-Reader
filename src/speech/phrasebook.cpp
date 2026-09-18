@@ -212,6 +212,15 @@ const Row kTable[] = {
     EN(L"On gives every door, shop, chest, crystal, person, enemy and item within about twenty steps its own repeating sound, played from the direction it is in. Nearer things are louder. Where several of a kind are near you they are spread in pitch, higher and lower than normal, and each repeats at a slightly different rate, so you can tell them apart."),
     EN(L"Soundscape volume"),
     EN(L"How loud the soundscape plays."),
+
+    // S192: the soundscape submenu. See the note in phrasebook.h for why this is only seven rows.
+    EN(L"Soundscape settings"),
+    EN(L"The soundscape's own settings: a master switch, and which kinds of thing sound and how loud. Right arrow opens it, Backspace comes back."),
+    EN(L"volume"),
+    EN(L"Whether this kind of thing sounds in the soundscape, and at what volume on the row below."),
+    EN(L"Off means this kind stays silent, even with the soundscape switched on."),
+    EN(L"On means this kind sounds, whenever the soundscape itself is on."),
+    EN(L"How loud this one kind plays, within the soundscape's own volume."),
 };
 
 #undef EN

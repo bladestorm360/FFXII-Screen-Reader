@@ -28,7 +28,13 @@ using Phrase::Id;
 // `Percent` setting has neither -- its value RENDERS AS A NUMBER, which is deliberate: a digit string
 // needs no phrasebook row, translates itself, and adding five invented loudness adjectives to a
 // 12-locale table would be exactly the fabricated-label failure the phrasebook rules exist to stop.
-enum class Kind : uint8_t { Named, Percent };
+// S192 adds a THIRD kind. A `Submenu` row holds no value at all -- it is a door. Right opens it,
+// Backspace comes back, and it is skipped by everything that reads or writes a value.
+enum class Kind : uint8_t { Named, Percent, Submenu };
+
+// Which menu a row lives in. The mod menu was flat until S192; the soundscape's twenty-two rows
+// would have swamped a flat list, which is exactly why the user asked for a submenu.
+enum class Menu : uint8_t { Root, Soundscape };
 
 // Volume steps: 20% .. 100%, five of them. Deliberately does NOT reach 0 -- each beacon has its own
 // Off toggle, and a volume that can silence a switched-on feature is a support question waiting to
@@ -49,6 +55,15 @@ struct Setting {
     // returns false the row is skipped by the cursor and by the opening announcement -- the VALUE is
     // untouched and still persists, so a setting stays where the player left it.
     bool (*visible)();
+    // S192. Which menu holds this row. Everything that walks the table filters on it, so a row is
+    // reachable only from its own level and the cursor can never land on another menu's row.
+    Menu menu;
+    // S192. True for a volume row whose name is COMPOSED: "<name> volume", e.g. "Doors volume". Ten
+    // such rows share one word instead of needing ten more full names in twelve locales. The glue
+    // (a space) is composed in code, per the phrasebook's own rule about punctuation and joining.
+    bool volumeOf;
+    // S192. Where a Submenu row leads. Meaningless for every other kind.
+    Menu opens;
 };
 
 const Setting kSettings[] = {
@@ -133,12 +148,49 @@ const Setting kSettings[] = {
     // it is continuous ambient audio over the game's own, so it must be something the player chose.
     // Not context-gated: soundscape.cpp reads it on the field tick and is silent everywhere else on
     // its own, and a row that disappeared in a menu would be a row nobody could turn on.
+    // ---- the soundscape's own menu (S192) --------------------------------------------------------
+    // These two are the MASTER switch and the master volume, and they moved OUT of the root menu
+    // into the submenu below. They keep their file keys, so a settings file written by V1.0.1
+    // restores them exactly where the player left them -- the rows moved, the values did not.
     { Id::SettingSoundscape, Kind::Named, 2,
       { Id::BeaconOff,         Id::BeaconOn },
       { Id::SoundscapeDescOff, Id::SoundscapeDescOn },
-      Id::SoundscapeDesc, "soundscape", 0, nullptr },
+      Id::SoundscapeDesc, "soundscape", 0, nullptr, Menu::Soundscape },
     { Id::SettingSoundscapeVolume, Kind::Percent, kVolumeSteps,
-      {}, {}, Id::SoundscapeVolumeDesc, "soundscape_volume", kVolumeSteps - 1 },
+      {}, {}, Id::SoundscapeVolumeDesc, "soundscape_volume", kVolumeSteps - 1, nullptr,
+      Menu::Soundscape },
+    // The door into it, and the only soundscape row left in the root menu.
+    { Id::SettingSoundscapeMenu, Kind::Submenu, 0, {}, {}, Id::SoundscapeMenuDesc,
+      "soundscape_menu", 0, nullptr, Menu::Root, false, Menu::Soundscape },
+
+    // One kind, then its volume, ten times over. A MACRO because the pair must stay together and in
+    // the enum's order: writing twenty rows by hand is twenty chances to pair "Doors" with the
+    // shops' volume, and nothing in a review would catch it -- both rows would still be valid.
+    // The names are the entity list's OWN category words (`CatExit` ... `CatItems`), so a door is
+    // called the same thing here as it is when the `[`/`]` keys walk past one.
+    //
+    // DEFAULT 1 (On) for every kind, while the master above defaults 0 (Off): switching the
+    // soundscape on gives the whole thing, exactly as S191 shipped, and these rows exist to take
+    // kinds away rather than to be hunted down before the feature works.
+#define SCAPE_KIND(NAMEID, KEY)                                                    \
+    { NAMEID, Kind::Named, 2, { Id::BeaconOff, Id::BeaconOn },                     \
+      { Id::SoundscapeKindDescOff, Id::SoundscapeKindDescOn },                     \
+      Id::SoundscapeKindDesc, KEY, 1, nullptr, Menu::Soundscape },                 \
+    { NAMEID, Kind::Percent, kVolumeSteps, {}, {},                                 \
+      Id::SoundscapeKindVolumeDesc, KEY "_vol", kVolumeSteps - 1, nullptr,         \
+      Menu::Soundscape, /*volumeOf=*/true },
+
+    SCAPE_KIND(Id::CatExit,          "scape_exit")
+    SCAPE_KIND(Id::CatDoor,          "scape_door")
+    SCAPE_KIND(Id::CatShop,          "scape_shop")
+    SCAPE_KIND(Id::CatSaveCrystal,   "scape_save_crystal")
+    SCAPE_KIND(Id::CatGateCrystal,   "scape_gate_crystal")
+    SCAPE_KIND(Id::CatTreasure,      "scape_treasure")
+    SCAPE_KIND(Id::CatNPC,           "scape_npc")
+    SCAPE_KIND(Id::CatInteractables, "scape_object")
+    SCAPE_KIND(Id::CatEnemy,         "scape_enemy")
+    SCAPE_KIND(Id::CatItems,         "scape_items")
+#undef SCAPE_KIND
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -146,8 +198,17 @@ static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(Se
 
 constexpr int kCount = static_cast<int>(SettingId::Count);
 
+// S192. Which level the cursor is on. Input thread only, like g_cursor. Reset to Root whenever the
+// menu closes, so reopening always starts at the top rather than wherever the player last was --
+// a menu that reopens somewhere unexpected is disorienting when you cannot see where you are.
+Menu g_menu = Menu::Root;
+
 bool RowVisible(int i) {
     if (i < 0 || i >= kCount) return false;
+    // S192: a row belongs to exactly one level, and only that level can reach it. Every walk below
+    // goes through here, so the cursor, Home/End, the opening announcement and the hidden-row rule
+    // all became menu-aware from this one line.
+    if (kSettings[i].menu != g_menu) return false;
     return kSettings[i].visible == nullptr || kSettings[i].visible();
 }
 
@@ -193,10 +254,14 @@ bool              g_initialized = false;
 // Value 0 is Off, and also the first value, for every two-valued row. No Percent row is gated today;
 // if one ever is, its author has to decide what "not applicable" means for a number first, because 0
 // there is the quietest step rather than a natural off.
+// S192 CAUTION: this asks the CONTEXT gate, never the menu level. `RowVisible` now answers false for
+// a row belonging to a level the cursor is not on, and a soundscape row must obviously keep working
+// while the player is standing in the field with no menu open at all. The two tests were separated
+// for exactly this reason; do not "simplify" this back into a RowVisible call.
 int EffectiveValue(SettingId id) {
     const int i = static_cast<int>(id);
     if (i < 0 || i >= kCount) return 0;
-    if (!RowVisible(i)) return 0;
+    if (kSettings[i].visible != nullptr && !kSettings[i].visible()) return 0;
     return g_values[i].load(std::memory_order_relaxed);
 }
 
@@ -220,8 +285,10 @@ void Save() {
     if (path.empty()) return;
     FILE* f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"w") != 0 || !f) return;
-    for (int i = 0; i < kCount; ++i)
+    for (int i = 0; i < kCount; ++i) {
+        if (kSettings[i].kind == Kind::Submenu) continue;   // a door has no value to store
         fprintf(f, "%s=%d\n", kSettings[i].key, g_values[i].load(std::memory_order_relaxed));
+    }
     fclose(f);
 }
 
@@ -271,8 +338,48 @@ float GainOf(SettingId id) {
     return static_cast<float>((v + 1) * kVolumePercent) / 100.0f;
 }
 
+// S192. A volume row's name is composed -- "Doors" + " " + "volume" -- so ten rows share one word
+// instead of needing ten more names in twelve locales. The space is glue and belongs in code, per
+// the phrasebook's own rule.
+std::wstring NameOf(int i) {
+    std::wstring n = Phrase::Get(kSettings[i].name);
+    if (kSettings[i].volumeOf) { n += L' '; n += Phrase::Get(Id::Volume); }
+    return n;
+}
+
 std::wstring NameAndValue(int i) {
-    return std::wstring(Phrase::Get(kSettings[i].name)) + L", " + ValueOf(i);
+    // A Submenu row has no value to speak -- it is a door, not a setting. Saying "Soundscape
+    // settings, Off" would be a lie about a row that holds nothing.
+    if (kSettings[i].kind == Kind::Submenu) return NameOf(i);
+    return NameOf(i) + L", " + ValueOf(i);
+}
+
+// S192. Move to a level and announce it the way opening the menu does -- the level's own name, then
+// the row the cursor lands on. A player who cannot see the screen has no other way to know the level
+// changed, so the level name is not optional decoration here.
+void GoToMenu(Menu m, Id levelName) {
+    g_menu   = m;
+    g_cursor = FirstVisible();
+    Speech::Output(std::wstring(Phrase::Get(levelName)) + L". " + NameAndValue(g_cursor) + L".", true);
+    Log::Write("MODMENU", m == Menu::Root ? "level: root" : "level: soundscape");
+}
+
+// S192. Back out one level. Returns FALSE at the root, where there is nothing to back out of -- the
+// caller closes the menu instead, which is exactly what the user asked Backspace to do there.
+bool LeaveMenu() {
+    if (g_menu == Menu::Root) return false;
+    const Menu was = g_menu;
+    g_menu = Menu::Root;
+    // Land on the row that OPENED this level, not on the first row of the root. The player pressed
+    // Right on that row a moment ago; putting them back anywhere else would lose their place in a
+    // list they cannot see.
+    for (int i = 0; i < kCount; ++i) {
+        if (kSettings[i].kind == Kind::Submenu && kSettings[i].opens == was) { g_cursor = i; break; }
+    }
+    if (!RowVisible(g_cursor)) g_cursor = FirstVisible();
+    Speech::Output(NameAndValue(g_cursor), true);
+    Log::Write("MODMENU", "level: root (backed out)");
+    return true;
 }
 
 void LogState(const char* what, int i) {
@@ -324,17 +431,36 @@ bool OnMenuNavKey(int vk) {
         // reached the game, so every exit also opened the game's pause screen. See
         // InputTracker::MaskModMenuKeys -- the mask is scoped to these two keys and to this menu
         // being open, and it is the mod's one chartered key swallow.
+        // ESCAPE CLOSES THE WHOLE MENU, FROM ANY LEVEL (S192, user instruction: *"escape should just
+        // close the mod menu regardless of sub menu level"*). It is the way OUT, not the way back --
+        // one key that always means the same thing however deep the player has gone.
         case VK_ESCAPE:
-        case VK_BACK:
             Toggle();
+            return true;
+        // BACKSPACE BACKS OUT ONE LEVEL, AND CLOSES AT THE TOP (S192, user instruction: *"Backspace
+        // should back the user out of that menu, and close the mod menu if at the top level"*). So
+        // the two keys differ only inside a submenu, which is the only place they COULD differ.
+        case VK_BACK:
+            if (!LeaveMenu()) Toggle();
             return true;
         // Left and right are now DIRECTIONAL. They used to both advance, on the reasoning that every
         // setting was two-valued so "previous" and "next" were the same move -- with a note to widen
         // it when a setting with three or more values arrived. Volume is that setting.
+        // A Submenu row holds no value, so there is nothing for Left to adjust. It deliberately does
+        // NOT back out either: Backspace is the one way back, and giving Left a second meaning that
+        // only applies on one row is how a player ends up somewhere they did not intend.
         case VK_LEFT:
+            if (kSettings[g_cursor].kind == Kind::Submenu) return true;
             Adjust(static_cast<SettingId>(g_cursor), -1);
             return true;
+        // RIGHT OPENS A SUBMENU -- the same key that turns a value up, on a row whose "value" is the
+        // level behind it. It needs no new key and it matches the direction Backspace comes back
+        // from, which is the whole of the mental model: Right goes in, Backspace comes out.
         case VK_RIGHT:
+            if (kSettings[g_cursor].kind == Kind::Submenu) {
+                GoToMenu(kSettings[g_cursor].opens, kSettings[g_cursor].name);
+                return true;
+            }
             Adjust(static_cast<SettingId>(g_cursor), +1);
             return true;
         default:
@@ -349,6 +475,8 @@ bool OnDescribe() {
     if (!g_open.load(std::memory_order_relaxed)) return false;
     const Setting& s = kSettings[g_cursor];
     std::wstring out = Phrase::Get(s.desc);
+    // A Submenu row has no value and so no per-value sentence; its own sentence is the whole answer.
+    if (s.kind == Kind::Submenu) { Speech::Output(out, true); return true; }
     // A Percent setting has no per-value sentence -- "eighty percent" explains itself, and inventing
     // five sentences that differ only in a number would be noise.
     if (s.kind == Kind::Named) {
@@ -456,16 +584,34 @@ float BeaconVolume() { return GainOf(SettingId::BeaconVolume); }
 float TargetVolume() { return GainOf(SettingId::TargetVolume); }
 float SoundscapeVolume() { return GainOf(SettingId::SoundscapeVolume); }   // S191
 
+// S192, the soundscape submenu's per-kind rows. Generic rather than twenty near-identical named
+// accessors -- see the note in mod_menu.h. Both answer safely for an id of the wrong kind: a
+// non-two-valued row reads false, a non-volume row reads 1.0, so a mis-mapped category goes quiet
+// or plays at full volume rather than reading some unrelated setting's number.
+bool SettingOn(SettingId id) {
+    const int i = static_cast<int>(id);
+    if (i < 0 || i >= kCount || kSettings[i].kind != Kind::Named || kSettings[i].count != 2)
+        return false;
+    return EffectiveValue(id) == static_cast<int>(Beacon::On);
+}
+
+float SettingVolume(SettingId id) { return GainOf(id); }
+
 bool IsOpen() { return g_open.load(std::memory_order_relaxed); }
 
 void Toggle() {
     const bool open = !g_open.load(std::memory_order_relaxed);
     g_open.store(open, std::memory_order_relaxed);
     if (!open) {
+        // S192: always reopen at the root. Coming back into a menu at whatever depth you left it is
+        // disorienting when you cannot see where you are, and it makes the first row you hear depend
+        // on something you did minutes ago.
+        g_menu = Menu::Root;
         Speech::Output(Phrase::Get(Id::ModMenuClosed), true);
         Log::Write("MODMENU", "closed");
         return;
     }
+    g_menu = Menu::Root;
     g_cursor = FirstVisible();   // S132: never open on a context-gated row that does not apply now
     Speech::Output(std::wstring(Phrase::Get(Id::ModMenu)) + L". " + NameAndValue(g_cursor) + L".", true);
     Log::Write("MODMENU", "opened");
@@ -479,6 +625,7 @@ static void AdjustImpl(SettingId id, int delta, bool speakName) {
     const int i = static_cast<int>(id);
     if (i < 0 || i >= kCount) return;
     const Setting& s = kSettings[i];
+    if (s.kind == Kind::Submenu) return;   // a door holds no value; Right opens it instead
     const int cur = g_values[i].load(std::memory_order_relaxed);
 
     int next = cur + (delta < 0 ? -1 : 1);

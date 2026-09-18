@@ -164,6 +164,47 @@ const AudioClips::Clip* CategorySound(Category c) {
     }
 }
 
+// ---- category -> its two rows in the soundscape submenu (S192) -------------------------------------
+// DELIBERATELY IMMEDIATELY BELOW CategorySound, and it is the same list in the same order. A kind
+// that gains a sound has to gain a row, and keeping the two switches adjacent is what makes that
+// obvious to whoever adds the next one. `Category::Trap` and `Category::All` have neither.
+//
+// The pair is returned together because every caller wants both, and because splitting them into two
+// switches is how "doors" ends up reading the shops' volume.
+struct KindRows { ModMenu::SettingId on; ModMenu::SettingId vol; };
+
+bool KindRowsFor(Category c, KindRows& out) {
+    using S = ModMenu::SettingId;
+    switch (c) {
+        case Category::Exit:        out = { S::ScapeExit,        S::ScapeExitVol };        return true;
+        case Category::Door:        out = { S::ScapeDoor,        S::ScapeDoorVol };        return true;
+        case Category::Shop:        out = { S::ScapeShop,        S::ScapeShopVol };        return true;
+        case Category::SaveCrystal: out = { S::ScapeSaveCrystal, S::ScapeSaveCrystalVol }; return true;
+        case Category::GateCrystal: out = { S::ScapeGateCrystal, S::ScapeGateCrystalVol }; return true;
+        case Category::Treasure:    out = { S::ScapeTreasure,    S::ScapeTreasureVol };    return true;
+        case Category::NPC:         out = { S::ScapeNPC,         S::ScapeNPCVol };         return true;
+        case Category::Object:      out = { S::ScapeObject,      S::ScapeObjectVol };      return true;
+        case Category::Enemy:       out = { S::ScapeEnemy,       S::ScapeEnemyVol };       return true;
+        case Category::Items:       out = { S::ScapeItems,       S::ScapeItemsVol };       return true;
+        default:                    return false;                 // All, Trap -- no sound, no rows
+    }
+}
+
+// Is this kind switched on? A kind with no rows at all (Trap) is off, which agrees with it having no
+// sound -- the two answers cannot disagree.
+bool KindOn(Category c) {
+    KindRows r;
+    return KindRowsFor(c, r) && ModMenu::SettingOn(r.on);
+}
+
+// This kind's own volume, 1.0 for anything without a row. Multiplied by the soundscape's master
+// volume at the point of play, so the master scales the whole picture and each row trims one kind
+// within it.
+float KindVolume(Category c) {
+    KindRows r;
+    return KindRowsFor(c, r) ? ModMenu::SettingVolume(r.vol) : 1.0f;
+}
+
 // Slot -> pitch. 0 -> 1.00, 1 -> 1.05, 2 -> 0.95, 3 -> 1.10, 4 -> 0.90 ... clamped at +-30%.
 // Odd slots go up, even slots go down, both walking outward one 5% step at a time.
 float PitchForSlot(int slot) {
@@ -234,6 +275,10 @@ void RefreshMembership(const FVec3& me, uint64_t now) {
         const AudioClips::Clip* clip = CategorySound(e.cat);
         if (!clip) continue;                  // soundless category (trap), or a clip that failed to
                                               // decode: never tracked, so it costs nothing per frame
+        // S192: a kind the player switched off is not tracked either -- same gate, same cost, and it
+        // releases the slot so the kinds still sounding close up the pitch spread between them
+        // instead of leaving gaps where the silenced ones used to be.
+        if (!KindOn(e.cat)) continue;
 
         Track* t = FindTrack(e.id, e.cat, e.pos);
         if (!t) {
@@ -375,7 +420,9 @@ void OnGameFrame() {
 
         const float d = NavCommon::Distance2D(me, t.pos);
         const float k = (radius > 0.0f && d < radius) ? d / radius : 1.0f;   // 0 at you, 1 at the edge
-        const float gain = vol * (1.0f - k * (1.0f - kFarGain));
+        // S192: master volume x this kind's own, then distance. Both default to 100%, so the
+        // shipped sound is unchanged until a player actually moves one of them.
+        const float gain = vol * KindVolume(t.cat) * (1.0f - k * (1.0f - kFarGain));
 
         AudioEngine::PlayScape(t.clip, pan, front, gain, t.pitch);
         g_sounding.store(true, std::memory_order_relaxed);

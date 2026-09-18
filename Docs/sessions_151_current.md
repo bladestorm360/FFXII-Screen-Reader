@@ -4316,3 +4316,75 @@ before speaking, and the only thing it can withhold is the mod's own volunteered
 see the release record. **The ordering fix itself is UNPLAYED:** it was built, reasoned through
 against all four paths (cursor move, field-pane entry, other-pane entry, deferred replay) and
 published without a play pass, because the instruction was to fix it and then update the release.
+
+### Session 192, THIRD PASS — the soundscape gets its own menu, one row per kind
+
+**The user's request, before the release went out:** *"make soundscape its own menu as a submenu of
+the mod menu. each soundscape type should have its own setting and volume control. that way a user
+could toggle only the objects they want to make sounds and don't have to toggle them all on or off at
+once. there should still be a master switch as well ... Backspace should back the user out of that
+menu, and close the mod menu if at the top level. escape should just close the mod menu regardless of
+sub menu level."*
+
+**The mod menu was flat until now.** It gained a level: `Setting` carries a `Menu` (`Root` or
+`Soundscape`) and `RowVisible` filters on it, which is the ONE line that made the cursor, Home/End,
+the opening announcement and the hidden-row rule all menu-aware at once — every walk over the table
+already went through that predicate. A third `Kind::Submenu` is a row that holds no value at all: a
+door. Right opens it, Backspace comes back.
+
+**`EffectiveValue` had to stop asking `RowVisible`, and that is the subtle part.** It used to read a
+hidden row as Off, which is right for a CONTEXT gate (S133's rule) and catastrophically wrong for a
+menu level — every soundscape setting would have read Off whenever the cursor was not standing inside
+the soundscape menu, which is almost always. The two tests are now separate and the function asks the
+context predicate directly. A comment says so, because "simplifying" it back is a one-line change
+that would silence the whole feature.
+
+**Twenty-one new rows, seven new phrases.** The per-kind row NAMES reuse `CatExit` … `CatItems` —
+the entity list's own category words — so a door is called the same thing in the soundscape menu as
+it is when `[` and `]` walk past one, and a second vocabulary cannot drift from the first. A volume
+row's name is COMPOSED (`"<kind>" + " " + "volume"`), so ten rows share one word instead of needing
+ten more names in twelve locales. The ten per-kind sentences are shared: the row name already says
+which kind, so the sentence only has to say what the row does.
+
+**The ten rows are written by a macro**, deliberately. Each kind and its volume must stay adjacent
+and in enum order, and hand-writing twenty rows is twenty chances to pair "Door" with the shops'
+volume — a mistake no review would catch, because both rows would still be perfectly valid.
+
+**The master is a GATE, not a bulk edit.** Switching it off silences everything without touching a
+single per-kind row, so flipping it back on restores exactly the set the player had chosen. A master
+that rewrote all ten rows would satisfy the same sentence and quietly destroy their choices.
+
+**Defaults: master OFF (unchanged), every kind ON at 100%.** So the first time a player switches the
+soundscape on they hear exactly what S191 shipped, and the per-kind rows are there to take things
+away rather than something to discover before the feature works at all.
+
+**`soundscape.cpp` maps a `Category` to its two rows in ONE switch, placed immediately below the
+switch that picks its sound** — the same list in the same order, so a kind that gains a sound cannot
+quietly fail to gain a row. A switched-off kind is not tracked at all: same gate and same cost as a
+soundless one, and it releases the pitch slot so the kinds still sounding close up the spread between
+them instead of leaving gaps. Per-kind volume multiplies the master at the point of play; both
+default to 100%, so the shipped sound is unchanged until someone moves one.
+
+**Keys, exactly as asked.** `Escape` closes the whole menu from any level — it is the way out, not
+the way back. `Backspace` backs out one level and closes at the top, so the two differ only inside a
+submenu, which is the only place they could. `Right` opens a submenu (the same key that turns a value
+up, on a row whose "value" is the level behind it); `Left` on such a row deliberately does nothing
+rather than becoming a second way back.
+
+**The pad's Back button now sends `VK_BACK` instead of `VK_F8` while the mod menu is open** — not
+asked for, and flagged as such. Without it a controller could OPEN the new submenu (D-pad Right) and
+then had no way out of it except closing the entire menu, so the feature was only half-reachable from
+a pad. Back now does what it always did from the root (closes) and backs out one level inside, which
+is the same rule as Backspace. **This needed a second change to be reachable at all:** `VK_BACK` had
+to join the menu-nav group in `InputTracker::DispatchModKey`, because the default route there is the
+nav-key switch, which does not answer Backspace — the press vanished silently on the first attempt.
+
+**Note on wording, flagged rather than fixed:** the category words are singular ("Exit", "Door",
+"Save Crystal") because they are shared with the entity list, so the rows read "Door, On" and
+"Door volume, 100%". Consistency with the category cycling was judged worth more than the grammar of
+a plural, but it is the kind of thing a player may hear differently — easy to change, and it would
+mean ten new names rather than reusing the shared ones.
+
+**UNPLAYED.** Nobody has navigated this menu. The failure modes worth listening for first: that
+`Escape` and `Backspace` do the right thing at each level, that the submenu announces itself on entry,
+and that switching a kind off actually silences it within ~200 ms (the track refresh).

@@ -251,6 +251,21 @@ enum class Id {
     SettingSoundscape, SoundscapeDesc, SoundscapeDescOff, SoundscapeDescOn,
     SettingSoundscapeVolume, SoundscapeVolumeDesc,
 
+    // S192: the soundscape becomes a SUBMENU with a row per kind of thing, so a player can have
+    // treasure sound without people. Only SEVEN new phrases were needed for twenty-one new rows, and
+    // that is deliberate:
+    //   * the per-kind row NAMES reuse `CatExit` ... `CatItems`, the very words the entity list
+    //     already speaks for those categories. A door is called the same thing in both places
+    //     because it IS the same list of categories, and a second set of names could only drift.
+    //   * a volume row's name composes as "<kind> <Volume>" in code -- one word, twelve locales,
+    //     instead of ten more full names.
+    //   * the per-kind sentences are shared by all ten rows. The row name already says WHICH kind;
+    //     the sentence only has to say what the row does.
+    SettingSoundscapeMenu, SoundscapeMenuDesc,
+    Volume,
+    SoundscapeKindDesc, SoundscapeKindDescOff, SoundscapeKindDescOn,
+    SoundscapeKindVolumeDesc,
+
     Count
 };
 
