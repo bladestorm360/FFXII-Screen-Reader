@@ -225,9 +225,9 @@ Worth knowing before you detour in Destiny's March: opening any of the eight doo
 
 #### Controller
 
-The mod reads a plugged-in controller as well as the keyboard. It is on by default. The Controller row in the mod menu below switches it off, and so does clicking **both sticks in at once** — L3 and R3 together — which says "Controller" and the new setting. Off passes every button and stick straight to the game. That pair works whether the mod is reading the pad or not, so it always hands the pad back and always takes it again; you never have to reach the keyboard to undo it.
+The mod reads a plugged-in controller as well as the keyboard. It is on by default, and it reads **any** pad Windows recognises — PlayStation, Xbox, Switch Pro and generic USB controllers alike, with no extra software in between. (In V1.0 it read Xbox pads only, so a PlayStation controller did nothing unless something like Steam Input or DS4Windows was translating it. If that was you, it works now.) The Controller row in the mod menu below switches it off, and so does clicking **both sticks in at once** — L3 and R3 together — which says "Controller" and the new setting. Off passes every button and stick straight to the game. That pair works whether the mod is reading the pad or not, so it always hands the pad back and always takes it again; you never have to reach the keyboard to undo it.
 
-L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken in normal play.
+L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. A, B, X and Y are named the way the game names them, so on a PlayStation pad A is Cross, B is Circle, X is Square and Y is Triangle — the button in that position, whatever your controller prints on it. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken in normal play.
 
 The mod takes four things the game also uses, and each was a deliberate trade: **L1** (game speed — still on the keyboard's 1, 2 and 3, and in the options menu), **Back** (the map toggle), **L3** (the area map) and **R3** (recentre the camera). Everything else it holds, the game leaves free.
 
@@ -275,6 +275,8 @@ The settings it holds:
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 * Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.
+* Soundscape — Off or On. On gives every door, shop, chest, crystal, person, enemy and item within about twenty steps its own repeating sound, played from the direction it is in, so you can hear the shape of the room around you rather than asking for it a category at a time. Nearer things are louder, and a thing behind you sounds duller and lower than one in front. Where several of a kind are near you they are spread in pitch, higher and lower than normal, and each repeats at a slightly different rate, so two people standing together do not blur into one sound. It follows things that move. It speaks nothing and it is not a route — the audio beacon is still what leads you somewhere. Off is the default: it is continuous sound layered over the game's own, so it is something you switch on when you want it.
+* Soundscape volume — 20% up to 100%, in fifths. 100% is the default.
 
 F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 
@@ -285,5 +287,4 @@ Two things worth knowing. The mod cannot take keys away from the game, so while 
 * O: read the focused item's description or tooltip — the description of the thing you are on, not the screen's own standing help. On an open Clan Primer page it re-reads the whole page, and in the mod menu it describes the setting you are on. With an enemy under the target cursor in battle it reads what Libra reveals — HP as numbers, level, any statuses on it, and what it is weak to, absorbs, halves or is immune to — or says Libra is not active. Marks and bosses that shrug off Libra give you the same nothing they give a sighted player.
 * T: repeat the last line of dialogue — a conversation page, a prompt, or an obtained-item message. Silent when none of those is on screen.
 * U: current License Points, on the License Board.
-* ': write a diagnostic dump to the log. Useful when reporting a bug — it records what the mod can see around you.
 
