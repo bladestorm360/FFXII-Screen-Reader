@@ -249,6 +249,129 @@ Newest first. One entry per release, written at step 4. `Releases\` is gitignore
 the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
 which is most of the argument for tagging: a record can be edited, a tag points at a tree.
 
+## V1.0.1 — 2026-09-18
+
+**The release that makes the mod reachable on a PlayStation pad.** V1.0 read the controller over
+XInput, which is the Xbox protocol, so a DualSense / DualShock 4 / Switch Pro / generic HID stick
+did nothing at all unless Steam Input or DS4Windows was translating it — on the most common pad in
+the blind community, every pad feature shipped dead. That is the headline fix and the reason this is
+a patch release rather than a feature one.
+
+**Built from:** `50bf70b`. **Stamp verified in the shipped binary** (not in the source): the strings
+`1.0.1` and `50bf70b` are each present once and `7588345` / `b21034c` are absent, so a log from this
+build opens `Build: V1.0.1 (50bf70b)` and cannot be confused with either binary that answers to V1.0.
+**The DLL's behaviour traces to `50fcfea`** (S191, the soundscape) — the two commits after it are
+this release's own prep: `fda7bb7` is the readme, `50bf70b` is the stamp bump. Covers **Sessions
+186–191** since V1.0's `7588345` (S185).
+
+**Artifacts.**
+
+```
+dinput8.dll                 1,942,528  sha256 48e74ad4e2b0204717c6a7d6e3f48b9e2a2f62015e4e7171ef9cc20d441fd331
+SDL3.dll                    1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll                      122,368  sha256 c4fb11d3ed236f27532c7ab8370ebde75133f322a069450f17e38d7548197225
+nvdaControllerClient64.dll    153,600  sha256 41c1f5df5997e798fcfbf7c8f2589de811e768b069a60710600cf57cb23a0b09
+ReadMe.txt                     29,803  sha256 4ae43aae43ac6afba2137ca7fa248e034f468b52c1f7b6fbeb961b64bc281506
+zip                         1,960,068  sha256 d57f7d008a39ff38313040a0791cefda62a6e3b816574111baead52d71a37a39
+```
+
+`SDL3.dll`, `Tolk.dll` and `nvdaControllerClient64.dll` are byte-identical to V1.0 (carried forward,
+not re-sourced). All four DLLs verified `8664`.
+
+**`dinput8.dll` DOUBLED IN SIZE — 960,000 → 1,942,528 — AND THAT IS EXPECTED, NOT A MISBUILD.** The
+soundscape ships nine new category sounds embedded as RCDATA (`src\audio\beacon_assets.rc`, sourced
+from `FF 12 SFX\`), and those nine WAVs are 887,558 bytes on their own. There is still deliberately
+no asset folder in the zip; the growth is the assets moving *into* the DLL, which is where this
+project has always put them.
+
+**`ReadMe.txt` CHANGED** — 28,365 → 29,803 bytes. Three edits, all in `fda7bb7` before the trigger.
+
+**The converter was validated the strong way again, and it passed.** Rebuilt from step 2's rules and
+`cmp`'d against the shipped V1.0 `ReadMe.txt` — byte identical at 28,365. So step 2 remains
+sufficient to regenerate a shipped artifact from source with no undocumented step. Output re-checked:
+zero `#` lines, exactly one backtick (the literal `` ` `` key name, line 90), zero doubled spaces,
+zero trailing-whitespace lines, no BOM, no stray LF, ends with exactly one CRLF.
+
+> **A CORRECTION TO THE V1.0 RE-CUT RECORD, FOUND BY DOING THIS.** That record says the converter was
+> validated "run against `git show 48ded58:README.md`, and `cmp` against the shipped V1.0
+> `ReadMe.txt` — byte identical." **Those two are not the same artifact and cannot both be right.**
+> `48ded58:README.md` converts to **25,603** bytes, which is the *first* V1.0 cut's ReadMe — the file
+> the re-cut then overwrote. The 28,365-byte file actually sitting in `Releases\V1.0\` reproduces
+> from `1416e1e:README.md`. Both convert cleanly, so the converter was never the problem and the
+> re-cut's conclusion holds; the sentence just names the wrong source commit, because the re-cut
+> validated against the artifact it was about to replace rather than the one it shipped. **If you are
+> rebuilding a shipped ReadMe to check this converter, take the README from the commit the record
+> says the DLL was built from, not from the record above it.**
+
+**What changed in the build (Sessions 186–191).**
+
+- **All controller input goes through SDL3 (S186–S189).** `gamepad_sdl.cpp` is the only pad reader,
+  and the game's pad state is *built* from what the mod read rather than the mod masking a device
+  the game reads for itself — the FFPR `GamepadManager` model ported whole. SDL3 was already linked
+  into the DLL for the beacon's audio, so the gamepad subsystem cost nothing to reach. **This is what
+  makes any pad work:** SDL3 carries the per-device mapping table and hands back one normalized
+  layout (SOUTH/EAST/WEST/NORTH, D-pad, both shoulders, both stick clicks, Back, Start) for every
+  controller, which is the thing a raw `DIJOYSTATE2` cannot give you — `rgbButtons[128]` is in the
+  device's own HID report order and "which index is Circle" differs per pad.
+- **The pad consume mask is a LEVEL, latched until release (S187)**, not an edge. An edge-shaped mask
+  is invisible at the game's 33 ms pad read rate, which is why a consumed button used to reach the
+  game anyway one frame later. Mod mode now has exactly one opener (Start) and one clean exit, Start
+  no longer pauses out from under the player, and **Back, Back opens the game's map on purpose** —
+  the second Back is deliberately not consumed, so the map button that Back costs the player
+  everywhere else is recoverable.
+- **Mod mode's confirm/cancel pair swapped to the game's own (S189).** `B` reads the summoned Esper
+  and `A` cancels; in the mod menu `B` reads a row's description and `A` closes. These are positions,
+  not letters — `A` is Cross and `B` is Circle on a PlayStation pad — so the mod backs out with the
+  button the rest of FFXII just taught the player to back out with.
+- **The soundscape (S191).** Every interactable within about twenty steps gets its own repeating
+  voice, panned to where the thing actually is right now and louder as you close, with no cap and no
+  scheduler. Two of a kind are told apart by pitch *and* by period — a voice at 1.0 s and one at
+  1.1 s cannot stay in phase — which is what stops them piling up without anything to keep in step.
+  A slot is owned for as long as the entity is tracked, so two NPCs walking past each other do not
+  swap identity mid-loop. **Default OFF**, on the user's explicit instruction: it is continuous audio
+  layered over the game's own and must be something the player chose. Off costs one relaxed atomic
+  load and an immediate return on the field tick.
+- **Numeric option rows speak (S190).** The Pharos Subterra orb pedestal asked how many orbs to set
+  and only "Cancel" ever spoke. Two defects in series: `IsMostlyPrintable` ends in `alpha >= 1`, so
+  the row "10" failed it, and `MessageMacro` cached one value, so all five macros on the surface
+  printed the same number. This silenced *every* numeric option list, not just that pedestal.
+
+**KEY AUDIT — every key that moved was grepped in the readme and EVERY hit read (L-67).**
+
+- **`'` WAS DOCUMENTED AND HAS NOT BEEN BOUND SINCE S185, AND IT SHIPPED THAT WAY IN BOTH V1.0
+  BUILDS.** The V1.0 re-cut record states "`'` had one hit and it is gone with the binding" — the
+  *binding* went, the readme line did not, so V1.0 promised a blind player a diagnostic dump that no
+  key produces. Confirmed dead at the source, not inferred: `DIK_APOSTROPHE` is declared at
+  `input_tracker.cpp:95` and used nowhere, and the `case VK_OEM_7` handler at
+  `nav_commands.cpp:163` is unreachable. The readme entry is removed in `fda7bb7`; all remaining
+  `'` hits in the readme are possessive apostrophes. **This is L-68's case exactly** — a flag that
+  survived a record and shipped anyway — so it was fixed rather than re-noted.
+- **Mod mode `A`/`B` needed no change and are now correct for the first time.** The readme has said
+  "B: Esper, A: Cancelled" since V1.0; V1.0's *code* had B opening the mod menu and A reading the
+  Esper, so the shipped readme described neither cut accurately. S189 swapped the code into the shape
+  the readme already claimed. All five mod-mode rows re-read against `ModModeKeyFor` and all three
+  mod-menu bindings against `kMenu`: X, Y, B, Start, A, Back-again and the "anything else" fallback
+  all match, as do B-describes / A-Start-Back-close / Escape.
+- **`Start`** has two hits (the mod-mode row and the mod-menu close line); both match the code.
+- **`F4` / `F7` / `F11`** unchanged and still correct — `F11` is still the Audio beacon, not the
+  soundscape.
+- **No key is missing from the readme and no listed key describes behaviour this build does not
+  have.**
+
+**The soundscape has no key and is not a readme gap on that ground** — but both its mod-menu rows
+were added to the settings list anyway, because that list enumerates what a player navigates and a
+row missing from it is a row nobody can be told about. Listed last, matching where they sit in the
+menu.
+
+**⚠ THE PLAYSTATION FIX IS UNTESTED ON A PLAYSTATION PAD.** The SDL3 read path is play-confirmed on
+an **Xbox** pad only. Xbox pads worked before this change, so the confirmation covers the refactor —
+it does not cover the thing the release is for. S189's A/B swap and S187's latched consume mask are
+**both unplayed by anyone**. The first PlayStation-pad report is the real test; if it fails, the log
+line to look for is `controller CONNECTED on index N`, which is what never fired in Lirin's V1.0 log.
+
+**Published.** Tag `V1.0.1` (annotated) on the commit carrying this record; GitHub Release with the
+zip attached.
+
 ## V1.0 (re-cut) — 2026-09-17
 
 **THE SAME VERSION NUMBER, RE-CUT THE SAME DAY.** The user's instruction: *"update the release and
