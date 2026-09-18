@@ -4388,3 +4388,40 @@ mean ten new names rather than reusing the shared ones.
 **UNPLAYED.** Nobody has navigated this menu. The failure modes worth listening for first: that
 `Escape` and `Backspace` do the right thing at each level, that the submenu announces itself on entry,
 and that switching a kind off actually silences it within ~200 ms (the track refresh).
+
+### Session 192, FOURTH PASS — the menu's own keys, and a pause the tick could not see
+
+Two from the same play pass, both shipped without a further test at the user's instruction.
+
+**1. The arrows were not intercepted, so the camera moved while the player read the menu.**
+*"arrow keys are not being properly intercepted, so the camera is moving when toggling options in the
+mod and soundscape menu."* The mask built earlier in this session covered Escape and Backspace and
+deliberately stopped there, with a comment saying the arrows were "a bigger behavioural change than
+was asked for". **That reasoning was wrong in the way that matters**: the arrows are mod-menu keys by
+exactly the same definition as the other two, and the cost of leaving them was moving a blind player
+somewhere else while they read a settings list — which the readme then had to warn them about instead
+of the mod simply not doing it. Home and End went in with them, unreported, because they navigate the
+menu identically and leaving them would leave the same defect standing.
+
+**2. The soundscape played on over a paused game — and the gate was never the problem.** The suspend
+gate matches the beacon's exactly: the same two predicates (`BattleCommandActive`, `IsBoxLive`), the
+same field tick, added when the feature was written. **The difference is the TAIL.** Opening the pause
+menu stops the field tick being called at all — which is how the beacon has always gone quiet there,
+"quiet only BY ACCIDENT" in its own words — and nothing silences what is ALREADY playing. The beacon's
+ping is a click, so its tail is inaudible; the soundscape's clips run to seconds (`gate_crystal.wav`
+is 323 KB), so its tail is the whole complaint.
+
+**A gate on a tick that has stopped cannot fix that**, which is why this is a watchdog rather than one
+more predicate. It runs on the game's DirectInput keyboard poll — the tick that keeps running through
+menus, pauses and loads, and the same property that makes that poll the mod's pad-read site. It
+notices the field tick has gone quiet for 200 ms and silences the voices.
+
+**It does only what is safe off the game thread** (`pad_router.h`'s threading note): two relaxed
+atomic reads and `SilenceScape`, which walks a fixed array and calls `SDL_ClearAudioStream`. No game
+memory, no locks, no touching the tracks vector. Dropping the tracks IS shared-state work, so the
+watchdog only raises a flag and the game thread does it on its next tick — the same treatment as
+coming out of the busy gate, because a pause can last minutes and the room may be different on the
+other side of it.
+
+**Both shipped into the V1.0.1 re-cut unplayed, on instruction:** *"those two things do not need to be
+tested after implementation."*

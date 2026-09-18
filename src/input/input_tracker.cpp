@@ -639,15 +639,29 @@ bool GameForeground() { return GameIsForeground(); }
 // With the menu shut and nothing latched, this function does not write a byte -- the buffer the
 // game receives is bit-identical to the one it would receive with no mod installed.
 //
-// NOT the arrow keys. They are claimed by the menu too and they still reach the game, which is why
-// the readme warns that the character walks while the menu is open. Widening this mask to them is a
-// bigger behavioural change than was asked for and would need its own instruction.
+// THE ARROWS AND HOME/END JOINED THE LIST AT S192's THIRD PASS, on a play report: *"arrow keys are
+// not being properly intercepted, so the camera is moving when toggling options in the mod and
+// soundscape menu."* They were left out when this was first written, on the grounds that masking
+// them was wider than had been asked for -- and that was wrong in the only way that matters: the
+// player who cannot see the screen gets moved somewhere else while reading a settings list, and the
+// readme had to warn them about it rather than the mod simply not doing it.
+//
+// EVERY KEY BELOW IS ONE THE MOD MENU CONSUMES WHILE IT IS OPEN, which is the whole principle this
+// mask runs on. The arrows were only distinctive in having a visible cost in the game behind them.
+// Home and End are here for the same reason and not because anything was reported: they navigate
+// this menu exactly as the arrows do, so leaving them out would leave the identical defect standing
+// for the next report to find.
 void MaskModMenuKeys(unsigned char* dik) {
     if (!dik) return;
-    static const int  kScan[2] = { DIK_ESCAPE, DIK_BACK };
-    static bool       s_latched[2] = {};
+    static const int kScan[] = {
+        DIK_ESCAPE, DIK_BACK,                      // close the menu / back out one level
+        DIK_UP, DIK_DOWN, DIK_LEFT, DIK_RIGHT,     // move between rows, change a value, open a submenu
+        DIK_HOME, DIK_END,                         // jump to the first row / the last
+    };
+    constexpr int kN = static_cast<int>(sizeof(kScan) / sizeof(kScan[0]));
+    static bool  s_latched[kN] = {};
     const bool open = ModMenu::IsOpen();
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kN; ++i) {
         if ((dik[kScan[i]] & 0x80) == 0) { s_latched[i] = false; continue; }   // released: claim ends
         if (open) s_latched[i] = true;                                          // claimed on this press
         if (s_latched[i]) dik[kScan[i]] = 0;                                    // ...and stays claimed

@@ -73,6 +73,13 @@ namespace Soundscape {
 // queued on its own voice and the soundscape is layered under it rather than racing it.
 void OnGameFrame();
 
+// Called from the game's DirectInput keyboard poll, which keeps running while the field tick does
+// not -- menus, pauses, loads. Silences the voices when the field tick has stopped, so a paused game
+// is not left with seconds of soundscape still playing over it. Off the game thread: it reads two
+// relaxed atomics and clears the audio streams, and touches nothing else. O(1) and returns on the
+// first line whenever nothing is sounding, which is the shipped default.
+void OnInputPoll();
+
 // GAME THREAD. Drop every tracked voice and silence anything sounding. Called by OnGameFrame itself
 // whenever what it is tracking has gone stale -- the row switched off, the map changed, the player
 // stopped driving -- and once at teardown, from the same place the other field-tick modules are torn

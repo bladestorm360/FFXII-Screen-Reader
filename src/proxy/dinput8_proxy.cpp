@@ -6,6 +6,7 @@
 #include "input/gamepad_sdl.h"
 #include "input/pad_hook.h"
 #include "navigation/auto_walk.h"
+#include "navigation/soundscape.h"   // OnInputPoll -- the stall watchdog; this poll outlives the field tick
 #include <Windows.h>
 #include <atomic>
 #include <cstring>
@@ -289,6 +290,12 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
         // MEASURED, NOT ASSUMED (`L-88`). It is an event drain plus ~27 cached reads and it collapses
         // to one read per frame however many hooks ask, but the budget report is what proves that.
         PollPadMeasured();
+
+        // S192: the soundscape's stall watchdog. THIS POLL IS THE POINT -- it keeps running while
+        // the field tick is stopped by a pause or a load, which is exactly when a soundscape voice
+        // would otherwise keep playing over a paused game. Same reasoning as the pad read above:
+        // this is the one tick that does not stop. O(1) unless something is actually sounding.
+        Soundscape::OnInputPoll();
     }
     // One line per non-keyboard device, the first time the game polls it. See g_otherDevices above.
     if (!IsKeyboardDev(self)) {

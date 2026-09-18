@@ -287,7 +287,7 @@ Its menu holds:
 
 F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 
-Two things worth knowing. The mod cannot take keys away from the game, so while the menu is open the arrow keys still move your character — press F8 while standing still, or just use F4. And Verbose speaks the enemy's announcement when the game makes it.
+While the menu is open the keys it uses are its own — the arrows, Home, End, Escape and Backspace do not reach the game, so moving between settings no longer moves your character or the camera. Every other key still reaches the game as usual. Worth knowing as well: Verbose speaks the enemy's announcement when the game makes it.
 
 #### Reading
 

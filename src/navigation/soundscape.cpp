@@ -124,7 +124,11 @@ struct Track {
                                                 // position: there is no scene node to re-read.
 };
 
-std::atomic<bool>  g_sounding{false};   // something of ours may be ringing; read from Stop()
+std::atomic<bool>  g_sounding{false};
+// S192: the field-tick heartbeat, and the flag the stall watchdog raises. Both relaxed and both
+// touched from two threads -- see the note above ClearTracks for why that is all it may do.
+std::atomic<uint64_t> g_lastTickMs{0};
+std::atomic<bool>     g_stalled{false};   // something of ours may be ringing; read from Stop()
 std::vector<Track> g_tracks;
 uint64_t           g_nextRefreshMs = 0;
 uint64_t           g_phaseSeq      = 0;      // hands out initial offsets; global, not per category
@@ -316,6 +320,28 @@ void RefreshMembership(const FVec3& me, uint64_t now) {
     }
 }
 
+// ---- THE FIELD TICK STOPPING IS ITSELF A PAUSE (S192, third pass) -------------------------------
+//
+// Play report: *"ensure soundscape is properly paused when the game is paused, as the audio beacon
+// and target beacon already do."* The suspend gate below already matches the beacon's exactly -- same
+// two predicates, same tick -- so the difference was never the gate. It is the TAIL.
+//
+// When the player opens the pause menu the field tick stops being called at all, which is how the
+// beacon has always gone quiet there ("quiet only BY ACCIDENT", audio_beacon.cpp). Nothing silences
+// what is ALREADY PLAYING, and that is where the two features part company: the beacon's ping is a
+// click, while the soundscape's clips run to seconds (`gate_crystal.wav` is 323 KB). So the beacon
+// stops inaudibly and the soundscape keeps sounding over a paused game.
+//
+// A gate on a tick that has stopped cannot fix that. The watchdog runs on the game's INPUT POLL,
+// which keeps running through menus, pauses and loads -- the same property that makes it the mod's
+// pad-read site. It notices the field tick has gone quiet and silences the voices.
+//
+// STRICTLY LIMITED TO WHAT IS SAFE OFF THE GAME THREAD (pad_router.h's threading note). It reads two
+// relaxed atomics and calls SilenceScape, which walks a fixed array and calls SDL_ClearAudioStream --
+// no game memory, no locks, no tracks vector. Dropping the tracks is real work on shared state, so
+// that is left for the game thread to do on its next tick, which is what `g_stalled` carries.
+constexpr uint64_t kTickStallMs = 200;   // ~12 frames at 60fps: far above a hitch, under a held note
+
 void ClearTracks() {
     g_tracks.clear();
     g_nextRefreshMs = 0;
@@ -323,6 +349,18 @@ void ClearTracks() {
 }
 
 } // namespace
+
+// Called from the DirectInput keyboard poll -- see the note above ClearTracks. Off the game thread.
+void OnInputPoll() {
+    if (!g_sounding.load(std::memory_order_relaxed)) return;   // nothing is making noise
+    const uint64_t last = g_lastTickMs.load(std::memory_order_relaxed);
+    if (last == 0) return;
+    const uint64_t now = GetTickCount64();
+    if (now < last || now - last <= kTickStallMs) return;       // the field tick is still running
+    AudioEngine::SilenceScape();
+    g_sounding.store(false, std::memory_order_relaxed);
+    g_stalled.store(true, std::memory_order_relaxed);
+}
 
 void OnGameFrame() {
     // ---- O(1) idle ---------------------------------------------------------------------------------
@@ -336,6 +374,17 @@ void OnGameFrame() {
         if (!on) Stop();
     }
     if (!on) return;
+
+    // The heartbeat the stall watchdog above measures against, and its counterpart: if the watchdog
+    // silenced us while the field tick was stopped, drop the tracks now that we are back on the game
+    // thread. Same treatment as coming out of the busy gate below -- a pause can be minutes long and
+    // the room may be entirely different on the other side of it, so re-read it rather than resuming
+    // voices aimed at where things used to be.
+    g_lastTickMs.store(GetTickCount64(), std::memory_order_relaxed);
+    if (g_stalled.exchange(false, std::memory_order_relaxed)) {
+        Log::Write("SCAPE", "field tick resumed after a stall -> tracks dropped");
+        Stop();
+    }
 
     // The map changed under us. Every track holds a scene-object pointer and a world position from the
     // old area, both meaningless now. PathPlanner bumps the epoch on teardown, so this needs no hook of
