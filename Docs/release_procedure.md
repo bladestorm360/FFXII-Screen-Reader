@@ -249,6 +249,87 @@ Newest first. One entry per release, written at step 4. `Releases\` is gitignore
 the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
 which is most of the argument for tagging: a record can be edited, a tag points at a tree.
 
+## V1.0.1 (re-cut 2) — 2026-09-18
+
+**THE SAME NUMBER, RE-CUT A SECOND TIME, ON THE SAME DAY.** The instruction: *"simply update the
+release and we're ready to ship after you implement that. remember, v1.0.1 still, do not bump. refresh
+the release instead."* `FFXII_SR_VERSION` is untouched at `1.0.1`, the directory and zip keep their
+names, and the tag `V1.0.1` moved again. **The record below this one describes the first re-cut and
+the one below that the original; neither is edited.** Three different binaries have now been published
+as V1.0.1.
+
+> **THE COST, RESTATED BECAUSE IT KEEPS BEING PAID.** The previous record said a same-day re-cut is
+> the user's settled preference rather than a one-off, and that this file should record the cost
+> instead of calling it exceptional. It has now happened twice more in one day. The standing costs
+> are unchanged — Preconditions 2 is violated by design, the superseded artifacts are gone, and a
+> moved tag never reaches anyone who already fetched it — and one of them has now grown past the
+> point where it can be waved through:
+>
+> **FIVE BUILDS ANSWER TO A 1.0.x NUMBER.** V1.0 twice (`b21034c`, `7588345`), V1.0.1 three times
+> (`50bf70b`, `ee26e19`, `5e6a8d8`). **A bug report naming a version is worthless on its own — ALWAYS
+> ask for the log's `Build:` line**, which is the only thing that separates them. This is no longer a
+> theoretical filing problem: the V1.0.1 builds differ in whether Auto detail works at all, whether it
+> speaks before or after the row line, whether the mod menu has a soundscape submenu, and whether the
+> arrow keys reach the game.
+
+**Built from:** `5e6a8d8`. **Stamp verified in the shipped binary:** `1.0.1` and `5e6a8d8` are each
+present once; `50bf70b` and `ee26e19` are absent. Covers **Session 192's third and fourth passes**.
+
+**Artifacts.**
+
+```
+dinput8.dll                 1,950,720  sha256 70f4fb7e2187311d1084a1edde9efed196dc5c8f8c9a71893b3458822c2909f2
+SDL3.dll                    1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll                      122,368  sha256 c4fb11d3ed236f27532c7ab8370ebde75133f322a069450f17e38d7548197225
+nvdaControllerClient64.dll    153,600  sha256 41c1f5df5997e798fcfbf7c8f2589de811e768b069a60710600cf57cb23a0b09
+ReadMe.txt                     30,921  sha256 308c173e258e9662cd33784102da222627c1340dd8f65c36c078819a56887a0e
+zip                         1,961,913  sha256 b985c4ae9e689b3f36a2432c1a8954b5a8440b458e675d1baa709c18388337ea
+```
+
+`SDL3.dll`, `Tolk.dll` and `nvdaControllerClient64.dll` are byte-identical to both earlier cuts. All
+four DLLs verified `8664`.
+
+**`ReadMe.txt` CHANGED** — 29,946 → 30,921 bytes. Output re-checked: zero `#` lines, exactly one
+backtick, zero doubled spaces, zero trailing-whitespace lines, no BOM, no stray LF, one trailing CRLF.
+
+**What changed in the build since the first re-cut.**
+
+- **The soundscape has its own menu**, reached from a `Soundscape settings` row in the mod menu
+  (Right opens it, Backspace comes back). Inside: the master switch, the master volume, and then an
+  Off/On row and a volume for each of the ten kinds that have a sound — Exit, Door, Shop, Save
+  Crystal, Gate Crystal, Treasure, NPC, Interactables, Enemy, Items. Every kind defaults On at 100%
+  with the master still Off, so the first switch-on is exactly what S191 shipped and the rows exist
+  to take kinds away. **The master is a gate, not a bulk edit:** switching it off silences everything
+  without forgetting which kinds the player chose.
+- **`Escape` closes the mod menu from any level; `Backspace` backs out one level and closes at the
+  top.** On a pad, Back does what Backspace does.
+- **The menu's own keys no longer reach the game.** The arrows, Home and End join Escape and
+  Backspace in the mask while the menu is open, so moving between settings no longer moves the
+  character or the camera.
+- **The soundscape is silenced when the field tick stops** — a pause, a load, a map change. Its
+  suspend gate already matched the beacon's; what it lacked was anything to cut the TAIL of a clip
+  already playing when the tick stopped. A watchdog on the DirectInput keyboard poll, which keeps
+  running when the field tick does not, now does that.
+
+**KEY AUDIT — every key that moved was grepped in the readme and EVERY hit read (L-67).**
+`Backspace` has three hits (the `F8` section, the controller section's keyboard note, and the
+soundscape settings row) and all three describe backing out one level and closing at the top.
+`Escape` has two, both now saying it closes from wherever you are. The arrows are described in the
+`F8` section, and **the readme's standing warning that "the arrow keys still move your character"
+while the menu is open is GONE** — it documented a defect that no longer exists, and leaving it would
+have told a player to work around something the mod now handles. **No key is missing from the readme
+and no listed key describes behaviour this build does not have.**
+
+**PLAY STATE.** The soundscape submenu was **play-confirmed** by the user before this cut ("soundscape
+menu works but…"), as were Escape, Backspace and Auto detail from the cut before. **The two fixes in
+this build — the arrow-key mask and the pause watchdog — are UNPLAYED, on the user's explicit
+instruction:** *"those two things do not need to be tested after implementation."* The ordering fix
+from the previous cut also remains unplayed in the strict sense, though the feature it belongs to was
+exercised.
+
+**Published.** Tag `V1.0.1` (annotated) moved to the commit carrying this record and force-pushed to
+`origin`; the GitHub Release's asset was replaced with the new zip.
+
 ## V1.0.1 (re-cut) — 2026-09-18
 
 **THE SAME VERSION NUMBER, RE-CUT THE SAME DAY — THE SECOND TIME THIS HAS HAPPENED, AND THE SECOND
