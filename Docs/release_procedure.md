@@ -249,6 +249,94 @@ Newest first. One entry per release, written at step 4. `Releases\` is gitignore
 the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
 which is most of the argument for tagging: a record can be edited, a tag points at a tree.
 
+## V1.0.1 (re-cut) — 2026-09-18
+
+**THE SAME VERSION NUMBER, RE-CUT THE SAME DAY — THE SECOND TIME THIS HAS HAPPENED, AND THE SECOND
+TIME THE USER ASKED FOR IT BY NAME.** The instruction: *"then update the v1.0.1 release, do not bump
+to 1.0.2."* So `FFXII_SR_VERSION` is untouched at `1.0.1`, the directory is still `Releases\V1.0.1\`,
+the zip is still `FFXII-Screen-ReaderV1.0.1.zip`, and the tag `V1.0.1` was **moved** to the commit
+carrying this record. The original V1.0.1 record below is kept as written — it describes a different
+binary and must not be edited to describe this one.
+
+> **THE V1.0 RE-CUT'S RECORD SAID "do not take this as precedent". IT HAS NOW HAPPENED AGAIN, AND
+> THE HONEST READING IS THAT IT IS THE USER'S SETTLED PREFERENCE FOR A SAME-DAY FIX, NOT A ONE-OFF.**
+> Both times the trigger was identical: a defect found in play within hours of publishing, fixed, and
+> shipped under the number that was already out. That is a reasonable thing to want and this file
+> should stop calling it exceptional — what it must keep doing is **recording the cost**, which is
+> unchanged and is not small:
+>
+> - **Preconditions 2 is violated by design** ("`Releases\V<version>\` does not already exist — if it
+>   does, stop and report"). It is overridden only by an instruction that names the version and says
+>   to keep it. Nothing else licenses it.
+> - **The superseded artifacts are gone.** `dinput8.dll` (1,942,528 bytes, `48e74ad4…`) and its zip
+>   are not in the repo and not on GitHub any more; the only copies are whatever people downloaded
+>   between 20:35 and this cut.
+> - **A moved tag does not reach anyone who already fetched it.** Whoever pulled `V1.0.1` earlier has
+>   a tag pointing at `1036148` and will never see it change.
+> - **FOUR builds now answer to a 1.0.x number** — V1.0 twice, V1.0.1 twice. **A bug report that
+>   names a version is no longer enough; ask for the log's `Build:` line every time.** The four stamp
+>   `b21034c`, `7588345`, `50bf70b` and `ee26e19`, and that is the only way to tell them apart.
+
+**Built from:** `ee26e19`. **Stamp verified in the shipped binary:** `1.0.1` and `ee26e19` are each
+present once and `50bf70b` is absent, so this build opens `Build: V1.0.1 (ee26e19)` and is
+distinguishable from the first cut. Covers **Session 192's second pass** since `50bf70b`.
+
+**Artifacts.**
+
+```
+dinput8.dll                 1,944,064  sha256 5c15ce357e54c57d397f0034e3063613e7ba9bb403cdb8c8cfc6038a83595d1b
+SDL3.dll                    1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll                      122,368  sha256 c4fb11d3ed236f27532c7ab8370ebde75133f322a069450f17e38d7548197225
+nvdaControllerClient64.dll    153,600  sha256 41c1f5df5997e798fcfbf7c8f2589de811e768b069a60710600cf57cb23a0b09
+ReadMe.txt                     29,946  sha256 b1732af85f26fd24f64b63fbb129bb7d399f9bd3938c5c90d6ec36d22d426717
+zip                         1,959,286  sha256 e08e45c24a98203e6ddd35d2af5db63740bd4ebad226a990cd999802e1065a87
+```
+
+`SDL3.dll`, `Tolk.dll` and `nvdaControllerClient64.dll` are byte-identical to the first cut (carried
+forward, not re-sourced). All four DLLs verified `8664`.
+
+**`ReadMe.txt` CHANGED** — 29,803 → 29,946 bytes. Output re-checked: zero `#` lines, exactly one
+backtick (the literal `` ` `` key name), zero doubled spaces, zero trailing-whitespace lines, no BOM,
+no stray LF, ends with exactly one CRLF.
+
+**What changed in the build (Session 192).**
+
+- **Auto detail actually does what it says.** It had three call sites — the equipment stat preview,
+  the shop's copy of it, and Libra behind the battle target line — and **never volunteered the `o`
+  description**, which is the user's own definition of the setting. So on the magick, technick, item
+  and equipment lists and the config screen, On and Off produced identical speech. It shipped that
+  way through fourteen releases and a public 1.0. Now the description is spoken on highlight,
+  queued behind the row line.
+- **The ordering defect that this re-cut exists for.** The first build of the above volunteered the
+  description after the focus dispatch — right on a cursor move, wrong on menu ENTRY, where the row
+  line is announced milliseconds later by a different hook. The description went out first and the
+  interrupting row line cut it off, so the very first thing a player heard on opening a menu was
+  wrong. Now ordered against `Speech::UtteranceCount()` at the speech choke point, so the detail
+  cannot precede the row line on any path.
+- **Closing the mod menu no longer pauses the game.** Escape closed the menu and reached the game as
+  well. Escape and Backspace are now taken from the game while the menu is open — the mod's one
+  chartered key swallow — and **Backspace closes the menu too**.
+
+**KEY AUDIT — every key that moved was grepped in the readme and EVERY hit read (L-67).**
+`Backspace` is new and is listed in both places a mod-menu close key is described (the `F8` section
+and the controller section's keyboard note). `Escape` has two hits, both still accurate — it closes
+the menu, and it now does so without also opening the pause screen, which the readme never claimed
+either way. Auto detail's paragraph was rewritten to describe what the setting now does, since the
+old wording described only the two previews. **No key is missing from the readme and no listed key
+describes behaviour this build does not have.**
+
+**PLAY STATE, stated plainly because it is mixed.** Escape, Backspace and the auto-detail feature
+itself are **PLAY-CONFIRMED** — the user played the first cut and reported it "mostly working", which
+also settles that the game reads Escape from the DirectInput poll the mask reaches. **The ordering
+fix in this cut is UNPLAYED:** it was built, reasoned through against all four announcement paths
+(cursor move, field-pane entry, other-pane entry, deferred SHOW replay) and published without a play
+pass, on the instruction to fix it and update the release. If it is wrong, the symptom is the one
+already reported — the description arriving before the row line on menu entry — and the change is
+contained in `TakeFocusDetail`'s mark comparison.
+
+**Published.** Tag `V1.0.1` (annotated) moved to the commit carrying this record and force-pushed to
+`origin`; the GitHub Release's asset was replaced with the new zip.
+
 ## V1.0.1 — 2026-09-18
 
 **The release that makes the mod reachable on a PlayStation pad.** V1.0 read the controller over
