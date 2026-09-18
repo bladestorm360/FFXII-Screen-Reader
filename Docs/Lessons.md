@@ -36,7 +36,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62, L-101 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94, L-107 |
-| anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102 |
+| anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102, L-108 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99, L-106 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100, L-103, L-105 |
@@ -1253,3 +1253,24 @@ information that would normally be read with the `o` key" and the call sites are
 readouts, the gap IS the defect -- do not start by debugging the three that are there. The same grep
 is the cheapest possible review of any *new* setting: a row whose accessor has no callers yet is a
 feature that does not exist, however complete the rest of it looks.
+
+### L-108 "AFTER THE EVENT" IS NOT "AFTER THE ANNOUNCEMENT" -- ORDER AGAINST THE SPEECH, NOT THE HOOK
+**When one line must land behind another, do not infer the order from where the hooks sit. Hook order
+is not speech order: the same event is announced at different moments on different paths, and the
+path a player meets FIRST is usually the deferred one.**
+**Why:** S192. Auto detail volunteered its description after the focus dispatch returned, which is
+correct on a cursor MOVE -- the reader speaks the row before the dispatch is over. On menu ENTRY it is
+wrong: the pane's first focus is gated out and STASHED, and the row is announced milliseconds later by
+a different hook (`FUN_00244830`, or the field pane's SHOW message). So the description went out
+first and the row line, which interrupts, cut it off -- and the very first thing a player hears when
+opening a menu was the defect. Shipped, and reported back the same day.
+**The tell:** you are reasoning "the row is spoken during X, so after X is safe". Ask instead whether
+EVERY path announces during X. A stash, a replay, an "armed"/"pending" flag or a wait-for-SHOW comment
+anywhere near the surface means at least one path does not.
+**How to apply:** order against the speech itself, at the choke point all speech funnels through --
+a monotonic utterance count, snapshotted when the event begins and compared before the dependent line
+goes out. It needs no cooperation from any individual reader, which is the whole point: the
+alternative is a "yes, I spoke" call in a dozen readers and every deferral path, and the next surface
+added is the one that forgets it. This is the same centralization argument CLAUDE.md already makes for
+`Speech::Output` -- if every speaker must funnel through one place, that place can answer questions
+about speech that no caller can answer about itself.

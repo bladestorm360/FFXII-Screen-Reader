@@ -4271,8 +4271,48 @@ press is what closes the menu), and the mask runs last, after `AutoWalk::OnDevic
 **Not the arrow keys.** They are claimed by the menu too and still reach the game — the readme warns
 the character walks while the menu is open. Masking them is a bigger change than was asked for.
 
-**UNPLAYED — the user tests before this is packaged.** Two things to listen for, both flagged at the
-time: whether the game reads Escape through DirectInput at all (if it takes it from a window message
-instead, the mask cannot reach it — the evidence that it does is that the game's own menus are driven
-by that poll), and whether the equipment screen is now too talkative, since the stat preview and the
-description are both volunteered there and each was specified separately.
+**PLAYED, and it came back "mostly working" with one defect — see the second pass below.** Escape and
+Backspace both close the menu without pausing the game, so the mask reaches the key: the game does
+take Escape from the DirectInput poll, which was the open question. The equipment screen was not
+reported as too talkative.
+
+---
+
+### Session 192, SECOND PASS — the detail got in front of the row line on menu ENTRY
+
+**The user, after playing it:** *"mostly working, except on initial focus the autodetail part is being
+read before the highlighted option, so the initially focused option interrupts."*
+
+**Exactly right, and the first pass had the wrong idea of when a row is spoken.** It assumed the row
+line always goes out before the focus dispatch returns — true when the cursor MOVES, false on menu
+ENTRY. On entry the pane's first `0x8000` arrives before `DAT_0208ebc0` flips, so it is gated out and
+STASHED; the announcement is replayed later, either by `FUN_00244830` or — for a field pane — by the
+menu's own SHOW message (cat `0x13`) some milliseconds afterwards. Both volunteer sites had long since
+run by then, so the description went out FIRST and the row line, which interrupts, cut it off. **"After
+the focus dispatch" and "after the row was announced" are not the same moment, and on the one path a
+player meets first they are milliseconds apart.**
+
+**Fixed by asking the only question that actually matters, at the one place that can answer it.**
+`Speech::UtteranceCount()` is a monotonic tick of "speech has actually reached the screen reader",
+incremented inside `Speech::Output` — the choke point every reader in the mod funnels through.
+`NotifyFocusChanged()` snapshots it (`g_focusSpeechMark`); `TakeFocusDetail()` declines, WITHOUT
+latching, while the count still equals that mark. So the detail simply cannot be spoken until
+something has been said for this focus, no matter which of the dozen readers says it or how late.
+
+**This needed no cooperation from any reader, and that is the point.** The alternative was a
+"row announced" call in every reader and every deferral path — a dozen call sites to keep in step,
+each of which is a place for the next surface to be forgotten. The counter is one line at a choke
+point that already exists because CLAUDE.md requires it to.
+
+One call site was added, in `ingame_menu_reader.cpp`'s SHOW release, immediately after
+`OnRowChainFocus` speaks the entered pane's first row: the gate now holds the detail back until that
+line goes out, so something has to ask for it once it has. `HookedFocusSet` got the same
+function-scoped guard as `HookedDispatch`, covering the non-deferred entry replays.
+
+**The counter is not a dedup and cannot suppress anything a player asked for** — nothing consults it
+before speaking, and the only thing it can withhold is the mod's own volunteered extra.
+
+**Re-cut into V1.0.1 under the same number, at the user's instruction** (*"do not bump to 1.0.2"*) —
+see the release record. **The ordering fix itself is UNPLAYED:** it was built, reasoned through
+against all four paths (cursor move, field-pane entry, other-pane entry, deferred replay) and
+published without a play pass, because the instruction was to fix it and then update the release.

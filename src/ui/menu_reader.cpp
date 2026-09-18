@@ -459,7 +459,7 @@ void OnFocus(void* owner, int index, bool fromPaint) {
 // g_helpTextGen stale and says nothing. This is the generation design doing the work that a
 // same-as-last-time filter would otherwise be reached for, and it is why none is needed here
 // (CLAUDE.md forbids one).
-void VolunteerDetail() {
+void VolunteerDetailImpl() {
     if (!ModMenu::AutoDetailOn()) return;              // Off: one relaxed load and out
     const std::wstring detail = TextCapture::TakeFocusDetail();
     if (detail.empty()) return;                        // no description for this focus, or already said
@@ -509,7 +509,7 @@ void OnMenuPainted(void* owner) {
     // is already this function's job to replay deferred focus speech, so a description that arrives
     // with the draw is picked up here. Costs nothing when site 1 already spoke -- the generation
     // latch hands this one an empty string.
-    VolunteerDetail();
+    VolunteerDetailImpl();
 }
 
 uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
@@ -522,7 +522,7 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
     // scoped to the `if` block would not do for the fall-through, the commonest path of all.
     struct DetailGuard {
         bool focus;
-        ~DetailGuard() { if (focus) VolunteerDetail(); }
+        ~DetailGuard() { if (focus) VolunteerDetailImpl(); }
     } _detail{ msg == MSG_FOCUS };
     if (msg == MSG_FOCUS) {
         STALL_SCOPE("MenuReader::HookedDispatch");
@@ -701,6 +701,12 @@ uintptr_t HookedDispatch(void* owner, uintptr_t msg, uintptr_t val) {
 // flipped yet), so we replay that stashed focus now that IsFocusedPane(new) is true — this is what
 // makes the first item on entering a submenu speak.
 void HookedFocusSet(void* oldWin, void* newWin, int flag) {
+    // AUTO DETAIL: this hook is where an ENTERED pane's first row is announced for every surface
+    // except the field pane (which defers to its SHOW message and volunteers from there). Scoped to
+    // the whole function because of the early `return` in the candidate-list branch below. It
+    // declines harmlessly on the deferred path -- nothing has been spoken yet there, and the
+    // ordering mark is what knows that.
+    struct DetailGuard { ~DetailGuard() { VolunteerDetailImpl(); } } _detail;
     if (s_origFocusSet) s_origFocusSet(oldWin, newWin, flag);
     // A pop-up just took the cursor: arm its body announce. This is the game's own entry event, so
     // it fires even when the window ADDRESS is recycled from the previous pop-up -- which is the
@@ -891,6 +897,11 @@ uint32_t HookedGfxWrite(uint32_t configId, uint32_t curVal, uint32_t dir) {
 } // namespace
 
 namespace MenuReader {
+
+// The exported face of the file-local VolunteerDetailImpl -- see menu_reader.h. One line, so the
+// deferred entry announcements in ingame_menu_reader.cpp can ask for the description once they have
+// actually spoken their row.
+void VolunteerDetail() { VolunteerDetailImpl(); }
 
 bool Init() {
     if (g_initialized) {

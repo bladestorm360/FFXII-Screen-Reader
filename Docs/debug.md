@@ -2805,7 +2805,26 @@ the generation has bumped and the stale text cannot be returned at all. No same-
 added and none is needed - a static help bar set once on entry is volunteered once on entry, because
 it belongs to that focus's generation. See `L-107`.
 
-### Closing the mod menu also opened the game's pause screen - FIXED (Session 192, 2026-09-18), UNPLAYED
+**SECOND PASS, same session: the detail preceded the row line on menu ENTRY.** Play report: *"on
+initial focus the autodetail part is being read before the highlighted option, so the initially
+focused option interrupts."* The first pass assumed the row line is always spoken before the focus
+dispatch returns - true on a cursor MOVE, FALSE on entry, where the pane's first `0x8000` is gated out
+and stashed and the announcement is replayed later (`FUN_00244830`, or the field pane's SHOW message
+`0x13` milliseconds later). Both volunteer sites had already run, so the description went out first
+and the interrupting row line cut it off.
+
+Fixed with `Speech::UtteranceCount()` - a monotonic tick incremented inside `Speech::Output`, the
+choke point every reader funnels through. `NotifyFocusChanged()` snapshots it into
+`g_focusSpeechMark`; `TakeFocusDetail()` declines WITHOUT latching while the count still equals the
+mark, so the detail cannot be spoken until something has been said for that focus - whichever reader
+says it and however it was deferred. One call site added after the SHOW release's `OnRowChainFocus`,
+and `HookedFocusSet` got the same function-scoped guard as `HookedDispatch`.
+
+**If an ordering problem like this recurs, the mark is the thing to check first** - and note that the
+counter is NOT a dedup: nothing consults it before speaking, and the only thing it can withhold is the
+mod's own volunteered extra.
+
+### Closing the mod menu also opened the game's pause screen - FIXED (Session 192, 2026-09-18), PLAY-CONFIRMED
 
 KEYWORDS: escape pauses game mod menu close not intercepted swallow key MaskModMenuKeys DIK_ESCAPE
 DIK_BACK backspace closes mod menu latch level not edge L-99 HookedGetDeviceState chartered exception
@@ -2823,9 +2842,9 @@ later the menu is shut while the key is still held, and that poll hands the game
 The mask latches on the press and lifts on release. Ordering at the call site is load-bearing and
 commented - the tracker is fed the REAL buffer first, and the mask runs last.
 
-**If it is still pausing after this:** the question is whether the game takes Escape from a window
-message rather than from the DirectInput poll this mask reaches. The evidence that it does not is that
-the game's own menus are driven by that same poll.
+**PLAY-CONFIRMED by the user the same day**, which also settles the open question: the game DOES take
+Escape from the DirectInput poll this mask reaches, not from a window message. Backspace closes the
+menu and neither key reaches the pause screen any more.
 
 
 ### Dialogue choices silent on highlight - SOLVED (Session 175, 2026-08-30), PLAY-CONFIRMED

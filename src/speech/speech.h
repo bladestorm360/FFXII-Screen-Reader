@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 namespace Speech {
 
@@ -20,6 +21,12 @@ void SpeakQueued(const std::wstring& text);
 // Output text to both speech and braille (always preferred — never use
 // Tolk_Speak directly; braille displays depend on Output).
 void Output(const std::wstring& text, bool interrupt = true);
+
+// How many utterances have actually reached the screen reader. Monotonic, never reset. Lets a caller
+// ask "has anything been spoken since X?" -- used by AUTO DETAIL so a volunteered description can
+// never get ahead of the row line it belongs behind, whichever reader spoke that line and however it
+// was deferred. Reading it changes nothing; it gates only the mod's own volunteered extra.
+uint64_t UtteranceCount();
 
 // Cancel any current speech.
 void Silence();

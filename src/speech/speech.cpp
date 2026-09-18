@@ -128,6 +128,21 @@ void SpeakQueued(const std::wstring& text) {
     LogSpoken("SPEAK-Q", text);
 }
 
+// ---- UTTERANCE COUNT (S192) ---------------------------------------------------------------------
+// A monotonic tick of "speech has actually gone out", so a caller can tell whether anything has been
+// said since some earlier moment. It exists for AUTO DETAIL's ordering problem: a volunteered
+// description must never get ahead of the row line it belongs behind, and the readers that speak
+// that line are scattered across a dozen files and several deferral paths. Asking "has anything been
+// spoken for this focus yet?" at the one choke point every one of them funnels through answers it
+// without any of them having to report in.
+//
+// NOT a dedup and not a gate on speech: nothing consults it before speaking, and it can only ever
+// cause the mod to say LESS of its own volunteered extra, never to suppress something a player
+// asked for.
+std::atomic<uint64_t> g_utterances{0};
+
+uint64_t UtteranceCount() { return g_utterances.load(std::memory_order_relaxed); }
+
 void Output(const std::wstring& text, bool interrupt) {
     if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-OUT", text, "muted"); return; }
     if (!g_Tolk_Output) { LogSuppressed("SPEAK-OUT", text, "Tolk unavailable"); return; }
@@ -140,6 +155,7 @@ void Output(const std::wstring& text, bool interrupt) {
         std::lock_guard<std::mutex> lock(g_tolkMutex);
         g_Tolk_Output(text.c_str(), interrupt);
     }
+    g_utterances.fetch_add(1, std::memory_order_relaxed);   // AFTER it went out, not before
     LogSpoken("SPEAK-OUT", text);
 }
 

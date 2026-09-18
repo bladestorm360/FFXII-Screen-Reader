@@ -425,6 +425,18 @@ uint64_t HookedFieldPaneWnd(void* window, void* packet) {
         // Outside the lock. Speaks only if the row resolves -- if it never does, stay silent (no
         // fallback), exactly like the battle menu only replays on a successful draw.
         IngameMenuReader::OnRowChainFocus(releaseOwner, rowOff, idx);
+        // AUTO DETAIL, and this call site is the whole reason the feature needed a second pass.
+        // THIS is where a menu's FIRST row is announced -- milliseconds after the focus that owns
+        // it, because the entry focus was gated out and stashed and this SHOW message is what
+        // releases it. The focus dispatch has long since returned, so the description had already
+        // been volunteered by then: it went out IN FRONT of this line and was cut off by it, which
+        // is exactly what the user reported ("on initial focus the autodetail part is being read
+        // before the highlighted option, so the initially focused option interrupts").
+        //
+        // Now the ordering mark declines the detail until something has been spoken for the focus,
+        // so it stays unsaid until the line above goes out -- and this call is what asks for it
+        // immediately afterwards, rather than leaving it to the next paint.
+        MenuReader::VolunteerDetail();
     }
     return ret;
 }

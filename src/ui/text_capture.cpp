@@ -4,6 +4,7 @@
 #include "core/hooks.h"
 #include "core/logger.h"
 #include "core/stall_probe.h"
+#include "speech/speech.h"        // UtteranceCount -- the auto-detail ordering mark
 
 #include <Windows.h>
 #include <array>
@@ -121,6 +122,16 @@ uint32_t g_itemDescGen = 0xffffffffu;
 // NOT latched on an empty answer: the description does not always exist yet when the first caller
 // asks, so a later one for the same focus must still be able to find it.
 uint32_t g_detailTakenGen = 0xffffffffu;
+
+// AUTO DETAIL, THE ORDERING MARK (S192, second pass). The utterance count as it stood when this
+// focus began. The detail must land BEHIND the row line, and on menu ENTRY the row line is spoken
+// LATE -- the entry focus is gated out and stashed, then replayed either by FUN_00244830 or, for a
+// field pane, by the menu's own SHOW message some milliseconds later. So "after the focus dispatch"
+// is not the same as "after the row was announced", and the first build of this feature got that
+// wrong: on entry the description went out first and the row line, which interrupts, cut it off.
+// Comparing against this mark asks the only question that actually matters -- has anything been
+// spoken for this focus yet? -- and it needs no cooperation from the dozen readers that speak it.
+uint64_t g_focusSpeechMark = 0;
 
 TextCapture::MenuPaintedCallback g_paintedCb = nullptr;
 
@@ -469,6 +480,7 @@ void Shutdown() {
     g_helpText.clear(); g_helpGen = 0; g_helpTextGen = 0xffffffffu;
     g_itemDesc.clear(); g_itemDescGen = 0xffffffffu;
     g_detailTakenGen = 0xffffffffu;
+    g_focusSpeechMark = 0;
     g_initialized = false;
     Log::Write("TEXT", "TextCapture shut down");
 }
@@ -512,6 +524,10 @@ std::wstring CurrentHelpText() {
 std::wstring TakeFocusDetail() {
     std::lock_guard<std::mutex> lk(g_mutex);
     if (g_detailTakenGen == g_helpGen) return std::wstring();   // already volunteered for this focus
+    // NOTHING HAS BEEN SPOKEN FOR THIS FOCUS YET, so the row line is still to come and the detail
+    // would be spoken in front of it -- and then cut off by it, since a row line interrupts. Decline
+    // WITHOUT latching: this same focus will ask again after the row goes out.
+    if (Speech::UtteranceCount() == g_focusSpeechMark) return std::wstring();
     std::wstring out;
     if (g_itemDescGen == g_helpGen && !g_itemDesc.empty()) out = g_itemDesc;
     else if (g_helpTextGen == g_helpGen)                  out = g_helpText;
@@ -522,6 +538,7 @@ std::wstring TakeFocusDetail() {
 void NotifyFocusChanged() {
     std::lock_guard<std::mutex> lk(g_mutex);
     ++g_helpGen;
+    g_focusSpeechMark = Speech::UtteranceCount();   // the detail waits for the row line -- see above
 }
 
 void ProvideHelpText(const std::wstring& text) {
