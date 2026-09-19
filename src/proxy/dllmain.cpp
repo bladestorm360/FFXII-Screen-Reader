@@ -26,6 +26,78 @@
 #include <thread>
 #include <atomic>
 
+// ============================================================================
+// tkMalloc fix: reserve memory below 2GB before the game starts.
+// FFXII uses legacy PS2 code with 32-bit memory pointers. The game's custom
+// allocator (tkMalloc) can't handle memory above 2GB. By reserving memory
+// at 0x10000000 before the game's main function runs, we ensure the allocator
+// has a valid region to use. This prevents crashes caused by driver/shader
+// cache pushing allocations above the 2GB limit.
+// ============================================================================
+
+static constexpr uintptr_t TKMALLOC_PREFERRED_ADDRESS = 0x10000000;
+static constexpr size_t TKMALLOC_RESERVE_SIZE = 0x12000000;  // 288 MB
+static void* g_tkMallocReserved = nullptr;
+
+static void* FindFreeRegionBelow2GB(size_t size) {
+    SYSTEM_INFO sysInfo;
+    GetSystemInfo(&sysInfo);
+    const uintptr_t granularity = sysInfo.dwAllocationGranularity;
+
+    uintptr_t addr = 0x10000;  // skip low null-guard region
+    const uintptr_t limit = 0x7FFFFFFF;
+
+    while (addr < limit) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi)) == 0)
+            break;
+
+        uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        uintptr_t regionEnd = base + mbi.RegionSize;
+
+        if (mbi.State == MEM_FREE) {
+            uintptr_t aligned = (base + granularity - 1) & ~(granularity - 1);
+            if (aligned >= base && regionEnd - aligned >= size && aligned < limit) {
+                return reinterpret_cast<void*>(aligned);
+            }
+        }
+
+        if (regionEnd == 0 || regionEnd <= addr) break;
+        addr = regionEnd;
+    }
+    return nullptr;
+}
+
+static bool ReserveTkMallocMemory() {
+    if (g_tkMallocReserved) return true;
+
+    // Try preferred address first
+    void* ptr = VirtualAlloc(
+        reinterpret_cast<LPVOID>(TKMALLOC_PREFERRED_ADDRESS),
+        TKMALLOC_RESERVE_SIZE,
+        MEM_RESERVE | MEM_COMMIT,
+        PAGE_READWRITE);
+
+    if (!ptr) {
+        // Preferred address occupied — scan for a free region below 2GB
+        void* region = FindFreeRegionBelow2GB(TKMALLOC_RESERVE_SIZE);
+        if (!region) return false;
+
+        ptr = VirtualAlloc(region, TKMALLOC_RESERVE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    }
+
+    if (ptr) {
+        g_tkMallocReserved = ptr;
+        // Touch every page to fully commit the region
+        volatile char* p = static_cast<volatile char*>(ptr);
+        for (size_t i = 0; i < TKMALLOC_RESERVE_SIZE; i += 4096)
+            p[i] = 0;
+        p[TKMALLOC_RESERVE_SIZE - 1] = 0;
+    }
+
+    return ptr != nullptr;
+}
+
 // DLL_PROCESS_ATTACH stages:
 //   Stage A — minimal & fast (must not block the loader).
 //     * load real System32\dinput8.dll so all exports work from frame 1
@@ -208,6 +280,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             // returns control to the game.
             DInput8Proxy::Init();
 
+            // tkMalloc fix: reserve memory below 2GB BEFORE the game starts.
+            // FFXII's custom allocator uses 32-bit pointers and crashes when
+            // memory is allocated above 2GB. This must happen synchronously
+            // in DLL_PROCESS_ATTACH, before the game's main function runs.
+            ReserveTkMallocMemory();
+
             // Stage B: detached background thread.
             HANDLE h = CreateThread(nullptr, 0, DeferredInitThread, nullptr, 0, nullptr);
             if (h) CloseHandle(h);
@@ -216,6 +294,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
         case DLL_PROCESS_DETACH: {
             // THE PROCESS IS GOING AWAY -- do nothing. See the note above DllMain.
             if (reserved != nullptr) break;
+
+            // Release tkMalloc reserved memory
+            if (g_tkMallocReserved) {
+                VirtualFree(g_tkMallocReserved, 0, MEM_RELEASE);
+                g_tkMallocReserved = nullptr;
+            }
             CombatEvents::Shutdown();
             // Before Navigation: the beacon lives under it and must stop pinging before the audio
             // device closes.
