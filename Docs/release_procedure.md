@@ -189,7 +189,7 @@ Everything through here is reversible. Everything below is not.
 ### 6. Tag the release
 
 ```
-git tag -a V<version> -m "<title>" <commit>
+git tag -a V<version> -m "V<version>" <commit>
 git push origin V<version>
 ```
 
@@ -204,9 +204,12 @@ git push origin V<version>
 ### 7. Create the GitHub Release
 
 ```
-gh release create V<version> "Releases\FFXII-Screen-ReaderV<version>.zip" --title "<title>" --notes-file <notes>
+gh release create V<version> "Releases\FFXII-Screen-ReaderV<version>.zip" --title "V<version>" --notes "<one line>"
 ```
 
+- **The title is the version number and nothing else (user, 2026-09-21): `V1.0.2`, not `V1.0.2 —
+  Every controller drives the game, and the startup-crash fix`.** No tagline or description after
+  it. The same goes for the tag's `-m` message in step 6.
 - **The zip is attached as a release asset.** That is the whole point — it is the download link.
 - **The notes are ONE short summary line, and nothing else (user, 2026-09-21, V1.0.2).** No install
   steps, no feature sections, no known issues, no bug-report instructions. The user writes the
