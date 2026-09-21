@@ -28,9 +28,18 @@
 // already performs -- one VirtualProtect over one pointer. `XInputGetState` is also a documented
 // TWO-argument API, so L-20 (a detour's arity must match) is unpayable here.
 //
-// THIS IS THE SECOND SANCTIONED WRITE TO INPUT (see CLAUDE.md; the first is Auto-walk, S100) and it
-// is bounded differently: it CONSUMES ONLY. It may clear a button bit or zero a stick axis; it may
-// never set one. Nothing else in the mod writes an XINPUT_STATE.
+// THIS IS THE SECOND SANCTIONED WRITE TO INPUT (see CLAUDE.md; the first is Auto-walk, S100). Since
+// S188 it does not merely consume -- it BUILDS the `XINPUT_STATE` the game reads, from the SDL state
+// in `gamepad_sdl.cpp` minus what `PadRouter` claimed. The bound is that every bit came from a
+// physical control the player is touching on that poll; the mod can decline to forward an input, and
+// can never originate one.
+//
+// IT IS ONE OF TWO ENCODERS, AND ON MOST CONTROLLERS IT IS THE ONE THAT NEVER RUNS (S193). FFXII
+// builds EITHER a `PInputDevicePadXInput` or a `PInputDevicePadDirectInput` for a pad, decided by
+// Microsoft's `IsXInputDevice()` WMI test, and only the first ever calls `XInputGetState`. A
+// DualSense, a Switch Pro pad or any generic HID stick takes the other branch, so for those players
+// this file is installed, correct, and never called -- their pad is built in `dinput8_proxy.cpp`
+// instead, from the same bytes. Do not read a silent XInput hook as a broken one.
 namespace PadHook {
 
 // XInput's gamepad state, declared here rather than pulled from <Xinput.h> -- the same reason
@@ -69,6 +78,15 @@ void Shutdown();
 
 // True once the patch is in and has not faulted itself off. Log/diagnostic use.
 bool Active();
+
+// TRUE ONCE THE GAME HAS ACTUALLY ASKED THIS HOOK FOR A PAD STATE -- i.e. it built a
+// `PInputDevicePadXInput`, and this encoder is the live one. It stays FALSE for the whole session on
+// every controller the game classed as DirectInput, because there the import is never called at all.
+//
+// `dinput8_proxy.cpp` needs it to settle a mixed setup: an Xbox pad on the XInput road with a wheel
+// or a second stick also enumerated. That joystick is NOT the pad, so it must be blanked rather than
+// handed the pad's state. Exactly one encoder ever feeds.
+bool DrivingXInput();
 
 // Short human-readable name for a single button bit ("A", "D-pad Up", ...); "?" for anything else.
 // Lives here because the bit constants do, and both the router and its log want the same words.

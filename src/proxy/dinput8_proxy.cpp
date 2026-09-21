@@ -146,45 +146,92 @@ static bool IsKeyboardDev(void* dev) {
     return false;
 }
 
-// ---- BLANKING THE GAME'S DIRECTINPUT JOYSTICK ---------------------------------------------------
+// ---- FEEDING THE GAME'S DIRECTINPUT JOYSTICK ----------------------------------------------------
 //
-// THE FFXII ANSWER TO FFPR's `DisableUnityGamepad()`. The mod reads the controller through SDL3 and
-// hands the game a pad built from that reading (pad_hook.cpp). For that to be the WHOLE story, the
-// physical device must not also reach the game down a second road: on a DualSense or any other
-// non-XInput pad, FFXII polls the stick directly through DirectInput, and anything arriving that way
-// has been routed by nobody and consumed by nobody.
+// THIS IS THE ROAD EVERY NON-XBOX PAD TAKES, AND UNTIL S193 IT WAS A DEAD END.
 //
-// So when the mod is driving, this makes the game's joystick read look like a controller sitting
-// perfectly still. It is not a mapping and there is nothing device-specific in it -- no
-// `rgbButtons[]` index tables, no SDL binding lookups, no per-button confirmation. Those existed only
-// because the old design had to remove SOME inputs and keep others in a format it did not own. This
-// one removes all of them, and the inputs come back to the game through SDL3 like every other pad's.
+// `FUN_00797690` (RVA 0x677690) decides, once per enumerated joystick, which Phyre device class the
+// game builds for it -- and the decision is made by `FUN_00797ad0` (RVA 0x677AD0), which is verbatim
+// Microsoft's `IsXInputDevice()`: WMI `\\.\root\cimv2` -> `Win32_PNPEntity` -> `DeviceID` ->
+// `wcsstr(L"IG_")`, cross-checked against the DirectInput product GUID with `VID_%4X` / `PID_%4X`.
+// Windows puts `IG_` in the PnP id of XInput-class devices and nothing else. So:
 //
-// `DIJOYSTATE` and `DIJOYSTATE2` share the layout we touch:
-//     +0   lX lY lZ lRx lRy lRz      (LONG each)     +32  rgdwPOV[4]   (0xFFFFFFFF = centred)
-//     +24  rglSlider[2]                              +48  rgbButtons[] (high bit set = down)
+//     "Creating new XInput Device: %d"     -> PInputDevicePadXInput      -> calls XInputGetState
+//     "Creating new DirectInput Device"    -> PInputDevicePadDirectInput -> calls GetDeviceState
 //
-// AN AXIS'S NEUTRAL IS NOT 0. A DirectInput axis carries whatever range the game asked for via
-// DIPROP_RANGE -- often 0..65535, centre 32768 -- so writing 0 would be a hard deflection, which on
-// the left stick would walk the player into a wall. The device is asked instead:
-// `IDirectInputDevice8::GetProperty(DIPROP_RANGE)`, vtable slot 5, once per axis per session.
+// and those two are exclusive. `PInputDevicePadXInput::vfunction6` (`FUN_007a2140`) is the ONLY
+// caller of `XInputGetState` in the whole exe. A DualSense, a DualShock 4, a Switch Pro pad or any
+// generic HID stick has no `IG_`, so the game NEVER CREATES AN XINPUT DEVICE FOR IT and never calls
+// that import once -- which means `pad_hook.cpp`'s synthesised `XINPUT_STATE`, the mod's entire
+// hand-back, was being built for a reader that did not exist. Meanwhile this function blanked the one
+// road the pad actually had. Net effect on a PlayStation pad: mod functions worked (they read SDL
+// directly) and the GAME saw a controller sitting perfectly still. That is exactly what the tester
+// reported, and an Xbox pad could never show it, because an Xbox pad takes the XInput branch.
+//
+// SO THE MOD FEEDS THIS ROAD TOO, from the same bytes. `GamepadSDL::GameButtons` is the one
+// post-router state; `pad_hook.cpp` packs it into an `XINPUT_STATE` and this packs the same thing
+// into the `DIJOYSTATE2` the game asked for. One reader, one router, one consume model, two
+// encoders -- and the mod does not choose which encoder runs, the GAME does, when it picks a device
+// class. There is still no per-device code: what goes in the buffer is decided by SDL's normalised
+// button names, never by what the physical device reports.
+//
+// WHAT THE GAME ACTUALLY DECODES, read out of `PInputDevicePadDirectInput::vfunction6`
+// (`FUN_007a1a50`, RVA 0x681A50). It reads `GetDeviceState(0x110, DIJOYSTATE2)` and then:
+//
+//   axes     lX (+0x00) -> left stick X      lY  (+0x04) -> left stick Y   (positive = DOWN)
+//            lZ (+0x08) -> right stick X     lRz (+0x14) -> right stick Y  (positive = DOWN)
+//            ...and nothing else. `FUN_00796280` sets DIPROP_RANGE to -255..255 on every axis, which
+//            is why the game copies them straight through: that is the same scale its XInput path
+//            produces with `thumb >> 7`.
+//   buttons  `for i in 0..16: field[0x43C + i] = rgbButtons[i] >> 7`, i.e. a FIXED slot order:
+//            0 WEST/Square . 1 SOUTH/Cross . 2 EAST/Circle . 3 NORTH/Triangle . 4 L1 . 5 R1 .
+//            6 L2 . 7 R2 . 8 Select . 9 Start . 10 L3 . 11 R3.
+//            Then `field[0x444] = rgbButtons[13] >> 7` OVERWRITES Select with slot 13, so Select has
+//            to be written twice, into 8 and 13, or it never arrives.
+//   D-pad    slots 12..15 are wiped (`*(u32*)(field+0x448) = 0`) before the POV hat is decoded, so
+//            the D-pad reaches the game ONLY through `rgdwPOV[0]`, and only at the eight exact
+//            values below -- anything else reads as centred.
+//   quirk    for product GUID {00060079-0000-0000-0000-504944564944} (VID 0x0079 / PID 0x0006, the
+//            DragonRise "Generic USB Joystick" adapter) the four face slots are decoded in REVERSE.
+//            That branch is the game's, not ours; we mirror it so that pad gets the right buttons.
+//
+// AN AXIS'S NEUTRAL IS STILL READ, NEVER ASSUMED (charter bound 3). `DIPROP_RANGE` is asked of the
+// device once per axis per device via `IDirectInputDevice8::GetProperty`, vtable slot 5 -- writing a
+// literal 0 would be a hard deflection on a device the game happened to give an unsigned range, and
+// on the left stick that walks the player into a wall. An axis whose range will not read is left
+// alone, exactly as before.
 struct DIPropHeader { DWORD dwSize, dwHeaderSize, dwObj, dwHow; };
 struct DIPropRange  { DIPropHeader diph; LONG lMin, lMax; };
 typedef HRESULT (STDMETHODCALLTYPE* PFN_GetProperty)(void*, const GUID*, DIPropHeader*);
 static const GUID* const kDIPropRange = reinterpret_cast<const GUID*>(static_cast<uintptr_t>(4));
 constexpr DWORD kDIPH_ByOffset = 1;
 
-// The eight axis slots of DIJOYSTATE2, by byte offset.
+// The eight axis slots of DIJOYSTATE2, by byte offset, and the four the game reads.
 constexpr int kAxisOffsets[8] = { 0, 4, 8, 12, 16, 20, 24, 28 };
+constexpr int kAxLeftX  = 0;   // lX
+constexpr int kAxLeftY  = 1;   // lY
+constexpr int kAxRightX = 2;   // lZ
+constexpr int kAxRightY = 5;   // lRz
 
-struct AxisNeutral { LONG centre = 0; bool known = false; bool absent = false; };
-static AxisNeutral g_axisNeutral[8];
-static std::atomic<bool> g_blankLogged{false};
+// The button slots the game decodes. Named for the PlayStation face layout because that is the order
+// the game's own table is in; on an Xbox pad WEST is X, SOUTH is A, EAST is B, NORTH is Y.
+constexpr int kBtnWest = 0, kBtnSouth = 1, kBtnEast = 2, kBtnNorth = 3;
+constexpr int kBtnL1 = 4, kBtnR1 = 5, kBtnL2 = 6, kBtnR2 = 7;
+constexpr int kBtnSelect = 8, kBtnStart = 9, kBtnL3 = 10, kBtnR3 = 11;
+constexpr int kBtnSelectAlt = 13;   // FUN_007a1a50 reads Select from here, overwriting slot 8
 
-// Ask the device where this axis's centre is. `absent` latches for an axis the data format has no
-// object at, which is normal -- most pads do not use all eight slots.
-static void LearnAxisNeutral(void* dev, int i) {
-    AxisNeutral& a = g_axisNeutral[i];
+// The one device id FFXII ITSELF branches on -- see the quirk note above.
+constexpr uint16_t kDragonRiseVid = 0x0079, kDragonRisePid = 0x0006;
+
+struct AxisRange { LONG lo = 0, hi = 0, centre = 0; bool known = false; bool absent = false; };
+static AxisRange g_axisRange[8][8];      // [device slot][axis slot]; g_otherDevices is capped at 8
+static std::atomic<bool> g_feedLogged{false};
+static std::atomic<int>  g_feedDev{-1};  // the one joystick-sized game device the mod drives
+
+// Ask the device where this axis sits. `absent` latches for an axis the data format has no object
+// at, which is normal -- most pads do not use all eight slots.
+static void LearnAxisRange(void* dev, int di, int i) {
+    AxisRange& a = g_axisRange[di][i];
     if (a.known || a.absent || !dev) return;
 
     void** vtbl = *reinterpret_cast<void***>(dev);
@@ -198,37 +245,149 @@ static void LearnAxisNeutral(void* dev, int i) {
     r.diph.dwHow        = kDIPH_ByOffset;
     if (FAILED(getProp(dev, kDIPropRange, &r.diph)) || r.lMax <= r.lMin) { a.absent = true; return; }
 
+    a.lo     = r.lMin;
+    a.hi     = r.lMax;
     a.centre = r.lMin + (r.lMax - r.lMin) / 2;
     a.known  = true;
-    char m[160];
-    snprintf(m, sizeof(m), "DInput axis +%d: range %ld..%ld, neutral %ld (read from the device)",
-             kAxisOffsets[i], (long)r.lMin, (long)r.lMax, (long)a.centre);
+    char m[192];
+    snprintf(m, sizeof(m),
+             "DInput dev %d axis +%d: range %ld..%ld, neutral %ld (read from the device)",
+             di, kAxisOffsets[i], (long)r.lMin, (long)r.lMax, (long)a.centre);
     Log::Write("PAD", m);
 }
 
-static void BlankDInputPad(void* dev, void* buf, DWORD cbData) {
+// Put a stick axis into its slot. `v` is already in DIRECTINPUT orientation (positive = right/down);
+// the caller does the sign flip, because SDL and XInput disagree with DirectInput about Y.
+static void WriteAxis(uint8_t* bytes, int di, int i, int v) {
+    const AxisRange& a = g_axisRange[di][i];
+    if (!a.known) return;                       // charter: an axis we cannot place is left alone
+    const long long half = (static_cast<long long>(a.hi) - a.lo) / 2;
+    long long out = a.centre + (static_cast<long long>(v) * half) / 32767;
+    if (out < a.lo) out = a.lo;
+    if (out > a.hi) out = a.hi;
+    *reinterpret_cast<LONG*>(bytes + kAxisOffsets[i]) = static_cast<LONG>(out);
+}
+
+// The eight POV values FUN_007a1a50 decodes. Anything else is centred, so only these may be written.
+static uint32_t PovFromDpad(uint16_t b) {
+    const bool u = (b & PadHook::kDpadUp)    != 0;
+    const bool d = (b & PadHook::kDpadDown)  != 0;
+    const bool l = (b & PadHook::kDpadLeft)  != 0;
+    const bool r = (b & PadHook::kDpadRight) != 0;
+    if (u && r) return 4500;
+    if (r && d) return 13500;
+    if (d && l) return 22500;
+    if (l && u) return 31500;
+    if (u) return 0;
+    if (r) return 9000;
+    if (d) return 18000;
+    if (l) return 27000;
+    return 0xFFFFFFFFu;                          // centred
+}
+
+// Shared prologue for both writers: learn the ranges, centre the sticks, centre the hats, clear the
+// buttons. What FEEDING adds on top of this is the player's actual input.
+static uint8_t* NeutralisePad(void* dev, int di, void* buf, DWORD cbData) {
+    auto* bytes = static_cast<uint8_t*>(buf);
+    for (int i = 0; i < 8; ++i) {
+        LearnAxisRange(dev, di, i);
+        const AxisRange& a = g_axisRange[di][i];
+        if (a.known) *reinterpret_cast<LONG*>(bytes + kAxisOffsets[i]) = a.centre;
+    }
+    auto* povs = reinterpret_cast<uint32_t*>(bytes + 32);
+    for (int i = 0; i < 4; ++i) povs[i] = 0xFFFFFFFFu;
+    memset(bytes + 48, 0, (cbData == 272) ? 128u : 32u);
+    return bytes;
+}
+
+// THE SECOND WRITER OF THE GAME'S PAD STATE (charter bound 2). Every bit written here came from a
+// physical control SDL reported as pressed on this poll, minus what PadRouter claimed; nothing is
+// originated. Runs on the game's input-poll thread, inside a __try.
+static void FeedDInputPad(void* dev, int di, void* buf, DWORD cbData) {
+    PadHook::Gamepad g{};
+    if (!GamepadSDL::GameButtons(&g)) return;
+
+    uint8_t* bytes = NeutralisePad(dev, di, buf, cbData);
+
+    if (!g_feedLogged.exchange(true)) {
+        char m[240];
+        snprintf(m, sizeof(m),
+                 "this pad reaches the game through DIRECTINPUT, not XInput (the game built a "
+                 "DirectInput device for it) -- feeding the game's DIJOYSTATE2 from SDL3, idx=%d",
+                 di);
+        Log::Write("PAD", m);
+    }
+
+    // ---- sticks. SDL/XInput Y is positive-UP, DirectInput's is positive-DOWN -- and the game's own
+    // XInput path stores `-thumbY`, so down-positive is what its device fields expect either way.
+    WriteAxis(bytes, di, kAxLeftX,   g.thumbLX);
+    WriteAxis(bytes, di, kAxLeftY,  -static_cast<int>(g.thumbLY));
+    WriteAxis(bytes, di, kAxRightX,  g.thumbRX);
+    WriteAxis(bytes, di, kAxRightY, -static_cast<int>(g.thumbRY));
+
+    // ---- D-pad, through the POV hat only (slots 12..15 are wiped by the game before it decodes).
+    *reinterpret_cast<uint32_t*>(bytes + 32) = PovFromDpad(g.buttons);
+
+    // ---- buttons, in the game's own slot order.
+    uint8_t* btn = bytes + 48;
+    const uint16_t b = g.buttons;
+    btn[kBtnWest]  = (b & PadHook::kX) ? 0x80 : 0;
+    btn[kBtnSouth] = (b & PadHook::kA) ? 0x80 : 0;
+    btn[kBtnEast]  = (b & PadHook::kB) ? 0x80 : 0;
+    btn[kBtnNorth] = (b & PadHook::kY) ? 0x80 : 0;
+
+    // The DragonRise branch inside FUN_007a1a50 decodes those four in reverse. Mirror it, so the
+    // player of that adapter gets Cross on Cross. Nothing else in the mod is device-specific.
+    uint16_t vid = 0, pid = 0;
+    GamepadSDL::VendorProduct(&vid, &pid);
+    if (vid == kDragonRiseVid && pid == kDragonRisePid) {
+        const uint8_t w = btn[kBtnWest],  s = btn[kBtnSouth];
+        const uint8_t e = btn[kBtnEast],  n = btn[kBtnNorth];
+        btn[0] = n; btn[1] = e; btn[2] = s; btn[3] = w;
+    }
+
+    btn[kBtnL1]    = (b & PadHook::kLeftShoulder)  ? 0x80 : 0;
+    btn[kBtnR1]    = (b & PadHook::kRightShoulder) ? 0x80 : 0;
+    // The game's XInput path treats a trigger as pressed at ANY non-zero value
+    // (`field[0x442] = bLeftTrigger != 0`). Match it exactly, so L2/R2 feel the same on both roads.
+    btn[kBtnL2]    = g.leftTrigger  ? 0x80 : 0;
+    btn[kBtnR2]    = g.rightTrigger ? 0x80 : 0;
+    btn[kBtnStart] = (b & PadHook::kStart)      ? 0x80 : 0;
+    btn[kBtnL3]    = (b & PadHook::kLeftThumb)  ? 0x80 : 0;
+    btn[kBtnR3]    = (b & PadHook::kRightThumb) ? 0x80 : 0;
+    // Select twice: slot 8 is what the loop reads, slot 13 is what overwrites it afterwards.
+    btn[kBtnSelect]    = (b & PadHook::kBack) ? 0x80 : 0;
+    btn[kBtnSelectAlt] = btn[kBtnSelect];
+}
+
+// Any joystick the mod is NOT driving still must not reach the game un-routed, so it gets the old
+// treatment: a controller sitting perfectly still. The mod opens one pad; a second stick plugged in
+// alongside it would otherwise arrive at the engine with nobody having looked at it.
+static void BlankDInputPad(void* dev, int di, void* buf, DWORD cbData) {
+    NeutralisePad(dev, di, buf, cbData);
+}
+
+// Feed the one device the mod drives; blank the rest. `di` is the game's own device slot.
+//
+// EXACTLY ONE ENCODER EVER FEEDS, and which one is decided by what the GAME built:
+//   * `PadHook::DrivingXInput()` -- the game has an XInput pad and is asking for it, so THAT is the
+//     player's controller. Any DirectInput joystick enumerated alongside it is something else (a
+//     wheel, a second stick) and gets blanked, never handed the pad's state.
+//   * otherwise the pad is on this road, and the FIRST joystick-sized device the game polls is it.
+//     A second one is blanked for the same reason: one pad in, one pad out.
+// Blanking, not passing through, because a device the mod did not route must not reach the engine
+// behind the router's back -- that is the bound S188 closed and it is unchanged.
+static void DriveDInputDevice(void* dev, int di, void* buf, DWORD cbData) {
     if (!buf || (cbData != 80 && cbData != 272)) return;
     if (!GamepadSDL::DriveGame()) return;          // off means byte-identical: touch nothing
 
-    if (!g_blankLogged.exchange(true))
-        Log::Write("PAD", "this pad also reaches the game through DirectInput -- blanking that road; "
-                          "the mod feeds the game from SDL3 instead");
-
-    auto* bytes = static_cast<uint8_t*>(buf);
-
-    for (int i = 0; i < 8; ++i) {
-        LearnAxisNeutral(dev, i);
-        const AxisNeutral& a = g_axisNeutral[i];
-        // An axis whose neutral we could not read is LEFT ALONE. Guessing one risks writing a hard
-        // deflection, and a stick that drifts is worse than one the game still sees.
-        if (a.known) *reinterpret_cast<LONG*>(bytes + kAxisOffsets[i]) = a.centre;
+    int want = g_feedDev.load(std::memory_order_relaxed);
+    if (want < 0) {
+        int expected = -1;
+        want = g_feedDev.compare_exchange_strong(expected, di) ? di : expected;
     }
-
-    auto* povs = reinterpret_cast<uint32_t*>(bytes + 32);
-    for (int i = 0; i < 4; ++i) povs[i] = 0xFFFFFFFFu;
-
-    const int nButtons = (cbData == 272) ? 128 : 32;
-    memset(bytes + 48, 0, static_cast<size_t>(nButtons));
+    if (di == want && !PadHook::DrivingXInput()) FeedDInputPad(dev, di, buf, cbData);
+    else                                         BlankDInputPad(dev, di, buf, cbData);
 }
 
 // Swap one COM vtable entry (aligned pointer write = atomic on x64).
@@ -256,11 +415,11 @@ static void PollPadMeasured() {
     PollPadGuarded();
 }
 
-// Same split, for the pad-poll path: refresh the claim, then take away what was claimed.
-static void PollAndBlankGuarded(void* dev, void* lpvData, DWORD cbData) {
+// Same split, for the pad-poll path: refresh the claim, then write the game's pad.
+static void PollAndDriveGuarded(void* dev, int di, void* lpvData, DWORD cbData) {
     __try {
         GamepadSDL::PollIfStale();
-        BlankDInputPad(dev, lpvData, cbData);
+        DriveDInputDevice(dev, di, lpvData, cbData);
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
@@ -324,9 +483,11 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
         // would flicker. `oi >= 0` means "the game created this device", which is exactly the set
         // whose buffer we are entitled to touch.
         if (oi >= 0) {
-            // Refresh SDL for this frame, then blank this road so the device cannot also reach the
-            // game un-routed -- see BlankDInputPad. A fault here must never reach the input thread.
-            PollAndBlankGuarded(self, lpvData, cbData);
+            // Refresh SDL for this frame, then WRITE this road -- the game's pad, built from the same
+            // SDL state the XInput encoder uses. On a non-Xbox controller this is the ONLY road the
+            // game has, because it never created an XInput device for it; see DriveDInputDevice. A
+            // fault here must never reach the input thread.
+            PollAndDriveGuarded(self, oi, lpvData, cbData);
         }
     }
     if (cbData >= 256 && IsKeyboardDev(self)) {

@@ -433,34 +433,49 @@ and above all not the very thing the feature under repair is supposed to give th
   - `src\input\gamepad_sdl.cpp` reads the pad through **SDL3 and nothing else**, for every device.
   - `src\input\pad_hook.cpp` **synthesises** the `XINPUT_STATE` the game reads, from that SDL state
     minus whatever `PadRouter` claimed. The real `XInputGetState` result is discarded while driving.
-  - `src\proxy\dinput8_proxy.cpp` **blanks** the game's DirectInput joystick, so the hardware cannot
-    also reach the game down a second road that nobody routed.
+  - `src\proxy\dinput8_proxy.cpp` **synthesises** the `DIJOYSTATE2` the game reads, from the same
+    bytes — and on every controller that is not an Xbox pad, **this is the only encoder that runs**.
 
   Bounds, all non-negotiable:
-  0. **ONE PATH, NO PER-DEVICE CODE.** Every controller — Xbox, DualSense, DualShock 4, Switch Pro, a
-     handheld's built-in sticks — is normalised by SDL's database and reaches the game through the
-     same synthesised state built by the same lines. **Testing on any pad tests the path every pad
-     uses.** Do NOT reintroduce a device-specific branch, an `rgbButtons[]` index table, an XInput
-     read, or a second reader of any kind. Reading the pad through `XInputGetState` is what shipped
-     broken in V1.0 (XInput is the Xbox protocol, so PlayStation pads were invisible); reading
-     through SDL while letting the game keep reading the hardware is what made S186–S187 need a
-     separate suppressor per API, each needing its own play pass. Both mistakes are closed.
+  0. **ONE READER, ONE ROUTER, ONE POST-ROUTER STATE — AND TWO ENCODERS, BECAUSE THE GAME READS TWO
+     STRUCTS.** Every controller is normalised by SDL's database into `GamepadSDL::GameButtons`, the
+     single post-router state. Nothing in the mod branches on WHICH device it is. What the mod cannot
+     collapse is which struct the GAME reads, because the game decides that itself: `FUN_00797690`
+     builds either a `PInputDevicePadXInput` or a `PInputDevicePadDirectInput` per pad, on
+     Microsoft's `IsXInputDevice()` WMI test, and **only the XInput class ever calls
+     `XInputGetState`**. So `GameButtons` is packed into an `XINPUT_STATE` by `pad_hook.cpp` and into
+     a `DIJOYSTATE2` by `dinput8_proxy.cpp`, and exactly one of the two fires for a given player.
+     Do NOT reintroduce a device-specific branch, an `rgbButtons[]` index table keyed on the DEVICE's
+     report order, an XInput read, or a second reader of any kind. Reading the pad through
+     `XInputGetState` is what shipped broken in V1.0; reading through SDL while letting the game keep
+     reading the hardware is what made S186–S187 need a suppressor per API; **writing only the XInput
+     encoder and blanking the other road is what shipped broken in V1.0.1**, because "the other road"
+     was the only road most players had (S193). The one branch that is legitimate is the one FFXII
+     itself has — the DragonRise VID `0x0079`/PID `0x0006` face-button reversal — mirrored so that
+     pad decodes correctly. Mirroring the game's table is not having a table of our own.
   1. **THE MOD MAY NOT ORIGINATE AN INPUT.** This is the bound that replaces the old "consumption
      only, never set a bit". Every bit in the synthesised state came from a physical control SDL
      reported as pressed **on that poll**. The mod can decline to forward an input; it can never
      invent one, hold one, repeat one, or press one the player is not pressing. A feature that wants
      the mod to press a button for the player is a NEW category and needs new permission. (Auto-walk
      remains the one standing exception to that, on the keyboard, under its own charter.)
-  2. **Two writers, and only two.** `BuildGameState` (what the game receives) and `BlankDInputPad`
-     (closing the other road). Nothing else in the mod may write an `XINPUT_STATE` or a `DIJOYSTATE`.
-  3. **An axis's neutral is READ, never assumed.** A DirectInput axis carries whatever range the game
-     set via `DIPROP_RANGE`, so blanking one uses `GetProperty(DIPROP_RANGE)` (vtable slot 5). Writing
-     0 would be a hard deflection on an unsigned range. An axis whose range cannot be read is **left
-     alone** — a stick the game still sees beats a stick stuck hard over.
+  2. **Two writers, and only two.** `BuildGameState` (the `XINPUT_STATE`) and `FeedDInputPad` (the
+     `DIJOYSTATE2`). Both draw from `GamepadSDL::GameButtons` and from nothing else, so neither can
+     make its own consumption decision. Nothing else in the mod may write an `XINPUT_STATE` or a
+     `DIJOYSTATE`. A joystick the mod is NOT driving — a second stick alongside the pad — is blanked
+     rather than fed, so it cannot reach the engine un-routed.
+  3. **An axis's neutral and its RANGE are READ, never assumed.** A DirectInput axis carries whatever
+     range the game set via `DIPROP_RANGE`, so both centring one and scaling a stick into one use
+     `GetProperty(DIPROP_RANGE)` (vtable slot 5), once per axis per device. Writing 0 would be a hard
+     deflection on an unsigned range. An axis whose range cannot be read is **left alone** — a stick
+     the game still sees beats a stick stuck hard over. (FFXII in fact sets −255…255 on every axis in
+     `FUN_00796280`, but that is measured, not assumed, and it is not ours to depend on.)
   4. **Off means byte-identical, not inert.** With the `Controller` row off, or no pad open,
      `DriveGame()` is false: the XInput hook returns the original call **verbatim** and the
-     DirectInput blanker touches nothing, so the game's input path is exactly what it would be with
-     no mod installed. `L3` + `R3` still reaches the router — that is what lets the pad be handed
+     DirectInput encoder touches nothing, so the game's input path is exactly what it would be with
+     no mod installed. **A controller SDL has no mapping for lands here too** — `SDL_GetGamepads`
+     never lists it, so it is never opened and the game keeps reading its own hardware. That player
+     loses the pad's mod features, never the game. `L3` + `R3` still reaches the router — that is what lets the pad be handed
      back and taken again without reaching for the keyboard. A fault latches the whole thing off for
      the session and the controller reverts to the game's own reading.
   5. **Game-foreground gated**, like every other dispatch in the mod (`PadRouter::OnPoll` returns on

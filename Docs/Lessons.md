@@ -40,7 +40,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99, L-106 |
 | how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100, L-103, L-105 |
-| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98, L-104 |
+| build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98, L-104, L-109 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
 bought it), then where the detail lives. `⟲` marks a lesson this project has learned **more than
@@ -1191,6 +1191,42 @@ period is floored at the clip's own duration *at that voice's pitch* plus a gap,
 cannot go stale when an asset is replaced or a pitch range widens. Then check the whole matrix, not the
 case you were looking at: the floor had to be added BEFORE the per-slot step, or two floored slots of
 one category would have come out with identical periods and lost the drift that keeps them apart.
+
+### L-109 ⟲ A HAND-BACK NEEDS A READER, AND YOU HAVE TO NAME THE READER
+**Before you build state for another system to consume, find the code that consumes it and prove it
+runs for the case you are shipping to.** An encoder whose reader never executes is indistinguishable
+from an encoder that works, from inside the encoder.
+**Why:** S193. S188 rebuilt controller support so the mod is the pad's only reader and "the game's pad
+is BUILT, not masked" -- correct, and it went out in V1.0.1 with the PlayStation half unplayed. The
+XInput encoder in `pad_hook.cpp` was right. Its READER did not exist: `FUN_00797690` builds EITHER a
+`PInputDevicePadXInput` OR a `PInputDevicePadDirectInput` per pad, on Microsoft's `IsXInputDevice()`
+WMI test for `IG_` in the PnP id, and `PInputDevicePadXInput::vfunction6` is **the only caller of
+`XInputGetState` in the whole exe**. A DualSense has no `IG_`, so the game never called the import
+once. Meanwhile the same session BLANKED the DirectInput road -- on the reasoning that it was a second,
+redundant road to close -- and for those players it was the only road there was. Mod functions worked
+(they read SDL); the game got a controller sitting perfectly still.
+**The tell, and it was in our own file.** `dinput8_proxy.cpp` already carried the measurement, in
+capitals: *"IT DOES USE IT... a tester's DualSense logged `cbData=272` here for a whole session while
+the XInput side never saw a pad at all."* S188 read that as *the pad reaches the game twice* and closed
+one road. It says *the pad reaches the game HERE*. One sentence, two readings, and the design was built
+on the wrong one without ever asking which.
+**`⟲` because this is `L-98` for the third time** -- an API is a device class, and which path a device
+takes is decided by the DEVICE. S162 read the pad through XInput and PlayStation pads were invisible.
+S186 fixed the read and left the game reading hardware. S188 fixed the write and aimed it at the wrong
+API. Each fix moved the same assumption one layer along.
+**How to apply, concretely:**
+* An encoder is only half a contract. Grep for the CONSUMER -- who calls this import, who reads this
+  buffer -- and check it is constructed on the branch your user is on. "The exe imports it" proves a
+  reader exists for SOME device; a cross-reference proves which.
+* **Blanking a path you have not proven is redundant converts a routing gap into a dead controller.**
+  Before suppressing an input road, say out loud what still reaches the game if you are wrong about it
+  being a second road. If the answer is "nothing", it is not a second road.
+* **When a bug cannot appear on the hardware you have, the untested case IS the shipped case.** Every
+  status line in S186-S188 ended "the PlayStation path is untested" and that was treated as a gap in
+  coverage. It was the whole feature.
+**Check it against:** `L-01` (one working pad is not all pads), `L-04` (the XInput "connected" line
+never fired, and its absence was again not read as a finding). Detail:
+`Docs\sessions_151_current.md` Session 193, `Docs\GameArchitecture.md` "Which device class a pad gets".
 
 ### L-104 ⟲ A REFERENCE IMPLEMENTATION CARRIES WHAT A HEADER CANNOT -- READ IT EVEN WHEN YOUR VERSION WOULD WORK
 **The API docs tell you what is legal. The working port tells you which legal thing survives contact.**

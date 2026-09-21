@@ -4425,3 +4425,73 @@ other side of it.
 
 **Both shipped into the V1.0.1 re-cut unplayed, on instruction:** *"those two things do not need to be
 tested after implementation."*
+
+
+## Session 193 — 2026-09-18 — [input] The hand-back was addressed to a reader that does not exist
+
+**The report:** a tester on a PlayStation pad — *"the mod functions are working on controller, but the
+game functions are not being passed through correctly."* Xbox fine. No log; diagnosed from the binary.
+
+**The cause, and it is one branch.** `FUN_00797690` (RVA `0x677690`) creates exactly one device object
+per enumerated joystick, and `FUN_00797ad0` (RVA `0x677AD0`) decides which. That function is
+**Microsoft's `IsXInputDevice()` sample, verbatim** — WMI `\\.\root\cimv2` → `Win32_PNPEntity` →
+`DeviceID` → `wcsstr(L"IG_")`, cross-checked with `VID_%4X`/`PID_%4X` against the DirectInput product
+GUID (all five wide strings sit at `0x677D0A`…`0x677D85`). Windows puts `IG_` in the PnP id of
+XInput-class devices and nothing else.
+
+```
+IsXInputDevice TRUE   -> "Creating new XInput Device: %d"   -> PInputDevicePadXInput
+IsXInputDevice FALSE  -> "Creating new DirectInput Device"  -> PInputDevicePadDirectInput
+```
+
+**`PInputDevicePadXInput::vfunction6` (`FUN_007a2140`) is the only caller of `XInputGetState` in the
+exe.** A DualSense has no `IG_`, so for that tester the game never called the import once — and S188's
+whole hand-back, the synthesised `XINPUT_STATE`, was being built for a reader that did not exist. The
+same session had blanked the DirectInput road as "a second road nobody routed". It was the only road.
+Mod functions worked (they read SDL directly); the game saw a controller sitting perfectly still.
+**An Xbox pad cannot show this** — it takes the other branch, and it never gets a DirectInput device
+created at all, so the blanker never ran for it either.
+
+**The fix: the DirectInput road is now FED, from the same bytes.** `GamepadSDL::GameButtons` is the one
+post-router state; `pad_hook.cpp` packs it into an `XINPUT_STATE` and `dinput8_proxy.cpp` packs it into
+the `DIJOYSTATE2` the game asked for. **The mod does not choose which encoder runs — the game does**,
+when it picks a device class.
+
+**What the game decodes, out of `FUN_007a1a50` (RVA `0x681A50`)**, and every line of it mattered:
+
+* axes `lX`/`lY`/`lZ`/`lRz` → left X, left Y, right X, right Y, **Y positive-DOWN** (the XInput path
+  stores `-thumbY` into the same fields, which is what pins the sign). `FUN_00796280` sets
+  `DIPROP_RANGE` to −255…255 on every axis — the same scale `thumb >> 7` produces, which is why the
+  game copies DirectInput axes through unscaled.
+* `for i in 0..16: field[0x43C+i] = rgbButtons[i] >> 7` — a FIXED slot order: `0` Square/WEST, `1`
+  Cross/SOUTH, `2` Circle/EAST, `3` Triangle/NORTH, `4` L1, `5` R1, `6` L2, `7` R2, `8` Select, `9`
+  Start, `10` L3, `11` R3. **Because the mod overwrites the whole buffer, the device's own HID report
+  order stops mattering** — we write the order the game decodes, so there is still no per-device table.
+* **Select has to be written twice.** After the loop, `field[0x444] = rgbButtons[13] >> 7` overwrites
+  slot 8. Write only slot 8 and Select never arrives.
+* **The D-pad only travels by POV.** `*(u32*)(field+0x448) = 0` wipes slots 12–15 before the hat is
+  decoded, and the hat is matched against eight exact values (`0`, `4500`, `9000`, `13500`, `18000`,
+  `22500`, `27000`, `31500`); anything else is centred.
+* **FFXII has exactly one device-specific branch and the mod now mirrors it.** For product GUID
+  `{00060079-…}` — VID `0x0079`/PID `0x0006`, the DragonRise "Generic USB Joystick" adapter — the tail
+  of the function re-decodes the four face slots in reverse. Read from abs `0x01F40398`. Mirroring the
+  game's table is not having a table of our own.
+
+**Every other controller type, checked while diagnosing:**
+
+| device | branch | after this session |
+|---|---|---|
+| Xbox / anything presenting as XInput (Steam Input, DS4Windows, ViGEm) | XInput | unchanged — **no Xbox regression is possible by construction**, the DirectInput encoder never runs for it |
+| DualSense, DualShock 4/3 | DirectInput | **fixed** |
+| Switch Pro, Joy-Con, generic HID pads | DirectInput | **fixed** |
+| DragonRise generic adapter | DirectInput + the game's reverse-face quirk | **fixed, quirk mirrored** |
+| a pad SDL has no mapping for | DirectInput | `SDL_GetGamepads` never lists it → `DriveGame()` false → the game reads its own hardware exactly as unmodded. Loses the mod's pad features, never the game. |
+| a second stick alongside the pad | DirectInput | blanked, not fed — one pad in, one pad out |
+| **Steam Controller / Steam Input** | `PInputDevicePadSteamController` | **not routable.** It reads through Steam's own interface, invisible to both hooks, and when it is created the game skips creating the DirectInput device entirely. A button would do its mod job *and* its game job. **Steam Input should be off for FFXII** — a support answer, not a code fix. |
+
+**Two one-shot log lines now settle which road a tester is on**, which is what the last three sessions
+lacked: `the game's pad is now being driven from SDL3 (XInput index 0)` versus `this pad reaches the
+game through DIRECTINPUT, not XInput … feeding the game's DIJOYSTATE2 from SDL3`. Exactly one of them
+can appear. The controller-connected line now also carries `VID_%04X PID_%04X`.
+
+**Lesson taken: `L-109`** — a hand-back needs a reader, and you have to name the reader.

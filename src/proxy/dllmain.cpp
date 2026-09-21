@@ -88,8 +88,10 @@ static void DeferredInitImpl() {
     //
     // GamepadSDL is the READER and it is the one that makes controller support work for controllers
     // that are not Xbox pads -- SDL3 normalizes a DualSense, a DualShock 4, a Switch Pro pad and a
-    // generic stick into one button layout. PadHook is now only the XInput half of SUPPRESSION; it
-    // patches one IAT cell and no longer reads anything.
+    // generic stick into one button layout. PadHook is the XInput ENCODER: it patches one IAT cell
+    // and hands the game a state built from that reading. It reads nothing itself, and on a pad the
+    // game classed as DirectInput it never fires at all -- there the encoder is in dinput8_proxy.cpp.
+    // Which one runs is the GAME's choice of device class, never the mod's (S193).
     GamepadSDL::Init();
     PadHook::Init();
 

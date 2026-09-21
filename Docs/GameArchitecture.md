@@ -58,8 +58,80 @@ Established 2026-08-20 from the import table, the RTTI list and `FUN_002498b0`.
 >
 > This is why the mod reads the pad through **SDL3** (`src\input\gamepad_sdl.cpp`) rather than
 > through either API directly: SDL's controller database normalizes every device into one button
-> layout. The two API hooks are kept purely to take a claimed input away from the game on whichever
-> path it arrived by. See `CLAUDE.md`'s second input-write exception.
+> layout. The two API hooks are the two ENCODERS that hand that reading back to the game. See
+> `CLAUDE.md`'s second input-write exception.
+
+### WHICH DEVICE CLASS A PAD GETS — measured from the binary 2026-09-18 (S193)
+
+**The two pad paths are EXCLUSIVE, and the device decides which one, at enumeration time.**
+
+`FUN_00796230` (RVA `0x676230`) is the `EnumDevices` callback. It switches on
+`DIDEVICEINSTANCE.dwDevType`: `0x12` keyboard, `0x13` mouse, and `0x14`–`0x18` except `0x19`
+(joystick / gamepad / driving / flight / 1st-person) → `FUN_00797690`.
+
+**`FUN_00797690` (RVA `0x677690`) is the branch**, and it creates exactly ONE device object:
+
+| test | log line the game prints | class built | how the game then reads it |
+|---|---|---|---|
+| Steam Input reports a connected controller | `Creating new Steam Controller` | `PInputDevicePadSteamController` | `ISteamController` — **invisible to both of the mod's hooks** |
+| `IsXInputDevice` TRUE | `Creating new XInput Device: %d` | `PInputDevicePadXInput` | `XInputGetState(userIndex)` |
+| `IsXInputDevice` FALSE | `Creating new DirectInput Device` | `PInputDevicePadDirectInput` | `IDirectInputDevice8::GetDeviceState(272, DIJOYSTATE2)` |
+
+`FUN_00797ad0` (RVA `0x677AD0`) **is Microsoft's `IsXInputDevice()` sample, verbatim**: `CoCreateInstance`
+WbemLocator → `\\.\root\cimv2` → `Win32_PNPEntity` → `DeviceID` → `wcsstr(L"IG_")`, cross-checked
+against the DirectInput product GUID with `VID_%4X` / `PID_%4X` (all five wide strings confirmed in the
+disassembly at `0x677D0A`…`0x677D85`). Windows puts `IG_` in the PnP id of **XInput-class devices only**.
+
+> **`PInputDevicePadXInput::vfunction6` (`FUN_007a2140`) IS THE ONLY CALLER OF `XInputGetState` IN THE
+> WHOLE EXE.** So on a DualSense, a DualShock 4, a Switch Pro pad or any generic HID stick the game
+> **never calls that import once**. This is what broke V1.0.1's PlayStation support: S188 fed the
+> XInput encoder and blanked the DirectInput road, so those players' mod functions worked (they read
+> SDL) and the GAME got a controller sitting perfectly still. An Xbox pad cannot show the bug.
+
+Also true and easy to miss: an XInput-class pad gets **no DirectInput device created at all** — the
+`CreateDevice` call lives only in the `IsXInputDevice`-FALSE branch. So `g_otherDevices` in
+`dinput8_proxy.cpp` holds a joystick-sized entry **only** for players on the DirectInput road.
+
+### `PInputDevicePadDirectInput::vfunction6` — the DIJOYSTATE2 decode (`FUN_007a1a50`, RVA `0x681A50`)
+
+`Poll()` (vtable 25) → `GetDeviceState(0x110, DIJOYSTATE2)` (vtable 9) → unpack. **The mod writes this
+buffer, so this table is load-bearing** (`src\proxy\dinput8_proxy.cpp`):
+
+| DIJOYSTATE2 | device field | meaning |
+|---|---|---|
+| `lX` +0x00 | `+0x414` | left stick X |
+| `lY` +0x04 | `+0x420` | left stick Y, **positive = DOWN** |
+| `lZ` +0x08 | `+0x418` | right stick X |
+| `lRz` +0x14 | `+0x424` | right stick Y, **positive = DOWN** |
+| `rgbButtons[i]` +0x30+i | `+0x43C+i`, i = 0…16 | fixed slot order, below |
+| `rgbButtons[13]` | `+0x444` | **written again AFTER the loop — Select comes only from slot 13** |
+| `rgdwPOV[0]` +0x20 | `+0x448…+0x44B` | D-pad; `+0x448` is zeroed as a `u32` first, so slots 12–15 never survive |
+
+Button slots: `0` WEST/Square · `1` SOUTH/Cross · `2` EAST/Circle · `3` NORTH/Triangle · `4` L1 ·
+`5` R1 · `6` L2 · `7` R2 · `8` Select · `9` Start · `10` L3 · `11` R3.
+
+POV is matched against eight **exact** values — `0`, `4500`, `9000`, `13500`, `18000`, `22500`,
+`27000`, `31500`; anything else reads as centred.
+
+The same four device fields are what the XInput path writes (`FUN_007a2140`: `+0x414 = thumbLX>>7`,
+`+0x420 = -thumbLY>>7`, `+0x418 = thumbRX>>7`, `+0x424 = -thumbRY>>7`), which is what pins the
+orientation and the scale. `FUN_00796280` (the `EnumObjects` callback) sets **`DIPROP_RANGE` to
+−255…255 on every axis**, which is why the DirectInput values are copied through unscaled: that is the
+same range `thumb >> 7` produces.
+
+> **FFXII CARRIES EXACTLY ONE DEVICE-SPECIFIC BRANCH, and the mod has to mirror it.** For product GUID
+> `{00060079-0000-0000-0000-504944564944}` — **VID `0x0079` / PID `0x0006`, the DragonRise "Generic USB
+> Joystick" adapter** — the tail of `FUN_007a1a50` re-decodes the four face slots **in reverse**
+> (`+0x43F←[0]`, `+0x43E←[1]`, `+0x43D←[2]`, `+0x43C←[3]`). The constant is at abs `0x01F40398`
+> (RVA `0x1E20398`). Nothing else in the exe branches on a device id.
+
+> **THE STEAM CONTROLLER PATH IS UNROUTABLE BY THE MOD.** `PInputDevicePadSteamController`
+> (`FUN_007a1cd0`) reads through Steam's own interface; neither the XInput IAT patch nor the
+> DirectInput vtable hook can see it, and when it is created the game **skips creating the DirectInput
+> device entirely** (`if (!bVar2)`). With Steam Input enabled for FFXII a pad can therefore reach the
+> engine un-routed — the mod's features still work, but nothing it claims is taken away, so a button
+> does its mod job *and* its game job. **Steam Input should be OFF for this game**; that is a support
+> answer, not a code fix.
 
 **3. The unified pad block — `FUN_002498b0`, RVA `0x1298B0`.** Rebuilt once per frame at Ghidra
 `0x02F97360` (RVA `0x2E77360`): **2 logical pads, stride `0x14`**, each **8 `u16` button words then

@@ -133,10 +133,11 @@ void OpenPad(SDL_JoystickID id) {
     const char* name = SDL_GetGamepadName(g_pad);
     std::snprintf(g_typeName, sizeof(g_typeName), "%s", name ? name : "Unknown");
 
-    char m[224];
-    snprintf(m, sizeof(m), "CONTROLLER CONNECTED via SDL3: \"%s\" (SDL type %d, id %u) -- pad lines "
-                           "below are real data", g_typeName, (int)SDL_GetGamepadType(g_pad),
-             (unsigned)id);
+    char m[256];
+    snprintf(m, sizeof(m), "CONTROLLER CONNECTED via SDL3: \"%s\" (SDL type %d, id %u, "
+                           "VID_%04X PID_%04X) -- pad lines below are real data",
+             g_typeName, (int)SDL_GetGamepadType(g_pad), (unsigned)id,
+             SDL_GetGamepadVendor(g_pad), SDL_GetGamepadProduct(g_pad));
     Log::Write("PAD", m);
 
     LogMappingCoverage();
@@ -226,16 +227,38 @@ bool DriveGame() {
     return g_sdlUp && g_pad != nullptr && ModMenu::ControllerOn();
 }
 
+void VendorProduct(uint16_t* vid, uint16_t* pid) {
+    if (vid) *vid = g_pad ? SDL_GetGamepadVendor(g_pad)  : 0;
+    if (pid) *pid = g_pad ? SDL_GetGamepadProduct(g_pad) : 0;
+}
+
 // THE STATE THE GAME READS. Built from SDL, minus the router's claim -- see the header.
-bool BuildGameState(PadHook::State* out) {
+//
+// THE ONE SOURCE BOTH ENCODERS DRAW FROM. `BuildGameState` packs this into an `XINPUT_STATE` and
+// `dinput8_proxy.cpp` packs the same bytes into a `DIJOYSTATE2`; neither reads a device and neither
+// makes its own consumption decision. If a third wire format ever appears it hangs off here too.
+bool GameButtons(PadHook::Gamepad* out) {
     if (!out || !DriveGame()) return false;
 
     PadHook::Gamepad g = g_gameState;
     g.buttons = static_cast<uint16_t>(g.buttons & ~g_consumed.load(std::memory_order_relaxed));
     if (g_eatStick.load(std::memory_order_relaxed)) { g.thumbRX = 0; g.thumbRY = 0; }
 
+    *out = g;
+    return true;
+}
+
+bool BuildGameState(PadHook::State* out) {
+    if (!out) return false;
+
+    PadHook::Gamepad g{};
+    if (!GameButtons(&g)) return false;
+
     // XInput callers detect "something changed" from the packet number, so it must move when the
-    // contents do and hold still when they do not.
+    // contents do and hold still when they do not. FFXII relies on exactly this: its XInput device
+    // (`FUN_007a2140`) unpacks the state ONLY when the packet differs from the one it kept last
+    // frame. Two callers a frame is harmless -- the second finds the contents unchanged and does not
+    // advance it.
     static PadHook::Gamepad s_last{};
     if (memcmp(&g, &s_last, sizeof(g)) != 0) { s_last = g; ++g_gamePacket; }
 

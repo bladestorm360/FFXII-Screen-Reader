@@ -159,6 +159,10 @@ bool Active() {
     return g_active.load(std::memory_order_acquire) && !g_faulted.load(std::memory_order_relaxed);
 }
 
+bool DrivingXInput() {
+    return g_sawPad.load(std::memory_order_relaxed) && !g_faulted.load(std::memory_order_relaxed);
+}
+
 bool ReadGamePadWords(uint16_t out[3]) {
     // Pad 0's +0x08/+0x0A/+0x0C. See the header for why this is a WITNESS and never a driver.
     return out &&

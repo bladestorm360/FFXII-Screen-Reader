@@ -49,21 +49,32 @@
 //
 //     * `pad_hook.cpp` SYNTHESISES the `XINPUT_STATE` the game reads, from this file's SDL state
 //       minus whatever `PadRouter` claimed. The real `XInputGetState` result is discarded.
-//     * `dinput8_proxy.cpp` BLANKS the game's DirectInput joystick, so the physical device cannot
-//       reach the game a second time, un-routed, behind the mod's back.
+//     * `dinput8_proxy.cpp` SYNTHESISES the `DIJOYSTATE2` the game reads, from the same bytes.
 //
-// WHY THIS IS THE WHOLE POINT. It means there is exactly ONE code path for every controller. An Xbox
-// pad, a DualSense, a Switch Pro pad, a ROG Ally's built-in sticks -- SDL's database normalises them
-// all, and every one of them reaches the game as the same synthesised state built by the same lines.
-// Testing on any pad tests the path all pads use; there is no second, device-shaped path left to go
-// unexercised. The previous design read through SDL but let the game keep reading the hardware, so
-// it needed a different suppressor per API and each had to be proven separately. That is gone, and
-// with it went the `rgbButtons[]` index tables, the SDL binding lookups and the per-button
-// confirmation they required -- none of that has anything to describe any more.
+// TWO ENCODERS, AND THE GAME PICKS WHICH ONE RUNS -- CORRECTED S193, AFTER IT SHIPPED WRONG. S188
+// wrote only the XInput encoder and BLANKED the DirectInput road, on the belief that the pad reached
+// the game through XInput and the DirectInput device was a second, redundant road to close. It is
+// not redundant: for most controllers it is the ONLY road. `FUN_00797690` builds EITHER a
+// `PInputDevicePadXInput` OR a `PInputDevicePadDirectInput` per device, decided by Microsoft's
+// `IsXInputDevice()` WMI test for `IG_` in the PnP id, and only the XInput class ever calls
+// `XInputGetState`. A DualSense has no `IG_`, so the game never created an XInput device for it,
+// never called the import once, and the mod's whole hand-back was addressed to a reader that did not
+// exist -- while the blanker sat on the road the pad actually had. The tester's report was exact:
+// mod functions fine (they read SDL), game functions dead. See `dinput8_proxy.cpp` for the full
+// decode table. An Xbox pad could not have shown it, because an Xbox pad takes the other branch.
+//
+// WHY THIS IS STILL ONE PATH. The device-shaped layer is what is gone, not the format-shaped one.
+// One reader (SDL), one router, one consume model, one post-router state -- `GameButtons` below --
+// and then a pack into whichever struct the game asked for. An Xbox pad, a DualSense, a Switch Pro
+// pad and a handheld's built-in sticks are normalised by SDL's database and reach the game through
+// the same lines; nothing branches on WHICH device it is. What branches is which struct the game
+// reads, and the game decides that, not the mod. The `rgbButtons[]` index tables the old design
+// needed are still gone: the mod writes the game's fixed slot order, so the device's own HID report
+// order never enters into it.
 //
 // IT ALSO FIXES SOMETHING THE OLD SHAPE COULD NOT. A DualSense used to reach the game as a raw
-// DirectInput joystick with whatever quirks that device's HID descriptor carries. Now it reaches the
-// game as a clean XInput pad, which is the path FFXII supports best.
+// DirectInput joystick with whatever quirks that device's HID descriptor carries. Now what lands in
+// that buffer is SDL's normalised layout, so the device's own quirks never reach the engine.
 //
 // THIS CROSSES THE CONSUMPTION/INJECTION LINE, DELIBERATELY AND ON INSTRUCTION. The mod no longer
 // merely clears bits the player pressed; it constructs the pad state the game reads. That is a
@@ -76,6 +87,11 @@
 // drives nothing: the real `XInputGetState` result is returned untouched and the DirectInput
 // joystick is left alone, so the game's input is byte-identical to an unmodded run. `L3` + `R3` still
 // reaches the router, which is what lets the pad be handed back and taken again without a keyboard.
+//
+// A CONTROLLER SDL HAS NO MAPPING FOR FALLS BACK THE SAME WAY, and that is the safety net under the
+// whole design: `SDL_GetGamepads` lists only devices SDL can normalise, so an exotic stick is never
+// opened, `DriveGame()` stays false, and the game reads its own hardware exactly as it would with no
+// mod installed. Such a player loses the pad's MOD features; they do not lose the game.
 namespace GamepadSDL {
 
 // Opens SDL's gamepad subsystem and the first gamepad present. Safe to call with no pad attached --
@@ -118,14 +134,31 @@ void PollIfStale();
 // byte-identical, not merely inert.
 bool DriveGame();
 
-// Fills `out` with the state the GAME should see this frame: what SDL read, minus what `PadRouter`
-// claimed. `dwPacketNumber` advances only when the contents actually change, which is the contract
-// XInput callers rely on to detect input.
+// THE ONE POST-ROUTER PAD STATE: what SDL read this poll, minus what `PadRouter` claimed. Both of
+// the encoders below are built from this and from nothing else, which is what keeps "one reader, one
+// consume model" true now that the game reads two different wire formats.
 //
 // Every bit set here came from a physical control SDL reported as pressed on this poll. Nothing is
 // originated -- the mod can decline to forward an input, never invent one.
 //
 // Returns false (leaving `out` untouched) when `DriveGame()` is false.
+bool GameButtons(PadHook::Gamepad* out);
+
+// Fills `out` with the state the GAME should see this frame, as an `XINPUT_STATE`.
+// `dwPacketNumber` advances only when the contents actually change, which is the contract XInput
+// callers rely on to detect input. A thin wrapper over `GameButtons`.
+//
+// Returns false (leaving `out` untouched) when `DriveGame()` is false.
 bool BuildGameState(PadHook::State* out);
+
+// The open pad's USB vendor and product ids, or 0/0 when nothing is open or SDL does not know them.
+//
+// WHY THE MOD NEEDS THESE AT ALL, given that the whole point is that SDL normalises devices: FFXII
+// ITSELF carries one device-specific branch. `PInputDevicePadDirectInput::vfunction6` re-maps the
+// four face buttons in reverse for product GUID `{00060079-...}` (VID 0x0079 / PID 0x0006, the
+// DragonRise "Generic USB Joystick" adapter). When the mod writes that device's buffer it has to
+// write what the game will decode, so this one id is checked -- see `dinput8_proxy.cpp`. It is the
+// game's branch, mirrored; the mod has none of its own.
+void VendorProduct(uint16_t* vid, uint16_t* pid);
 
 } // namespace GamepadSDL
