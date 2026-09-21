@@ -21,6 +21,9 @@ namespace {
 std::atomic<uint8_t>  g_ctx{static_cast<uint8_t>(PadRouter::Context::Unknown)};
 std::atomic<uint64_t> g_ctxStampMs{0};
 std::atomic<uint8_t>  g_state{static_cast<uint8_t>(PadRouter::State::Normal)};
+// S194: the game's own flee flag, published WITH the context (and only ever true in a fight) so the
+// poll never reads game memory itself. See PadRouter::Escaping.
+std::atomic<bool>     g_escaping{false};
 
 // ---- mod mode ----------------------------------------------------------------------------------
 // A LATCH, not a hold. Press Back and the mod says "Mod"; the NEXT button is a mod command and the
@@ -195,9 +198,12 @@ void OnGameFrame() {
     } else {
         c = Context::Field;
     }
+    g_escaping.store(c == Context::Battle && BattleState::EscapeModeOn(), std::memory_order_relaxed);
     g_ctx.store(static_cast<uint8_t>(c), std::memory_order_relaxed);
     g_ctxStampMs.store(GetTickCount64(), std::memory_order_release);
 }
+
+bool Escaping() { return g_escaping.load(std::memory_order_relaxed); }
 
 Context CurrentContext() { return FreshContext(); }
 State   CurrentState()   { return static_cast<State>(g_state.load(std::memory_order_relaxed)); }

@@ -22,7 +22,9 @@
 //                 message box owns input it still works as it does with the row off (Up describes).
 //   D-pad         open field: THE PATHFINDER, in the stick's own layout -- Up previous category
 //                 (`-`), Down next category (`=`), Left previous object (`[`), Right next object
-//                 (`]`). In a fight with no menu up: THE PARTY, clockwise from Up, as the field had it.
+//                 (`]`). In a fight with no menu up: THE PARTY, clockwise from Up, as the field had it
+//                 -- UNLESS THE PARTY IS FLEEING: in the game's escape mode it is the pathfinder
+//                 again (S194, the user's rule), so a player running away can pick where to.
 //                 Everywhere else it is unchanged: dispatched as arrow keys and passed to the game's
 //                 cursor, so a battle menu or a target list keeps the D-pad.
 //   R3            unchanged -- still the beacon toggle. The user's ruling: *"only the camera turning
@@ -43,6 +45,10 @@ enum Dir { DIR_UP = 0, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_COUNT };
 // THE one dispatch: hands `vk` to InputTracker::DispatchModKey and writes the PAD line. Defined in
 // pad_router.cpp; every binding in both files goes through it.
 void Act(const char* padInput, int vk, const char* action, Context ctx);
+
+// True while the party is in the game's ESCAPE (flee) mode in a fight -- BattleState::EscapeModeOn,
+// read on the game thread in OnGameFrame and published beside the context. Defined in pad_router.cpp.
+bool Escaping();
 
 // Normal mode, minus Back (which arms mod mode and so belongs to the state machine). Dispatches what
 // `ctx` allows, returns the button bits the game must not see, and sets `*eatStick` when the right

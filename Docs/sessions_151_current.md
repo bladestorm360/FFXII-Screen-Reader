@@ -4649,7 +4649,18 @@ accessed. make l3/r3 toggle between control schemes."*
 * **L3 + R3 flips `Right stick camera`**, spoken as "Right stick camera, On/Off". The singles are
   unchanged, and all three are still inert while the mod menu is open.
 * CLAUDE.md charter bound 4 now reads "no pad means byte-identical". The GameArchitecture amendment on
-  the off guarantee is marked superseded. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
+  the off guarantee is marked superseded.
+
+Committed as `1a5fdcf` (S193, rebuilt file by file from the mixed tree; the staged diff matched S193's
+original stats exactly) and `4595aad` (S194). The user then reported everything working as intended.
+
+**One follow-up: escape mode beats the fight on the D-pad.** The user: *"escape mode must overwrite the
+combat switch for the d-pad when in combat and fall back to pathfinding."* With the camera row on and
+the party fleeing, the D-pad is the pathfinder rather than the party. The flag is the game's own
+(`BattleState::EscapeModeOn`, S179). `PadRouter::OnGameFrame` reads it on the game thread and
+publishes it beside the context as `g_escaping` (only ever true in `Context::Battle`), so the poll
+reads no game memory. With the row off nothing changes, because the stick is the pathfinder then.
+UNPLAYED. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
 
 ### Status
 * **BUILT + DEPLOYED. The tkMalloc fix and the camera row are PLAY-CONFIRMED. UNPLAYED so far: the

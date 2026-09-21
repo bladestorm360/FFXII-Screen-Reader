@@ -115,7 +115,12 @@ uint16_t NormalBindings(Context ctx, uint16_t rising, const bool (&stickRising)[
     } else if (fight && camera) {
         // Row on, in a fight with NO menu up (a menu makes the context FieldBusy). There is no cursor
         // here for the D-pad to move, which is the only reason S174's ruling can bend for this.
-        consume |= Claim(kParty, rising, ctx);
+        //
+        // ESCAPE MODE OVERRIDES IT (S194, the user: *"escape mode must overwrite the combat switch for
+        // the d-pad when in combat and fall back to pathfinding"*). A fleeing party needs somewhere to
+        // run TO, not its HP list -- the rule S179 already applies to the beacon, which always resumes
+        // the route in escape mode. With the row off nothing changes: the stick is the pathfinder then.
+        consume |= Claim(Escaping() ? kPathfinder : kParty, rising, ctx);
     } else {
         // In a menu the D-pad is the GAME'S, and it is also an arrow key. Dispatched and NOT consumed:
         // the Status attributes buffer and the Clan Primer page walk hear it exactly as they hear the

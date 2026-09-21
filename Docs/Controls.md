@@ -647,8 +647,8 @@ which is the layout above exactly. **On** frees only the stick's camera job:
 | Control | Open field | In a fight, no menu up | Menu, target cursor or message box |
 |---|---|---|---|
 | Right stick | **the game's** — turns the camera; the mod does nothing with it | **the game's** | unchanged (Up describes / Libra) |
-| D-pad Up / Down | previous / next category (`-` `=`) | party 1 / party 3 (`4` `6`) | the game's cursor, as before |
-| D-pad Left / Right | previous / next object (`[` `]`) | guest / party 2 (`7` `5`) | the game's cursor, as before |
+| D-pad Up / Down | previous / next category (`-` `=`) | party 1 / party 3 (`4` `6`) — **in escape mode: category, as on the field** | the game's cursor, as before |
+| D-pad Left / Right | previous / next object (`[` `]`) | guest / party 2 (`7` `5`) — **in escape mode: object, as on the field** | the game's cursor, as before |
 | R3 | unchanged: beacon toggle | unchanged | unchanged |
 | L3 + R3 | switches this row back Off | same | same |
 
@@ -656,7 +656,11 @@ which is the layout above exactly. **On** frees only the stick's camera job:
 > user's ruling. The tester steers by the audio beacon, which re-aims as the camera turns, so a moving
 > camera costs them nothing. The fight column uses the same gate L1 and R1 already use: the moment a
 > command menu opens the context is FieldBusy and the D-pad is the game's cursor again, so this bends
-> S174's "never in combat" only where there is no cursor for it to move. Code: `src\input\pad_normal.cpp`.
+> S174's "never in combat" only where there is no cursor for it to move. **Escape mode wins over the
+> fight** (the user: *"escape mode must overwrite the combat switch for the d-pad when in combat and fall
+> back to pathfinding"*): while the party is fleeing (Left Ctrl, or holding the flee button) the D-pad
+> is the pathfinder again, read from the game's own flag (`BattleState::EscapeModeOn`, S179) -- the
+> same rule that makes the beacon resume the route. Code: `src\input\pad_normal.cpp`.
 
 ### Mod mode — press Back, then one button
 
