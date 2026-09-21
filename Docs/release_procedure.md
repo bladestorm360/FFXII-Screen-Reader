@@ -249,6 +249,107 @@ Newest first. One entry per release, written at step 4. `Releases\` is gitignore
 the only record in the repo that a given zip ever existed — **and from V1.0 the tag is a second one**,
 which is most of the argument for tagging: a record can be edited, a tag points at a tree.
 
+## V1.0.2 — 2026-09-21
+
+**The release in which the PlayStation-pad fix reaches the road those pads actually use, and the
+startup-crash fix is built in.** V1.0.1's pad fix fed only the XInput encoder and blanked DirectInput
+— and the game reads every non-Xbox pad over DirectInput, so on a DualSense the mod's pad features
+worked while the game saw a still controller (S193). **Six builds now answer to a 1.0.x number;
+this is the only one stamped 1.0.2.** Still ask for the log's `Build:` line.
+
+**Built from:** `b432df2`. **Stamp verified in the shipped binary:** `1.0.2` and `b432df2` are each
+present once; `1.0.1` and `5e6a8d8` are absent (matched as literal strings — a regex grep counts
+`1.0.1` twice through its dots, which is a grep artifact, not a stale stamp). **The DLL's behaviour
+traces to `88641e8`** (S194's follow-up); the two commits after it are this release's own prep:
+`d930775` is the readme, `b432df2` the stamp bump. Covers **Sessions 193–194** since V1.0.1 re-cut 2's
+`5e6a8d8` (S192). Zero build warnings.
+
+**Artifacts.**
+
+```
+dinput8.dll                 1,969,152  sha256 b4930ade6cebeb1dfe7691ec92d073b4fe1b6ff39a700fba9fcae6d3d3f7d3b8
+SDL3.dll                    1,748,992  sha256 64e52809f91bb27501ccc163fc14569488df1ffd304da4ddc3aa8a60b4ac7531
+Tolk.dll                      122,368  sha256 c4fb11d3ed236f27532c7ab8370ebde75133f322a069450f17e38d7548197225
+nvdaControllerClient64.dll    153,600  sha256 41c1f5df5997e798fcfbf7c8f2589de811e768b069a60710600cf57cb23a0b09
+ReadMe.txt                     32,694  sha256 91a54bf4b6d2645b7393652e9a85db8b798a225c0e0668255618adef29c55ef4
+zip                         1,974,085  sha256 9125189a56891306f45277e66b9f0f8e8b95822596916d80879f915a14028af3
+```
+
+`SDL3.dll`, `Tolk.dll` and `nvdaControllerClient64.dll` are byte-identical to V1.0.1 (carried
+forward, not re-sourced). All four DLLs verified `8664`. `dinput8.dll` grew 18,432 bytes, which is
+dlmalloc and the tkMalloc port.
+
+**`ReadMe.txt` CHANGED** — 30,921 → 32,694 bytes, mostly the tkMalloc fix's BSD-2 notice under a new
+`Credits` heading (the licence requires it in documentation shipped with a binary, and `ReadMe.txt`
+is that documentation). The file now ends on the licence's last sentence rather than `you.`.
+
+**The converter was rebuilt from step 2's rules and validated the strong way, first try.**
+`5e6a8d8:README.md` (identical to `548e17f`'s) converts byte-identical to the shipped V1.0.1
+`ReadMe.txt` at 30,921. Output re-checked: zero `#` lines, exactly one backtick (the literal `` ` ``
+key name, line 92), zero doubled spaces, zero trailing-whitespace lines, no BOM, no stray LF, one
+trailing CRLF. (`grep -c '[ \t]\r?$'` reports every line of a CRLF file as trailing whitespace —
+check line endings in Python, per L-43's family.)
+
+**Readme prep, `d930775`, two phrases — both wrong against the tree, fixed rather than flagged
+(L-68).** The Controller paragraph's *"(In V1.0 it read Xbox pads only … If that was you, it works
+now.)"* was before/after framing `CLAUDE.md` forbids, and its promise was one V1.0.1 did not keep.
+Auto-walk's *"the left stick is passed straight to the game and never read"* has been false since
+S188 — the mod reads every control through SDL3; what the player needs (the left stick does not
+cancel auto-walk) is kept.
+
+**What changed in the build.**
+
+- **Non-Xbox pads reach the game (S193).** `FUN_00797690` builds one device object per pad on
+  Microsoft's `IsXInputDevice()` test, and only the XInput class ever calls `XInputGetState`. The
+  post-router state is now packed into the `DIJOYSTATE2` as well as the `XINPUT_STATE`; the game
+  decides which encoder runs. The DragonRise face-button reversal the game carries is mirrored.
+- **ffgriever's tkMalloc Fix is built in (S194)** — first thing DllMain runs; 288 MB reserved below
+  2 GB, 28 call sites retargeted to a dlmalloc mspace, every site's bytes checked first, never fails
+  the DLL. Always on, no row. Log: `[MEM] tkMalloc fix INSTALLED` plus one line per pool.
+- **`Right stick camera` row (S194)**, default Off, last root row: the right stick turns the camera
+  and the pathfinder moves to the D-pad on the field; in a fight the D-pad is the party — **unless
+  the party is fleeing, when it is the pathfinder again (`88641e8`)**. R3 stays the beacon.
+- **The mod menu is fully modal and has the user's pad layout (S194).** D-pad moves and changes,
+  right stick Up describes, B toggles or opens, A backs out one level, Back closes every level,
+  Start and the stick clicks do nothing. No key (all 256 scan codes) and no pad input reaches the
+  game while it is open, each claim latched until release.
+- **The `Controller` row and the L3 + R3 kill switch are gone (S194)**; L3 + R3 switches the control
+  scheme (flips `Right stick camera`).
+
+**KEY AUDIT — every key that moved was grepped in the readme and EVERY hit read (L-67).**
+- **L3 + R3** — three hits (the Controller paragraph, the pad list, the `Right stick camera` row);
+  all say it switches the control scheme. No hit still calls it an off switch.
+- **`Controller` row** — zero hits as a row; the three remaining hits are the section heading and two
+  pointers to it ("see Controller below", "as set out under Controller above").
+- **Mod-menu pad keys** — the one paragraph that describes them matches `kMenu` in `pad_router.cpp`
+  row for row (B = the menu's Right, A = Backspace, Back = `F8`, right stick Up = `O`), and says the
+  stick clicks do nothing there. Start has one hit (mod mode's "open the mod menu") and it is right.
+- **D-pad** — the default-scheme line (party, field only) and the camera-row line (pathfinder on the
+  field, party in a fight, pathfinder while fleeing, the game's cursor in a menu) both match
+  `pad_normal.cpp`'s `kParty` / `kPathfinder` selection. **R3** still says audio beacon.
+- **Keyboard while the menu is open** — both hits now say no key reaches the game, matching the
+  256-code `MaskModMenuKeys`.
+- **No key is missing from the readme and no listed key describes behaviour this build does not
+  have.**
+
+**Not in the readme, and carried by the release notes instead: turn Steam Input OFF for FFXII.**
+With it on, the game reads the pad through `PInputDevicePadSteamController`, which neither encoder
+reaches, and skips creating the DirectInput device (S193's table). It is a support answer, not a key.
+
+**PLAY STATE.**
+- **PLAY-CONFIRMED:** the tkMalloc fix (does no harm here — this machine does not crash, so the fix's
+  real test is a tester who does), the camera row, and the modal mod menu with its pad layout, the
+  Controller row's removal and L3 + R3 as the scheme switch (user, after `4595aad`: *"all is working
+  as intended"*).
+- **UNPLAYED:** escape mode on the D-pad (`88641e8`). **And the headline: the DirectInput encoder has
+  never run in play** — the only pad here is Xbox, and it took the XInput road. The first
+  PlayStation-pad report is the test. The log line that settles which road a pad took is
+  `this pad reaches the game through DIRECTINPUT, not XInput … feeding the game's DIJOYSTATE2 from
+  SDL3` versus `the game's pad is now being driven from SDL3 (XInput index 0)`; only one can appear.
+
+**Published.** Tag `V1.0.2` (annotated) on the commit carrying this record; GitHub Release with the
+zip attached, marked Latest.
+
 ## V1.0.1 (re-cut 2) — 2026-09-18
 
 **THE SAME NUMBER, RE-CUT A SECOND TIME, ON THE SAME DAY.** The instruction: *"simply update the
