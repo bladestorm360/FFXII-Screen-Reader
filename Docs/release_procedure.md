@@ -208,10 +208,14 @@ gh release create V<version> "Releases\FFXII-Screen-ReaderV<version>.zip" --titl
 ```
 
 - **The zip is attached as a release asset.** That is the whole point — it is the download link.
-- **Write the notes for players, not for us.** The release records in this file are a build-tracing
-  artifact full of commit hashes and internal lessons; a release note is what a blind player reads to
-  decide whether to install. Install steps, what is new, what is known-broken, how to report a bug.
-  **Do not paste the record.**
+- **The notes are ONE short summary line, and nothing else (user, 2026-09-21, V1.0.2).** No install
+  steps, no feature sections, no known issues, no bug-report instructions. The user writes the
+  changelog and posts it with the Discord announcement. V1.0.2 shipped with ~70 lines of notes; the
+  user: *"way, way too verbose on the release notes ... remove everything else. I'll put a changelog
+  that I write up myself in the discord announcement."* The line that replaced them, as the model:
+  *"A patch release. Two headlines: a PlayStation, Switch Pro or generic controller now controls the
+  game as well as the mod, and the fix for the game's startup crash is built in."* Pass it with
+  `--notes "<line>"`; no notes file is needed. **Do not paste the record.**
 - **`--latest` is the default and is what you want** for a normal release. Use `--prerelease` for a
   test or sponsor build if one is ever published this way.
 - **Never `--draft` and then forget it.** A draft Release is invisible and its tag is not, which is
@@ -332,7 +336,8 @@ cancel auto-walk) is kept.
 - **No key is missing from the readme and no listed key describes behaviour this build does not
   have.**
 
-**Not in the readme, and carried by the release notes instead: turn Steam Input OFF for FFXII.**
+**Not in the readme, and not in the release notes either (cut to one line at the user's
+instruction): turn Steam Input OFF for FFXII.**
 With it on, the game reads the pad through `PInputDevicePadSteamController`, which neither encoder
 reaches, and skips creating the DirectInput device (S193's table). It is a support answer, not a key.
 
