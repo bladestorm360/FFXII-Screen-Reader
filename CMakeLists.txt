@@ -224,7 +224,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 # cache too, or delete it, or pass -DFFXII_SR_VERSION=. That trap shipped V0.6 on five releases.
 # VERIFY THE BUMP IN THE SHIPPED BINARY, never in the source. The git hash is best-effort: a source
 # drop with no .git still builds, it just stamps "nogit".
-set(FFXII_SR_VERSION "1.0.1" CACHE STRING "Mod version, as it appears in the release zip name")
+set(FFXII_SR_VERSION "1.0.2" CACHE STRING "Mod version, as it appears in the release zip name")
 
 execute_process(
     COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short HEAD
