@@ -4495,3 +4495,173 @@ game through DIRECTINPUT, not XInput … feeding the game's DIJOYSTATE2 from SDL
 can appear. The controller-connected line now also carries `VID_%04X PID_%04X`.
 
 **Lesson taken: `L-109`** — a hand-back needs a reader, and you have to name the reader.
+
+## Session 194 — 2026-09-21 — [memory][input] ffgriever's startup-crash fix built in; the Right stick camera row (BUILT/DEPLOYED, UNPLAYED)
+
+KEYWORDS: tkmalloc, tkMalloc, ff12-tkmalloc, ffgriever, startup crash, white screen, memory allocation,
+2 GB, 32-bit pointers, mspace, dlmalloc, create_mspace_with_base, FUN_00369d30, DAT_022d89b8,
+FUN_0022a0b0, FUN_0037b3d0, FUN_008636e0, call-site patch, rel32 stub, image base 0x120000, Right stick
+camera, RightStickCamera, right_stick_camera, pad_normal.cpp, NormalBindings, D-pad pathfinder, party
+vitals in battle, pad_router split, L-110
+
+**Three things arrived together.** (1) Testers report the game failing to start with a memory
+allocation error on newer graphics cards -- not our bug -- and the user asked to fold in ffgriever's
+fix, which needs a loader we do not use. (2) A tester asked for an `F8` toggle that frees the right
+stick for camera turning, with the D-pad taking the pathfinder out of combat and the party in a fight.
+(3) A controller question about S193. The testers are on **V1.0.1**; S193 is untouched this session
+and still unplayed.
+
+### 1. The startup-crash fix -- ffgriever's FF12 tkMalloc Fix, compiled into our DLL
+
+The link given (`gitlab.com/ffgriever/ff12`) is truncated; the project is
+**`gitlab.com/ffgriever/ff12-tkmalloc`**, v0.2.2 (`e3f69b8`), BSD 2-Clause. The game's tkMalloc
+allocator carves its pools out of blocks it gets from CRT `malloc` early in startup, and PS2-era code
+keeps 32-bit pointers into them, so every block must land below 2 GB. Nothing makes sure of that. The
+fix reserves one 288 MB block low before the game's startup code runs, makes a dlmalloc mspace of it,
+and retargets 28 call instructions so the pools come from there.
+
+**Why ffgriever's builds could not be used as they are:** the standalone build IS a `dinput8.dll`,
+and the module build needs the External File Loader, also a `dinput8.dll`. So it is now
+`src\core\tkmalloc_fix.{h,cpp}` + `include\dlmalloc\` (Doug Lea 2.8.6, MIT-0, `ONLY_MSPACES`),
+installed from DllMain before anything else, and its verdict is logged in Stage B.
+
+**Checked against our own decompile before porting:**
+* ffgriever's addresses use the exe's preferred base **0x120000**, the same base our Ghidra project
+  uses. `GameArchitecture.md` still claimed 0x140000000; that is now STRUCK.
+* `tkallocInit` = `FUN_00369d30`: 9 calls from `FUN_0022a0b0` and 1 from `FUN_0037b3d0`, exactly as
+  the table says. The rel32s at the malloc/free sites resolve to `FUN_0036d240` / `FUN_0036d250`.
+* The nulled `malloc10` writes `DAT_01fd4a20`, which nothing in the exe reads.
+* All three redirected paths (startup setup, the pool-11 re-create, the thread-object ctor) run on the
+  game's side, which is why the unlocked mspace ffgriever ships is kept.
+
+**What the port changes, and why:**
+* **Never fails the DLL.** ffgriever's DllMain returns FALSE on failure, which here would kill speech.
+* **Checks everything before writing anything.** Every site's bytes are checked, and so is the
+  pools-set-up mask `DAT_022d89b8`, which must be 0. A partial patch is rolled back. Installing after
+  the game had pools would free CRT memory into the mspace, so "too late" means "do nothing".
+* **A fallback block must END below 2 GB**, not merely start there.
+* **Steam profile only**, since every other RVA in the mod is Steam's.
+* **Our own stubs:** one page of `jmp [rip]` stubs, five of them.
+* **Always on, no row:** the player it is for crashes before the menu exists.
+
+**The user's question: does moving the game's memory break our RVAs? No.**
+* RVAs address the exe IMAGE, which does not move. The fix moves only the memory behind the heap
+  pools, and the mod reaches heap objects through pointers it reads at runtime.
+* Audited `src\`:
+  * no hardcoded heap address;
+  * the one pointer-range test (`shout_script.cpp`, user-mode bounds) accepts 0x10000000..0x22000000;
+  * `MemRead` guards by SEH, not by address.
+* MinHook allocates its trampolines in Stage B, after the reservation, and finds other space.
+
+**New log lines** (category `MEM`, flushed per line because they matter most on a run that crashes):
+`tkMalloc fix INSTALLED ... 0x10000000..0x21FFFFFF ... 28 call sites redirected`, then one
+`game memory pool N set up at ...` per `tkallocInit`, and a line for any allocation the pool could
+not serve below 2 GB. A NOT-installed line names the reason (wrong build, too late, no address space,
+rollback).
+
+**Licence:** BSD-2 requires the notice in documentation shipped with a binary, so `README.md` gains a
+`## Credits` section carrying it (it ships as `ReadMe.txt`). The Compatibility section now tells
+players the fix is included and must not be installed separately.
+
+### 2. The Right stick camera row
+
+A new `F8` row, **Off by default** (the shipped layout, unchanged), appended as the last ROOT row so
+every existing row keeps its position. The user's ruling on scope: *"only the camera turning functions
+should be freed. r3 can still toggle the beacon"*. The tester steers by the beacon, which re-aims as
+they turn. With the row On:
+* the right stick does nothing for the mod on the open field or in a fight with no menu, and is never
+  swallowed, so the camera turns. Where a command menu, target cursor or message box is up it keeps
+  its old job (Up describes / Libra);
+* D-pad on the open field = the pathfinder in the stick's layout (`-` `=` `[` `]`);
+* D-pad in a fight with no menu = the party, clockwise from Up (`4` `5` `6` `7`). This uses the same
+  `Context::Battle` gate as L1/R1: a command menu makes the context FieldBusy and the D-pad is the
+  game's cursor again. S174's "never in combat" bends only where there is no cursor to move;
+* R3 and L3 + R3 unchanged.
+
+**`pad_router.cpp` was 571 lines**, so Normal mode's stick/shoulder/D-pad bindings moved to
+`src\input\pad_normal.{h,cpp}` (`NormalBindings`), with `Act` and the `Dir` enum shared through the
+new header. The router keeps the state machine and is now 492 lines. The shipped bindings moved
+verbatim, comments included.
+
+### 3. The controller question
+
+Answered without a log. The first answer assumed which report it was and which build the testers
+ran. The second misread "the last public release before any controller work" as a build older than
+V1.0.1. The user corrected both: the testers are on V1.0.1. **Lesson `L-110`.** No tester log was opened. The only logs read were our own `x64\logs\`, to
+check whether S193's build had been run (it had not: the newest log predates it).
+
+### 4. Follow-up, same session: the mod menu's pad layout
+
+**Both features PLAY-CONFIRMED by the user** (*"all works as expected"*). The log agrees. It shows
+`[MEM] tkMalloc fix INSTALLED ... 0x10000000..0x21FFFFFF`, then pools 2-9 and 11 set up at 0x100003C0
+through 0x1FFA0C6F. Pool 13 was carved from inside pool 5, and pool 11 was re-created at runtime by
+`FUN_0037b3d0` (0x3C0000). All of it is below 0x22000000. The Xbox pad still took the XInput road.
+
+Then the user: *"the mod menu is a mess ... right stick up is supposed to describe, b is supposed to
+toggle settings. a does properly close menus, but in soundscape menus it's supposed to back out a
+level, not close the entire menu. only the back button should close the menu completely from any
+submenu."*
+
+What it was:
+* the right stick navigated the menu;
+* B described (`o`);
+* A and Start sent `F8`, closing every level;
+* Back sent Backspace.
+
+What it is now (`pad_router.cpp`, the `modMenuOpen` branch):
+* **D-pad** unchanged;
+* **right stick Up = `o`**, and the other three directions do nothing but are still claimed so the
+  camera cannot turn behind the modal menu;
+* **B = the menu's Right**: it flips a two-valued row, steps a volume up, and opens a submenu;
+* **A and Start = Backspace**: back out one level, close at the top;
+* **Back = `F8`**: closes the whole menu from any level.
+
+Then the user corrected Start: *"start should do nothing in the mod menu, nor should any other button
+be passed to the game while mod menu is open. when mod menu is open, the mod should claim all buttons
+until it is closed."* So Start has no binding. The open menu now withholds **every held button, both
+sticks and both triggers, on every poll**: `consume |= buttons`, `eatStick`, and a new `eatRest`. Until
+now only the right stick could be withheld. `gamepad_sdl.cpp` gains `g_eatRest`, derived from what the
+router zeroed exactly as `g_eatStick` is, and `GameButtons` applies it. Both encoders (XInput and
+DIJOYSTATE2) inherit it.
+
+**A leak this also closes:** the old menu set `eatStick` only on the poll a stick direction ROSE. So a
+held stick reached the game from the next poll on, and the camera turned behind the menu. That is the
+`L-99` edge-vs-level shape again. The claim is now a level for as long as the menu is open. The
+existing button latch keeps the Back that closed the menu away from the game until it is released.
+
+Then: *"nothing should reach the game when the mod menu is open. no keyboard keys, no controller inputs
+(including r3 and l3)"*. So:
+* `InputTracker::MaskModMenuKeys` now covers **all 256 scan codes**, each latched until release. It
+  used to cover only the menu's own eight keys, a list that had grown one report at a time. Because
+  it runs after Auto-walk, an open menu also withholds the injected W/A/S/D.
+* In the pad prologue, **L3 and R3 do nothing while the menu is open**. That includes the L3 + R3
+  chord and a click released after the menu closes (`PadEdges::menuThumbs`).
+* CLAUDE.md records the widened swallow as the mod's one key swallow.
+
+**Then the `Controller` row went, and the chord got a new job.** Told that switching the Controller row
+off would let the pad reach the game with the menu open, the user: *"that's not supposed to remove all
+mod functionality ... so actually we don't need that anymore as it does effectively the same thing as
+the new toggle. we don't need the l3/r3 master switch anymore either as now every game control can be
+accessed. make l3/r3 toggle between control schemes."*
+* `SettingId::Controller`, its row, its four phrases, `ModMenu::ControllerOn()` and the uncalled
+  `ToggleController()` are gone. A stored `controller=` is skipped by `Load()`.
+* `GamepadSDL::DriveGame()` is now just "a pad is open". The router's off switch is deleted.
+* **L3 + R3 flips `Right stick camera`**, spoken as "Right stick camera, On/Off". The singles are
+  unchanged, and all three are still inert while the mod menu is open.
+* CLAUDE.md charter bound 4 now reads "no pad means byte-identical". The GameArchitecture amendment on
+  the off guarantee is marked superseded. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
+
+### Status
+* **BUILT + DEPLOYED. The tkMalloc fix and the camera row are PLAY-CONFIRMED. UNPLAYED so far: the
+  mod-menu pad layout, the fully modal menu (every key and pad input withheld), the removal of the
+  Controller row, and L3 + R3 as the control-scheme switch.** Every build compiles with no warnings. The deploy carries S193's
+  uncommitted DirectInput feed too.
+* First run on this machine should show `[MEM] tkMalloc fix INSTALLED` and nine pool lines, all below
+  0x22000000. This machine does not crash, so it can only show the fix does no harm. The real test is
+  a tester who crashes.
+* `mod_menu.cpp` is 687 lines, over the cap, and was already over (679) before this row. Logged in
+  `PerformanceIssues.md`, not paid here.
+* Files: `src\core\tkmalloc_fix.{h,cpp}` (new), `include\dlmalloc\` (new), `src\input\pad_normal.{h,cpp}`
+  (new), `pad_router.{h,cpp}`, `proxy\dllmain.cpp`, `core\logger.cpp` (`MEM` flushes),
+  `ui\mod_menu.{h,cpp}`, `speech\phrasebook.{h,cpp}` (4 phrases, ours -- flag rewording),
+  `CMakeLists.txt`, `README.md`, `CLAUDE.md`, `Docs\{GameArchitecture,Controls,Lessons,PerformanceIssues}.md`.

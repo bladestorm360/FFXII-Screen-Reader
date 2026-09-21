@@ -14,7 +14,10 @@ or class structure. **Read it first** before re-discovering.
 - **Compiler:** MSVC (specific version TBD — confirm from PE timestamp / PDB hint)
 - **Architecture:** x64
 - **Path:** `D:\Games\steamlibrary\steamapps\common\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII_TZA.exe`
-- **Image base (default):** `0x140000000` (PE x64 default — confirm from Ghidra)
+- **Image base (preferred):** `0x120000` -- **NOT** the x64 default. ~~`0x140000000` (PE x64 default — confirm from Ghidra)~~
+  **STRUCK S194:** every RVA in the mod is `abs - 0x120000` (`phyre_types.h`, `title_reader.cpp`), our
+  Ghidra project uses that base, and ffgriever's tkmalloc tables assume it too (`defaultModuleBase`).
+  A low base is what a PS2 port with 32-bit pointers needs: the image itself must sit below 2 GB.
 - **Companion exe:** `FFXII_TZA_GameSetting.exe` (config tool; ignored by accessibility mod)
 
 ## Adjacent DLLs
@@ -23,11 +26,38 @@ or class structure. **Read it first** before re-discovering.
 |---|---|---|
 | `xinput1_3.dll` | Ships beside the game — **and the exe does NOT import it** | NO — overwriting breaks the game |
 | `XINPUT9_1_0.DLL` | **ONE OF TWO PAD PATHS — Xbox pads only.** `FFXII_TZA.exe` statically imports `XInputGetState` + `XInputSetState` from it (2 imports, `output/imports.txt`). ~~THE PAD PATH~~ **STRUCK 2026-09-18** — it is not *the* pad path, see below | **YES — the mod's IAT hook, `src\input\pad_hook.cpp`, now SUPPRESSION ONLY** |
-| `dinput8.dll` (post-mod) | FF12 Module Loader (ffgriever, BSD-2) | YES — our injection vector |
+| `dinput8.dll` (post-mod) | **THIS MOD's proxy** -- which since S194 also carries ffgriever's tkMalloc Fix (see below). ~~FF12 Module Loader (ffgriever, BSD-2)~~ was the Phase-0 plan, abandoned | YES — our injection vector |
 | `d3dcompiler_47.dll` | Microsoft redistributable | NO |
 | `SharpDX.dll`, `SharpDX.DirectInput.dll`, `SharpDX.DXGI.dll` | .NET; used by `FFXII_TZA_GameSetting.exe` | NO |
 | `Steamworks.NET.dll`, `CSteamworks.dll` | .NET Steam wrappers | NO |
 | `steam_api.dll`, `steam_api64.dll` | Steam API | NO |
+
+## Memory — the tkMalloc pools, and the startup-crash fix (S194)
+
+**The game's own allocator (tkMalloc) runs in up to 15 POOLS, and every pool must sit below 2 GB**,
+because PS2-era code stores pointers into them as 32-bit integers. The game takes each pool's block
+from plain CRT `malloc` and hopes it lands low; on machines where drivers or early threads have
+claimed the low address space it does not, and the game crashes at startup, loading a save or at a
+zone change. ffgriever's tkMalloc Fix (gitlab.com/ffgriever/ff12-tkmalloc, BSD-2) is built into our
+DLL as `src\core\tkmalloc_fix.cpp`. Addresses below are Ghidra (preferred-base) addresses; RVA =
+address - 0x120000.
+
+| what | where | fact |
+|---|---|---|
+| `tkallocInit(pool, base, size, pageSize)` | `FUN_00369d30` (RVA 0x249D30) | sets up pool `pool` (< 15) over `[base, base+size)`. `size` is an `int` in the signature. ORs `1 << pool` into the mask below; initialises the shared tables when the mask was 0. Identity: ffgriever's, consistent with every call site |
+| pools-set-up mask | `DAT_022d89b8` (RVA 0x21B89B8) | bit N = pool N exists. Tested by the pool functions around it; one clears a bit on teardown. **0 before the game's startup code runs** -- the fix refuses to install unless it is 0 |
+| `malloc` / `free` (CRT) | `FUN_0036d240` / `FUN_0036d250` | the call targets at the patched sites; the rel32s resolve there |
+| startup pool setup | `FUN_0022a0b0` | eleven `malloc`s (sizes 0x1DC0010, 0xD20100, 0x100010, 0x1C0100, 0x6C00400, 0x3000100, 0x2000100, 0x1200010, 0x400100, 0x80000, 0x100000; ~257 MB) then nine `tkallocInit`s (pools 2-9 and 11). **The 10th block (0x80000) goes to `DAT_01fd4a20`, which is written once and read NOWHERE in the exe** (decompile grep, S194) -- which is why ffgriever answers that `malloc` with null |
+| pool 11 re-created at runtime | `FUN_0037b3d0` (3 callers) | tears pool 11 down, `free`s its block (`DAT_01fd4a18`), `malloc`s 0x3C0000 or 0x400000 by a mode byte at `DAT_02add930/31`, re-inits it |
+| thread-object constructor | `FUN_008636e0` (4 callers) | two small allocations (8 and 0x28 bytes) via `FUN_00210ec0`; ffgriever routes both to the pool. Names the thread (`"UnknownThread"` default) |
+
+**The fix:** reserve + commit 0x12000000 at 0x10000000 (else the lowest free fit that ENDS below 2 GB),
+`create_mspace_with_base` on it (dlmalloc 2.8.6, `include\dlmalloc\`), retarget 28 call sites (12
+pool `malloc`s, 2 thread `malloc`s, 1 `free`, 13 `tkallocInit` incl. two tail-JMPs at 0x25AA21 /
+0x25AAC1) through a page of `jmp [rip]` stubs within rel32 reach. Every site's 5 bytes are checked
+first. **It moves only the memory behind the heap pools -- the image, and so every RVA, stays put.**
+Log: `[MEM] tkMalloc fix INSTALLED ...` then one `[MEM] game memory pool N set up at ...` per
+`tkallocInit`.
 
 ## Input — the four layers, and which one a mod must hook
 
@@ -213,7 +243,13 @@ battle job needs a targeting cursor up, which the router classifies `FieldBusy` 
 > **A survey line is only evidence when the game word's moving bit corresponds to the control named**,
 > and that comparison was not possible until S174 added `raw=`.
 
-### Amendment to the intercept's "off" guarantee (S174, restated S185)
+### Amendment to the intercept's "off" guarantee (S174, restated S185) -- **SUPERSEDED S194**
+
+> **S194: there is no player-facing off switch.** The `Controller` row and the L3 + R3 kill switch were
+> removed at the user's instruction; the chord now flips the `Right stick camera` row. The only "off"
+> left is "no pad open" (or a pad SDL cannot map), which keeps the byte-identical guarantee: nothing is
+> read or written. What follows is the history of the switch, kept for the falling-edge reasoning,
+> which still governs the singles and the chord.
 
 `CLAUDE.md`'s second input-write exception said `PadRouter::OnPoll` "returns on its first line" with
 the `Controller` row off. It now returns on the FIFTH: foreground check, edge bookkeeping, the prompt

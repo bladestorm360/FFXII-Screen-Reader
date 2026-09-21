@@ -99,13 +99,6 @@ const Setting kSettings[] = {
       { Id::BeaconOff,         Id::BeaconOn },
       { Id::AutoDetailDescOff, Id::AutoDetailDescOn },
       Id::AutoDetailDesc, "auto_detail", 0, nullptr },
-    // Default ON. Unlike auto-walk this does not DRIVE the game -- it only decides whether the mod
-    // may read the pad and withhold what it claims -- so shipping it on is not the surprise auto-walk
-    // would have been. It is here as the pad player's way back to a stock controller.
-    { Id::SettingController, Kind::Named, 2,
-      { Id::BeaconOff,         Id::BeaconOn },
-      { Id::ControllerDescOff, Id::ControllerDescOn },
-      Id::ControllerDesc, "controller", 1, nullptr },
     // S130, RESTORED S177 at the user's instruction after S147 removed it -- same two values, same
     // default, same settings key. Default STANDARD, which is every unmodified install in all twelve
     // languages -- a fan patch is the exception and its player is the one who knows they installed
@@ -191,6 +184,14 @@ const Setting kSettings[] = {
     SCAPE_KIND(Id::CatEnemy,         "scape_enemy")
     SCAPE_KIND(Id::CatItems,         "scape_items")
 #undef SCAPE_KIND
+
+    // S194. Default OFF -- the shipped layout, unchanged. See mod_menu.h for what On moves where.
+    // A ROOT row (the struct's `menu` defaults to Root), placed after the soundscape door only
+    // because the table is in enum order and the enum only grows at the end.
+    { Id::SettingRightStickCamera, Kind::Named, 2,
+      { Id::BeaconOff,               Id::BeaconOn },
+      { Id::RightStickCameraDescOff, Id::RightStickCameraDescOn },
+      Id::RightStickCameraDesc, "right_stick_camera", 0, nullptr },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),
@@ -414,7 +415,7 @@ bool OnMenuNavKey(int vk) {
             Speech::Output(NameAndValue(g_cursor), true);
             return true;
         // S185, user instruction: Escape is the habit every other settings screen trains, so it
-        // closes this one too. `F8`, and the pad's B / Start / Back, still close it -- this is one
+        // closes this one too. `F8`, and the pad's Back (S194), still close it -- this is one
         // more way out of a menu, never the only one.
         //
         // It is claimed ONLY while the menu is open. The `return false` at the top of this function
@@ -429,8 +430,8 @@ bool OnMenuNavKey(int vk) {
         // BOTH ARE NOW SWALLOWED while the menu is open, which is the part that changed at S192 and
         // the reason the comment above is no longer the whole story: Escape closed the menu AND
         // reached the game, so every exit also opened the game's pause screen. See
-        // InputTracker::MaskModMenuKeys -- the mask is scoped to these two keys and to this menu
-        // being open, and it is the mod's one chartered key swallow.
+        // InputTracker::MaskModMenuKeys -- the mask is scoped to this menu being open (every key since
+        // S194), and it is the mod's one chartered key swallow.
         // ESCAPE CLOSES THE WHOLE MENU, FROM ANY LEVEL (S192, user instruction: *"escape should just
         // close the mod menu regardless of sub menu level"*). It is the way OUT, not the way back --
         // one key that always means the same thing however deep the player has gone.
@@ -503,7 +504,7 @@ void ApplyTextGlyphs() {
 
 } // namespace
 
-// Defined below, beside ToggleController -- forward-declared here because Init registers it.
+// Defined below -- forward-declared here because Init registers it.
 static void OnPadToggleSetting(int settingId);
 
 bool Init() {
@@ -570,9 +571,6 @@ bool SochenPuzzlesOn() { return EffectiveValue(SettingId::SochenPuzzles) == stat
 // visibility predicate, so EffectiveValue here is just the stored value.
 bool SoundscapeOn() { return EffectiveValue(SettingId::Soundscape) == static_cast<int>(Beacon::On); }
 
-bool ControllerOn() {
-    return EffectiveValue(SettingId::Controller) == static_cast<int>(Beacon::On);
-}
 
 // S179/S182. Read from the input thread (the list filter), with the same relaxed-atomic discipline as the
 // rows above.
@@ -650,14 +648,6 @@ static void AdjustImpl(SettingId id, int delta, bool speakName) {
 }
 
 void Adjust(SettingId id, int delta) { AdjustImpl(id, delta, /*speakName=*/false); }
-
-// S174: the pad's own kill switch, bound to L3. It speaks the NAME as well as the value, unlike
-// every other adjust path. `F4` is a key the player chose to press knowing what it means, and inside
-// the menu they just heard the row's name a moment ago -- but L3 sits under a thumb that is resting
-// on the movement stick, so it is the one setting that gets flipped by accident. "Off" alone would
-// leave a blind player guessing WHICH thing just went off, at the exact moment their pad changed
-// behaviour. "Controller, Off" costs one word and answers it.
-void ToggleController() { AdjustImpl(SettingId::Controller, +1, /*speakName=*/true); }
 
 // S185. The pad's two thumb-clicks and their chord, arriving as an int from a file that knows no
 // enum of ours. ONE handler for all three rather than three callbacks: what a thumb-click does is a

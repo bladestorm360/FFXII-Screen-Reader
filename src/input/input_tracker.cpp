@@ -339,7 +339,7 @@ DWORD WINAPI InputThread(LPVOID) {
             Speech::Output(Phrase::Get(static_cast<Phrase::Id>(m.wParam)), true);
         } else if (m.message == WM_PADSET) {
             // A pad thumb-click asking for one of the mod's own settings to flip -- the reachability
-            // filter, the audio beacon, or the intercept's own kill switch. A callback like every
+            // filter, the audio beacon, or the control scheme (S194). A callback like every
             // other handler here: this file knows no reader and no menu, and it names the setting by
             // an int so it does not have to agree with ModMenu about the enum.
             InputTracker::SettingToggleCallback cb = g_settingToggleCb;
@@ -651,20 +651,20 @@ bool GameForeground() { return GameIsForeground(); }
 // Home and End are here for the same reason and not because anything was reported: they navigate
 // this menu exactly as the arrows do, so leaving them out would leave the identical defect standing
 // for the next report to find.
+//
+// S194: EVERY KEY. The user: *"nothing should reach the game when the mod menu is open. no keyboard
+// keys, no controller inputs"*. The list above grew one report at a time -- Escape, then the arrows,
+// then Home/End -- and each addition was a key the game had acted on behind the menu. The principle
+// was always "the menu is modal"; the list was an approximation of it. All 256 scan codes now, same
+// latch per key, same "not one byte written" when the menu is shut and nothing is still held.
 void MaskModMenuKeys(unsigned char* dik) {
     if (!dik) return;
-    static const int kScan[] = {
-        DIK_ESCAPE, DIK_BACK,                      // close the menu / back out one level
-        DIK_UP, DIK_DOWN, DIK_LEFT, DIK_RIGHT,     // move between rows, change a value, open a submenu
-        DIK_HOME, DIK_END,                         // jump to the first row / the last
-    };
-    constexpr int kN = static_cast<int>(sizeof(kScan) / sizeof(kScan[0]));
-    static bool  s_latched[kN] = {};
+    static bool s_latched[256] = {};
     const bool open = ModMenu::IsOpen();
-    for (int i = 0; i < kN; ++i) {
-        if ((dik[kScan[i]] & 0x80) == 0) { s_latched[i] = false; continue; }   // released: claim ends
-        if (open) s_latched[i] = true;                                          // claimed on this press
-        if (s_latched[i]) dik[kScan[i]] = 0;                                    // ...and stays claimed
+    for (int k = 0; k < 256; ++k) {
+        if ((dik[k] & 0x80) == 0) { s_latched[k] = false; continue; }   // released: claim ends
+        if (open) s_latched[k] = true;                                  // claimed on this press
+        if (s_latched[k]) dik[k] = 0;                                   // ...and stays claimed
     }
 }
 

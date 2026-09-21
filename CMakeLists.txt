@@ -25,6 +25,14 @@ target_include_directories(MinHook PRIVATE
     ${CMAKE_SOURCE_DIR}/include/MinHook
 )
 
+# ---- dlmalloc (Doug Lea, 2.8.6, MIT-0) ----
+# Vendored under include/dlmalloc/, copied from ffgriever's ff12-tkmalloc. Only the mspace API is
+# built (ONLY_MSPACES): the startup-crash fix (src/core/tkmalloc_fix.cpp) makes one mspace out of a
+# block below 2 GB and hands the game's memory pools to it. It never replaces this DLL's own malloc.
+# PUBLIC so the header sees the same setting as the library.
+add_library(dlmalloc STATIC include/dlmalloc/malloc.c)
+target_compile_definitions(dlmalloc PUBLIC ONLY_MSPACES=1)
+
 # ---- SDL3 (audio output for the navigation beacon; gamepad input for controller support) ----
 # Built from source and LINKED, the same way DQ7R does it. Audio only — every other
 # subsystem is switched off so we are not compiling a renderer we never call.
@@ -62,6 +70,7 @@ add_library(${PROJECT_NAME} SHARED
     src/proxy/dinput8_proxy.cpp
     src/core/logger.cpp
     src/core/stall_probe.cpp
+    src/core/tkmalloc_fix.cpp
     src/core/frame_probe.cpp
     src/core/hooks.cpp
     src/core/game_text.cpp
@@ -78,6 +87,7 @@ add_library(${PROJECT_NAME} SHARED
     src/input/gamepad_sdl.cpp
     src/input/pad_hook.cpp
     src/input/pad_router.cpp
+    src/input/pad_normal.cpp
     src/input/pad_survey.cpp
     src/ui/text_capture.cpp
     src/ui/menu_state.cpp
@@ -236,7 +246,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/src/proxy/dinput8.def
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE MinHook Psapi SDL3::SDL3)
+target_link_libraries(${PROJECT_NAME} PRIVATE MinHook dlmalloc Psapi SDL3::SDL3)
 
 # Tolk.dll + nvdaControllerClient64.dll are user-supplied; loaded at runtime via
 # LoadLibrary. The build never links them and build_and_deploy.bat never copies them.

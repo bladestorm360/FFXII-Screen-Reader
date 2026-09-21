@@ -37,6 +37,10 @@ char         g_typeName[64] = "none";
 // as long as the player holds it, so the mask is correct whenever the game reads, at any rate.
 std::atomic<uint16_t> g_consumed{0};
 std::atomic<bool>     g_eatStick{false};
+// S194: the left stick and both triggers, withheld together. Only the open mod menu ever sets it --
+// it claims everything until it closes -- and, like the right stick, it is re-derived every poll
+// from what the router zeroed, because the menu being open is itself a level.
+std::atomic<bool>     g_eatRest{false};
 
 // Buttons the router has claimed that are still physically held. Poll-thread only.
 uint16_t g_heldConsume = 0;
@@ -114,6 +118,7 @@ void ClosePad() {
     g_gameState = PadHook::Gamepad{};
     g_consumed.store(0, std::memory_order_relaxed);
     g_eatStick.store(false, std::memory_order_relaxed);
+    g_eatRest.store(false, std::memory_order_relaxed);
     g_heldConsume = 0;
     g_primeMask  = 0;
     g_primeStick = false;
@@ -224,7 +229,7 @@ bool Available() { return g_sdlUp && g_pad != nullptr; }
 const char* TypeName() { return g_typeName; }
 
 bool DriveGame() {
-    return g_sdlUp && g_pad != nullptr && ModMenu::ControllerOn();
+    return g_sdlUp && g_pad != nullptr;   // S194: the Controller row is gone -- a pad open is enough
 }
 
 void VendorProduct(uint16_t* vid, uint16_t* pid) {
@@ -243,6 +248,9 @@ bool GameButtons(PadHook::Gamepad* out) {
     PadHook::Gamepad g = g_gameState;
     g.buttons = static_cast<uint16_t>(g.buttons & ~g_consumed.load(std::memory_order_relaxed));
     if (g_eatStick.load(std::memory_order_relaxed)) { g.thumbRX = 0; g.thumbRY = 0; }
+    if (g_eatRest.load(std::memory_order_relaxed)) {
+        g.thumbLX = 0; g.thumbLY = 0; g.leftTrigger = 0; g.rightTrigger = 0;
+    }
 
     *out = g;
     return true;
@@ -336,6 +344,8 @@ void PollIfStale() {
     // ---- run the scheme -------------------------------------------------------------------------
     const uint16_t before  = st.pad.buttons;
     const short    beforeX = st.pad.thumbRX, beforeY = st.pad.thumbRY;
+    const bool     restLive = st.pad.thumbLX || st.pad.thumbLY || st.pad.leftTrigger ||
+                              st.pad.rightTrigger;
 
     PadRouter::OnPoll(0, &st);
 
@@ -352,6 +362,10 @@ void PollIfStale() {
     g_consumed.store(g_heldConsume, std::memory_order_relaxed);
     g_eatStick.store((beforeX != 0 || beforeY != 0) && st.pad.thumbRX == 0 && st.pad.thumbRY == 0,
                      std::memory_order_relaxed);
+    // The router only ever zeroes these four together (the mod menu's claim-all), so "something was
+    // live and now all four are zero" is exactly "the router took them".
+    g_eatRest.store(restLive && !st.pad.thumbLX && !st.pad.thumbLY && !st.pad.leftTrigger &&
+                    !st.pad.rightTrigger, std::memory_order_relaxed);
 }
 
 } // namespace GamepadSDL

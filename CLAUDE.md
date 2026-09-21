@@ -44,6 +44,10 @@ around it, and do not read the prompt as an invitation to try. Full rule and the
 - **Conflict with External File Loader**: both want the `dinput8.dll` slot. If a
   user has ELF installed, our install is incompatible without further work.
   Document in `README.md`. (If we revisit later: chain-load ELF from our DllMain.)
+- **ffgriever's tkMalloc Fix is BUILT IN (S194)** -- `src\core\tkmalloc_fix.cpp`, run first in
+  DllMain. Both of its own builds want the `dinput8.dll` slot too (the standalone IS one; the module
+  needs ELF), which is why it is compiled into ours. Players must NOT install it separately, and its
+  BSD-2 notice must stay in `README.md` (the release ships it as `ReadMe.txt`).
 - **Exception — THE LOGS.** Reading `FFXII-Screen-Reader-Latest.log` **and the whole archive
   beside it** is always permitted (needed for debugging):
   `…\FINAL FANTASY XII THE ZODIAC AGE\x64\FFXII-Screen-Reader-Latest.log`
@@ -470,14 +474,16 @@ and above all not the very thing the feature under repair is supposed to give th
      deflection on an unsigned range. An axis whose range cannot be read is **left alone** — a stick
      the game still sees beats a stick stuck hard over. (FFXII in fact sets −255…255 on every axis in
      `FUN_00796280`, but that is measured, not assumed, and it is not ours to depend on.)
-  4. **Off means byte-identical, not inert.** With the `Controller` row off, or no pad open,
-     `DriveGame()` is false: the XInput hook returns the original call **verbatim** and the
-     DirectInput encoder touches nothing, so the game's input path is exactly what it would be with
-     no mod installed. **A controller SDL has no mapping for lands here too** — `SDL_GetGamepads`
-     never lists it, so it is never opened and the game keeps reading its own hardware. That player
-     loses the pad's mod features, never the game. `L3` + `R3` still reaches the router — that is what lets the pad be handed
-     back and taken again without reaching for the keyboard. A fault latches the whole thing off for
-     the session and the controller reverts to the game's own reading.
+  4. **No pad means byte-identical, not inert.** With no pad open, `DriveGame()` is false: the
+     XInput hook returns the original call **verbatim** and the DirectInput encoder touches nothing,
+     so the game's input path is exactly what it would be with no mod installed. **A controller SDL
+     has no mapping for lands here too** — `SDL_GetGamepads` never lists it, so it is never opened and
+     the game keeps reading its own hardware. That player loses the pad's mod features, never the
+     game. A fault latches the whole thing off for the session and the controller reverts to the
+     game's own reading. **There is no player-facing off switch any more (S194):** the `Controller`
+     row and the L3 + R3 kill switch were removed at the user's instruction, because every game
+     control is now reachable through the scheme; L3 + R3 switches the control scheme instead (the
+     `Right stick camera` row).
   5. **Game-foreground gated**, like every other dispatch in the mod (`PadRouter::OnPoll` returns on
      `InputTracker::GameForeground()`).
   6. **A claim is a LEVEL, not an edge** (`L-99`). The router claims on a rising edge, but
@@ -489,11 +495,23 @@ and above all not the very thing the feature under repair is supposed to give th
      expires ~250 ms after the field tick stops, so consumption ends by itself on a map change,
      pause or stall. Widening consumption to a new control is a normal design change.
 
+  **THE MOD MENU IS MODAL (S192, widened S194 on the user's instruction: *"nothing should reach the
+  game when the mod menu is open. no keyboard keys, no controller inputs (including r3 and l3)"*).**
+  While `F8`'s menu is open, `InputTracker::MaskModMenuKeys` zeroes every key in the DirectInput
+  buffer the game reads, and the pad router withholds every button, both sticks and both triggers;
+  L3 and R3 do nothing. Each claim latches per key/button until release, so the press that closes the
+  menu never reaches the game either. With the menu shut and nothing held, neither writes a byte.
+  This is the mod's ONE key swallow; do not grow a second.
+
   **GAME-MEMORY WRITES, each user-authorized and each chartered in its own header:** sneak assist
   (`sneak_assist.h`, S107), the shout minigame's Instant success (`shout_fill.h`, 2026-08-05), and
   Sochen Cave Palace's Solve door puzzles (`sochen_doors.h`, 2026-09-15, S180: ORs two puzzle bits
-  into one save-block byte, context-gated row, default Off). Each writes only what its charter names;
-  a new target is a new permission.
+  into one save-block byte, context-gated row, default Off), and **the startup-crash fix**
+  (`tkmalloc_fix.h`, 2026-09-21, S194: ffgriever's FF12 tkMalloc Fix, BSD-2, ported in -- retargets
+  28 call instructions in the exe so the game's memory pools come from one block below 2 GB; checks
+  every site's bytes and that no pool exists yet before writing any; never fails the DLL; always on,
+  no row, because its player crashes before the menu exists). Each writes only what its charter
+  names; a new target is a new permission.
 
   Everything else in this rule stands unchanged: no lock-on presses, no speed changes, and any
   OTHER feature that would *drive* the game still requires **explicit user permission** and a

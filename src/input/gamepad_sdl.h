@@ -83,10 +83,10 @@
 // A PHYSICAL CONTROL THE PLAYER IS TOUCHING, as SDL read it this poll. The mod cannot originate an
 // input; it can only decline to forward one.
 //
-// OFF MEANS OFF, AND THAT IS UNCHANGED. With the `Controller` row off, or no pad open, this file
-// drives nothing: the real `XInputGetState` result is returned untouched and the DirectInput
-// joystick is left alone, so the game's input is byte-identical to an unmodded run. `L3` + `R3` still
-// reaches the router, which is what lets the pad be handed back and taken again without a keyboard.
+// NO PAD MEANS NO WRITES. With no pad open this file drives nothing: the real `XInputGetState`
+// result is returned untouched and the DirectInput joystick is left alone, so the game's input is
+// byte-identical to an unmodded run. (Until S194 the `Controller` row and the L3 + R3 chord could
+// force the same state with a pad attached; both were removed at the user's instruction.)
 //
 // A CONTROLLER SDL HAS NO MAPPING FOR FALLS BACK THE SAME WAY, and that is the safety net under the
 // whole design: `SDL_GetGamepads` lists only devices SDL can normalise, so an exotic stick is never
@@ -98,7 +98,7 @@ namespace GamepadSDL {
 // hot-plug is handled in Poll. False (logged) when the subsystem will not start, in which case the
 // mod behaves exactly as it does with no pad: nothing crashes, nothing speaks.
 //
-// Call AFTER ModMenu::Init (the router asks it whether the Controller setting is on) and it may be
+// Call AFTER ModMenu::Init (the router reads the Right stick camera row) and it may be
 // called before or after AudioEngine::Init -- both use subsystem-scoped init, so neither teardown
 // takes the other's subsystem down.
 bool Init();
@@ -128,10 +128,9 @@ void PollIfStale();
 
 // ---- driving the game ---------------------------------------------------------------------------
 
-// True when the mod should be the source of the game's pad state: a pad is open AND the `Controller`
-// row is on. False hands the hardware back completely -- callers must then leave the game's own
-// input path untouched rather than write a neutral state over it, because "off" has always meant
-// byte-identical, not merely inert.
+// True when the mod should be the source of the game's pad state: a pad is open. False hands the
+// hardware back completely -- callers must then leave the game's own input path untouched rather
+// than write a neutral state over it, because "no pad" means byte-identical, not merely inert.
 bool DriveGame();
 
 // THE ONE POST-ROUTER PAD STATE: what SDL read this poll, minus what `PadRouter` claimed. Both of

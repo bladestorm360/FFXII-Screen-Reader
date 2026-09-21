@@ -519,9 +519,10 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(void* self, DWORD cbData, 
                 AutoWalk::OnDevicePoll(reinterpret_cast<unsigned char*>(lpvData));
                 // S192, THE ONE SANCTIONED KEY SWALLOW (user-authorized; see
                 // InputTracker::MaskModMenuKeys and CLAUDE.md). LAST, and after the tracker was fed:
-                // the mod must see the real Escape/Backspace press -- that press is what closes the
-                // menu -- while the game must not, or closing the mod menu also opens the pause
-                // screen. With the mod menu shut this writes nothing.
+                // the mod must see every real key -- they drive the menu -- while the game sees none
+                // of them until the menu closes and each key is released (S194). Also why it runs
+                // after Auto-walk: an open menu withholds the injected W/A/S/D too. With the mod menu
+                // shut and nothing still held, this writes nothing.
                 InputTracker::MaskModMenuKeys(reinterpret_cast<unsigned char*>(lpvData));
             } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }

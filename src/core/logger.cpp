@@ -215,7 +215,10 @@ void Write(const char* category, const char* message) {
                      // The pad survey IS the deliverable of the controller measurement build, and a
                      // session ends by the player quitting the game -- the exact hard exit that
                      // stranded the PARTY lines above in an unflushed buffer.
-                     strcmp(category, "PAD") == 0)) {
+                     strcmp(category, "PAD") == 0 ||
+                     // The startup-crash fix's pool lines: they matter most on exactly the run
+                     // that crashes, so they cannot wait in a buffer (tkmalloc_fix.h).
+                     strcmp(category, "MEM") == 0)) {
         fflush(g_logFile);
     }
 

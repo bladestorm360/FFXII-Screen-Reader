@@ -66,11 +66,6 @@ enum class SettingId : int {
     TargetVolume,
     AutoWalk,             // S100: `\` also WALKS the route. Default Off; see auto_walk.h
     AutoDetail,           // S147: volunteer the detail on highlight instead of on a key. Default Off
-    // The gamepad intercept's master switch. Default ON -- the feature exists to be used -- but it
-    // is a ROW rather than a compile-time constant because a pad hook that misbehaved would leave a
-    // pad player with no way to play and no way to report it. Off returns PadRouter::OnPoll on its
-    // first line, so the input path becomes byte-identical to the mod with no pad support at all.
-    Controller,
     // S130's row, RESTORED S177 at the user's instruction: which font atlas the decoder maps
     // bytes through. Two values, Standard and Polish translation, exactly as it always was --
     // only the spoken NAME changed, to "Diacritics override". It sits LAST of the always-visible
@@ -137,12 +132,26 @@ enum class SettingId : int {
     ScapeObject,      ScapeObjectVol,
     ScapeEnemy,       ScapeEnemyVol,
     ScapeItems,       ScapeItemsVol,
+    // S194, a tester's request through the user: give the right stick back to the game's camera.
+    // Default OFF, which is today's layout exactly. On, the right stick does nothing for the mod on a
+    // live field or in a fight, its pathfinder job moves to the D-pad out of combat, and the party
+    // readout moves to the D-pad in a fight with no menu open. Only the stick's MOVEMENT is freed --
+    // R3 still toggles the beacon (the user's ruling); L3 + R3 flips this row. Appended
+    // LAST so every existing row keeps its position; it sits at the bottom of the ROOT menu, after
+    // the soundscape door. Read by pad_normal.cpp through SettingOn.
+    RightStickCamera,
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was
 // play-confirmed the tester made it automatic on the two maps `path_danger.cpp` names -- so there is
 // nothing left for a player to choose. A settings file still carrying `sneak_assist=1` is harmless:
 // `Load()` ignores keys it does not know, by design.
+//
+// REMOVED Session 194: `Controller`, the pad intercept's master switch, with its L3 + R3 kill switch.
+// The user: *"we don't need that anymore as it does effectively the same thing as the new toggle. we
+// don't need the l3/r3 master switch anymore either as now every game control can be accessed."*
+// Every game control is reachable through the pad scheme, so a switch that handed the whole pad back
+// had no job left. A settings file still carrying `controller=` is harmless -- `Load()` skips it.
 //
 // ~~REMOVED Session 147: `TextGlyphs`.~~ **RESTORED Session 177, unchanged** -- see the row in the
 // enum above. S147 removed it on the grounds that detection had replaced it. Detection turned out
@@ -167,7 +176,6 @@ bool AudioBeaconOn();      // the ROUTE beacon
 bool TargetBeaconOn();     // the in-combat target ping
 bool AutoWalkOn();         // S100: whether `\` may engage auto-walk. Read from input + game threads
 bool AutoDetailOn();       // S147: whether detail is VOLUNTEERED on highlight. Never gates a key
-bool ControllerOn();       // whether the pad intercept may read or consume anything. Input thread
 bool UnreachableFilterOn(); // S179/S182: the list filter only -- never routing, never a search
 bool PuzzleGuideOn();      // S132: whether the shout meter speaks and B/N answer
 bool PuzzleSkipOn();       // S132: whether one shout completes the shout minigame
@@ -206,12 +214,6 @@ void CycleSetting(SettingId id);
 // CLAMPS at its ends, because wrapping 100% round to the quietest step on one keypress is a nasty
 // surprise and the repeated spoken value is how the player hears they are at the end.
 void Adjust(SettingId id, int delta);
-
-// S174: `L3` on the pad. Flips the Controller row and speaks "Controller, <value>" — name included,
-// which no other adjust path does. It is the escape hatch, so it must work in BOTH directions: the
-// pad router runs it from a prologue ABOVE its own `ControllerOn()` gate, or turning the intercept
-// off would take the only pad button that could turn it back on. Input thread only, via WM_PADCTRL.
-void ToggleController();
 
 // (`SetSilently` was removed in Session 115 along with the sneak-assist toggle, its only caller. It
 // set a value without speaking it, for automatic changes the player did not ask for. If that need

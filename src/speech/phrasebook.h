@@ -149,11 +149,7 @@ enum class Id {
     // user-approved 2026-08-10. What it switches is what gets VOLUNTEERED, never what is reachable:
     // the `4`-`9` shop columns and `o` keep working identically in both modes.
     SettingAutoDetail, AutoDetailDesc, AutoDetailDescOff, AutoDetailDescOn,
-    // Gamepad intercept. The Off/On VALUES reuse BeaconOff/BeaconOn -- they are generic. This row
-    // is the KILL SWITCH for the pad hook: a mod that could break the controller outright is a mod a
-    // pad player cannot report a bug from, so there is always a keyboard route back to a stock pad.
-    // Wording from the approved plan; flag it to the user before rewording.
-    SettingController, ControllerDesc, ControllerDescOff, ControllerDescOn,
+    // (S194: the four `Controller` row phrases were removed with the row itself -- see mod_menu.h.)
     // S173: mod mode -- the pad's modifier. Both words were APPROVED with the S162 plan and
     // deliberately withheld until the mode existed, so this is the sanctioned moment to add them.
     // "Mod" is spoken on arming and "Cancelled" whenever the mode ends without running a command
@@ -265,6 +261,12 @@ enum class Id {
     Volume,
     SoundscapeKindDesc, SoundscapeKindDescOff, SoundscapeKindDescOn,
     SoundscapeKindVolumeDesc,
+
+    // S194: the right-stick camera row. A tester asked, through the user, for a toggle that frees the
+    // right stick so the camera can turn; the row name and the sentences are ours. The Off/On VALUES
+    // reuse BeaconOff/BeaconOn. Appended at the END so no earlier positional row shifts. Flag any
+    // reword to the user.
+    SettingRightStickCamera, RightStickCameraDesc, RightStickCameraDescOff, RightStickCameraDescOn,
 
     Count
 };

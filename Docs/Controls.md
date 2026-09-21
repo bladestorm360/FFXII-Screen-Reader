@@ -350,7 +350,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > No volume goes to zero on purpose — each of the three sounding features has its own Off, so a
 > switched-on beacon or soundscape is never silent for a reason you cannot hear.
 >
-> **This table is not complete.** `Controller`, `Diacritics override`, `Unreachable filter` and the
+> **This table is not complete.** `Diacritics override`, `Unreachable filter`, `Right stick camera` and the
 > context-gated puzzle rows (`Puzzle guide`, `Instant success`, `Solve door puzzles`) are in the menu
 > and not listed here; they are documented in their own sections and in `mod_menu.h`. Noted rather
 > than backfilled so the gap is visible instead of implied.
@@ -547,8 +547,9 @@ is what it is for.
 **The mod claims four controls the game uses** — `L1`, `Back`, `L3` and `R3` — plus the D-pad and the
 right stick on the field. Each was a deliberate trade, and `L1` was the user's call at S185: game
 speed is reachable from the options menu and from the keyboard's `1`/`2`/`3`, pad buttons are scarce,
-and a speed toggle is not what one is worth spending on. **`L3` + `R3` together**, or the `Controller`
-row in the `F8` menu, turns the whole thing off and hands the pad back untouched.
+and a speed toggle is not what one is worth spending on. **`L3` + `R3` together** switches control
+scheme (the `Right stick camera` row). There is no off switch any more: the `Controller` row and the
+chord's old job as a kill switch were removed at S194 (see below).
 
 **Every controller type works** — PlayStation (DualSense, DualShock 4), Xbox, Switch Pro and
 generic USB pads alike. The mod reads the pad through **SDL3**, whose controller database turns
@@ -568,7 +569,7 @@ an input on; it can never press one for you — see the second input-write excep
 
 One consequence worth knowing: because the game is fed from SDL3 rather than reading your pad itself,
 **a PlayStation controller now works as a game controller too**, without Steam Input or DS4Windows in
-the way. Switching the `Controller` row off hands the hardware straight back to the game.
+the way. Unplug the pad (or use one SDL cannot map) and the game reads its own hardware untouched.
 
 On the field the mod takes the right stick completely, on every controller type — the camera does
 not move while it is driving the mod. That is deliberate and it matters: the camera decides which
@@ -594,7 +595,7 @@ behind the modifier instead.
 | Back / Select | Mod mode — says **"Mod"** | — |
 | **L3** (left stick click) | Reachability filter off / on — says **"Unreachable filter, On"** | `F8` → that row |
 | **R3** (right stick click) | Audio beacon off / on — says **"Audio beacon, On"** | `F11` |
-| **L3 + R3 together** | Switch the pad intercept off or on — says **"Controller, Off"** | `F8` → Controller |
+| **L3 + R3 together** | Switch control scheme — says **"Right stick camera, On"** | `F8` → Right stick camera |
 
 > **Right stick Up is the one control that changes meaning in Normal mode, and it is the only one
 > left.** On a plain idle field the description key has nothing to answer and the pathfinder has
@@ -626,18 +627,36 @@ behind the modifier instead.
 > this is the right pair of buttons for the job: the user's own rule is that stick clicks are too
 > awkward for anything time-critical, and nothing is waiting on a settings toggle.
 
-> **L3 + R3 hands the whole pad back, and hands it back again.** It works whether the intercept is on
-> or off — a switch you could only throw once would leave you at the keyboard to undo it. While the
-> intercept is off the mod reads those two buttons and nothing else, consumes nothing, and changes
-> nothing the game sees: `L3` and `R3` pass through to the area map and the camera recentre. Only the
-> chord answers while off, because only the chord is the way back.
+> **L3 + R3 SWITCHES THE CONTROL SCHEME (S194).** It was the intercept's kill switch -- handing the
+> whole pad back, with the `Controller` row -- until the user removed both: *"we don't need that
+> anymore as it does effectively the same thing as the new toggle. we don't need the l3/r3 master
+> switch anymore either as now every game control can be accessed. make l3/r3 toggle between control
+> schemes."* It now flips `Right stick camera` and speaks the row's name and value.
 
 > **THIS IS THE ONE EXCEPTION TO "NO SETTING GETS A PAD BUTTON", WIDENED FROM ONE BINDING TO THREE AT
 > S185, ON THE USER'S INSTRUCTION.** The rule it bends is real — a switch is two presses away through
 > `Start`, and the menu says what it changed and what the new value means. The reachability filter and
-> the audio beacon are the two the user flips constantly mid-play, and the intercept's own kill switch
-> cannot live behind a menu driven by the pad it switches off. `F4`, `F5`, `F7` and the volumes stay
-> menu-only.
+> the audio beacon are the two the user flips constantly mid-play, and the control scheme is the third.
+> `F4`, `F5`, `F7` and the volumes stay menu-only.
+
+### Right stick camera — the `F8` row (S194)
+
+A tester asked for the right stick back so they could turn the camera. The row is **Off by default**,
+which is the layout above exactly. **On** frees only the stick's camera job:
+
+| Control | Open field | In a fight, no menu up | Menu, target cursor or message box |
+|---|---|---|---|
+| Right stick | **the game's** — turns the camera; the mod does nothing with it | **the game's** | unchanged (Up describes / Libra) |
+| D-pad Up / Down | previous / next category (`-` `=`) | party 1 / party 3 (`4` `6`) | the game's cursor, as before |
+| D-pad Left / Right | previous / next object (`[` `]`) | guest / party 2 (`7` `5`) | the game's cursor, as before |
+| R3 | unchanged: beacon toggle | unchanged | unchanged |
+| L3 + R3 | switches this row back Off | same | same |
+
+> **"Only the camera turning functions should be freed. r3 can still toggle the beacon"** -- the
+> user's ruling. The tester steers by the audio beacon, which re-aims as the camera turns, so a moving
+> camera costs them nothing. The fight column uses the same gate L1 and R1 already use: the moment a
+> command menu opens the context is FieldBusy and the D-pad is the game's cursor again, so this bends
+> S174's "never in combat" only where there is no cursor for it to move. Code: `src\input\pad_normal.cpp`.
 
 ### Mod mode — press Back, then one button
 
@@ -680,11 +699,31 @@ the game itself cancels with, so it is the one your hand already reaches for.
 
 ### The mod menu, from the pad
 
-While the mod's settings menu is open it owns the pad: D-pad or right stick moves between settings
-and changes the focused one, **B** reads its description, **A**, **Start** or **Back** closes it. From
-the keyboard, `F8` and **`Escape`** both close it (S185). Everything the pad has no direct binding for
-is reachable this way — combat verbosity, autodetail, the availability filter, the volumes, and the
-`Controller` switch itself.
+While the mod's settings menu is open it owns the pad (S194, the user's layout):
+
+| Button | Does | Keyboard |
+|---|---|---|
+| D-pad Up / Down | move between settings | arrows |
+| D-pad Left / Right | change the focused setting | arrows |
+| Right stick Up | read the focused setting's description | `o` |
+| **B** | toggle the setting (steps a volume up; opens a submenu) | Right arrow |
+| **A** | back out one level; close at the top | Backspace |
+| **Back** | close the whole menu, from any level | `Escape` / `F8` |
+| Start, L3, R3, everything else | nothing | — |
+
+**While the menu is open, nothing reaches the game** — not a key, not a button, not a stick or a
+trigger, bound or not, until it closes. A key or button still held as the menu closes (the Back or
+Escape that closed it) stays away from the game until it is released. L3 and R3 do not toggle their
+settings in the menu, and L3 + R3 does not fire there either — Back closes the menu first. Everything
+the pad has no direct binding for is reachable this way — combat verbosity, autodetail, the
+availability filter, the volumes.
+
+> **S194 replaced the S185/S189/S192 layout** (stick navigated, B described, A and Start closed
+> everything, Back backed out). The user: *"right stick up is supposed to describe, b is supposed to
+> toggle settings ... in soundscape menus [A is] supposed to back out a level, not close the entire
+> menu. only the back button should close the menu completely from any submenu."* And then: *"start
+> should do nothing in the mod menu, nor should any other button be passed to the game while mod menu
+> is open."*
 
 ### What has no pad binding
 

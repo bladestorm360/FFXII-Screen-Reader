@@ -3,6 +3,7 @@
 #include "core/hooks.h"
 #include "core/frame_probe.h"
 #include "core/game_text.h"
+#include "core/tkmalloc_fix.h"
 #include "battle/battle_state.h"
 #include "speech/speech.h"
 #include "input/input_tracker.h"
@@ -61,6 +62,8 @@ static void DeferredInitImpl() {
     std::string gameDir = ResolveSelfDirectory();
     Log::Init(gameDir);
     Log::Write("INIT", "Stage B starting (background thread)");
+    // What the startup-crash fix did back in DllMain, and every game memory pool set up since.
+    TkmallocFix::LogReport();
 
     bool tolkOk = Speech::Init();
     if (tolkOk) {
@@ -81,8 +84,8 @@ static void DeferredInitImpl() {
     // so it must keep working on a session where MinHook fails and the player needs to hear why.
     ModMenu::Init();
 
-    // THE PAD, in two halves. AFTER ModMenu::Init, because the router asks it whether the Controller
-    // setting is on before it reads or writes anything. Outside the Hooks block below for the same
+    // THE PAD, in two halves. AFTER ModMenu::Init, because the router reads the Right stick camera
+    // row on every poll. Outside the Hooks block below for the same
     // reason ModMenu and AudioEngine are: neither half installs a MinHook hook, so both must keep
     // working on a session where MinHook fails.
     //
@@ -203,6 +206,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
         case DLL_PROCESS_ATTACH: {
             g_selfModule = hinst;
             DisableThreadLibraryCalls(hinst);
+
+            // Stage 0: the startup-crash fix (S194). FIRST, before anything in this DLL reserves
+            // address space, because the whole fix is winning the race for memory below 2 GB before
+            // the game's own startup code runs -- and this is the last moment before it does. Cannot
+            // fail the load; see tkmalloc_fix.h. Its verdict is logged in Stage B.
+            TkmallocFix::Install();
 
             // Stage A: load System32\dinput8.dll so the game's DirectInput
             // exports resolve. Synchronous — this is fast (one LoadLibrary +

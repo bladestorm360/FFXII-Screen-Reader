@@ -93,10 +93,9 @@ void SetModMenuDescribeCallback(DescribeInterceptCallback cb);
 // dispatches describe/reread/nav on rising edges (game-foreground only).
 void FeedDInputKeyboard(const unsigned char* dikState);
 
-// Clear the mod menu's close keys (Escape, Backspace) from the buffer the GAME is about to read,
-// while that menu is open -- so closing the mod menu does not also open the game's pause screen.
-// S192, user instruction; the mod's one chartered key swallow (CLAUDE.md's input rule otherwise
-// forbids swallowing a key). Call on the game thread from the DirectInput keyboard poll, strictly
+// Clear EVERY key from the buffer the GAME is about to read while the mod menu is open (S194; S192
+// began it with Escape and Backspace so closing the menu did not also pause the game). User
+// instruction; the mod's one chartered key swallow (CLAUDE.md's input rule otherwise forbids it). Call on the game thread from the DirectInput keyboard poll, strictly
 // AFTER FeedDInputKeyboard, so the mod still sees the real press that closes the menu. The claim is
 // LEVEL-shaped and latches until the key is released (`L-99`). A no-op -- not one byte written --
 // when the menu is shut and neither key is still held.
@@ -132,8 +131,7 @@ void DispatchSpeakPhrase(int phraseId);
 
 // S174, widened S185: flip one of the mod's own settings from the pad poll. Only posts, like
 // `DispatchSpeakPhrase`. Not a `DispatchModKey` VK -- these rows have no keyboard shortcut to name
-// them by, and the Controller row in particular is run ABOVE the pad router's own `ControllerOn()`
-// gate, which would otherwise eat the button that undoes it.
+// them by.
 void DispatchToggleSetting(int settingId);
 
 // Wall-clock milliseconds (GetTickCount64) of the last key-down event.

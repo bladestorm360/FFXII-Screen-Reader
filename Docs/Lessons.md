@@ -32,7 +32,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | your task looks like… | grep tag | lessons |
 |---|---|---|
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90, L-95 |
-| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97 |
+| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97, L-110 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62, L-101 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94, L-107 |
@@ -506,6 +506,19 @@ passively on a rescan or map load, with no positioning required.
 nav list could not see signed off with *"stand next to it and press `'` — ground truth, no
 guessing"*. Reply: *"I can not just magically walk up to the cactus and interact with it to get your
 log."* Detail: `feedback_never_ask_user_to_read_screen.md`; rule text in `CLAUDE.md`.
+
+### L-110 A RELAYED REPORT IS NOT THE ONE IN THE SESSION LOG -- AND WHEN IT DEPENDS ON WHAT YOU DO NOT KNOW, SAY "I DON'T KNOW"
+**Never match a report the user passes on ("the original tester", "another user with a DS4") to one a
+session entry already quotes, and never guess which build a tester runs.** Ask, or take it from the
+user. If the answer turns on those unknowns, the answer is "I don't know", plus the one fact that
+would settle it -- not a tree of if/then cases built on a guess.
+**Why:** S194. Asked whether S193 fixed a PS5-pad report without breaking a DS4 player, the session
+treated the report as the one S193's entry quotes and assumed, untold, that both testers ran V1.0.1.
+Then, told they were on "the last public release before any controller work" (V1.0.1, before S193),
+it read that as an OLDER build and reasoned from the wrong code. A build described rather than named
+gets its version confirmed before anything is reasoned from it. The user: *"you don't know which
+testers reported what and I don't know where you got your assumptions ... if you don't know, then just
+say you don't know."* Detail: `feedback_say_i_dont_know_on_relayed_reports.md`.
 
 ---
 

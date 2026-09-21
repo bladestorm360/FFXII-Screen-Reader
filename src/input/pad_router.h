@@ -33,6 +33,7 @@
 //                       behaves identically, because it cannot swallow a key at all. Combat is on
 //                       this side of the line: a fight is always one command menu away, and party
 //                       slots are not worth costing the player that cursor.
+//   ** S194: the `Right stick camera` row re-maps the stick and the D-pad -- see pad_normal.h. **
 //   L1            THE INTERACT READOUT (`;`) -- what am I about to talk to, open or hit, and in a
 //                       fight the enemy's name and HP. S185 took it from the game's Speed mode at
 //                       the user's instruction: game speed is reachable from the options menu and
@@ -44,7 +45,7 @@
 //                       the enemy. `p` moved to mod + Y.
 //   Back          arm mod mode. Speaks "Mod". Costs the game's map toggle, knowingly.
 //   L3            reachability filter on/off.   R3   audio beacon on/off.
-//   L3 + R3       switch the intercept off or on. Speaks "Controller, <value>".
+//   L3 + R3       switch control scheme -- the Right stick camera row (S194; was the kill switch).
 //
 //   BOTH SHOULDERS PASS THROUGH IN A MENU AND UNDER A TARGETING CURSOR, which is what keeps the
 //   battle target list intact: there the context is FieldBusy, so the game keeps L1 and R1 as its
@@ -77,9 +78,9 @@
 //   thing everywhere, and a button that changes job depending on a latch is a button the player has
 //   to remember the state of. The keyboard keeps every one of those keys -- they cost nothing there.
 //
-// MOD MENU OPEN -- it is modal, so here the pad IS taken: D-pad and right stick move and change the
-//   focused setting, A reads its description, B, Start or Back closes. So does Escape, from the
-//   keyboard (S185).
+// MOD MENU OPEN -- modal, and it claims EVERYTHING until it closes (S194, the user's): D-pad moves and
+//   changes the focused setting, right stick Up describes, B toggles (opens a submenu), A backs out
+//   one level and closes at the top, Back closes the whole menu, Start does nothing.
 //
 // WHAT IS DELIBERATELY NOT BOUND: A, B, X and Y in Normal mode. They are the game's core verbs --
 // talk, cancel, map, menu -- and a mod that eats one of them is a mod the player cannot play
@@ -92,8 +93,8 @@
 // THE THUMB-CLICKS ARE THE ONE EXCEPTION TO "NO SETTING GETS A PAD BUTTON", and S185 widened it from
 // one button to three bindings on the user's instruction. The rule it bends is real -- a switch is
 // two presses away through the menu, which says what it changed -- but the reachability filter and
-// the beacon are the two the user flips constantly mid-play, and the intercept's own kill switch
-// cannot live behind a menu driven by the pad it switches off. They fire on RELEASE, not on press,
+// the beacon are the two the user flips constantly mid-play, and the chord switches the control
+// scheme (S194 -- it was the intercept's kill switch, removed with the Controller row). They fire on RELEASE, not on press,
 // which is what lets one pair of buttons carry two singles and a chord with no timer.
 
 // ---- THREADING, and why the gate is not evaluated here ------------------------------------------
@@ -118,8 +119,8 @@ enum class Context : uint8_t {
     OffField,      // title, loading, between maps
     Field,         // field live, idle, no menu/dialogue/combat -- the stick, the D-pad and R1
     FieldBusy,     // field live but a battle-command menu or a message box owns input
-    Battle,        // party is engaged -- R1 routes to the target, but the D-pad and the camera stay
-                   // the game's
+    Battle,        // party engaged, no menu up -- L1/R1 are the mod's; D-pad + camera are the game's
+                   // unless the right-stick camera row is on (pad_normal.h)
 };
 
 // Log-facing names for a context and for a right-stick direction (0..3 = Up/Down/Left/Right).

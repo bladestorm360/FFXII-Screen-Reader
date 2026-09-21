@@ -93,8 +93,8 @@ void** FindImportSlot(const char* dllPrefix, const char* wantFn) {
 // Steam Input performs, done by the mod, for free.
 //
 // Contract, in order:
-//   1. mod not driving (no pad, or `Controller` off) -> return the original call VERBATIM. "Off"
-//      means byte-identical, so nothing is written over the game's own input path.
+//   1. mod not driving (no pad open) -> return the original call VERBATIM. No pad means
+//      byte-identical, so nothing is written over the game's own input path.
 //   2. only index 0 carries the pad; 1-3 report not connected, because the mod opens one controller.
 //   3. refresh SDL for this frame, then fill `state` from it.
 // A fault anywhere latches the whole thing off for the session and the pad reverts to the game's.

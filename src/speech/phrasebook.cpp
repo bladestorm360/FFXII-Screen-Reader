@@ -131,11 +131,6 @@ const Row kTable[] = {
     EN(L"Whether the extra detail about the highlighted thing is read out on its own, or only when you ask for it."),
     EN(L"Off reads the detail only when you ask: the equipment columns on 4 to 9, and Libra on the describe key."),
     EN(L"On also reads it as you move: the equipment comparison in a shop, and the Libra readout on a targeted enemy. Both still answer the keys as well."),
-    // Gamepad intercept (wording from the approved plan; flag to the user before reword).
-    EN(L"Controller"),
-    EN(L"Whether the mod reads your controller. Off hands the whole pad back to the game."),
-    EN(L"Off passes every button and stick straight to the game, exactly as if the mod had no controller support."),
-    EN(L"On lets the mod use the controller. Anything the mod does not use still reaches the game."),
     // S173: mod mode. One word each on purpose -- these interrupt whatever is being read, and they
     // are heard many times a session.
     EN(L"Mod"),
@@ -221,6 +216,12 @@ const Row kTable[] = {
     EN(L"Off means this kind stays silent, even with the soundscape switched on."),
     EN(L"On means this kind sounds, whenever the soundscape itself is on."),
     EN(L"How loud this one kind plays, within the soundscape's own volume."),
+
+    // S194: the right-stick camera row -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"Right stick camera"),
+    EN(L"Whether the right stick turns the camera or works the pathfinder."),
+    EN(L"Off gives the right stick to the pathfinder, and the D-pad reads the party out of combat."),
+    EN(L"On gives the right stick back to the game, so it turns the camera. Out of combat the D-pad works the pathfinder instead: up and down change the category, left and right change the object. In a fight with no menu open, the D-pad reads the party."),
 };
 
 #undef EN

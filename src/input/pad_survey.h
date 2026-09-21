@@ -17,7 +17,7 @@
 // button does not reach us", when the player had simply not pressed it.
 namespace PadSurvey {
 
-// INPUT-POLL THREAD, once per poll, from `PadRouter::OnPoll` after the Controller gate.
+// INPUT-POLL THREAD, once per poll, from `PadRouter::OnPoll` after the thumb-click prologue.
 //
 // Does two things in this order: emits the PREVIOUS poll's edges -- by which time the game has had a
 // poll to react to them -- and then remembers this poll's for the next call. `stickRising` is four

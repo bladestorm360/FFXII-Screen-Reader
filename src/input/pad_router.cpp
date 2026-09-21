@@ -1,4 +1,5 @@
 #include "input/pad_router.h"
+#include "input/pad_normal.h"
 #include "input/input_tracker.h"
 #include "input/pad_survey.h"
 #include "core/logger.h"
@@ -54,7 +55,12 @@ constexpr int kStickArm       = 16000;
 constexpr int kStickRelease   = 10000;
 constexpr int kStickDominance = 8000;
 
-enum Dir { DIR_UP = 0, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_COUNT };
+// The four directions are declared in pad_normal.h, which shares them with the bindings.
+using PadRouter::DIR_UP;
+using PadRouter::DIR_DOWN;
+using PadRouter::DIR_LEFT;
+using PadRouter::DIR_RIGHT;
+using PadRouter::DIR_COUNT;
 
 const char* const kDirName[DIR_COUNT] = {
     "R-stick-Up", "R-stick-Down", "R-stick-Left", "R-stick-Right"
@@ -72,6 +78,9 @@ struct PadEdges {
     // The thumb bits as of the previous poll. Kept apart from `prevButtons` because the chord is
     // resolved on the FALLING edge and everything else in this file on the rising one.
     uint16_t prevThumbs     = 0;
+    // S194: clicks down at ANY moment while the mod menu was open. They belong to the menu, which
+    // binds neither, so they do nothing -- whenever they are released, and as half of a chord too.
+    uint16_t menuThumbs     = 0;
 };
 // XInput reports up to 4 pads. Per-index edges, so a second connected pad cannot alias the first
 // one's history.
@@ -89,20 +98,6 @@ PadRouter::Context FreshContext() {
 
 // The survey log lives in `pad_survey.cpp` -- it answers what the GAME does with a control, which
 // is a different question from what the mod makes it mean, and this file was over 500 lines.
-
-// ---- dispatch ----------------------------------------------------------------------------------
-//
-// EVERY pad action goes through here, and here does exactly one thing: hand a VIRTUAL-KEY CODE to
-// `InputTracker::DispatchModKey`. The pad reimplements no feature and knows no handler -- it names
-// the same key the keyboard names, and the tracker routes both into the same callback. That is
-// CLAUDE.md's centralization rule, and it is also why a future mod key is reachable from the pad by
-// adding one line to a table here rather than by touching any reader.
-void Act(const char* padInput, int vk, const char* action, PadRouter::Context ctx) {
-    InputTracker::DispatchModKey(vk);
-    char m[128];
-    snprintf(m, sizeof(m), "%s -> %s ctx=%s", padInput, action, PadRouter::ContextName(ctx));
-    Log::Write("PAD", m);
-}
 
 void Say(Phrase::Id id) { InputTracker::DispatchSpeakPhrase(static_cast<int>(id)); }
 
@@ -152,6 +147,20 @@ int ModModeKeyFor(uint16_t bit, bool fighting, const char** nameOut) {
 } // namespace
 
 namespace PadRouter {
+
+// ---- dispatch ----------------------------------------------------------------------------------
+//
+// EVERY pad action goes through here, and here does exactly one thing: hand a VIRTUAL-KEY CODE to
+// `InputTracker::DispatchModKey`. The pad reimplements no feature and knows no handler -- it names
+// the same key the keyboard names, and the tracker routes both into the same callback. That is
+// CLAUDE.md's centralization rule, and it is also why a future mod key is reachable from the pad by
+// adding one line to a table (here, or in pad_normal.cpp) rather than by touching any reader.
+void Act(const char* padInput, int vk, const char* action, Context ctx) {
+    InputTracker::DispatchModKey(vk);
+    char m[128];
+    snprintf(m, sizeof(m), "%s -> %s ctx=%s", padInput, action, ContextName(ctx));
+    Log::Write("PAD", m);
+}
 
 // Log-facing names, shared by this file's dispatch lines and by `pad_survey.cpp`. One spelling of
 // each, so a context or a direction never reads two ways across two files.
@@ -233,10 +242,8 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
         e.prevStick[d] = stick[d];
     }
 
-    // Button bits cleared from what the game is about to read. Declared HERE, above the off switch,
-    // because the thumb-clicks are resolved up there and they are consumed like anything else. It is
-    // only ever applied below the off switch, so a poll with the intercept off returns having
-    // accumulated nothing and written nothing.
+    // Button bits cleared from what the game is about to read. Declared HERE because the thumb-clicks
+    // are resolved first, and they are consumed like anything else.
     uint16_t consume = 0;
 
     // ---- a prompt owns the keyboard, so it owns the pad too (S185) ------------------------------
@@ -256,8 +263,9 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
 
     // ---- THE TWO THUMB-CLICKS, AND THE CHORD THEY MAKE (S174, rebuilt S185) ----------------------
     //
-    // L3 = the reachability filter. R3 = the audio beacon. BOTH AT ONCE = the intercept's own kill
-    // switch, which is what L3 alone used to be.
+    // L3 = the reachability filter. R3 = the audio beacon. BOTH AT ONCE = the CONTROL SCHEME: the
+    // Right stick camera row, pathfinder stick <-> camera stick (S194, the user's instruction). The
+    // chord was the intercept's kill switch until then; see the note at the end of this comment.
     //
     // WHY THE SINGLES FIRE ON RELEASE. A chord and its two singles cannot all be edge-triggered on
     // the press: whichever button went down first would already have spoken by the time the second
@@ -269,38 +277,36 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
     // time-critical, so a settings toggle -- which nothing is waiting on -- is exactly what belongs
     // here, and the release-edge latency that would be unacceptable on a route key costs nothing.
     //
-    // WHY IT IS ALL ABOVE THE OFF SWITCH. A kill switch that lives below its own gate can only be
-    // thrown once: with the intercept off, `OnPoll` used to return on its first line, so no pad
-    // button could turn it back on and the player had to reach the keyboard. The escape hatch has to
-    // work in BOTH directions, so the whole block runs here.
-    //
-    // WHAT "OFF" STILL GUARANTEES. Off means the game's pad state is untouched, and that is intact:
-    // the singles are skipped, nothing is consumed, and L3 and R3 pass straight through to the game's
-    // area map and camera recentre. Only the chord answers while off, because only the chord is the
-    // way back. That is the honest price of the two buttons, and it is the same bargain S174 struck
-    // for L3 alone. Docs/GameArchitecture.md records the amendment.
+    // THERE IS NO OFF SWITCH ANY MORE (S194). The `Controller` row and the L3 + R3 kill switch were
+    // removed at the user's instruction: *"we don't need that anymore as it does effectively the same
+    // thing as the new toggle. we don't need the l3/r3 master switch anymore either as now every game
+    // control can be accessed."* With a pad open the mod always reads it and always builds the game's
+    // state; with none open (or one SDL cannot map) the game reads its own hardware, untouched.
     {
         const bool l3 = (buttons & PadHook::kLeftThumb)  != 0;
         const bool r3 = (buttons & PadHook::kRightThumb) != 0;
         if (l3 && r3) e.thumbsTogether = true;
+        if (ModMenu::IsOpen())
+            e.menuThumbs |= static_cast<uint16_t>(buttons & (PadHook::kLeftThumb | PadHook::kRightThumb));
 
-        const uint16_t thumbFalling = static_cast<uint16_t>(
+        const uint16_t released = static_cast<uint16_t>(
             (e.prevThumbs & ~buttons) & (PadHook::kLeftThumb | PadHook::kRightThumb));
+        if (released & e.menuThumbs) e.chordFired = true;     // a chord the menu owned never fires
+        const uint16_t thumbFalling = static_cast<uint16_t>(released & ~e.menuThumbs);
+        e.menuThumbs &= buttons;
 
         if (thumbFalling) {
             if (e.thumbsTogether) {
                 if (!e.chordFired) {
                     e.chordFired = true;
-                    const bool wasOn = ModMenu::ControllerOn();
-                    InputTracker::DispatchToggleSetting(static_cast<int>(ModMenu::SettingId::Controller));
-                    // A pad the mod is handing back must not leave a latch armed behind it. The
-                    // spoken "Controller, Off" is the feedback, so this needs no "Cancelled".
-                    g_modArmedMs.store(0, std::memory_order_relaxed);
-                    Log::Write("PAD", wasOn ? "L3+R3 -> intercept OFF (the pad is the game's again)"
-                                            : "L3+R3 -> intercept ON");
+                    // Speaks "Right stick camera, <value>" -- the row's own name -- so the player
+                    // hears which scheme they are now in.
+                    InputTracker::DispatchToggleSetting(
+                        static_cast<int>(ModMenu::SettingId::RightStickCamera));
+                    Log::Write("PAD", "L3+R3 -> control scheme (right stick camera)");
                 }
-            } else if (ModMenu::ControllerOn()) {
-                // A single click, and the intercept is on. One button, one row, spoken by name.
+            } else {
+                // A single click. One button, one row, spoken by name.
                 if (thumbFalling & PadHook::kLeftThumb) {
                     InputTracker::DispatchToggleSetting(
                         static_cast<int>(ModMenu::SettingId::UnreachableFilter));
@@ -317,22 +323,14 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
         e.prevThumbs = static_cast<uint16_t>(buttons & (PadHook::kLeftThumb | PadHook::kRightThumb));
 
         // Consumed for as long as they are HELD, not on an edge: an XInput button is a level, so
-        // clearing the bit every poll is what keeps the game from seeing it at all. Only while the
-        // intercept is on -- see the guarantee above.
+        // clearing the bit every poll is what keeps the game from seeing it at all.
         //
         // IT GOES THROUGH `consume`, NOT THROUGH A WRITE OF ITS OWN. The apply at the bottom of this
         // function rebuilds the button word from the ORIGINAL `buttons`, so a second writer up here
         // would be silently undone on every poll that also consumed something else -- which is most
         // of them. One accumulator, one write; see the apply.
-        if (ModMenu::ControllerOn()) {
-            consume |= static_cast<uint16_t>(buttons & (PadHook::kLeftThumb | PadHook::kRightThumb));
-        }
+        consume |= static_cast<uint16_t>(buttons & (PadHook::kLeftThumb | PadHook::kRightThumb));
     }
-
-    // THE OFF SWITCH. With the Controller setting off this returns having read the pad and written
-    // nothing, so what the game reads is byte-identical to the mod as it shipped with no pad hook at
-    // all. Same bound Auto-walk carries, and the only line of it that moved is this one.
-    if (!ModMenu::ControllerOn()) return;
 
     // ---- survey ---------------------------------------------------------------------------------
     // It measures the controls the mod does NOT take, and it runs on everything -- including what
@@ -357,6 +355,7 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
     // itself and `ctx` falls to Unknown -- so "we are in a game menu" arrives for free, without
     // MenuState::IsAnyMenuOpen(), which is unusable (1 write, 0 clears).
     bool eatStick = false;        // right stick zeroed for the game
+    bool eatRest  = false;        // left stick and both triggers zeroed too -- the mod menu only (S194)
 
     const uint64_t now         = GetTickCount64();
     const bool     modMenuOpen = ModMenu::IsOpen();
@@ -372,44 +371,35 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
 
     if (modMenuOpen) {
         // ---- the mod's own menu ----------------------------------------------------------------
-        // It is a modal overlay drawn over whatever the player was doing, so here the pad IS taken:
-        // the game must not act on the same press that moved the menu. `o` reads the focused
-        // setting's description; B and Start both close, because the two habits are equally common
-        // and neither costs the menu anything.
+        // THE USER'S LAYOUT (S194; the table is in Docs\Controls.md): D-pad moves and changes, R-stick
+        // Up describes (`o`), B toggles / opens a submenu (the menu's Right -- B is the game's
+        // confirm), A backs out one level and closes at the top (Backspace -- the game's cancel), Back
+        // closes every level (F8). Start, L3, R3 and everything else do NOTHING.
+        //
+        // AND NOTHING REACHES THE GAME WHILE IT IS OPEN -- *"nothing should reach the game when the
+        // mod menu is open. no keyboard keys, no controller inputs (including r3 and l3)"*. Every
+        // held button, both sticks and both triggers are withheld on every poll -- a level, not an
+        // edge (`L-99`) -- and the latch in gamepad_sdl.cpp keeps anything still down when the menu
+        // closes (the Back that closed it) from the game until it is released. The keyboard twin is
+        // InputTracker::MaskModMenuKeys; the thumb-clicks are silenced in the prologue above.
         g_state.store(static_cast<uint8_t>(State::ModMenu), std::memory_order_relaxed);
         struct MenuBind { uint16_t bit; int vk; const char* name; };
         static const MenuBind kMenu[] = {
-            { PadHook::kDpadUp,    VK_UP,    "mod menu up"      },
-            { PadHook::kDpadDown,  VK_DOWN,  "mod menu down"    },
-            { PadHook::kDpadLeft,  VK_LEFT,  "mod menu left"    },
-            { PadHook::kDpadRight, VK_RIGHT, "mod menu right"   },
-            // B INSPECTS, A CLOSES -- the game's own confirm/cancel pair, not the Xbox letters
-            // (S189, the user's call). The mod menu is a menu; the button the player confirms with
-            // everywhere else in FFXII is the button that should read a row out, and the one they
-            // back out with everywhere else is the one that should shut it. Getting this backwards
-            // costs a blind player the muscle memory the rest of the game just taught them.
-            { PadHook::kB,         'O',      "read description" },
-            { PadHook::kA,         VK_F8,    "close mod menu"   },
-            { PadHook::kStart,     VK_F8,    "close mod menu"   },
-            // Back is the pad's BACKSPACE (S192). Everywhere else it is the mod-mode latch, so a
-            // player will press it here expecting the mod to answer; letting it fall through would
-            // open the game's map behind the overlay instead. It used to send F8 and close the menu
-            // outright -- which left a pad with no way back out of the soundscape submenu except by
-            // closing the whole thing. VK_BACK backs out one level and closes at the top, so it does
-            // what it always did from the root and the new level is reachable from a pad at all.
-            { PadHook::kBack,      VK_BACK,  "back out / close mod menu" },
+            { PadHook::kDpadUp,    VK_UP,    "mod menu up"                },
+            { PadHook::kDpadDown,  VK_DOWN,  "mod menu down"              },
+            { PadHook::kDpadLeft,  VK_LEFT,  "mod menu left"              },
+            { PadHook::kDpadRight, VK_RIGHT, "mod menu right"             },
+            { PadHook::kB,         VK_RIGHT, "toggle / open"              },
+            { PadHook::kA,         VK_BACK,  "back out a level"           },
+            { PadHook::kBack,      VK_F8,    "close mod menu (all levels)" },
         };
         for (const MenuBind& m : kMenu) {
-            if (rising & m.bit) {
-                Act(PadHook::ButtonName(m.bit), m.vk, m.name, ctx);
-                consume |= m.bit;
-            }
+            if (rising & m.bit) Act(PadHook::ButtonName(m.bit), m.vk, m.name, ctx);
         }
-        // The right stick drives it too, so a thumb already resting there never has to move.
-        static const int kMenuStickVk[DIR_COUNT] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };
-        for (int d = 0; d < DIR_COUNT; ++d) {
-            if (stickRising[d]) { Act(kDirName[d], kMenuStickVk[d], "mod menu", ctx); eatStick = true; }
-        }
+        if (stickRising[DIR_UP]) Act(kDirName[DIR_UP], 'O', "read description", ctx);
+        consume |= buttons;     // every held button, bound or not
+        eatStick = true;
+        eatRest  = true;
     } else if (modArmed) {
         // ---- mod mode: the next button, then out ------------------------------------------------
         // The stick is deliberately ignored here rather than treated as a cancel -- a thumb resting
@@ -453,94 +443,9 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
     } else {
         // ---- Normal ------------------------------------------------------------------------------
         g_state.store(static_cast<uint8_t>(State::Normal), std::memory_order_relaxed);
-        const bool onField = (ctx == Context::Field);
-        const bool live    = onField || (ctx == Context::Battle);   // the player is driving a body
-
-        // THE RIGHT STICK IS THE PATHFINDER, with ONE context-gated direction. Up is `o` wherever a
-        // description could be read -- a menu, a message box, a battle with a target under the
-        // cursor -- and falls back to the category cycle on a plain idle field, which is the only
-        // surface where `o` has nothing to say and the pathfinder has everything. The user's call,
-        // and the reason this direction is the only one that moves.
-        const int   upVk   = onField ? VK_OEM_MINUS : 'O';
-        const char* upName = onField ? "previous category (-)" : "describe / Libra (o)";
-        const int   kStickVk[DIR_COUNT] = { upVk, VK_OEM_PLUS, VK_OEM_4, VK_OEM_6 };
-        const char* kStickName[DIR_COUNT] = {
-            upName, "next category (=)", "previous object ([)", "next object (])"
-        };
-        for (int d = 0; d < DIR_COUNT; ++d) {
-            if (stickRising[d]) Act(kDirName[d], kStickVk[d], kStickName[d], ctx);
-        }
-        // Consumption is unchanged from the shipped build: the field camera only. Off the field the
-        // stick is read and passed through, so nothing the game does with it is taken away.
-        eatStick = onField;
-
-        // ---- L1 AND R1: ASK, AND GO (Session 185) -----------------------------------------------
-        //
-        // L1 = `;`  -- what am I about to interact with. Out of combat that is the object the game's
-        //              own interaction scorer has picked, which is not always the one the mod's list
-        //              has focused; in a fight it is the enemy, with its HP.
-        // R1 = `\`  -- route to the current selection, and start the beacon.
-        //
-        // R1 NO LONGER CHANGES MEANING IN A FIGHT, and that was the user's call with a reason behind
-        // it: the thing a player most needs a route for mid-combat is a way OUT. Sending R1 to `p`
-        // in battle meant the one context where escaping matters was the one context where the route
-        // key routed to the enemy instead. `p` did not lose its pad home -- it moved to mod + Y,
-        // where asking for the target's bearing is a deliberate question rather than the default.
-        //
-        // L1 IS TAKEN FROM THE GAME, KNOWINGLY. It was Speed mode (x2 / x4). The user's ruling: game
-        // speed is reachable from the options menu and from the keyboard's `1`, pad buttons are
-        // scarce, and a speed toggle is not what one should be spent on. That leaves the mod holding
-        // L1, R1, Back, both thumb-clicks, and -- on the field only -- the D-pad and the right stick.
-        //
-        // BOTH ARE GATED ON `live`, WHICH IS WHAT KEEPS THE BATTLE TARGET LIST WORKING. With a
-        // targeting cursor up the context is FieldBusy, not Battle, so neither shoulder is touched
-        // and the game keeps L1 and R1 as the target list's group step -- the Foes / Party / Reserve
-        // / Allies switch S184 built the spoken titles for. Taking them there would have silenced a
-        // feature to feed another.
-        if (live && (rising & PadHook::kLeftShoulder)) {
-            Act("L1", VK_OEM_1, "target readout (;)", ctx);
-            consume |= PadHook::kLeftShoulder;
-        }
-        if (live && (rising & PadHook::kRightShoulder)) {
-            Act("R1", VK_OEM_5, "route + beacon (\\)", ctx);
-            consume |= PadHook::kRightShoulder;
-        }
-
-        if (onField) {
-            // THE D-PAD IS THE PARTY, and ONLY on a field the player is driving -- never in combat.
-            // Clockwise from Up: 1, 2, 3, then the guest, one rule rather than four positions.
-            //
-            // S174 narrowed this from `live` to `onField` at the user's instruction: the D-pad is
-            // how a pad moves a cursor, and a fight is one command menu away at all times. Party
-            // slots are worth having; they are not worth costing the player a battle menu. In every
-            // other context it falls through to the arrow passthrough below.
-            struct PartyBind { uint16_t bit; int vk; const char* name; };
-            static const PartyBind kParty[] = {
-                { PadHook::kDpadUp,    '4', "party 1 (4)" },
-                { PadHook::kDpadRight, '5', "party 2 (5)" },
-                { PadHook::kDpadDown,  '6', "party 3 (6)" },
-                { PadHook::kDpadLeft,  '7', "guest (7)"   },
-            };
-            for (const PartyBind& m : kParty) {
-                if (rising & m.bit) {
-                    Act(PadHook::ButtonName(m.bit), m.vk, m.name, ctx);
-                    consume |= m.bit;
-                }
-            }
-        } else {
-            // In a menu the D-pad is the GAME'S, and it is also an arrow key. Dispatched and NOT
-            // consumed: the Status attributes buffer and the Clan Primer page walk hear it exactly
-            // as they hear the keyboard's arrows, and the game's own cursor is untouched. Where no
-            // buffer is open the mod does nothing at all with it.
-            struct ArrowBind { uint16_t bit; int vk; };
-            static const ArrowBind kArrow[] = {
-                { PadHook::kDpadUp,    VK_UP    }, { PadHook::kDpadDown,  VK_DOWN  },
-                { PadHook::kDpadLeft,  VK_LEFT  }, { PadHook::kDpadRight, VK_RIGHT },
-            };
-            for (const ArrowBind& m : kArrow) {
-                if (rising & m.bit) Act(PadHook::ButtonName(m.bit), m.vk, "buffer arrow", ctx);
-            }
-        }
+        // The right stick, both shoulders and the D-pad -- what each means in this context, including
+        // the right-stick camera row (S194). pad_normal.cpp; Back stays here because it arms a mode.
+        consume |= NormalBindings(ctx, rising, stickRising, &eatStick);
 
         // BACK/SELECT ARMS MOD MODE, in every context including a menu -- the mod menu has to be
         // reachable from wherever the player is, which is the whole point of putting F8 behind it.
@@ -566,6 +471,10 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
     // only writes to an XINPUT_STATE anywhere in the mod, which is the bound that matters.
     if (consume)  state->pad.buttons = static_cast<uint16_t>(buttons & ~consume);
     if (eatStick) { state->pad.thumbRX = 0; state->pad.thumbRY = 0; }
+    if (eatRest)  {
+        state->pad.thumbLX = 0; state->pad.thumbLY = 0;
+        state->pad.leftTrigger = 0; state->pad.rightTrigger = 0;
+    }
 }
 
 } // namespace PadRouter

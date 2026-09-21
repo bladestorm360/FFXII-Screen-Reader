@@ -46,6 +46,8 @@ There is no configuration file to install — the mod writes its own on first la
 
 The mod ships as dinput8.dll. The FF12 External File Loader and FF12 Module Loader use that same filename, so they cannot be installed at the same time as this mod — installing this replaces them. This means for now other mods are likely not supported.
 
+The mod includes ffgriever's FF12 tkMalloc Fix, which stops the game crashing or showing a white screen at startup, when loading a save or between areas on newer graphics drivers. Do not install that fix separately: it also uses the dinput8.dll filename.
+
 ### If the game will not start at all
 
 Check that SDL3.dll is in the x64 folder next to dinput8.dll. The mod links against it directly, so a missing SDL3.dll stops the game from launching instead of just disabling the beacon.
@@ -225,19 +227,20 @@ Worth knowing before you detour in Destiny's March: opening any of the eight doo
 
 #### Controller
 
-The mod reads a plugged-in controller as well as the keyboard. It is on by default, and it reads **any** pad Windows recognises — PlayStation, Xbox, Switch Pro and generic USB controllers alike, with no extra software in between. (In V1.0 it read Xbox pads only, so a PlayStation controller did nothing unless something like Steam Input or DS4Windows was translating it. If that was you, it works now.) The Controller row in the mod menu below switches it off, and so does clicking **both sticks in at once** — L3 and R3 together — which says "Controller" and the new setting. Off passes every button and stick straight to the game. That pair works whether the mod is reading the pad or not, so it always hands the pad back and always takes it again; you never have to reach the keyboard to undo it.
+The mod reads a plugged-in controller as well as the keyboard. It reads **any** pad Windows recognises — PlayStation, Xbox, Switch Pro and generic USB controllers alike, with no extra software in between. (In V1.0 it read Xbox pads only, so a PlayStation controller did nothing unless something like Steam Input or DS4Windows was translating it. If that was you, it works now.) Clicking **both sticks in at once** — L3 and R3 together — switches between the two control schemes, the right stick for the pathfinder or the right stick for the camera, and says which is now on.
 
 L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. A, B, X and Y are named the way the game names them, so on a PlayStation pad A is Cross, B is Circle, X is Square and Y is Triangle — the button in that position, whatever your controller prints on it. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken in normal play.
 
 The mod takes four things the game also uses, and each was a deliberate trade: **L1** (game speed — still on the keyboard's 1, 2 and 3, and in the options menu), **Back** (the map toggle), **L3** (the area map) and **R3** (recentre the camera). Everything else it holds, the game leaves free.
 
-* **Right stick:** Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera.
+* **Right stick:** Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera, unless Right stick camera is on (below).
 * **D-pad, on the field only:** party members one, two, three and your guest, clockwise from Up. Everywhere else, battle included, it stays the game's cursor.
+* **Right stick camera**, in the mod menu: with it On the right stick turns the camera again and the mod leaves it alone. On the field the D-pad takes its place — Up and Down change the category, Left and Right change the object — and in a fight with no menu open the D-pad reads party members one, two, three and your guest, clockwise from Up. With a menu or target cursor up it is the game's cursor as before. R3 still switches the audio beacon.
 * **L1:** what you are about to interact with — the person or object the game itself would act on if you pressed Confirm. In a fight it reads the enemy your party is on, with its HP.
 * **R1:** turn-by-turn directions to the selected object, and the audio beacon. **This works in battle too**, so you can pick an exit and be led out of a fight you do not want.
 * **Back:** mod mode. It says "Mod", the next button is a mod key, and it expires after five seconds.
 * **L3:** the reachability filter on and off. **R3:** the audio beacon on and off. Both say which setting they changed and what it is now.
-* **L3 and R3 together:** the controller off and on switch above.
+* **L3 and R3 together:** switch control scheme — the same as the Right stick camera setting.
 
 L1 and R1 both go to the game in menus and while a targeting cursor is up — that is where the game uses them to switch target group, and the mod reads the group out for you instead of taking the button.
 
@@ -252,7 +255,7 @@ In mod mode, press Back and then:
 reach the map button it costs you.
 * Anything else ends mod mode and says "Cancelled".
 
-While the mod menu is open, the D-pad and the right stick move between settings and change them, B reads a description, and A, Start or Back closes it — and so does Escape on the keyboard. Backspace comes back out of a settings menu one level at a time, and closes the mod menu when you are already at the top.
+While the mod menu is open, the D-pad moves between settings and changes them, right stick Up reads a description, and B toggles the setting you are on or opens a menu. A backs out of a menu one level at a time and closes the mod menu at the top, like Backspace. Back closes the whole mod menu from anywhere in it, like Escape. Nothing reaches the game while the mod menu is open — no key and no controller input, and the stick clicks do nothing there.
 
 Everything else the mod can do is on the keyboard, and the mod menu reaches every setting. A controller has few buttons and the ones above are the ones worth spending.
 
@@ -269,13 +272,13 @@ The settings it holds:
 * Target beacon volume — 20% up to 100%, in fifths. 100% is the default.
 * Auto detail — Off or On. Off reads the extra detail only when you ask for it, on O and on 4 to 9. On reads it as you move instead: the description of whatever you have highlighted — a magick, a technick, an item, a piece of equipment, a config row — along with the equipment comparison as you go down a shop list and the Libra readout as you move the target cursor between enemies. It always comes after the short line, never instead of it, and every key keeps working either way. Off is the default.
 * Auto-walk — Off or On. With it On, the route key does not just speak the route and start the beacon — the mod walks your character along it. It stops the instant you touch a movement key, the instant a fight starts, when you arrive, when a menu opens, and after fifteen seconds of no progress, and it never starts walking again on its own — press the route key when you want it back. Off is the default. One honest limitation for controller players: auto-walk watches the keyboard alone for that, and the left stick is passed straight to the game and never read, so pushing the stick does not cancel it — tap any movement key on the keyboard, or switch it off in this menu.
-* Controller — On or Off. Whether the mod reads your controller, set out in full under Controller above. On is the default, and while it is on the right stick no longer turns the field camera. Off passes every button and stick straight to the game, exactly as if the mod had no controller support. Clicking both sticks in at once changes this setting without opening the menu.
 * Diacritics override — Standard or Polish translation. Which font the game is running, which is what decides how accented letters are read. On Standard the mod works it out from the game itself, and that covers the unmodified game in any language it shipped in. Set it to Polish translation if you are playing the PL fan patch and accented letters come out as the wrong letter — that setting is remembered and always wins. Standard is the default.
 * Unreachable filter — Off or On. On hides anything the route key has answered No path to, until a door opens, a waterfall moves or you leave the area. Enemies are always listed. Off is the default, and lists everything. On a controller, clicking the left stick in changes it without opening the menu.
 * Puzzle guide — On or Off. The spoken infamy meter and the B and N keys during Bhujerba's shouting, described above. This setting and the next appear only while the shouting is actually running, so open the menu there to reach them. On is the default.
 * Instant success — Off or On. Fills the infamy meter on your first shout, and the scene continues from there. Off is the default.
 * Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.
 * Soundscape settings — a menu of its own. Press Right to open it, Backspace to come back.
+* Right stick camera — Off or On. On gives the right stick back to the game so it turns the camera, and moves its job to the D-pad, as set out under Controller above. Off is the default. Clicking both sticks in at once changes it without opening the menu.
 
 The soundscape is a sound for each thing near you, repeating from the direction it is in, so you can hear the shape of the room around you rather than asking for it a category at a time. Nearer things are louder, and a thing behind you sounds duller and lower than one in front. Where several of a kind are near you they are spread in pitch and each repeats at a slightly different rate, so two people standing together do not blur into one sound. It follows things that move. It speaks nothing and it is not a route — the audio beacon is still what leads you somewhere.
 
@@ -287,7 +290,7 @@ Its menu holds:
 
 F4 switches Combat verbosity, F7 switches Auto detail and F11 switches the Audio beacon, all without opening the menu, so you can change any of them in the middle of a fight. Your choices are remembered between sessions.
 
-While the menu is open the keys it uses are its own — the arrows, Home, End, Escape and Backspace do not reach the game, so moving between settings no longer moves your character or the camera. Every other key still reaches the game as usual. Worth knowing as well: Verbose speaks the enemy's announcement when the game makes it.
+While the menu is open no key reaches the game, so nothing you press there moves your character or the camera. Worth knowing as well: Verbose speaks the enemy's announcement when the game makes it.
 
 #### Reading
 
@@ -295,3 +298,19 @@ While the menu is open the keys it uses are its own — the arrows, Home, End, E
 * T: repeat the last line of dialogue — a conversation page, a prompt, or an obtained-item message. Silent when none of those is on screen.
 * U: current License Points, on the License Board.
 
+
+## Credits
+
+The startup-crash fix is ffgriever's FF12 tkMalloc Fix (https://gitlab.com/ffgriever/ff12-tkmalloc), built into this mod under its licence:
+
+BSD 2-Clause License
+
+Copyright (c) 2026, ffgriever
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
