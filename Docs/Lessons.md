@@ -32,7 +32,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | your task looks like… | grep tag | lessons |
 |---|---|---|
 | about to state a conclusion, an RVA, an offset, a cause | `TAG:concluding` | L-01…L-09, L-59, L-64, L-69, L-72, L-73, L-74, L-76, L-79, L-80, L-85, L-86, L-87, L-90, L-95 |
-| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97, L-110 |
+| a tester reported something | `TAG:tester` | L-10…L-14, L-77, L-91, L-97, L-110, L-111 |
 | reading a log to find out what happened | `TAG:logreading` | L-15…L-19, L-61, L-62, L-101 |
 | adding/changing a hook, or reading game state | `TAG:hooking` | L-20…L-26, L-83, L-89 |
 | editing code that already works | `TAG:refactor` | L-27…L-32, L-81, L-82, L-84, L-94, L-107 |
@@ -1157,18 +1157,26 @@ and needs a software mixer"*) was true about the code and false about the requir
 already did the mixing (`L-104`). Between them: **a carried-forward blocker names an obstacle someone
 once hit, never a property of the problem.** Re-derive it against today's request and today's library.
 
-### L-111 A CHOKE POINT TELLS YOU THAT THE STATE CHANGED, NOT WHAT THE PLAYER HEARD ON THE WAY
-**Before announcing a state change, find out how the player CAUSES it -- the input that changes it may
-open a surface that already speaks.**
-**Why:** S195. Asked to announce a new party leader, the session found the one writer of the controlled
-character's handle and hooked it -- a correct, complete detector -- and wrote down *"the field D-pad's
-handler was not found, and did not need to be"*. It did need to be: D-pad Up/Down opens the game's own
-leader MENU, which the mod already reads, so the announcement said the choice a second time. The user
-removed it the same day. The candidate handler had been on screen and set aside as "a party panel".
-**The tell:** "every path ends here, so which path does not matter". For a detector that is true; for a
-decision about what to SPEAK it is backwards, because what the player already hears lives on the path.
-**How to apply:** ask, or read, what the player's own input does first -- one sentence to the user
-("what does the D-pad do when you press it?") would have settled it before any RE.
+### L-111 A GAME MECHANIC NOBODY HERE HAS SEEN IS A HYPOTHESIS -- CHECK ITS SHAPE IN THE CODE BEFORE DESIGNING SPEECH ON IT
+**When a request rests on how a game mechanic behaves, find out whether anyone on our side has
+actually seen it. If not, the description is a hypothesis -- including the user's, who may be relaying
+it -- and its SHAPE (live switch? menu? toggle?) is checked in the decompile before anything is built.**
+**Why:** S195. *"The d-pad is used to choose a party leader"* reached the user from another player who
+did not say how it worked, and neither the user nor the session had tried it. Both read it the same way:
+the leader changes live as the D-pad moves. So the session hooked the one writer of the controlled
+character's handle and built "<name>, leader". In fact D-pad Up/Down OPENS the game's leader menu, which
+the mod already reads, and the announcement was removed the same day. **Asking the user would not have
+settled it** -- they would have passed on the same second-hand model in good faith (the user: *"don't
+assume the user was correct, because I was told about it by another player who didn't explain how the
+system worked"*). The code would have: the candidate handler was on screen (`FUN_0029be50`, a window that
+builds one row per party member and sets the leader on confirm) and was set aside as "a party panel"
+because the session was looking for WHERE the leader changes, not WHAT the D-pad does.
+**The tell:** a detector that makes the input path unnecessary ("every path ends here, so which path
+does not matter"). True for detection; the path is exactly where the mechanic's shape lives.
+**How to apply:** ask where the knowledge comes from -- played, or told? -- and when it is told, confirm
+the shape in the decompile first. A candidate you set aside is a claim too; say what it is before
+dismissing it. The build is also a probe here: the mechanic surfaced the moment the user could press it
+with `Normal D-pad` on. **Check it against:** `L-110` (a relayed report is not first-hand either).
 
 ### L-105 A CAP AND A SCHEDULER ARE DESIGN CAUTION, AND CAUTION DELETES INFORMATION
 **When a feature's job is to report what is there, ask what your safety margin is hiding before you add

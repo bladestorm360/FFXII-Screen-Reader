@@ -4755,8 +4755,9 @@ actually brings up a menu to select the party leader. so it's unnecessary to ann
 the leader."* The announcement is committed in `09da7ee` so it can be restored from history, and removed
 in the next commit: `party_leader.{h,cpp}`, its init/shutdown, its CMake line and its phrase are gone,
 and `PlayerState` is back exactly as it was (`ComponentForHandle` had no other caller). The RE stays in
-`GameArchitecture.md`. The miss is `L-111`: "which path does not matter" was true for the detector and
-backwards for what to speak -- the path was the leader MENU, already read. `FUN_0029be50`, set aside as
+`GameArchitecture.md`. The miss is `L-111`: the request came from another player's description, second-hand
+to the user too, and nobody here had seen the mechanic -- its shape (a MENU, already read) was checkable
+in the decompile and was not checked, because "which path does not matter" was true for the detector. `FUN_0029be50`, set aside as
 "a party panel", is the likeliest handler for it (unconfirmed).
 * **`09da7ee` was amended before its first push**: two comment lines and one `GameArchitecture.md` line
   quoted the game (a disassembly line, a decompiler assignment) and were rewritten as prose, per
