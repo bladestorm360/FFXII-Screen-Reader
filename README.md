@@ -247,7 +247,7 @@ L1 and R1 both go to the game in menus and while a targeting cursor is up — th
 
 In mod mode, press Back and then:
 
-* **X:** your gil. In a fight, the enemy's name and HP instead.
+* **X:** your gil.
 * **Y:** rescan and announce the area.
 * **B:** the summoned Esper's HP. Silent when you have no Esper out.
 * **Start:** open the mod menu.

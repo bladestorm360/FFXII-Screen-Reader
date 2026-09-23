@@ -115,19 +115,15 @@ void Say(Phrase::Id id) { InputTracker::DispatchSpeakPhrase(static_cast<int>(id)
 // ONE EXCEPTION SINCE S195: R1 flips the Normal D-pad row. It is a setting rather than a key, so it
 // is handled beside the call to this table in OnPoll, not in it.
 //
-// ONE OF THE FOUR CHANGES MEANING IN A FIGHT: the button keeps the question and the context picks
-// which subject it is about.
-//   X  out of combat is the party's gil. In a fight it is the enemy readout, `;` -- the name and HP
-//      of what you are up against, which is the only "how much of it is there" that matters mid-fight.
-// Y was the second until S196: in a fight it was `p`, the directions to the target. R1 carries `p` in
-// a fight now (pad_normal.cpp, the user's), so Y rescans and says the area everywhere.
-// A and B do not move, because neither question has a combat form: the Esper gauge is the Esper
-// gauge, and the settings menu is the settings menu.
+// NONE OF THEM CHANGES MEANING IN A FIGHT ANY MORE (S196, the user's). Two used to: X was the enemy
+// readout (`;`) and Y the directions to the target (`p`). Normal mode's shoulders carry both in a
+// fight -- L1 is `;` everywhere, R1 is `p` there (pad_normal.cpp) -- so the latch copies were
+// duplicates, and each button now asks one question: X the gil, Y the rescan.
 //
-// A IS THE SUMMONED ESPER (`8`), AND IT IS SILENT WHEN THERE IS NONE. That silence is the game's own
+// B IS THE SUMMONED ESPER (`8`), AND IT IS SILENT WHEN THERE IS NONE. That silence is the game's own
 // answer, not a dropped press -- an Esper absent from the field has no HP to read. `8` is the same
 // key the keyboard uses, so the two devices cannot drift.
-int ModModeKeyFor(uint16_t bit, bool fighting, const char** nameOut) {
+int ModModeKeyFor(uint16_t bit, const char** nameOut) {
     switch (bit) {
         case PadHook::kStart: *nameOut = "mod menu (F8)"; return VK_F8;
         // A IS NOT IN THIS TABLE, AND ITS ABSENCE IS THE POINT. Mod + A falls through to `default`,
@@ -139,9 +135,7 @@ int ModModeKeyFor(uint16_t bit, bool fighting, const char** nameOut) {
         // A also CLOSES the mod menu, from the `modMenuOpen` branch -- same button, same meaning, two
         // contexts. The pair to it is below: B is the game's confirm, so B is what asks a question.
         case PadHook::kB:     *nameOut = "summoned Esper (8)"; return '8';
-        case PadHook::kX:
-            *nameOut = fighting ? "enemy name and HP (;)" : "gil (g)";
-            return fighting ? VK_OEM_1 : 'G';
+        case PadHook::kX:     *nameOut = "gil (g)"; return 'G';
         case PadHook::kY:     *nameOut = "rescan + area (`)"; return VK_OEM_3;
         default:              *nameOut = nullptr; return 0;
     }
@@ -415,7 +409,7 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             // Lowest set bit wins, so a two-button fumble resolves to one action rather than several.
             const uint16_t bit = static_cast<uint16_t>(rising & (~rising + 1));
             const char* action = nullptr;
-            const int vk = ModModeKeyFor(bit, ctx == Context::Battle, &action);
+            const int vk = ModModeKeyFor(bit, &action);
             if (vk) {
                 Act(PadHook::ButtonName(bit), vk, action, ctx);
             } else if (bit == PadHook::kRightShoulder) {

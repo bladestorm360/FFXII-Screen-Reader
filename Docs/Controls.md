@@ -705,7 +705,7 @@ silence, so there is no mode to get stuck in.
 
 | Button | Out of combat | In a fight | Same as |
 |---|---|---|---|
-| X | Party gil | **The enemy: name and HP** | `g` / `;` |
+| X | Party gil | same — **the enemy's name and HP is L1's, S196** | `g` |
 | Y | Rescan, and say the area name | same — **directions to the target moved to R1 at S196** | `` ` `` |
 | B | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
 | Start | Open or close the mod's settings menu | same | `F8` |

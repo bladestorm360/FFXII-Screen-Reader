@@ -4774,11 +4774,11 @@ in the decompile and was not checked, because "which path does not matter" was t
   `src\battle\party_leader.{h,cpp}`, the `PlayerState` resolver, the `dllmain.cpp` wiring and the CMake
   line; the removal commit takes them back out.
 
-## Session 196 — 2026-09-23 — [input] R1 is context-gated again: route on the field, the target in a fight, the route while fleeing (BUILT/DEPLOYED, UNPLAYED)
+## Session 196 — 2026-09-23 — [input] R1 is context-gated again: route on the field, the target in a fight, the route while fleeing; mod + X is gil everywhere (BUILT/DEPLOYED, UNPLAYED)
 
 KEYWORDS: R1, route key, directions to target, `p`, RouteToActiveTarget, TargetGate, escape mode,
 Escaping, EscapeModeOn, mod + Y, mod mode Y, NormalBindings, pad_normal.cpp, ModModeKeyFor,
-Right stick camera, S185 reversed
+Right stick camera, S185 reversed, mod + X, mod mode X, L1, `;` in a fight
 
 **The request (the user):** *"when using a controller, make r1 context sensitive: out of combat, it
 should announce directions to whatever destination is highlighted in the pathfinder. in combat, it
@@ -4803,6 +4803,15 @@ d-pad with right stick camera on."*
   flee flag. `Controls.md` strikes the S185 note rather than deleting it (`L-38`).
 * Keyboard unchanged: `\` and `p` are still separate keys.
 
+**Then: L1 and mod + X.** The user asked for L1 to be context-sensitive the way `;` is (interact readout
+out of combat, enemy name and HP in one). **No change: it already is.** L1 dispatches `VK_OEM_1` in
+Field and Battle, and the pad road ends in the same `OnNavKey` case as the keyboard's `;`. The archive
+has never seen it pressed in a fight -- 9 L1 presses across two logs, all `ctx=field` -- so the fight half
+is UNPLAYED, not broken. That made **mod + X**'s fight meaning (`;`) a duplicate of L1, and at the user's
+word (*"yes, mod+x should be gil everywhere"*) it is now gil (`g`) in every context. With X and Y both
+single-meaning, `ModModeKeyFor` lost its `fighting` parameter. Its comment also named A as the Esper;
+B has been the Esper since S189, and the comment now says so.
+
 **Evidence that `p` resolves a target in `Context::Battle`:** the V1.0 archive log
 `2026-09-17_13-49-23` (build `48ded58`, when R1 in a fight was `p`) has ten `'p' (route to active
 target) pressed: target acquired` lines in one fight, each after a `ResolveTarget ... committed/acting
@@ -4811,6 +4820,7 @@ S194's camera-row D-pad override (`88641e8`), which is still UNPLAYED.
 
 ### Status
 * **BUILT/DEPLOYED, UNPLAYED.** Clean build, no compiler warnings.
+* **Play check (mod + X):** Back then X in a fight says the gil.
 * **Play check:** in a fight with no menu up, R1 speaks the route to the enemy (`PAD R1 -> directions
   to target (p) ctx=battle`); hold flee and press R1 -> `route + beacon (\)`; on the field, the route to
   the selection as before; with a target cursor up, R1 still steps the target group.

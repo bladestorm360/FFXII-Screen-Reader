@@ -63,7 +63,7 @@
 //          Silent on purpose: the map screen is its own feedback.
 //   B      summoned Esper (`8`), silent when none is out -- B is the game's confirm, so it is the
 //          button that ASKS something, and A is the button that backs out (S189)
-//   X      gil (`g`)                  -- in a fight: enemy name and HP (`;`)
+//   X      gil (`g`), in a fight too -- its fight meaning (`;`) is L1's, S196
 //   Y      rescan + area (`` ` ``), in a fight too -- its fight meaning (`p`) moved to R1 at S196
 //   R1     the Normal D-pad row, spoken by name (S195)
 //   Anything else -- the D-pad, L1, either stick click -- ends the mode and speaks "Cancelled".
