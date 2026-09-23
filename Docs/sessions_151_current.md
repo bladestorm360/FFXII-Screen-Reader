@@ -4660,7 +4660,11 @@ the party fleeing, the D-pad is the pathfinder rather than the party. The flag i
 (`BattleState::EscapeModeOn`, S179). `PadRouter::OnGameFrame` reads it on the game thread and
 publishes it beside the context as `g_escaping` (only ever true in `Context::Battle`), so the poll
 reads no game memory. With the row off nothing changes, because the stick is the pathfinder then.
-UNPLAYED. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
+~~UNPLAYED.~~ **PLAY-CONFIRMED 2026-09-23** (the user, during S196: *"d-pad switching to pathfinder out of
+combat and while escape mode toggled is confirmed working"*). Log `2026-09-21_12-29-42` holds three
+`D-pad ... -> previous/next category ... ctx=battle` lines; it is stamped `4595aad` but was built from
+this change before it was committed, because `4595aad`'s own code gives the party in a fight
+and never the pathfinder. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
 
 ### Status
 * **BUILT + DEPLOYED. The tkMalloc fix and the camera row are PLAY-CONFIRMED. UNPLAYED so far: the
@@ -4816,7 +4820,8 @@ B has been the Esper since S189, and the comment now says so.
 `2026-09-17_13-49-23` (build `48ded58`, when R1 in a fight was `p`) has ten `'p' (route to active
 target) pressed: target acquired` lines in one fight, each after a `ResolveTarget ... committed/acting
 enemy` line. **Not evidence for the escape half:** the fallback reads the same `Escaping()` flag as
-S194's camera-row D-pad override (`88641e8`), which is still UNPLAYED.
+S194's camera-row D-pad override (`88641e8`), ~~which is still UNPLAYED~~ -- PLAY-CONFIRMED the same day,
+see Status.
 
 ### Status
 * **PLAY-CONFIRMED** (the user, 2026-09-23: *"all changes are working as intended"*). Clean build, no
@@ -4827,6 +4832,11 @@ S194's camera-row D-pad override (`88641e8`), which is still UNPLAYED.
   escape-mode fallback firing on the game's flee flag; `R1 -> route + beacon (\) ctx=field` x2;
   `X -> gil (g) ctx=field` x1. Mod + X was pressed on the field only, but it has no context branch
   left, so that press runs the same code a fight press would.
-* **What this does NOT confirm:** S194's camera-row D-pad escape override (`88641e8`). It reads the same
-  `Escaping()` flag, now seen working for R1, but no D-pad press in escape mode is in any log.
+* ~~**What this does NOT confirm:** S194's camera-row D-pad escape override (`88641e8`). It reads the same
+  `Escaping()` flag, now seen working for R1, but no D-pad press in escape mode is in any log.~~
+  **STRUCK -- the log claim was false.** The sweep searched for `D-pad-Up`, and the pad log writes
+  `D-pad Up` with a space (`PadHook::ButtonName`), so it matched nothing (`L-06`). Log `2026-09-21_12-29-42`
+  has three escape-mode D-pad presses (see S194). The user then confirmed it in play (*"d-pad switching to
+  pathfinder out of combat and while escape mode toggled is confirmed working"*), so `88641e8` is
+  PLAY-CONFIRMED.
 * Files: `src\input\pad_normal.{h,cpp}`, `src\input\pad_router.{h,cpp}`, `README.md`, `Docs\Controls.md`.
