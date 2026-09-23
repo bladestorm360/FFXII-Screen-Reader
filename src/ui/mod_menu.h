@@ -134,12 +134,19 @@ enum class SettingId : int {
     ScapeItems,       ScapeItemsVol,
     // S194, a tester's request through the user: give the right stick back to the game's camera.
     // Default OFF, which is today's layout exactly. On, the right stick does nothing for the mod on a
-    // live field or in a fight, its pathfinder job moves to the D-pad out of combat, and the party
-    // readout moves to the D-pad in a fight with no menu open. Only the stick's MOVEMENT is freed --
-    // R3 still toggles the beacon (the user's ruling); L3 + R3 flips this row. Appended
-    // LAST so every existing row keeps its position; it sits at the bottom of the ROOT menu, after
-    // the soundscape door. Read by pad_normal.cpp through SettingOn.
+    // live field or in a fight, its pathfinder job moves to the D-pad out of combat, and the D-pad
+    // keeps the party only in a fight with no menu open (S195: with this row off the D-pad is the
+    // party in both). Only the stick's MOVEMENT is freed -- R3 still toggles the beacon (the user's
+    // ruling); L3 + R3 flips this row. Appended after the soundscape door so every existing row kept
+    // its position. Read by pad_normal.cpp through SettingOn.
     RightStickCamera,
+    // S195, the user's request: hand the D-pad back to the game, which uses it to choose the party
+    // leader on the field. Default OFF, which is today's layout. On, the D-pad is passed through
+    // whole on a live field and in a fight -- nothing dispatched, nothing consumed -- whatever the
+    // Right stick camera row says. Menus are unchanged either way (the D-pad is already the game's
+    // cursor there). Appended LAST so it is the bottom ROOT row: one Up from where the menu opens.
+    // Mod mode + R1 flips it. Read by pad_normal.cpp through SettingOn.
+    NormalDpad,
     Count
 };
 // REMOVED Session 115: `SneakAssist`. It neutralises the palace guards' catch, and after S113 was

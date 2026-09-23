@@ -192,6 +192,12 @@ const Setting kSettings[] = {
       { Id::BeaconOff,               Id::BeaconOn },
       { Id::RightStickCameraDescOff, Id::RightStickCameraDescOn },
       Id::RightStickCameraDesc, "right_stick_camera", 0, nullptr },
+    // S195. Default OFF -- the D-pad stays the mod's. See mod_menu.h. The last ROOT row, so it is
+    // one Up from the top of the menu.
+    { Id::SettingNormalDpad, Kind::Named, 2,
+      { Id::BeaconOff,         Id::BeaconOn },
+      { Id::NormalDpadDescOff, Id::NormalDpadDescOn },
+      Id::NormalDpadDesc, "normal_dpad", 0, nullptr },
 };
 
 static_assert(sizeof(kSettings) / sizeof(kSettings[0]) == static_cast<size_t>(SettingId::Count),

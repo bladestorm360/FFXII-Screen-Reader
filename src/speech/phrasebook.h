@@ -268,6 +268,15 @@ enum class Id {
     // reword to the user.
     SettingRightStickCamera, RightStickCameraDesc, RightStickCameraDescOff, RightStickCameraDescOn,
 
+    // S195: the Normal D-pad row -- the D-pad handed back to the game, which chooses the party leader
+    // with it. The row name is the user's word ("normalize d-pad"); the sentences are ours. Off/On
+    // reuse BeaconOff/BeaconOn. Appended at the END. Flag any reword to the user.
+    SettingNormalDpad, NormalDpadDesc, NormalDpadDescOff, NormalDpadDescOn,
+
+    // S195: the word after a new party leader's name -- "Basch, leader" (the user chose the form).
+    // The name is the game's; the comma glue is composed in code (party_leader.cpp).
+    PartyLeader,
+
     Count
 };
 

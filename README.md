@@ -231,10 +231,11 @@ The mod reads a plugged-in controller as well as the keyboard. It reads **any** 
 
 L1 and R1 are the upper shoulder buttons; L3 and R3 are the left and right sticks clicked in. A, B, X and Y are named the way the game names them, so on a PlayStation pad A is Cross, B is Circle, X is Square and Y is Triangle — the button in that position, whatever your controller prints on it. Anything not listed here reaches the game unchanged, and A, B, X and Y are never taken in normal play.
 
-The mod takes four things the game also uses, and each was a deliberate trade: **L1** (game speed — still on the keyboard's 1, 2 and 3, and in the options menu), **Back** (the map toggle), **L3** (the area map) and **R3** (recentre the camera). Everything else it holds, the game leaves free.
+The mod takes four things the game also uses, and each was a deliberate trade: **L1** (game speed — still on the keyboard's 1, 2 and 3, and in the options menu), **Back** (the map toggle), **L3** (the area map), **R3** (recentre the camera) and the **D-pad** (choosing the party leader — Normal D-pad gives it back). Everything else it holds, the game leaves free.
 
 * **Right stick:** Up describes the selected object, or reads Libra on an enemy in battle; on the field with nothing to describe it reads the previous category instead. Down is the next category, Left the previous object, Right the next object. While the mod reads the pad, the right stick no longer turns the field camera, unless Right stick camera is on (below).
-* **D-pad, on the field only:** party members one, two, three and your guest, clockwise from Up. Everywhere else, battle included, it stays the game's cursor.
+* **D-pad, on the field and in a fight with no menu open:** party members one, two, three and your guest, clockwise from Up. In menus and with a target cursor up it stays the game's cursor.
+* **Normal D-pad**, in the mod menu: with it On the D-pad goes to the game on the field and in a fight, so you can choose your party leader with it. This wins over Right stick camera.
 * **Right stick camera**, in the mod menu: with it On the right stick turns the camera again and the mod leaves it alone. On the field the D-pad takes its place — Up and Down change the category, Left and Right change the object — and in a fight with no menu open the D-pad reads party members one, two, three and your guest, clockwise from Up — unless you are fleeing, when it goes back to changing the category and object so you can pick where to run. With a menu or target cursor up it is the game's cursor as before. R3 still switches the audio beacon.
 * **L1:** what you are about to interact with — the person or object the game itself would act on if you pressed Confirm. In a fight it reads the enemy your party is on, with its HP.
 * **R1:** turn-by-turn directions to the selected object, and the audio beacon. **This works in battle too**, so you can pick an exit and be led out of a fight you do not want.
@@ -250,6 +251,7 @@ In mod mode, press Back and then:
 * **Y:** rescan and announce the area. In a fight, directions to the enemy your party is targeting instead.
 * **B:** the summoned Esper's HP. Silent when you have no Esper out.
 * **Start:** open the mod menu.
+* **R1:** Normal D-pad on and off.
 * **A:** ends mod mode and says "Cancelled".
 * **Back again:** opens the game's map. Back is the mod's modifier, so pressing it twice is how you
 reach the map button it costs you.
@@ -279,6 +281,7 @@ The settings it holds:
 * Solve door puzzles — Off or On. Appears only in Sochen Cave Palace. On marks the waterfall puzzle and the clock puzzle solved, so both Pilgrim's Doors and the Ascetic's Door open when you use them. If a waterfall or an exit has not changed, leave the area and come back. Turning it off does not unsolve them. Off is the default.
 * Soundscape settings — a menu of its own. Press Right to open it, Backspace to come back.
 * Right stick camera — Off or On. On gives the right stick back to the game so it turns the camera, and moves its job to the D-pad, as set out under Controller above. Off is the default. Clicking both sticks in at once changes it without opening the menu.
+* Normal D-pad — Off or On. On gives the D-pad back to the game on the field and in a fight, so you can choose your party leader with it. Off is the default. On a controller, Back and then R1 changes it without opening the menu.
 
 The soundscape is a sound for each thing near you, repeating from the direction it is in, so you can hear the shape of the room around you rather than asking for it a category at a time. Nearer things are louder, and a thing behind you sounds duller and lower than one in front. Where several of a kind are near you they are spread in pitch and each repeats at a slightly different rate, so two people standing together do not blur into one sound. It follows things that move. It speaks nothing and it is not a route — the audio beacon is still what leads you somewhere.
 

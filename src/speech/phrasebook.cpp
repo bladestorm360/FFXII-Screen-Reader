@@ -220,8 +220,17 @@ const Row kTable[] = {
     // S194: the right-stick camera row -- same order as the enum's tail. Flag any reword to the user.
     EN(L"Right stick camera"),
     EN(L"Whether the right stick turns the camera or works the pathfinder."),
-    EN(L"Off gives the right stick to the pathfinder, and the D-pad reads the party out of combat."),
+    EN(L"Off gives the right stick to the pathfinder, and the D-pad reads the party, out of combat and in a fight."),
     EN(L"On gives the right stick back to the game, so it turns the camera. Out of combat the D-pad works the pathfinder instead: up and down change the category, left and right change the object. In a fight with no menu open, the D-pad reads the party."),
+
+    // S195: the Normal D-pad row -- same order as the enum's tail. Flag any reword to the user.
+    EN(L"Normal D-pad"),
+    EN(L"Whether the D-pad works the mod or goes to the game."),
+    EN(L"Off gives the D-pad to the mod, on the field and in a fight."),
+    EN(L"On gives the D-pad back to the game, so it chooses the party leader. The mod does nothing with it. Menus are not affected."),
+
+    // S195: the party-leader announcement's one word.
+    EN(L"leader"),
 };
 
 #undef EN

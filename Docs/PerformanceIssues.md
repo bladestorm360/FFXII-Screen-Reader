@@ -314,4 +314,4 @@ read from `IngameMenuReader::BattleListDrawCallback` (exported, not re-read).
 | file | lines | status |
 |---|---|---|
 | `src\input\pad_router.cpp` | **492** (was 571) | **PAID.** Normal mode's right-stick / shoulder / D-pad bindings moved to `pad_normal.cpp` (137) on the seam the file already had: the router is the state machine, the bindings are what a control means in a context. The right-stick camera row would have taken it past 600. |
-| `src\ui\mod_menu.cpp` | **687** (was 679 before the S194 row) | **OVER, not paid.** It was already over the cap. Obvious seam: the `kSettings` table and its row structs (~150 lines of data) into `mod_menu_rows.cpp`, leaving the cursor, persistence and speech. Not done inside a feature change. |
+| `src\ui\mod_menu.cpp` | **675** after S195's row (687 at S194, 679 before it) | **OVER, not paid.** It was already over the cap. Obvious seam: the `kSettings` table and its row structs (~150 lines of data) into `mod_menu_rows.cpp`, leaving the cursor, persistence and speech. Not done inside a feature change. |

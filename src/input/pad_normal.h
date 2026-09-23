@@ -11,10 +11,12 @@
 //
 // ---- THE RIGHT-STICK CAMERA ROW (S194, a tester's request through the user) ---------------------
 //
-// OFF (default) -- the shipped layout, byte for byte:
+// OFF (default):
 //   right stick   the pathfinder on a live field (and swallowed there, so the camera holds still);
 //                 Up is describe / Libra (`o`) anywhere a description could be read.
-//   D-pad         the party (`4` `5` `6` `7`, clockwise from Up) on the open field only.
+//   D-pad         the party (`4` `5` `6` `7`, clockwise from Up) on the open field AND in a fight
+//                 with no menu up (S195, the user's: with the stick on the pathfinder there is no
+//                 field/fight switch and escape mode does not apply -- the D-pad is always vitals).
 //
 // ON -- only the stick's CAMERA job is freed:
 //   right stick   does NOTHING for the mod on the open field or in a fight with no menu up, and is
@@ -36,6 +38,14 @@
 // or message box up" -- the instant a menu opens the context is FieldBusy and the D-pad goes back to
 // the game's cursor. That is why this reverses S174's "D-pad never in combat" only for the moment in
 // a fight when there is no cursor for it to move.
+//
+// ---- THE NORMAL D-PAD ROW (S195, the user's request) -------------------------------------------
+//
+// ON hands the D-pad to the game on the open field and in a fight -- nothing dispatched, nothing
+// consumed -- whichever way the camera row is set, so the game's party-leader choice works. Menus
+// are unchanged, because the D-pad is already the game's cursor there. With BOTH rows on, the
+// pathfinder has no pad control (the stick is the camera, the D-pad the game's); the keyboard keeps
+// it. Mod mode + R1 flips this row (pad_router.cpp).
 namespace PadRouter {
 
 // Right-stick directions, in the order every table here is written. `pad_router.cpp` computes the

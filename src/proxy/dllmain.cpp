@@ -20,6 +20,7 @@
 #include "audio/audio_engine.h"
 #include "navigation/navigation.h"
 #include "battle/combat_events.h"
+#include "battle/party_leader.h"
 
 #include <Windows.h>
 #include <Psapi.h>
@@ -135,6 +136,9 @@ static void DeferredInitImpl() {
         // diagnostic on the `\` key. Installs the map-load ctx-capture hook only —
         // no interpreter/action hooks (announce-only, non-interfering).
         Navigation::Init();
+        // S195: "<name>, leader" when the game hands control to another character. One hook, on the
+        // leader-handle commit FUN_00358bc0 (party_leader.h). Before the combat hooks, which stay last.
+        PartyLeader::Init();
         // Combat log: the game's own battle sentences (Tier 1) plus synthesized
         // damage lines (Tier 2). Installs three hooks — the codec-sprintf, the result applier and
         // the reward/death batch.
@@ -228,6 +232,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
             // THE PROCESS IS GOING AWAY -- do nothing. See the note above DllMain.
             if (reserved != nullptr) break;
             CombatEvents::Shutdown();
+            PartyLeader::Shutdown();
             // Before Navigation: the beacon lives under it and must stop pinging before the audio
             // device closes.
             AudioEngine::Shutdown();

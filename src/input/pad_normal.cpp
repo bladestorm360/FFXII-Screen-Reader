@@ -106,20 +106,34 @@ uint16_t NormalBindings(Context ctx, uint16_t rising, const bool (&stickRising)[
     }
 
     // ---- D-pad ----------------------------------------------------------------------------------
-    if (onField) {
-        // Row off: THE PARTY, and ONLY on a field the player is driving. S174 narrowed this from
-        // `live` to `onField` at the user's instruction: the D-pad is how a pad moves a cursor, and
-        // party slots are not worth costing the player a battle menu.
-        // Row on: the pathfinder the stick gave up. The party moves to the fight, below.
-        consume |= Claim(camera ? kPathfinder : kParty, rising, ctx);
-    } else if (fight && camera) {
-        // Row on, in a fight with NO menu up (a menu makes the context FieldBusy). There is no cursor
-        // here for the D-pad to move, which is the only reason S174's ruling can bend for this.
+    // THE NORMAL D-PAD ROW (S195, the user's) hands it back to the game on a live surface -- the game
+    // chooses the party leader with it -- and it wins over the camera row: nothing dispatched, nothing
+    // consumed, so the game reads the D-pad exactly as it would unmodded. Menus are the `else` below
+    // and already pass it through, so the row changes nothing there.
+    const bool gameDpad = ModMenu::SettingOn(ModMenu::SettingId::NormalDpad);
+    if (live && gameDpad) {
+        // The game's. Deliberately no arrow dispatch either: no buffer the arrows feed is open on a
+        // live field or in a fight, and "the mod does nothing with it" is what the row promises.
+    } else if (live && !camera) {
+        // Camera row off: THE PARTY, on the field AND in a fight with no menu up (S195, the user: *"if
+        // it is off and the right stick is used for pathfinding, the combat context does not apply and
+        // it is always to be used for checking vitals"*). The field/fight switch and escape mode's
+        // override below belong to the camera row only, because only there does the D-pad carry the
+        // pathfinder. S174's narrowing to the field alone was about a battle MENU's cursor, and a
+        // menu makes the context FieldBusy -- `live` is never true while one is up.
+        consume |= Claim(kParty, rising, ctx);
+    } else if (onField) {
+        // Camera row on, open field: the pathfinder the stick gave up. The party moves to the fight.
+        consume |= Claim(kPathfinder, rising, ctx);
+    } else if (fight) {
+        // Camera row on, in a fight with NO menu up (a menu makes the context FieldBusy). There is no
+        // cursor here for the D-pad to move.
         //
         // ESCAPE MODE OVERRIDES IT (S194, the user: *"escape mode must overwrite the combat switch for
         // the d-pad when in combat and fall back to pathfinding"*). A fleeing party needs somewhere to
         // run TO, not its HP list -- the rule S179 already applies to the beacon, which always resumes
-        // the route in escape mode. With the row off nothing changes: the stick is the pathfinder then.
+        // the route in escape mode. With the camera row off none of this applies: the D-pad is the
+        // party and the stick is the pathfinder.
         consume |= Claim(Escaping() ? kPathfinder : kParty, rising, ctx);
     } else {
         // In a menu the D-pad is the GAME'S, and it is also an arrow key. Dispatched and NOT consumed:

@@ -4676,3 +4676,89 @@ UNPLAYED. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
   (new), `pad_router.{h,cpp}`, `proxy\dllmain.cpp`, `core\logger.cpp` (`MEM` flushes),
   `ui\mod_menu.{h,cpp}`, `speech\phrasebook.{h,cpp}` (4 phrases, ours -- flag rewording),
   `CMakeLists.txt`, `README.md`, `CLAUDE.md`, `Docs\{GameArchitecture,Controls,Lessons,PerformanceIssues}.md`.
+
+## Session 195 — 2026-09-22 — [input][party] The D-pad is always vitals with the camera row off; the Normal D-pad row hands it to the game; a new leader is announced (BUILT/DEPLOYED, UNPLAYED)
+
+KEYWORDS: Normal D-pad, NormalDpad, normal_dpad, party leader, D-pad passthrough, D-pad in battle,
+party vitals in a fight, Right stick camera, escape mode, Escaping, mod mode R1, mod + R1,
+DispatchToggleSetting, NormalBindings, pad_normal.cpp, S174 field-only D-pad reversed, PartyLeader,
+party_leader.cpp, leader announcement, FUN_00358bc0, FUN_003594b0, DAT_022c7fe4, DAT_022c7ff8,
+ComponentForHandle, 0x5AA4 writers
+
+**Two requests from the user, one pad scheme.**
+
+1. *"the d-pad context toggle is only supposed to apply ***if*** the right stick camera toggle is on.
+   if it is off and the right stick is used for pathfinding, the combat context does not apply and it
+   is always to be used for checking vitals."* With `Right stick camera` Off, the D-pad was the party
+   on the open field only; in a fight it fell through to the menu branch (arrow dispatch, passed to
+   the game). It is now the party on the field AND in `Context::Battle`. The field/fight switch and
+   S194's escape-mode override stay where they were, inside the camera-row branch, because only there
+   does the D-pad carry the pathfinder. "Always" was read as every LIVE surface: in a menu, under a
+   target cursor or with a message box up the context is `FieldBusy` and the D-pad is still the game's
+   cursor -- taking it there would take the pad's only way to move a cursor.
+   **This reverses S174's field-only narrowing for the row-off scheme.** S174's reason was the battle
+   command menu's cursor, and a menu is never `Battle`, which is the same argument S194 already used
+   for the camera row's fight column.
+2. *"the d-pad is used to choose a party leader. we need a mod menu toggle for this. it should be at
+   the bottom of the mod menu so it's easy to reach. if we don't have anything on mod mode+b, it can be
+   an easy toggle for normalize d-pad. if the toggle is on, it should pass the d-pad through to the game
+   so that it can be used to select the party leader on the field."* Mod + B is the summoned Esper
+   (`8`, S189), so it was not used; the user then said *"if b is already being used in mod mode, put it
+   on mod mode+r1"*. Mod + R1 was unmapped (it cancelled).
+
+**What was built.**
+* **`Normal D-pad` row** -- `SettingId::NormalDpad`, key `normal_dpad`, default Off, appended last so it
+  is the bottom ROOT row (the menu opens on the first row and wraps, so it is one Up away). On: on a
+  live surface (Field or Battle) the D-pad is neither dispatched nor consumed, whichever way the camera
+  row is set. Menus are untouched -- they already pass it through with the arrow dispatch.
+* **Mod + R1** flips it through `InputTracker::DispatchToggleSetting`, the thumb-clicks' own road, so it
+  speaks "Normal D-pad, On/Off". Handled beside the `ModModeKeyFor` call, not in the VK table, because
+  it is a setting and not a key. R1 is consumed like every other mod-mode press.
+* **Knowingly left:** with BOTH rows On the pathfinder has no pad control (stick = camera, D-pad = the
+  game's). The user's rule was "pass the d-pad through", unconditionally; the keyboard keeps the
+  pathfinder, and mod + R1 is one press back. Flagged to the user rather than designed around.
+* **Phrases (ours -- flag rewording):** row name "Normal D-pad" (the user's word, "normalize"), its
+  description and Off/On sentences; and the camera row's Off sentence now says the D-pad reads the party
+  "out of combat and in a fight".
+
+**Not verified here:** that the game's D-pad chooses the party leader in a FIGHT as well as on the
+field. The user named the field; the row passes it through in both, which is what "normal" means.
+
+**Then: *"the mod should actually speak who has become the party leader when changed."*** The user
+chose straight-to-C++ (FRIDA-FIRST waived for this feature, asked and answered this session) and the
+wording "Basch, leader".
+* **The field D-pad's handler was not found, and did not need to be.** The six writers of the leader
+  index `W+0x5AA4` were read (party panel, KO hand-over on map load, summon, load/restore, actor
+  rebuild, party-list fix-up) and none reads a pad. What they all end in is: `FUN_00326500` stages the
+  handle through `FUN_003594b0`, and `FUN_00358bc0` commits it. **That commit is the only non-zero
+  writer of the controlled-character handle `DAT_022c7fe0`** and nothing takes the global's address,
+  so a hook there hears every change of control, whichever path made it (`L-21`).
+* **New module `src\battle\party_leader.{h,cpp}`**, one MinHook detour on `FUN_00358bc0` (RVA
+  `0x238BC0`, `void(void)` by decompile and by bytes). Every frame it reads the handle before and after
+  the original and stops there. On a change it resolves handle → component (the actor) → BtlChr →
+  `PartyStatus::ReadBtlChr`, the party readout's own reader, so the name matches keys 4-7.
+* **Two transitions are silent, by the game's own state:** from handle 0 (a map load after teardown)
+  and to the same character id as the last leader (`FUN_003220e0` rebuilds an actor under a new
+  handle). Every other change speaks with interrupt, including a switch back.
+* **Every branch logs a `PARTY` line**, the silent ones included (`L-83`): `leader changed:`,
+  `leader set from handle 0`, `same character`, `did not resolve`, `has no name`.
+* **Shared resolver, not a copy:** `PlayerState::ComponentForHandle(handle)`. `ReadLeaderComponent`
+  is now that applied to the live handle, with the same field-active gate as before.
+* Hook count 75 → 76. The census line will show it.
+* **Open:** what a summon does. `FUN_00306760` calls `FUN_00327810` on a summon, so if control moves
+  to the Esper the mod will say "<Esper>, leader". The first log with a summon shows which.
+* Docs: `GameArchitecture.md` (LEADER-HANDLE COMMIT), `Controls.md`, archive note
+  `..\FFXII-Decompile\notes\party_leader_commit_s195.md`. README unchanged: no key, nothing to look up.
+
+### Status
+* **BUILT + DEPLOYED, UNPLAYED.** Clean build, no warnings. The deployed DLL carries `normal_dpad`,
+  `mod + R1 -> normal D-pad`, and both new UTF-16 phrases.
+* Play checks: with `Normal D-pad` On, switch leader with the D-pad -- "<name>, leader" each time,
+  and `[PARTY] leader changed:` in the log; a map change says nothing. Camera row Off, in a fight with
+  no menu -- the D-pad reads the party; fleeing changes nothing. `Normal D-pad` On -- the D-pad switches the party leader on the field, and the mod says
+  nothing on it. Back, R1 -- "Normal D-pad, On", and again for Off.
+* `mod_menu.cpp` is 675 lines, still over the cap (existing debt, `PerformanceIssues.md`).
+* Files: `src\input\pad_normal.{h,cpp}`, `src\input\pad_router.{h,cpp}`, `src\ui\mod_menu.{h,cpp}`,
+  `src\speech\phrasebook.{h,cpp}`, `src\battle\party_leader.{h,cpp}` (new),
+  `src\navigation\player_state.{h,cpp}`, `src\proxy\dllmain.cpp`, `CMakeLists.txt`, `README.md`,
+  `Docs\{Controls,PerformanceIssues,GameArchitecture}.md`.

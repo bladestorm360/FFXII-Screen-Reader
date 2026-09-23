@@ -350,7 +350,7 @@ features pick conflict-free keys and we swallow/rebind any collisions.
 > No volume goes to zero on purpose — each of the three sounding features has its own Off, so a
 > switched-on beacon or soundscape is never silent for a reason you cannot hear.
 >
-> **This table is not complete.** `Diacritics override`, `Unreachable filter`, `Right stick camera` and the
+> **This table is not complete.** `Diacritics override`, `Unreachable filter`, `Right stick camera`, `Normal D-pad` and the
 > context-gated puzzle rows (`Puzzle guide`, `Instant success`, `Solve door puzzles`) are in the menu
 > and not listed here; they are documented in their own sections and in `mod_menu.h`. Noted rather
 > than backfilled so the gap is visible instead of implied.
@@ -544,8 +544,8 @@ is what it is for.
 | Start | Pause | Pause |
 | Triangle | Party menu | Party menu |
 
-**The mod claims four controls the game uses** — `L1`, `Back`, `L3` and `R3` — plus the D-pad and the
-right stick on the field. Each was a deliberate trade, and `L1` was the user's call at S185: game
+**The mod claims four controls the game uses** — `L1`, `Back`, `L3` and `R3` — plus the D-pad on the
+field and in a fight (unless `Normal D-pad` is On), and the right stick on the field. Each was a deliberate trade, and `L1` was the user's call at S185: game
 speed is reachable from the options menu and from the keyboard's `1`/`2`/`3`, pad buttons are scarce,
 and a speed toggle is not what one is worth spending on. **`L3` + `R3` together** switches control
 scheme (the `Right stick camera` row). There is no off switch any more: the `Controller` row and the
@@ -588,8 +588,8 @@ behind the modifier instead.
 | Right stick Down | Next category | `=` |
 | Right stick Left | Previous object | `[` |
 | Right stick Right | Next object | `]` |
-| D-pad (field only) | Party status — **clockwise from Up: member 1, 2, 3, then the guest** | `4` `5` `6` `7` |
-| D-pad (anywhere else, combat included) | Walks the Status Attributes page and an open Clan Primer entry, exactly as the arrow keys do. The game still gets the press | Arrow keys |
+| D-pad (field, and a fight with no menu up) | Party status — **clockwise from Up: member 1, 2, 3, then the guest** | `4` `5` `6` `7` |
+| D-pad (a menu, a target cursor or a message box) | Walks the Status Attributes page and an open Clan Primer entry, exactly as the arrow keys do. The game still gets the press | Arrow keys |
 | **L1** (field and battle) | **The interact readout** — who Confirm would address, or in a fight the enemy and its HP | `;` |
 | **R1** (field and battle) | Route to the current selection, and start the audio beacon | `\` |
 | Back / Select | Mod mode — says **"Mod"** | — |
@@ -614,10 +614,15 @@ behind the modifier instead.
 > the switch **S184** built the spoken titles for. Taking them there would have silenced one feature
 > to feed another.
 
-> **The D-pad is only taken on the open field — never in combat.** Everywhere else it is dispatched
-> to the mod *and* passed straight through, so the game's own cursor still moves. That is what the
-> arrow keys already do, since the mod cannot swallow a key. A fight is always one command menu away,
-> and party slots are not worth costing you that cursor.
+> **The D-pad is the party on the field AND in a fight with no menu up (S195).** The user: *"if it
+> is off and the right stick is used for pathfinding, the combat context does not apply and it is
+> always to be used for checking vitals."* The field/fight switch and escape mode belong to the
+> `Right stick camera` row only, because only there does the D-pad carry the pathfinder. The moment a
+> command menu, a target cursor or a message box is up, the context is `FieldBusy` and the D-pad is
+> dispatched to the mod *and* passed straight through, so the game's own cursor still moves — what the
+> arrow keys already do, since the mod cannot swallow a key. That is why S174's "never in combat" no
+> longer needs to hold: it was protecting the battle menu's cursor, and a menu is never `Battle`.
+> **`Normal D-pad` (below) hands it to the game instead**, on the field and in a fight.
 
 > **THE THUMB-CLICKS FIRE ON RELEASE, NOT ON PRESS, AND THAT IS WHAT MAKES THE CHORD POSSIBLE.** A
 > chord and its two singles cannot all be edge-triggered on the press: whichever button went down
@@ -637,7 +642,8 @@ behind the modifier instead.
 > S185, ON THE USER'S INSTRUCTION.** The rule it bends is real — a switch is two presses away through
 > `Start`, and the menu says what it changed and what the new value means. The reachability filter and
 > the audio beacon are the two the user flips constantly mid-play, and the control scheme is the third.
-> `F4`, `F5`, `F7` and the volumes stay menu-only.
+> **A fourth since S195: mod + R1 flips `Normal D-pad`** (the user asked for a quick toggle; mod + B
+> was taken by the Esper). `F4`, `F5`, `F7` and the volumes stay menu-only.
 
 ### Right stick camera — the `F8` row (S194)
 
@@ -661,11 +667,29 @@ which is the layout above exactly. **On** frees only the stick's camera job:
 > back to pathfinding"*): while the party is fleeing (Left Ctrl, or holding the flee button) the D-pad
 > is the pathfinder again, read from the game's own flag (`BattleState::EscapeModeOn`, S179) -- the
 > same rule that makes the beacon resume the route. Code: `src\input\pad_normal.cpp`.
+>
+> **`Normal D-pad` On overrides both D-pad columns above** — the D-pad is the game's on the field and
+> in a fight — so with both rows On the pathfinder has no pad control; the keyboard keeps it.
+
+### Normal D-pad — the `F8` row (S195)
+
+The game chooses the **party leader** with the D-pad on the field, and the mod was taking it. The
+user asked for a toggle, at the **bottom of the mod menu** so it is one Up from where the menu opens,
+with a quick switch on **mod + R1** (mod + B was taken by the Esper). **Off by default** — the D-pad
+stays the mod's, as above. **On** hands it to the game on the open field and in a fight with no menu
+up: nothing is dispatched and nothing is consumed, whichever way `Right stick camera` is set. Menus,
+target cursors and message boxes are unchanged, because the D-pad is already the game's cursor there.
+Mod + R1 speaks **"Normal D-pad, On"** / **"Off"**. Code: `src\input\pad_normal.cpp`.
+
+**Whoever becomes leader is announced** — "Basch, leader" — however it happened: the D-pad, the party
+menu, or the game handing over when the leader falls. Nothing on a map load, and nothing when the same
+character is rebuilt under a new handle. One hook on the game's leader-handle commit
+(`src\battle\party_leader.cpp`; the facts are in `GameArchitecture.md`, "LEADER-HANDLE COMMIT").
 
 ### Mod mode — press Back, then one button
 
 Back says **"Mod"**. The next button is a mod command and the mode ends. Anything unmapped — the
-D-pad, either shoulder, either stick click — says **"Cancelled"**, and so does five seconds of
+D-pad, L1, either stick click — says **"Cancelled"**, and so does five seconds of
 silence, so there is no mode to get stuck in.
 
 | Button | Out of combat | In a fight | Same as |
@@ -674,6 +698,7 @@ silence, so there is no mode to get stuck in.
 | Y | Rescan, and say the area name | **Directions to the active target** | `` ` `` / `p` |
 | B | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
 | Start | Open or close the mod's settings menu | same | `F8` |
+| R1 | **Normal D-pad off / on** — says "Normal D-pad, On" | same | `F8` → Normal D-pad |
 | A | **Cancels.** Says "Cancelled" and hands the pad back | same | — |
 | Back | **Opens the game's map.** Back twice, deliberately — see below | same | — |
 

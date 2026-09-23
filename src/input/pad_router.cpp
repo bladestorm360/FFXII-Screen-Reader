@@ -112,6 +112,8 @@ void Say(Phrase::Id id) { InputTracker::DispatchSpeakPhrase(static_cast<int>(id)
 // meaning everywhere now, and L1 and R1 earned permanent Normal-mode homes, so a second meaning
 // behind a latch would be a button that does two things depending on a mode the player has to
 // remember they are in. An unmapped press says "Cancelled", which is the honest answer.
+// ONE EXCEPTION SINCE S195: R1 flips the Normal D-pad row. It is a setting rather than a key, so it
+// is handled beside the call to this table in OnPoll, not in it.
 //
 // TWO OF THE FOUR CHANGE MEANING IN A FIGHT, and both changes are the same idea: the button keeps
 // the question and the context picks which subject it is about.
@@ -418,6 +420,13 @@ void OnPoll(uint32_t userIndex, PadHook::State* state) {
             const int vk = ModModeKeyFor(bit, ctx == Context::Battle, &action);
             if (vk) {
                 Act(PadHook::ButtonName(bit), vk, action, ctx);
+            } else if (bit == PadHook::kRightShoulder) {
+                // MOD + R1 FLIPS THE NORMAL D-PAD ROW (S195, the user's: *"if b is already being used
+                // in mod mode, put it on mod mode+r1"*). A setting, not a key, so it goes through the
+                // thumb-clicks' own road rather than the VK table, and speaks "Normal D-pad, <value>".
+                // The one shoulder in this table; S185 stripped the others and they still cancel.
+                InputTracker::DispatchToggleSetting(static_cast<int>(ModMenu::SettingId::NormalDpad));
+                Log::Write("PAD", "mod + R1 -> normal D-pad");
             } else if (bit == PadHook::kBack) {
                 // Back, Back -- see the consume note below. The map speaks for itself.
                 Log::Write("PAD", "mod mode ended on Back; the map press passes through to the game");

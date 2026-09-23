@@ -2122,7 +2122,27 @@ RVA = Ghidra-abs − 0x120000. Confidence + validation state noted; anything <0.
   (RVA `0x2D9F190`), leader index `mgr+0x5aa4`, control index `mgr+0x5ad5`; leader-change
   refresh `FUN_00326500` promotes the handle + retargets camera (⇒ field leader, not menu).
   Remaining pin: char component → position field (its controller `+0xD0`/`+0x30`, or a
-  direct matrix) — confirm live. Corollary: leader→controller `+0xD8` = `PPhysicsWorld`
+  direct matrix) — confirm live.
+- **LEADER-HANDLE COMMIT (S195, 0.99 by exhaustive xref; bytes checked):** the handle is STAGED
+  and then COMMITTED. Stager **`FUN_003594b0` (RVA `0x2394B0`)**: `DAT_022c7fe4` (RVA `0x21A7FE4`)
+  := handle, flag `DAT_022c7ff8` (RVA `0x21A7FF8`) := 1. Commit **`FUN_00358bc0` (RVA `0x238BC0`,
+  `void(void)`)**: when the flag is set and the staged handle differs from the live one, it releases
+  the old leader's camera and control, then copies the staged handle into the live one and clears the
+  flag. **It is the ONLY non-zero writer of
+  `DAT_022c7fe0`** — the others store 0 (`FUN_00358b40`, `FUN_003590e0`, teardown) — and no code
+  takes the global's address. Called every frame from the main loop `FUN_0022a770` (and
+  `FUN_0022b8c0`, `FUN_0022bc20`), plus map-load paths (`FUN_0025c830`, `FUN_0026c3e0`, `FUN_0026ce60`,
+  native `FUN_0050c610`). Stagers: `FUN_00326500` (leader refresh, from `W+0x5AA4` in modes 0/1),
+  `FUN_00269c70` (party-slot assign, only when no leader), `FUN_0050c610`.
+  **The six writers of the leader index `W+0x5AA4`** each call `FUN_00326500` straight after:
+  `FUN_00327850(idx)` (callers `FUN_00280b70`, `FUN_00304180`, `FUN_0034d4e0`, and `FUN_0035baa0` ←
+  `FUN_0029be50`, a party-panel message handler), `FUN_00327810(actor)` (callers `FUN_00237f40` = the
+  KO hand-over on map load, `FUN_00237ea0`, `FUN_00306760` = summon), `FUN_00327870(slot)` (load),
+  `FUN_003220e0` (actor rebuilt under a new handle — same character), `FUN_00326620` (leader not in
+  the party list), `FUN_00329cc0` (party restore). **The field D-pad's own handler is NOT identified**
+  — it does not need to be, since every path ends in the commit. `FUN_00263e30(obj)` =
+  `*(obj+0x30)`, the component, which is the actor (`+0x08` handle, `+0x698` BtlChr, BtlChr `+0x04` =
+  char id = the value `W+0x5AA4` holds). Used by `src\battle\party_leader.cpp`. Corollary: leader→controller `+0xD8` = `PPhysicsWorld`
   (RE-4 context) → `+0x60` = raycast world, so this anchor closes RE-4's handle too.
 - **CORRECTION — camera globals are STALE for our build:** `CameraLookAtPointPtr`/
   `CameraPositionPtr` (community RVA `0x20955F0`/`E0`) do NOT exist here (0 occurrences,

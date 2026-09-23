@@ -27,13 +27,13 @@
 //                       where it has something to say.
 //                 Down  next category (`=`)      Left  previous object (`[`)
 //                                                Right next object (`]`)
-//   D-pad         FIELD ONLY: party 1, 2, 3, guest (`4` `5` `6` `7`), clockwise from Up.
-//                 everywhere else: dispatched as ARROW KEYS to the Status and Clan Primer buffers
-//                       and NOT consumed, so the game's own cursor still gets them -- the keyboard
-//                       behaves identically, because it cannot swallow a key at all. Combat is on
-//                       this side of the line: a fight is always one command menu away, and party
-//                       slots are not worth costing the player that cursor.
-//   ** S194: the `Right stick camera` row re-maps the stick and the D-pad -- see pad_normal.h. **
+//   D-pad         FIELD, AND A FIGHT WITH NO MENU UP (S195): party 1, 2, 3, guest (`4` `5` `6`
+//                       `7`), clockwise from Up.
+//                 in a menu or under a cursor: dispatched as ARROW KEYS to the Status and Clan
+//                       Primer buffers and NOT consumed, so the game's own cursor still gets them --
+//                       the keyboard behaves identically, because it cannot swallow a key at all.
+//   ** S194: the `Right stick camera` row re-maps the stick and the D-pad; S195: the `Normal D-pad`
+//      row hands the D-pad to the game on the field and in a fight -- see pad_normal.h. **
 //   L1            THE INTERACT READOUT (`;`) -- what am I about to talk to, open or hit, and in a
 //                       fight the enemy's name and HP. S185 took it from the game's Speed mode at
 //                       the user's instruction: game speed is reachable from the options menu and
@@ -64,8 +64,8 @@
 //          button that ASKS something, and A is the button that backs out (S189)
 //   X      gil (`g`)                  -- in a fight: enemy name and HP (`;`)
 //   Y      rescan + area (`` ` ``)    -- in a fight: directions to the target (`p`)
-//   Anything else -- the D-pad, either shoulder, either stick click -- ends the mode and speaks
-//   "Cancelled".
+//   R1     the Normal D-pad row, spoken by name (S195)
+//   Anything else -- the D-pad, L1, either stick click -- ends the mode and speaks "Cancelled".
 //
 // CONSUMPTION IS A LEVEL, NOT AN EDGE, and that is not a detail (S187). The router claims on a
 // rising edge, but `gamepad_sdl.cpp` LATCHES the claim until the button is released, because the mod
@@ -119,8 +119,8 @@ enum class Context : uint8_t {
     OffField,      // title, loading, between maps
     Field,         // field live, idle, no menu/dialogue/combat -- the stick, the D-pad and R1
     FieldBusy,     // field live but a battle-command menu or a message box owns input
-    Battle,        // party engaged, no menu up -- L1/R1 are the mod's; D-pad + camera are the game's
-                   // unless the right-stick camera row is on (pad_normal.h)
+    Battle,        // party engaged, no menu up -- L1/R1 and the D-pad are the mod's, the camera the
+                   // game's; the Normal D-pad and Right stick camera rows change that (pad_normal.h)
 };
 
 // Log-facing names for a context and for a right-stick direction (0..3 = Up/Down/Left/Right).

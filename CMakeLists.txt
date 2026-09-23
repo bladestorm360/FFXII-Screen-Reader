@@ -124,6 +124,7 @@ add_library(${PROJECT_NAME} SHARED
     src/battle/battle_state_diag.cpp
     src/battle/battle_state_names.cpp
     src/battle/party_status.cpp
+    src/battle/party_leader.cpp
     src/battle/combat_log.cpp
     src/battle/combat_events.cpp
     src/battle/combat_format.cpp

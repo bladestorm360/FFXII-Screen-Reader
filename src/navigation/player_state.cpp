@@ -197,7 +197,12 @@ void* ReadLeaderSceneObject() {
 }
 
 void* ReadLeaderComponent() {
-    void* sceneObj = ReadLeaderSceneObject();
+    if (!IsFieldActive()) return nullptr;
+    return ComponentForHandle(ReadLeaderHandle());
+}
+
+void* ComponentForHandle(uint32_t handle) {
+    void* sceneObj = ResolveHandle(handle);
     if (!sceneObj) return nullptr;
     void* comp = PtrAt(sceneObj, NavRva::SCENEOBJ_COMPONENT_OFF);
     if (!comp) return nullptr;
