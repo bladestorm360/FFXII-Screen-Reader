@@ -4774,7 +4774,7 @@ in the decompile and was not checked, because "which path does not matter" was t
   `src\battle\party_leader.{h,cpp}`, the `PlayerState` resolver, the `dllmain.cpp` wiring and the CMake
   line; the removal commit takes them back out.
 
-## Session 196 — 2026-09-23 — [input] R1 is context-gated again: route on the field, the target in a fight, the route while fleeing; mod + X is gil everywhere (BUILT/DEPLOYED, UNPLAYED)
+## Session 196 — 2026-09-23 — [input] R1 is context-gated again: route on the field, the target in a fight, the route while fleeing; mod + X is gil everywhere (PLAY-CONFIRMED)
 
 KEYWORDS: R1, route key, directions to target, `p`, RouteToActiveTarget, TargetGate, escape mode,
 Escaping, EscapeModeOn, mod + Y, mod mode Y, NormalBindings, pad_normal.cpp, ModModeKeyFor,
@@ -4819,9 +4819,14 @@ enemy` line. **Not evidence for the escape half:** the fallback reads the same `
 S194's camera-row D-pad override (`88641e8`), which is still UNPLAYED.
 
 ### Status
-* **BUILT/DEPLOYED, UNPLAYED.** Clean build, no compiler warnings.
-* **Play check (mod + X):** Back then X in a fight says the gil.
-* **Play check:** in a fight with no menu up, R1 speaks the route to the enemy (`PAD R1 -> directions
-  to target (p) ctx=battle`); hold flee and press R1 -> `route + beacon (\)`; on the field, the route to
-  the selection as before; with a target cursor up, R1 still steps the target group.
+* **PLAY-CONFIRMED** (the user, 2026-09-23: *"all changes are working as intended"*). Clean build, no
+  compiler warnings. Pushed to `origin/master` (`d2d2887`, `941d46a`).
+* **The log agrees** (`FFXII-Screen-Reader-Latest.log`, build `941d46a`): `R1 -> directions to target (p)
+  ctx=battle` x7, six `target acquired` and one `No target` (`p`'s own answer with nothing committed);
+  `R1 -> route + beacon (\) ctx=battle` x1, 31 ms before the beacon's `escape mode ON` line -- the
+  escape-mode fallback firing on the game's flee flag; `R1 -> route + beacon (\) ctx=field` x2;
+  `X -> gil (g) ctx=field` x1. Mod + X was pressed on the field only, but it has no context branch
+  left, so that press runs the same code a fight press would.
+* **What this does NOT confirm:** S194's camera-row D-pad escape override (`88641e8`). It reads the same
+  `Escaping()` flag, now seen working for R1, but no D-pad press in escape mode is in any log.
 * Files: `src\input\pad_normal.{h,cpp}`, `src\input\pad_router.{h,cpp}`, `README.md`, `Docs\Controls.md`.
