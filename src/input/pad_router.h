@@ -38,11 +38,12 @@
 //                       fight the enemy's name and HP. S185 took it from the game's Speed mode at
 //                       the user's instruction: game speed is reachable from the options menu and
 //                       from the keyboard, and pad buttons are too scarce to spend one on it.
-//   R1            THE ROUTE KEY (`\`), in every context -- route to the current selection and start
-//                       the beacon. S185 stopped it changing meaning in a fight: the route a player
-//                       most needs mid-combat is a way OUT, and sending R1 to `p` there meant the
-//                       one context where escaping matters was the one where the route key aimed at
-//                       the enemy. `p` moved to mod + Y.
+//   R1            THE ROUTE KEY, context-gated (S196). Field: route to the current selection and
+//                       start the beacon (`\`). A fight with no menu up: directions to the target
+//                       (`p`). A fight in ESCAPE MODE: the route again, so a fleeing party can pick
+//                       where to -- the camera-row D-pad's gate, shared (pad_normal.cpp). S185 had
+//                       pinned it to `\` in a fight so a player could route OUT; escape mode is that
+//                       signal now, which is why `p` came back from mod + Y.
 //   Back          arm mod mode. Speaks "Mod". Costs the game's map toggle, knowingly.
 //   L3            reachability filter on/off.   R3   audio beacon on/off.
 //   L3 + R3       switch control scheme -- the Right stick camera row (S194; was the kill switch).
@@ -63,7 +64,7 @@
 //   B      summoned Esper (`8`), silent when none is out -- B is the game's confirm, so it is the
 //          button that ASKS something, and A is the button that backs out (S189)
 //   X      gil (`g`)                  -- in a fight: enemy name and HP (`;`)
-//   Y      rescan + area (`` ` ``)    -- in a fight: directions to the target (`p`)
+//   Y      rescan + area (`` ` ``), in a fight too -- its fight meaning (`p`) moved to R1 at S196
 //   R1     the Normal D-pad row, spoken by name (S195)
 //   Anything else -- the D-pad, L1, either stick click -- ends the mode and speaks "Cancelled".
 //

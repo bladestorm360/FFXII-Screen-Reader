@@ -238,7 +238,7 @@ The mod takes four things the game also uses, and each was a deliberate trade: *
 * **Normal D-pad**, in the mod menu: with it On the D-pad goes to the game on the field and in a fight, so you can choose your party leader with it. This wins over Right stick camera.
 * **Right stick camera**, in the mod menu: with it On the right stick turns the camera again and the mod leaves it alone. On the field the D-pad takes its place — Up and Down change the category, Left and Right change the object — and in a fight with no menu open the D-pad reads party members one, two, three and your guest, clockwise from Up — unless you are fleeing, when it goes back to changing the category and object so you can pick where to run. With a menu or target cursor up it is the game's cursor as before. R3 still switches the audio beacon.
 * **L1:** what you are about to interact with — the person or object the game itself would act on if you pressed Confirm. In a fight it reads the enemy your party is on, with its HP.
-* **R1:** turn-by-turn directions to the selected object, and the audio beacon. **This works in battle too**, so you can pick an exit and be led out of a fight you do not want.
+* **R1:** turn-by-turn directions to the selected object, and the audio beacon. In a fight with no menu open it gives directions to the enemy your party is targeting instead. **While you are fleeing it goes back to the selected object**, so you can pick an exit and be led out of a fight you do not want.
 * **Back:** mod mode. It says "Mod", the next button is a mod key, and it expires after five seconds.
 * **L3:** the reachability filter on and off. **R3:** the audio beacon on and off. Both say which setting they changed and what it is now.
 * **L3 and R3 together:** switch control scheme — the same as the Right stick camera setting.
@@ -248,7 +248,7 @@ L1 and R1 both go to the game in menus and while a targeting cursor is up — th
 In mod mode, press Back and then:
 
 * **X:** your gil. In a fight, the enemy's name and HP instead.
-* **Y:** rescan and announce the area. In a fight, directions to the enemy your party is targeting instead.
+* **Y:** rescan and announce the area.
 * **B:** the summoned Esper's HP. Silent when you have no Esper out.
 * **Start:** open the mod menu.
 * **R1:** Normal D-pad on and off.

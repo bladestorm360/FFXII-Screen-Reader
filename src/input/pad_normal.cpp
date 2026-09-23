@@ -27,6 +27,12 @@ const DpadBind kPathfinder[] = {
     { PadHook::kDpadRight, VK_OEM_6,     "next object (])"       },
 };
 
+// THE TARGET GATE (S196): a fight with no menu up, and the party NOT fleeing. It is the one test that
+// flips R1 to the target and the camera-row D-pad to the party; escape mode fails it, so both fall
+// back to the pathfinder -- a party running away needs somewhere to run TO. One predicate, so the two
+// controls cannot drift apart (`L-71`).
+bool TargetGate(Context ctx) { return ctx == Context::Battle && !Escaping(); }
+
 // Dispatch and CLAIM -- the D-pad on a surface the mod owns.
 uint16_t Claim(const DpadBind (&table)[4], uint16_t rising, Context ctx) {
     uint16_t consume = 0;
@@ -80,13 +86,17 @@ uint16_t NormalBindings(Context ctx, uint16_t rising, const bool (&stickRising)[
     // L1 = `;`  -- what am I about to interact with. Out of combat that is the object the game's own
     //              interaction scorer has picked, which is not always the one the mod's list has
     //              focused; in a fight it is the enemy, with its HP.
-    // R1 = `\`  -- route to the current selection, and start the beacon.
+    // R1 = `\`  -- on the field, route to the current selection and start the beacon.
+    //      `p`  -- in a fight with no menu up, directions to the target the party is on.
+    //      `\`  -- in a fight in ESCAPE MODE: the route again, so a fleeing party can pick where to.
     //
-    // R1 NO LONGER CHANGES MEANING IN A FIGHT, and that was the user's call with a reason behind it:
-    // the thing a player most needs a route for mid-combat is a way OUT. Sending R1 to `p` in battle
-    // meant the one context where escaping matters was the one context where the route key routed to
-    // the enemy instead. `p` did not lose its pad home -- it moved to mod + Y, where asking for the
-    // target's bearing is a deliberate question rather than the default.
+    // R1 CHANGES MEANING IN A FIGHT AGAIN (S196, the user's: *"in combat, it should announce
+    // directions to target ... if escape mode is toggled, it should fall back to pathfinder. so
+    // effectively, same context gate as the d-pad with right stick camera on."*). S185 had pinned it
+    // to `\` everywhere because the route a player most needs mid-combat is a way OUT; escape mode is
+    // what answers that now -- the game's own flee flag says when the player wants out. That was also
+    // why `p` lived on mod + Y, and it does not any more: R1 is its pad home. The gate is TargetGate
+    // above, and it applies whichever way the camera row is set.
     //
     // L1 IS TAKEN FROM THE GAME, KNOWINGLY. It was Speed mode (x2 / x4). The user's ruling: game speed
     // is reachable from the options menu and from the keyboard's `1`, pad buttons are scarce, and a
@@ -101,7 +111,8 @@ uint16_t NormalBindings(Context ctx, uint16_t rising, const bool (&stickRising)[
         consume |= PadHook::kLeftShoulder;
     }
     if (live && (rising & PadHook::kRightShoulder)) {
-        Act("R1", VK_OEM_5, "route + beacon (\\)", ctx);
+        if (TargetGate(ctx)) Act("R1", 'P', "directions to target (p)", ctx);
+        else                 Act("R1", VK_OEM_5, "route + beacon (\\)", ctx);
         consume |= PadHook::kRightShoulder;
     }
 
@@ -133,8 +144,8 @@ uint16_t NormalBindings(Context ctx, uint16_t rising, const bool (&stickRising)[
         // the d-pad when in combat and fall back to pathfinding"*). A fleeing party needs somewhere to
         // run TO, not its HP list -- the rule S179 already applies to the beacon, which always resumes
         // the route in escape mode. With the camera row off none of this applies: the D-pad is the
-        // party and the stick is the pathfinder.
-        consume |= Claim(Escaping() ? kPathfinder : kParty, rising, ctx);
+        // party and the stick is the pathfinder. R1 makes the same switch through the same gate.
+        consume |= Claim(TargetGate(ctx) ? kParty : kPathfinder, rising, ctx);
     } else {
         // In a menu the D-pad is the GAME'S, and it is also an arrow key. Dispatched and NOT consumed:
         // the Status attributes buffer and the Clan Primer page walk hear it exactly as they hear the

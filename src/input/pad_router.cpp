@@ -115,12 +115,12 @@ void Say(Phrase::Id id) { InputTracker::DispatchSpeakPhrase(static_cast<int>(id)
 // ONE EXCEPTION SINCE S195: R1 flips the Normal D-pad row. It is a setting rather than a key, so it
 // is handled beside the call to this table in OnPoll, not in it.
 //
-// TWO OF THE FOUR CHANGE MEANING IN A FIGHT, and both changes are the same idea: the button keeps
-// the question and the context picks which subject it is about.
+// ONE OF THE FOUR CHANGES MEANING IN A FIGHT: the button keeps the question and the context picks
+// which subject it is about.
 //   X  out of combat is the party's gil. In a fight it is the enemy readout, `;` -- the name and HP
 //      of what you are up against, which is the only "how much of it is there" that matters mid-fight.
-//   Y  out of combat rescans and says the area. In a fight it is `p`, the directions to the target
-//      you are already acting on.
+// Y was the second until S196: in a fight it was `p`, the directions to the target. R1 carries `p` in
+// a fight now (pad_normal.cpp, the user's), so Y rescans and says the area everywhere.
 // A and B do not move, because neither question has a combat form: the Esper gauge is the Esper
 // gauge, and the settings menu is the settings menu.
 //
@@ -142,9 +142,7 @@ int ModModeKeyFor(uint16_t bit, bool fighting, const char** nameOut) {
         case PadHook::kX:
             *nameOut = fighting ? "enemy name and HP (;)" : "gil (g)";
             return fighting ? VK_OEM_1 : 'G';
-        case PadHook::kY:
-            *nameOut = fighting ? "directions to target (p)" : "rescan + area (`)";
-            return fighting ? 'P' : VK_OEM_3;
+        case PadHook::kY:     *nameOut = "rescan + area (`)"; return VK_OEM_3;
         default:              *nameOut = nullptr; return 0;
     }
 }

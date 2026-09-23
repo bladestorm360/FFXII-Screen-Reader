@@ -4773,3 +4773,45 @@ in the decompile and was not checked, because "which path does not matter" was t
   `Docs\{Controls,PerformanceIssues,GameArchitecture,Lessons}.md`. `09da7ee` also carries
   `src\battle\party_leader.{h,cpp}`, the `PlayerState` resolver, the `dllmain.cpp` wiring and the CMake
   line; the removal commit takes them back out.
+
+## Session 196 — 2026-09-23 — [input] R1 is context-gated again: route on the field, the target in a fight, the route while fleeing (BUILT/DEPLOYED, UNPLAYED)
+
+KEYWORDS: R1, route key, directions to target, `p`, RouteToActiveTarget, TargetGate, escape mode,
+Escaping, EscapeModeOn, mod + Y, mod mode Y, NormalBindings, pad_normal.cpp, ModModeKeyFor,
+Right stick camera, S185 reversed
+
+**The request (the user):** *"when using a controller, make r1 context sensitive: out of combat, it
+should announce directions to whatever destination is highlighted in the pathfinder. in combat, it
+should announce directions to target (replacing our mod specific controller command for this.) if
+escape mode is toggled, it should fall back to pathfinder. so effectively, same context gate as the
+d-pad with right stick camera on."*
+
+**What was built.**
+* **R1 in Normal mode:** `Context::Field` -> `\` (route + beacon, unchanged); `Context::Battle` and not
+  fleeing -> `p` (`RouteToActiveTarget`); `Context::Battle` in escape mode -> `\`. `FieldBusy` (a menu,
+  a target cursor, a message box) is untouched: R1 still passes through as the target list's group step.
+* **One predicate, `TargetGate(ctx)`** (`ctx == Battle && !Escaping()`), in `pad_normal.cpp`. The
+  camera-row D-pad's fight branch now calls it too, in place of its inline `Escaping()` test, so the two
+  controls the user tied together cannot drift apart (`L-71`). Behaviour of that branch is identical.
+* **R1's gate applies whichever way `Right stick camera` is set.** "Same context gate as the d-pad with
+  right stick camera on" was read as naming WHICH D-pad gate (the camera-row-off D-pad has no fight
+  switch), not as a condition on the row.
+* **Mod + Y lost its fight meaning** ("replacing our mod specific controller command"): it is rescan +
+  area (`` ` ``) in every context. Mod + X keeps its fight form (`;`), which the request did not touch.
+* **This reverses S185's "R1 never changes meaning in a fight".** S185's reason -- the route a player
+  most needs mid-combat is a way OUT -- is now answered by the escape-mode fallback, the game's own
+  flee flag. `Controls.md` strikes the S185 note rather than deleting it (`L-38`).
+* Keyboard unchanged: `\` and `p` are still separate keys.
+
+**Evidence that `p` resolves a target in `Context::Battle`:** the V1.0 archive log
+`2026-09-17_13-49-23` (build `48ded58`, when R1 in a fight was `p`) has ten `'p' (route to active
+target) pressed: target acquired` lines in one fight, each after a `ResolveTarget ... committed/acting
+enemy` line. **Not evidence for the escape half:** the fallback reads the same `Escaping()` flag as
+S194's camera-row D-pad override (`88641e8`), which is still UNPLAYED.
+
+### Status
+* **BUILT/DEPLOYED, UNPLAYED.** Clean build, no compiler warnings.
+* **Play check:** in a fight with no menu up, R1 speaks the route to the enemy (`PAD R1 -> directions
+  to target (p) ctx=battle`); hold flee and press R1 -> `route + beacon (\)`; on the field, the route to
+  the selection as before; with a target cursor up, R1 still steps the target group.
+* Files: `src\input\pad_normal.{h,cpp}`, `src\input\pad_router.{h,cpp}`, `README.md`, `Docs\Controls.md`.

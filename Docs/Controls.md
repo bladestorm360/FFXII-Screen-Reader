@@ -591,7 +591,8 @@ behind the modifier instead.
 | D-pad (field, and a fight with no menu up) | Party status — **clockwise from Up: member 1, 2, 3, then the guest** | `4` `5` `6` `7` |
 | D-pad (a menu, a target cursor or a message box) | Walks the Status Attributes page and an open Clan Primer entry, exactly as the arrow keys do. The game still gets the press | Arrow keys |
 | **L1** (field and battle) | **The interact readout** — who Confirm would address, or in a fight the enemy and its HP | `;` |
-| **R1** (field and battle) | Route to the current selection, and start the audio beacon | `\` |
+| **R1** (field) | Route to the current selection, and start the audio beacon | `\` |
+| **R1** (a fight with no menu up) | **Directions to the target** your party is on — **in escape mode: the route, as on the field** | `p` / `\` |
 | Back / Select | Mod mode — says **"Mod"** | — |
 | **L3** (left stick click) | Reachability filter off / on — says **"Unreachable filter, On"** | `F8` → that row |
 | **R3** (right stick click) | Audio beacon off / on — says **"Audio beacon, On"** | `F11` |
@@ -601,12 +602,21 @@ behind the modifier instead.
 > left.** On a plain idle field the description key has nothing to answer and the pathfinder has
 > everything, so Up cycles the category there. Anywhere a description could be read, it reads it.
 
-> **R1 STOPPED CHANGING MEANING AT S185, and the reason is the point.** It used to route to the
-> ACTIVE TARGET (`p`) in a fight. The user's ruling: *"the player needs to be able to pathfind away
-> from enemies if they want to escape, so even in battle it should be pathfind to selected
-> destination."* The one context where a route out matters most was the one context where the route
-> key aimed at the enemy. `p` did not lose its pad home — it moved to **mod + Y**, where asking for
-> the target's bearing is a deliberate question rather than the default.
+> **R1 CHANGES MEANING IN A FIGHT AGAIN (S196), THROUGH THE CAMERA-ROW D-PAD'S OWN GATE.** The
+> user: *"out of combat, it should announce directions to whatever destination is highlighted in the
+> pathfinder. in combat, it should announce directions to target (replacing our mod specific
+> controller command for this.) if escape mode is toggled, it should fall back to pathfinder. so
+> effectively, same context gate as the d-pad with right stick camera on."* One predicate
+> (`TargetGate`, `src\input\pad_normal.cpp`) now decides both: a fight with no menu up and the party
+> **not** fleeing. It applies whichever way `Right stick camera` is set. `p` left **mod + Y**, which
+> is rescan + area everywhere now.
+>
+> ~~**R1 STOPPED CHANGING MEANING AT S185.** It used to route to the ACTIVE TARGET (`p`) in a fight.
+> The user's ruling: *"the player needs to be able to pathfind away from enemies if they want to
+> escape, so even in battle it should be pathfind to selected destination."* `p` moved to mod + Y.~~
+> **Superseded at S196, not contradicted:** the way out S185 protected is still there — escape mode
+> (Left Ctrl, or holding the flee button) turns R1 back into the route, which is the game's own
+> statement that the player wants out.
 
 > **BOTH SHOULDERS ARE GATED ON `live` (Field or Battle), AND THAT IS WHAT KEEPS THE TARGET LIST
 > WORKING.** With a targeting cursor up the context is `FieldBusy`, not `Battle`, so neither shoulder
@@ -666,7 +676,9 @@ which is the layout above exactly. **On** frees only the stick's camera job:
 > fight** (the user: *"escape mode must overwrite the combat switch for the d-pad when in combat and fall
 > back to pathfinding"*): while the party is fleeing (Left Ctrl, or holding the flee button) the D-pad
 > is the pathfinder again, read from the game's own flag (`BattleState::EscapeModeOn`, S179) -- the
-> same rule that makes the beacon resume the route. Code: `src\input\pad_normal.cpp`.
+> same rule that makes the beacon resume the route. **R1 goes through this gate too (S196)** -- the
+> target in a fight, the route while fleeing -- whichever way this row is set. Code:
+> `src\input\pad_normal.cpp`.
 >
 > **`Normal D-pad` On overrides both D-pad columns above** — the D-pad is the game's on the field and
 > in a fight — so with both rows On the pathfinder has no pad control; the keyboard keeps it.
@@ -694,7 +706,7 @@ silence, so there is no mode to get stuck in.
 | Button | Out of combat | In a fight | Same as |
 |---|---|---|---|
 | X | Party gil | **The enemy: name and HP** | `g` / `;` |
-| Y | Rescan, and say the area name | **Directions to the active target** | `` ` `` / `p` |
+| Y | Rescan, and say the area name | same — **directions to the target moved to R1 at S196** | `` ` `` |
 | B | The summoned Esper: name, statuses, HP and summon gauge. **Silent when no Esper is out** | same | `8` |
 | Start | Open or close the mod's settings menu | same | `F8` |
 | R1 | **Normal D-pad off / on** — says "Normal D-pad, On" | same | `F8` → Normal D-pad |

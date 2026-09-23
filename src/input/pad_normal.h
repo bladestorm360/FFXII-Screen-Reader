@@ -39,6 +39,12 @@
 // the game's cursor. That is why this reverses S174's "D-pad never in combat" only for the moment in
 // a fight when there is no cursor for it to move.
 //
+// ---- R1 (S196, the user's request) -------------------------------------------------------------
+//
+// The route key on the open field (`\`); in a fight with no menu up, directions to the target (`p`);
+// in the game's escape mode, the route again. That is the camera-row D-pad's fight gate exactly --
+// both go through TargetGate in pad_normal.cpp -- but R1 applies it whichever way the row is set.
+//
 // ---- THE NORMAL D-PAD ROW (S195, the user's request) -------------------------------------------
 //
 // ON hands the D-pad to the game on the open field and in a fight -- nothing dispatched, nothing
