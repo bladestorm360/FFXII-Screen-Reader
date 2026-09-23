@@ -2139,10 +2139,14 @@ RVA = Ghidra-abs − 0x120000. Confidence + validation state noted; anything <0.
   `FUN_0029be50`, a party-panel message handler), `FUN_00327810(actor)` (callers `FUN_00237f40` = the
   KO hand-over on map load, `FUN_00237ea0`, `FUN_00306760` = summon), `FUN_00327870(slot)` (load),
   `FUN_003220e0` (actor rebuilt under a new handle — same character), `FUN_00326620` (leader not in
-  the party list), `FUN_00329cc0` (party restore). **The field D-pad's own handler is NOT identified**
-  — it does not need to be, since every path ends in the commit. `FUN_00263e30(obj)` =
+  the party list), `FUN_00329cc0` (party restore). **On the field, D-pad Up/Down OPENS A PARTY-LEADER
+  MENU** (the user, from play, S195) — so a leader change by pad is a menu choice. Its handler is not
+  identified; `FUN_0029be50` is the likeliest candidate (a window message handler that builds one row
+  per party member and, on its confirm, sets the leader through `FUN_0035baa0` → `FUN_00327850`)
+  — **unconfirmed, below the bar**. `FUN_00263e30(obj)` =
   `*(obj+0x30)`, the component, which is the actor (`+0x08` handle, `+0x698` BtlChr, BtlChr `+0x04` =
-  char id = the value `W+0x5AA4` holds). Used by `src\battle\party_leader.cpp`. Corollary: leader→controller `+0xD8` = `PPhysicsWorld`
+  char id = the value `W+0x5AA4` holds). S195 hooked the commit for a "<name>, leader"
+  announcement and removed it the same session (the D-pad's menu already says it); commit `09da7ee`. Corollary: leader→controller `+0xD8` = `PPhysicsWorld`
   (RE-4 context) → `+0x60` = raycast world, so this anchor closes RE-4's handle too.
 - **CORRECTION — camera globals are STALE for our build:** `CameraLookAtPointPtr`/
   `CameraPositionPtr` (community RVA `0x20955F0`/`E0`) do NOT exist here (0 occurrences,

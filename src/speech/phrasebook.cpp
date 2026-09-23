@@ -228,9 +228,6 @@ const Row kTable[] = {
     EN(L"Whether the D-pad works the mod or goes to the game."),
     EN(L"Off gives the D-pad to the mod, on the field and in a fight."),
     EN(L"On gives the D-pad back to the game, so it chooses the party leader. The mod does nothing with it. Menus are not affected."),
-
-    // S195: the party-leader announcement's one word.
-    EN(L"leader"),
 };
 
 #undef EN

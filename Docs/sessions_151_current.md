@@ -4677,7 +4677,7 @@ UNPLAYED. Docs: `Controls.md` (now a table), `README.md`, `pad_router.h`.
   `ui\mod_menu.{h,cpp}`, `speech\phrasebook.{h,cpp}` (4 phrases, ours -- flag rewording),
   `CMakeLists.txt`, `README.md`, `CLAUDE.md`, `Docs\{GameArchitecture,Controls,Lessons,PerformanceIssues}.md`.
 
-## Session 195 — 2026-09-22 — [input][party] The D-pad is always vitals with the camera row off; the Normal D-pad row hands it to the game; a new leader is announced (BUILT/DEPLOYED, UNPLAYED)
+## Session 195 — 2026-09-22 — [input] The D-pad is always vitals with the camera row off; the Normal D-pad row hands it to the game (PLAY-CONFIRMED; leader announcement built and removed)
 
 KEYWORDS: Normal D-pad, NormalDpad, normal_dpad, party leader, D-pad passthrough, D-pad in battle,
 party vitals in a fight, Right stick camera, escape mode, Escaping, mod mode R1, mod + R1,
@@ -4750,15 +4750,25 @@ wording "Basch, leader".
 * Docs: `GameArchitecture.md` (LEADER-HANDLE COMMIT), `Controls.md`, archive note
   `..\FFXII-Decompile\notes\party_leader_commit_s195.md`. README unchanged: no key, nothing to look up.
 
+**REMOVED the same session (2026-09-23), at the user's instruction:** *"pressing up or down on the d-pad
+actually brings up a menu to select the party leader. so it's unnecessary to announce who's just become
+the leader."* The announcement is committed in `09da7ee` so it can be restored from history, and removed
+in the next commit: `party_leader.{h,cpp}`, its init/shutdown, its CMake line and its phrase are gone,
+and `PlayerState` is back exactly as it was (`ComponentForHandle` had no other caller). The RE stays in
+`GameArchitecture.md`. The miss is `L-111`: "which path does not matter" was true for the detector and
+backwards for what to speak -- the path was the leader MENU, already read. `FUN_0029be50`, set aside as
+"a party panel", is the likeliest handler for it (unconfirmed).
+* **`09da7ee` was amended before its first push**: two comment lines and one `GameArchitecture.md` line
+  quoted the game (a disassembly line, a decompiler assignment) and were rewritten as prose, per
+  `CLAUDE.md`'s WHAT NEVER ENTERS THE REPO.
+
 ### Status
-* **BUILT + DEPLOYED, UNPLAYED.** Clean build, no warnings. The deployed DLL carries `normal_dpad`,
-  `mod + R1 -> normal D-pad`, and both new UTF-16 phrases.
-* Play checks: with `Normal D-pad` On, switch leader with the D-pad -- "<name>, leader" each time,
-  and `[PARTY] leader changed:` in the log; a map change says nothing. Camera row Off, in a fight with
-  no menu -- the D-pad reads the party; fleeing changes nothing. `Normal D-pad` On -- the D-pad switches the party leader on the field, and the mod says
-  nothing on it. Back, R1 -- "Normal D-pad, On", and again for Off.
+* **PLAY-CONFIRMED** (the user, 2026-09-23: *"other than that, working perfectly"*): the D-pad as
+  vitals in a fight with the camera row off, the `Normal D-pad` row and mod + R1. Clean build, no
+  warnings; the deployed DLL has no leader hook (hook count back to 75).
 * `mod_menu.cpp` is 675 lines, still over the cap (existing debt, `PerformanceIssues.md`).
 * Files: `src\input\pad_normal.{h,cpp}`, `src\input\pad_router.{h,cpp}`, `src\ui\mod_menu.{h,cpp}`,
-  `src\speech\phrasebook.{h,cpp}`, `src\battle\party_leader.{h,cpp}` (new),
-  `src\navigation\player_state.{h,cpp}`, `src\proxy\dllmain.cpp`, `CMakeLists.txt`, `README.md`,
-  `Docs\{Controls,PerformanceIssues,GameArchitecture}.md`.
+  `src\speech\phrasebook.{h,cpp}`, `README.md`,
+  `Docs\{Controls,PerformanceIssues,GameArchitecture,Lessons}.md`. `09da7ee` also carries
+  `src\battle\party_leader.{h,cpp}`, the `PlayerState` resolver, the `dllmain.cpp` wiring and the CMake
+  line; the removal commit takes them back out.

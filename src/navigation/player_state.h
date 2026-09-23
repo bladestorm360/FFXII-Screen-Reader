@@ -60,12 +60,6 @@ void* ReadLeaderSceneObject();
 // physics controller + world matrix.
 void* ReadLeaderComponent();
 
-// The same two hops for ANY handle, with no field-active gate: ResolveHandle, then `*(sceneObj+0x30)`
-// with the validity bit. ReadLeaderComponent is this applied to the live leader handle. The component
-// is the ACTOR in BattleState's sense -- `+0x08` its handle, `+0x698` its BtlChr (FUN_003220e0 reads
-// exactly this chain). Null on any failure. S195: PartyLeader names a new leader with it.
-void* ComponentForHandle(uint32_t handle);
-
 // Snapshot of every hop, capturing partial progress even when a later hop fails —
 // consumed by the M0 diagnostic dump.
 struct LeaderChain {

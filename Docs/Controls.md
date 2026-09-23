@@ -681,10 +681,9 @@ up: nothing is dispatched and nothing is consumed, whichever way `Right stick ca
 target cursors and message boxes are unchanged, because the D-pad is already the game's cursor there.
 Mod + R1 speaks **"Normal D-pad, On"** / **"Off"**. Code: `src\input\pad_normal.cpp`.
 
-**Whoever becomes leader is announced** — "Basch, leader" — however it happened: the D-pad, the party
-menu, or the game handing over when the leader falls. Nothing on a map load, and nothing when the same
-character is rebuilt under a new handle. One hook on the game's leader-handle commit
-(`src\battle\party_leader.cpp`; the facts are in `GameArchitecture.md`, "LEADER-HANDLE COMMIT").
+**On the field, D-pad Up or Down opens the game's own party-leader menu** (the user, from play), so
+the choice is read like any menu and needs no announcement of its own. One was built at S195 and
+removed the same session for exactly that reason; commit `09da7ee` holds it.
 
 ### Mod mode — press Back, then one button
 

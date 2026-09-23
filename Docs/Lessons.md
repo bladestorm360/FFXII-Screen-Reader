@@ -39,7 +39,7 @@ task.** Nine times out of ten the relevant lesson is one of six.
 | anything that makes the mod speak | `TAG:speech` | L-33…L-37, L-102, L-108 |
 | writing docs, committing, closing a session | `TAG:process` | L-38…L-43, L-67, L-68, L-92 |
 | something is slow, or timing-dependent | `TAG:timing` | L-44…L-47, L-60, L-65, L-75, L-88, L-99, L-106 |
-| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100, L-103, L-105 |
+| how wide should the fix be; is this key free | `TAG:scope` | L-48…L-51, L-63, L-66, L-70, L-71, L-78, L-93, L-96, L-100, L-103, L-105, L-111 |
 | build, release, Ghidra, Frida, menus, input | `TAG:tooling` | L-52…L-58, L-98, L-104, L-109 |
 
 **Format of an entry:** the imperative as the `### L-NN` heading, then **Why** (the evidence that
@@ -1156,6 +1156,19 @@ stays put. The older and better-argued the note, the more it reads as a fact abo
 and needs a software mixer"*) was true about the code and false about the requirement -- the library
 already did the mixing (`L-104`). Between them: **a carried-forward blocker names an obstacle someone
 once hit, never a property of the problem.** Re-derive it against today's request and today's library.
+
+### L-111 A CHOKE POINT TELLS YOU THAT THE STATE CHANGED, NOT WHAT THE PLAYER HEARD ON THE WAY
+**Before announcing a state change, find out how the player CAUSES it -- the input that changes it may
+open a surface that already speaks.**
+**Why:** S195. Asked to announce a new party leader, the session found the one writer of the controlled
+character's handle and hooked it -- a correct, complete detector -- and wrote down *"the field D-pad's
+handler was not found, and did not need to be"*. It did need to be: D-pad Up/Down opens the game's own
+leader MENU, which the mod already reads, so the announcement said the choice a second time. The user
+removed it the same day. The candidate handler had been on screen and set aside as "a party panel".
+**The tell:** "every path ends here, so which path does not matter". For a detector that is true; for a
+decision about what to SPEAK it is backwards, because what the player already hears lives on the path.
+**How to apply:** ask, or read, what the player's own input does first -- one sentence to the user
+("what does the D-pad do when you press it?") would have settled it before any RE.
 
 ### L-105 A CAP AND A SCHEDULER ARE DESIGN CAUTION, AND CAUTION DELETES INFORMATION
 **When a feature's job is to report what is there, ask what your safety margin is hiding before you add
