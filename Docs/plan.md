@@ -4,105 +4,84 @@ Status: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` blocked
 
 ## Current maintenance requests — 2026-10-15
 
-**Follow-up investigation:** user authorized deeper offline RE, retaining the no-mod-code boundary.
-See [the source-backed investigation](VoiceAndMounts.md) for the current result: voice suppression
-needs a positive page/voice ownership join; mounted autowalk shares the native leader/input path,
-but the user now confirms it failed for a tester. Production fixture verifies
-the 250 ms class-cache transition issue; no gameplay breakage is inferred from it. These findings
-supersede the preliminary difficulty/root-cause assessment below. Implementation remains pending.
-The [navigation audit request](NavigationAudit.md) preserves the corrected mounted failure, the
-tester-supplied Exodus/chocobo/floatweed report, current live-mesh A* architecture and required deep
-physics/blocker/objective audit plus baked-map refactoring evaluation.
+**User-set priority order, 2026-10-15.** This is the authoritative current open-issues order;
+it supersedes earlier recommendations to do mounted transition work first or merely evaluate
+whether to adopt baked maps. This turn updates documentation only. Implementation, build/deploy
+and runtime testing remain pending; preserve the committed core fixes and existing working behavior.
 
-- [ ] Investigate and repair mounted autowalk specifically; do not treat the user's own lack of
-  testing as negating the tester's failure or call the transition cache the confirmed root cause.
-- [ ] Deep navigation audit and baked-map refactor evaluation, with the reported Exodus sequence
-  as a priority regression scenario. Establish objective discovery, conditional connectivity and
-  physics correctness independently. This pass documents requirements; it does not implement them.
+### 1. Replace the current pathfinding system with baked maps
 
-**Documentation only, requested by the user.** No implementation, build, deployment or runtime test
-is authorized by this entry. These items remain pending; the limited source inspection below is not
-a completed refactoring audit or proof of either fix's cause. Preserve the committed October 4 core work.
+- [ ] Replace the current live-mesh search/repair system with a baked-map-based navigation system.
+  This is the selected refactoring direction. The intended outcome is to resolve recurring routing,
+  blocker and elevation failures structurally, including the reported Exodus/chocobo/floatweed case.
+  Deliver one authoritative planning path and retire the superseded implementation after validation.
+- Extract the actual game geometry, elevations/layers, connections, placements, interaction approaches,
+  movement-mode rules and script conditions offline into versioned, hashed, mod-owned map data.
+  Preserve useful native mesh structure and reconcile current shrine/bridge/gate, quest/reveal,
+  collection/despawn and moving-target state. Routes still need the current start, destination and
+  state; baked geometry must not assume every puzzle connection is permanently open.
+- Audit native physics, clearance, blockers and connectivity as part of this replacement. Compare
+  the changed production consumers against recovered native semantics and real extracted data;
+  include working-map controls, overlapping elevations, mounted-only passages, bridge open/closed
+  states, cancellation and stale-result rejection. Do not claim that changing storage alone proves
+  those semantics correct. See [NavigationAudit.md](NavigationAudit.md) for the exact tester report,
+  present live-mesh A* architecture, detailed audit scope and acceptance requirements.
+- Keep native observation bounded/read-only and planning on owned data off the game thread, with
+  validated total state/work/backlog bounds and whole-pipeline timing evidence. Use the maintained
+  [offline extraction/refactoring contract](../../../../codex/templates/accessibility-mod/references/offline-discovery.md)
+  and [speech/architecture contract](../../../../codex/templates/accessibility-mod/references/speech-and-architecture.md).
 
-### Refactoring audit
+### 2. Mounted autowalk and voiced dialogue speech suppression
 
-- [ ] Audit the existing mod against the maintained [speech/architecture contract](../../../../codex/templates/accessibility-mod/references/speech-and-architecture.md)
-  and [offline refactoring contract](../../../../codex/templates/accessibility-mod/references/offline-discovery.md#offline-prototyping-and-refactoring).
-  Record findings and priorities in [PerformanceIssues.md](PerformanceIssues.md), using
-  [PerFrameAudit.md](PerFrameAudit.md) and [GameArchitecture.md](GameArchitecture.md) as evidence pointers.
-- Trace actual callback-to-consumer paths, thread/pointer ownership, waits/locks, synchronous
-  speech/audio/text/log/file work, scans/pathfinding, startup/shutdown and SDL ownership. Initial
-  source-backed review targets: `DialogueReader::HookedTextWalk` takes a mutex and calls `EmitPage`
-  for decode/log/speech; `nav_hooks.cpp` invokes `PathPlanner::OnGameFrame`, which calls
-  `RouteQuery::Search`. Audit their complete consumers before choosing safe snapshot boundaries.
-- Preserve native event/page guards, controls, speech order, working maps and approved input writes.
-  Centralize actual duplication and mixed responsibilities without a blanket rewrite or arbitrary
-  file splits. Workers must own copied data; game callbacks must never wait for mod processing.
-- Require behavior-preserving production-consumer checks, validated counts/work/backlog bounds,
-  overload/cancellation/retirement checks and comparable whole-pipeline performance evidence.
-  Record unmeasured callback/aggregate cost, usable/audible response, data age and tail delays;
-  worker placement alone proves none of these. Separate offline results from user-side gameplay.
+- [ ] Repair **tester-reported autowalk failure on mounts/vehicles**, initially chocobos. Trace actual
+  mount/rider identity, controlled origin, movement class, route validity, input consumer, speed,
+  camera steering and stop conditions together. The user's own lack of testing does not negate the
+  tester report. The verified 250 ms class-cache issue is a risk, not the established root cause.
+- [ ] Assess **game-side pathfinding and movement** as an alternative to current DirectInput W/A/S/D
+  simulation. Native party/gambit pathing is not currently used by autowalk. Recover actual supported
+  entry points, actor ownership, thread/lifetime requirements, ordinary player control semantics and
+  cancellation before judging feasibility. Compare end-to-end efficiency/responsiveness, native-thread
+  cost, correctness, maintenance cost and mounted/controller coverage using equivalent scenarios.
+  Keep input simulation if game-side control is less efficient or offers no justified benefit;
+  switching is optional and must fit the baked-map architecture and shared route consumers.
+- [ ] Add a persistent, accessible toggle for suppressing automatic screen-reader dialogue speech
+  when the matching native voice is audible, following the behavior of BDFFHD/FFX. Preserve choices,
+  unvoiced/muted/failed/uncertain-voice fallback and explicit `t` repeat. Keep it independent of mute
+  and Autodetail; suppression default is proposed Off. No text-content deduplication.
+- [VoiceAndMounts.md](VoiceAndMounts.md) records the native investigation, real script census,
+  production class-cache fixture and unresolved positive page/voice ownership and playback-state
+  join. Settings/output wiring is straightforward; those remaining facts require targeted evidence.
 
-### Voiced dialogue speech suppression
+### 3. Broader mod audit and justified refactoring
 
-- [ ] Add a persistent, accessible mod-menu toggle to suppress automatic screen-reader speech for
-  dialogue with matching native voice playback, as requested for parity with BDFFHD and FFX.
-  Suppress the duplicate dialogue utterance, not choices, menus, tutorials or unrelated speech.
-  Unvoiced, disabled/muted, failed or uncertain voice must retain speech. Preserve the current line
-  for explicit `t` repeat; this is a voice policy, not text-content deduplication. Initial suppression
-  default is proposed Off to preserve behavior until deliberately enabled.
-- **Observed:** `ui/dialogue_reader.cpp::EmitPage` decodes the current page, notifies ChoiceReader,
-  updates MessageReader's repeat line and calls `Speech::Output`; no voice qualification is present
-  in that path. `ui/mod_menu.cpp` already supplies persistent settings. Existing script-native voice
-  references in GameArchitecture.md are leads, not an established dialogue-to-audible-voice binding.
-- **Reference semantics checked:** BDFFHD `src/settings.cpp` and `src/dialogue_state.h` match a line
-  to voice identity; FFX `src/native/settings.cpp` and `dialogue_voice.cpp` track voice state/ownership.
-  Both offer Suppress/Braille only/Speak anyway, fallback speech and explicit repeat. The request
-  here is a suppression toggle; do not silently expand it to a three-choice output redesign.
-- **Difficulty:** setting/output wiring is small; reliable per-line voice identity, start ordering,
-  page coverage, native volume/playback status and retirement are the uncertain work. Likely small
-  to moderate if existing native evidence exposes them; not yet established as a quick fix. First
-  inspect only the relevant existing voice/message producers offline. No audio-amplitude heuristic,
-  global "some sound is playing" mute, speculative capture or transplanted engine offsets.
+- [ ] Review threading and centralization across mod-side calls, game-state/context tracking,
+  helpers/utilities, speech/audio/input ownership and lifecycle. The user reports little instability;
+  preserve stable systems and make changes where the audit demonstrates a safety or maintainability
+  benefit. This is a review-led maintenance pass, not a presumption that the whole mod needs rewriting.
+- Trace actual callback-to-consumer paths, pointer/thread ownership, locks/waits, synchronous
+  speech/audio/text/log/file work, scans and startup/shutdown. Initial evidence-backed review targets
+  include `DialogueReader::HookedTextWalk`/`EmitPage` and field-frame planning consumers. Keep game
+  callbacks nonblocking; workers consume owned snapshots and never retain thread-affine game pointers.
+- Centralize genuinely shared calls, state and utilities in cohesive modules so future changes have
+  one clear home. Preserve event/page guards, speech order, controls, working maps and approved input
+  writes. Avoid redundant wrappers, arbitrary file splits and unrelated framework/backend changes.
+- Record findings in [PerformanceIssues.md](PerformanceIssues.md), using [PerFrameAudit.md](PerFrameAudit.md)
+  and [GameArchitecture.md](GameArchitecture.md) as evidence pointers. Verify actual production callers,
+  behavior and overload/cancellation/lifetime boundaries. Record comparable callback/aggregate cost,
+  usable/audible response, data age and tail delays; asynchronous placement alone is not proof.
 
-### Autowalk while riding chocobos
+### Eventual acceptance and current status
 
-- [ ] Make the existing default-off autowalk work when mounted. Start with chocobos; establish the
-  game's freely controlled transport scope before claiming they are the only vehicle. The private
-  airship destination map is already documented as a menu (`debug.md`, Session 176); that is separate
-  from field movement. Do not add generic vehicle machinery without evidence of another need.
-- **Observed:** `navigation/auto_walk.cpp` consumes the beacon's route, reads
-  `PlayerState::ReadPlayerPos`, steers relative to the camera and publishes bounded W/A/S/D intent
-  through `OnDevicePoll`. `player_state.cpp::PartyMovementClass` and `nav_rva.h` already recognize
-  mounted class 5 (250 ms cache); `nav_mesh.cpp::TerrainRefused` passes the live class to native
-  walkability. Mounted awareness exists, but successful mounted autowalk is unverified.
-- **Difficulty:** potentially a contained maintenance fix, with moderate uncertainty. Check the
-  controlled actor/position chain, field-safety gates, mounted input consumer, route/cache class
-  invalidation, body clearance, speed/corner overshoot and arrival/stuck handling. No root cause has
-  been demonstrated; do not promise a one-line fix or rebuild the pathfinder. Keep manual input
-  priority, all stop conditions and the approved native movement route; add no mount/dash automation.
+After implementation and relevant offline checks, prioritize the reported Exodus objective/floatweed
+route and working-map/elevation controls; then mounted travel, cornering, arrival and immediate
+mount/dismount transitions with keyboard/controller override; then voiced/unvoiced dialogue, choices,
+`t` repeat, native voice mute/failure and settings persistence. Complete the broader lifecycle,
+behavior and comparable performance checks. Preserve simple nonvisual steps and distinct missing-target,
+No-path, wrong-level, no-movement and stale-input symptoms in the linked records.
 
-### Economical next pass and eventual acceptance
-
-Implement neither fix during this documentation-only task. When implementation is requested, start
-with bounded offline checks of the two unknown producer paths above; prioritize whichever yields a
-verified local fix. Keep a broad audit/refactor separate, except for safety corrections necessary to
-the touched path. If either needs substantial new RE, record the exact blocker and finish independent
-work rather than opening a broad investigation. No reliable time/usage estimate exists yet.
-
-After implementation and relevant offline checks, accumulate these short gameplay checks for the
-final handoff, earliest available dialogue/chocobo access first:
-
-1. Enable suppression; hear a voiced line once from the game, unvoiced text and choices normally,
-   and `t` repeat on request. Disable suppression; dialogue speech returns. Check muted/failed voice,
-   page/line changes and reload persistence. Missing text or suppression leaking to other UI fails.
-2. With autowalk enabled, route on foot, then on a chocobo; check straight travel, a corner and
-   stopping at the destination. Manual movement must take priority; menus, route loss, focus/map
-   changes and dismount must not leave stale movement. Check mounted-only access and normal/high
-   game speed where available. Spinning, overshoot, false arrival or stuck input fails.
-
-**Status:** requests documented; fixes unimplemented, offline functional validation and
-gameplay confirmation pending. Transport exclusivity and both fixes' root causes remain unresolved.
+**Status:** priorities documented; baked-map replacement selected; implementation and full audits
+pending. The mounted failure's cause, voice ownership join and game-side pathing efficiency remain
+unresolved. No new game/runtime activity or mod-side code change in this documentation pass.
 
 ## Phase 0: Scaffolding (no game interaction)
 

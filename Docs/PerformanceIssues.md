@@ -2,10 +2,18 @@
 
 ## Current audit request — 2026-10-15
 
-The user requests a refactoring audit against the current template and persistent guidance.
+The user sets this [open-issues priority order](plan.md#current-maintenance-requests--2026-10-15):
+
+1. Replace the current pathfinding system with baked maps, including physics/blocker/elevation correctness.
+2. Fix mounted autowalk and add voiced-dialogue suppression. Assess native pathing/movement only if
+   it offers an efficiency/correctness benefit over input simulation.
+3. Audit broader threading and centralization of mod calls, game-state tracking and utilities.
+   Little instability is reported; preserve stable systems and refactor where evidence justifies it.
+
+The user requests the audits against the current template and persistent guidance.
 The [deep navigation audit](NavigationAudit.md) is explicitly required: native physics/blockers,
 mounted input/identity, Exodus objective/floatweed connectivity, search/validation correctness,
-whole-pipeline performance and evaluation of an offline-baked base with live state reconciliation.
+whole-pipeline performance and the selected offline-baked replacement with live state reconciliation.
 **Pending, documentation only:** this session did not perform the full audit or change source.
 The [current maintenance plan](plan.md#current-maintenance-requests--2026-10-15) records scope,
 source-backed starting points, ownership/nonblocking and whole-pipeline acceptance requirements,

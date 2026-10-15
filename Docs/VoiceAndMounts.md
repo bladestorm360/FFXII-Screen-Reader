@@ -125,8 +125,13 @@ does not prove an exhaustive list of every controllable transport, so do not cla
 
 ## Next implementation pass and acceptance
 
-Prioritize tracing and repairing the tester's mounted failure, including the Exodus floatweed route;
-do not reduce the scope to the cache issue or infer success from the shared native path. Voice policy is
+The user-set [open-issues order](plan.md#current-maintenance-requests--2026-10-15) now puts baked-map
+pathfinder replacement first; these mounted/voice fixes are second, and broader mod review third.
+For the mounted fix, trace the tester's failure including the Exodus floatweed route; do not reduce
+the scope to the cache issue or infer success from the shared native path. Assess game-side pathing
+and movement as an optional alternative, retaining input simulation if it is more efficient or the
+native route offers no justified benefit. See [NavigationAudit.md](NavigationAudit.md#optional-native-pathingmovement-assessment--priority-2).
+Voice policy is
 moderate remaining RE/integration, not just a settings edit; finish its exact owner join first.
 Keep the broader refactoring audit separate, while obeying the current nonblocking contract in
 touched paths. No implementation or runtime/performance success is claimed here.

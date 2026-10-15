@@ -1,8 +1,11 @@
 # Navigation audit and baked-map refactoring request
 
 Recorded 2026-10-15. **Documentation/source inspection only; audit and implementation pending.**
-User requests a deep audit of navigation physics, blockers and routing, and evaluation of a complete
-pathfinding refactor using baked maps under the maintained template. No mod-side code change,
+User requests a deep audit of navigation physics, blockers and routing, and has selected a complete
+pathfinding replacement using baked maps as **priority 1** under the maintained template. Mounted
+autowalk/voiced dialogue are priority 2; broader mod threading/centralization review is priority 3.
+The [current maintenance plan](plan.md#current-maintenance-requests--2026-10-15) owns that order.
+No mod-side code change,
 deployment, game execution or new runtime capture is authorized by this record.
 
 ## Tester report and corrected scope
@@ -71,7 +74,12 @@ the matching game data/scripts. Do not hardcode a permanently open bridge from a
    cancellation and native callback/aggregate cost plus request-to-usable/audible response, data age
    and tail delays. Existing workers, caches or small batches alone are not performance evidence.
 
-## Baked-map direction to evaluate
+## Selected baked-map replacement
+
+The user selected replacement of the current live-mesh search/repair implementation, with the goal
+of addressing the recurring route and elevation failures structurally. This supersedes the earlier
+recommendation merely to evaluate adoption. Implementation is still pending; the current turn orders
+the documented work. Validate the replacement and retire the superseded planning path.
 
 Use the template's [offline extraction and live reconciliation contract](../../../../codex/templates/accessibility-mod/references/offline-discovery.md#extract-map-data-offline):
 extract the actual native geometry/layers, connections, placements, interaction approaches and
@@ -87,11 +95,21 @@ or dynamic connectivity. Reconcile native quest/reveal, bridge/shrine/gate state
 collection/despawn state; invalidate stale plans promptly. Static connectivity alone is insufficient
 for this reported sequence.
 
-Evaluate a full replacement against the current production planner on the same extracted game data
+Validate the full replacement against the current production planner on the same extracted game data
 and faithfully recovered native semantics. Preserve ABI/numeric/order/lifetime evidence and make
 unavailable engine boundaries explicit. Include working-map controls and discriminating foot/mount,
 bridge open/closed, overlapping-height, false-blocker, cancellation and map-return cases. User gameplay
 confirmation is distinct. No claim that most existing failures are solved merely by changing map storage.
+
+## Optional native pathing/movement assessment — priority 2
+
+Assess actual game-side pathfinding and movement, including whether party/gambit movement can safely
+serve the player-controlled mount, against the existing W/A/S/D simulation. No suitable callable route
+or efficiency advantage is established yet. Recover ABI/ownership, thread affinity, manual priority,
+cancellation and control/physics behavior; compare equivalent end-to-end work and native callback cost,
+usable response, mounted/controller coverage and maintenance burden. Keep input simulation if native
+control is less efficient or provides no justified benefit. This option must fit the selected baked-map
+architecture; it is not a requirement to switch movement mechanisms.
 
 ## Prioritized eventual acceptance
 
@@ -104,4 +122,5 @@ keyboard/controller manual override. Record missing-target, No-path, wrong-level
 symptoms separately. Accumulate these with the broader maintenance acceptance procedure.
 
 **Status:** tester failures preserved; current architecture source-verified; deep audit, exact cause,
-bake coverage/format, refactor decision, implementation and gameplay/performance validation pending.
+bake coverage/format, optional native-control decision, implementation and gameplay/performance
+validation pending. Baked-map replacement is selected as the first priority.
