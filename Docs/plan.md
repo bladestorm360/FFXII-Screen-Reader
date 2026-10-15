@@ -4,6 +4,13 @@ Status: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` blocked
 
 ## Current maintenance requests — 2026-10-15
 
+**Follow-up investigation:** user authorized deeper offline RE, retaining the no-mod-code boundary.
+See [the source-backed investigation](VoiceAndMounts.md) for the current result: voice suppression
+needs a positive page/voice ownership join; mounted autowalk is untested, not a reported failure,
+and already shares the native chocobo-controlled leader/input path. Production fixture verifies
+the 250 ms class-cache transition issue; no gameplay breakage is inferred from it. These findings
+supersede the preliminary difficulty/root-cause assessment below. Implementation remains pending.
+
 **Documentation only, requested by the user.** No implementation, build, deployment or runtime test
 is authorized by this entry. These items remain pending; the limited source inspection below is not
 a completed refactoring audit or proof of either fix's cause. Keep the existing October 4 core work

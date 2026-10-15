@@ -1,5 +1,9 @@
 # FFXII Game Architecture — RVA / Offset / Struct Registry
 
+Current subsystem evidence (2026-10-15): [voiced-dialogue and mounted-autowalk investigation](VoiceAndMounts.md)
+records native producers/ownership leads, chocobo control/class transitions, verified source risks,
+offline fixtures and remaining gaps. No mod-side code or runtime changes in that investigation.
+
 This is the **persistent lookup** for everything we've discovered about
 `FFXII_TZA.exe` internals. Session logs reference entries here; entries here are not
 duplicated in session logs.

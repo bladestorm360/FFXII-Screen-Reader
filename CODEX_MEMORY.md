@@ -15,7 +15,8 @@ This is the source entry for that workspace. Read the linked memory once, then o
 
 ## 2026-10-15 documentation-only maintenance request
 
-- [Current maintenance plan](Docs/plan.md#current-maintenance-requests--2026-10-15): pending template/persistent-guidance refactoring audit, persistent voiced-dialogue suppression toggle and chocobo-first mounted autowalk repair. Limited source inspection only; no implementation/build/deploy/runtime tests. Voice-to-line binding, mounted failure cause and transport exclusivity remain unverified. Preserve existing core edits. Audit findings belong in [PerformanceIssues.md](Docs/PerformanceIssues.md); the plan records economical next steps and eventual nonvisual acceptance checks.
+- Follow-up offline investigation completed, no mod-side code/deploy/runtime changes: [VoiceAndMounts.md](Docs/VoiceAndMounts.md). User clarified mounts are untested, not a reported failure. Native chocobo control already updates the shared leader/input path. Unchanged production fixture verifies 250 ms class-cache transition retention and a conditional slot-0 safety rejection; occurrence in mounted play unproved. Voice/captions use separate script routines; registry/voice-ID shortcut rejected by 1,115-file US census. Exact per-page audible ownership/mute/start binding remains open. Local timestamped RE archive linked in the record. Existing work committed/pushed as `5207c1f`; all three core/speech regressions pass.
+- [Current maintenance plan](Docs/plan.md#current-maintenance-requests--2026-10-15): pending refactoring audit, voiced-dialogue suppression toggle and chocobo-first mounted autowalk coverage; accumulated nonvisual acceptance checks. The follow-up investigation above supersedes the initial difficulty assessment. Audit findings belong in [PerformanceIssues.md](Docs/PerformanceIssues.md).
 
 ## Engineering and model policy
 
