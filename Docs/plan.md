@@ -6,15 +6,23 @@ Status: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` blocked
 
 **Follow-up investigation:** user authorized deeper offline RE, retaining the no-mod-code boundary.
 See [the source-backed investigation](VoiceAndMounts.md) for the current result: voice suppression
-needs a positive page/voice ownership join; mounted autowalk is untested, not a reported failure,
-and already shares the native chocobo-controlled leader/input path. Production fixture verifies
+needs a positive page/voice ownership join; mounted autowalk shares the native leader/input path,
+but the user now confirms it failed for a tester. Production fixture verifies
 the 250 ms class-cache transition issue; no gameplay breakage is inferred from it. These findings
 supersede the preliminary difficulty/root-cause assessment below. Implementation remains pending.
+The [navigation audit request](NavigationAudit.md) preserves the corrected mounted failure, the
+tester-supplied Exodus/chocobo/floatweed report, current live-mesh A* architecture and required deep
+physics/blocker/objective audit plus baked-map refactoring evaluation.
+
+- [ ] Investigate and repair mounted autowalk specifically; do not treat the user's own lack of
+  testing as negating the tester's failure or call the transition cache the confirmed root cause.
+- [ ] Deep navigation audit and baked-map refactor evaluation, with the reported Exodus sequence
+  as a priority regression scenario. Establish objective discovery, conditional connectivity and
+  physics correctness independently. This pass documents requirements; it does not implement them.
 
 **Documentation only, requested by the user.** No implementation, build, deployment or runtime test
 is authorized by this entry. These items remain pending; the limited source inspection below is not
-a completed refactoring audit or proof of either fix's cause. Keep the existing October 4 core work
-and unrelated working-tree edits.
+a completed refactoring audit or proof of either fix's cause. Preserve the committed October 4 core work.
 
 ### Refactoring audit
 
@@ -93,7 +101,7 @@ final handoff, earliest available dialogue/chocobo access first:
    changes and dismount must not leave stale movement. Check mounted-only access and normal/high
    game speed where available. Spinning, overshoot, false arrival or stuck input fails.
 
-**Status:** all three requests documented; fixes unimplemented, offline functional validation and
+**Status:** requests documented; fixes unimplemented, offline functional validation and
 gameplay confirmation pending. Transport exclusivity and both fixes' root causes remain unresolved.
 
 ## Phase 0: Scaffolding (no game interaction)

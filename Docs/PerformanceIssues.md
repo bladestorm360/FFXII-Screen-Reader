@@ -3,6 +3,9 @@
 ## Current audit request — 2026-10-15
 
 The user requests a refactoring audit against the current template and persistent guidance.
+The [deep navigation audit](NavigationAudit.md) is explicitly required: native physics/blockers,
+mounted input/identity, Exodus objective/floatweed connectivity, search/validation correctness,
+whole-pipeline performance and evaluation of an offline-baked base with live state reconciliation.
 **Pending, documentation only:** this session did not perform the full audit or change source.
 The [current maintenance plan](plan.md#current-maintenance-requests--2026-10-15) records scope,
 source-backed starting points, ownership/nonblocking and whole-pipeline acceptance requirements,

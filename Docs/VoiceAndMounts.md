@@ -1,7 +1,9 @@
 # Voiced dialogue and mounted autowalk investigation
 
 Investigated 2026-10-15 by Sol. User authorized deeper offline investigation/RE, **no mod-side code
-changes**. User clarified that mounted autowalk is a requested capability, not a tested failure.
+changes**. Correction later on 2026-10-15: the user confirms mounted autowalk failed for a tester.
+The user's own untested status was incorrectly generalized to the tester. See the
+[Exodus report and navigation audit request](NavigationAudit.md) for the authoritative failure scope.
 
 Before investigating, committed the outstanding October 4 core fixes/tests and project notes as
 `5207c1f` and pushed to the existing `origin/master`. All three isolated core/speech tests passed.
@@ -69,8 +71,14 @@ and Autodetail. Suppress only automatic matching dialogue; choices/unvoiced line
 
 ## Mounted autowalk
 
-**The fundamental native path is already compatible in design; a gameplay defect is not established.**
-Do not write a new vehicle controller merely because the user requested coverage.
+**Tester-reported mounted autowalk failure; cause unresolved.** The shared native path below does
+not establish successful mounted autowalk. Investigate the actual mount origin, controlled actor,
+injected input and route validity together; the cache risk alone is not an established diagnosis.
+
+Current autowalk injects W/A/S/D into the DirectInput keyboard state (`AutoWalk::OnDevicePoll`,
+called by `dinput8_proxy.cpp::HookedGetDeviceState`). It does not issue gambit/party-AI movement
+commands or write a player/mount position. Native actor/type changes can still affect observation,
+input routing and planning. The [navigation audit](NavigationAudit.md) records these boundaries.
 
 - Native 894/895 are mount/dismount thunks (`0x227230`/`0x227820` to `0x25CFF0`/`0x25CFC0`),
   which enable/disable the chocobo mode through `0x1E3D90`.
@@ -87,7 +95,7 @@ Do not write a new vehicle controller merely because the user requested coverage
   Native floor predicate `0x110A40` uses effective bit 24 for class 5 and bit 23 for foot class 0.
   Existing `PartyMovementClass`, terrain/march checks and ReachGate already use the live class.
 
-### Verified source risks, distinct from a reported mounted failure
+### Verified source risks; not yet the cause of the reported mounted failure
 
 1. **Class transition cache:** unchanged production `player_state.cpp` was compiled into an isolated
    x64 fixture with owned memory and a controlled clock. It returns old foot class 0 after the
@@ -117,8 +125,8 @@ does not prove an exhaustive list of every controllable transport, so do not cla
 
 ## Next implementation pass and acceptance
 
-Prioritize mounted transition/cache/route identity handling, then the existing mounted path, since
-there is a concrete bounded issue and no evidence requiring a new steering system. Voice policy is
+Prioritize tracing and repairing the tester's mounted failure, including the Exodus floatweed route;
+do not reduce the scope to the cache issue or infer success from the shared native path. Voice policy is
 moderate remaining RE/integration, not just a settings edit; finish its exact owner join first.
 Keep the broader refactoring audit separate, while obeying the current nonblocking contract in
 touched paths. No implementation or runtime/performance success is claimed here.

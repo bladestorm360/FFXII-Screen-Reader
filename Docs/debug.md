@@ -2,6 +2,15 @@
 
 This file is structured for keyword searching. **Always grep before proposing solutions.**
 
+## OPEN — mounted autowalk and Exodus floatweed navigation (2026-10-15)
+
+User confirms a tester reported autowalk failing on a mount. The supplied `tidus10` report identifies
+the Exodus side quest, chocobo travel (dictated “choker boat”) and a floating bridge. Preserve the
+failure despite earlier notes incorrectly treating it as untested. Exact supplied wording, verified
+current input/planner architecture, source evidence, remaining symptom distinctions and the required
+deep physics/blocker/objective audit and baked-map evaluation are in [NavigationAudit.md](NavigationAudit.md).
+No tester logs/saves were accessed; no code, deployment or runtime test in this documentation pass.
+
 ## Core review - 2026-10-04
 
 Source-backed fixes: codec snapshots previously stopped at zero bytes inside token payloads, dropping valid following text; incomplete numeric tokens could substitute values. Shared framing now covers snapshot and decode. Immutable stock/Polish tables are selected once per string, eliminating mutable-table races and per-character atomic checks. A separate manual override prevents an in-flight atlas probe from restarting detection or replacing forced Polish mode. Nested sprite decoding retains the parent diagnostic, and nested numeric scopes restore their previous state.
