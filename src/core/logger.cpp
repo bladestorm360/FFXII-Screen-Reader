@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <limits>
 #include <mutex>
 
 // Defined by CMake (see the build-stamp block in CMakeLists.txt). Defaulted here so the file still
@@ -231,11 +232,34 @@ void Write(const char* category, const char* message) {
 // buffer is generously sized and the result is truncated rather than dropped -- a clipped line still
 // tells you which surface fired.
 void ToUtf8(const std::wstring& text, char* out, size_t cap) {
+    if (!out || cap == 0) return;
     out[0] = '\0';
-    if (text.empty()) return;
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out, static_cast<int>(cap) - 1,
-                        nullptr, nullptr);
-    out[cap - 1] = '\0';
+    if (text.empty() || cap == 1) return;
+    const size_t end = text.find(L'\0');
+    const size_t units = (std::min)(end == std::wstring::npos ? text.size() : end,
+                                   static_cast<size_t>((std::numeric_limits<int>::max)()));
+    if (units == 0) return;
+    const int capacity = static_cast<int>((std::min)(cap - 1,
+                             static_cast<size_t>((std::numeric_limits<int>::max)())));
+    int written = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(units),
+                                     out, capacity, nullptr, nullptr);
+    if (written == 0 && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        // The API fails rather than truncating. Find the longest UTF-16 prefix
+        // whose UTF-8 bytes fit, without splitting a surrogate pair.
+        size_t lo = 0, hi = (std::min)(units, static_cast<size_t>(capacity));
+        while (lo < hi) {
+            const size_t mid = lo + (hi - lo + 1) / 2;
+            const int bytes = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(mid),
+                                                 nullptr, 0, nullptr, nullptr);
+            if (bytes > 0 && bytes <= capacity) lo = mid;
+            else hi = mid - 1;
+        }
+        if (lo > 0 && lo < units && text[lo - 1] >= 0xD800 && text[lo - 1] <= 0xDBFF &&
+            text[lo] >= 0xDC00 && text[lo] <= 0xDFFF) --lo;
+        if (lo > 0) written = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(lo),
+                                                out, capacity, nullptr, nullptr);
+    }
+    out[written > 0 ? written : 0] = '\0';
 }
 
 void WriteW(const char* category, const char* prefix, const std::wstring& text) {

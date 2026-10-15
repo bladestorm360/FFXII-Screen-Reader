@@ -1,4 +1,5 @@
 #include "core/game_text.h"
+#include "core/codec_tokens.h"
 #include "core/message_macro.h"
 #include "core/game_glyphs.h"
 #include "core/game_glyphs_pl.h"
@@ -9,6 +10,7 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <array>
 #include <cstdio>
 #include <cwctype>
 
@@ -18,22 +20,22 @@ namespace {
 SpriteNameFn g_spriteResolver = nullptr;
 
 // ---- glyph variant ------------------------------------------------------------------------------
-// The live byte -> character table. `kGlyph` (generated from the game's own font00.dat) is the base;
-// a fan translation that repaints atlas slots patches a handful of entries over it.
-//
-// Built once per variant change rather than consulted per character: the decode loop runs per byte
-// of every string the mod speaks, and a 16-entry search inside it would be paid on every letter of
-// every line. One array, one index, no branch.
+// Immutable atlas tables: input-thread decodes cannot race a game-thread variant change.
+// Select once per string; every character then costs only an array lookup.
 std::atomic<Variant> g_variant{Variant::Standard};
-wchar_t g_glyph[256];
-std::atomic<bool> g_glyphReady{false};
+// A probe already in flight may finish after SetVariant. Its result must never
+// overwrite the player's explicit override; keep that decision independently.
+std::atomic<bool> g_polishOverride{false};
+constexpr std::array<wchar_t, 256> PolishGlyphTable() {
+    std::array<wchar_t, 256> table{};
+    for (size_t i = 0; i < table.size(); ++i) table[i] = kGlyph[i];
+    for (const auto& o : kGlyphPolish) table[o.byte] = o.ch;
+    return table;
+}
+constexpr auto kPolishGlyph = PolishGlyphTable();
 
-void BuildGlyphTable(Variant v) {
-    for (int i = 0; i < 256; ++i) g_glyph[i] = kGlyph[i];
-    if (v == Variant::PolishPatch) {
-        for (const auto& o : kGlyphPolish) g_glyph[o.byte] = o.ch;
-    }
-    g_glyphReady.store(true, std::memory_order_release);
+const wchar_t* GlyphTable(Variant v) {
+    return v == Variant::PolishPatch ? kPolishGlyph.data() : kGlyph;
 }
 
 // ---- WHICH FONT ATLAS IS LOADED — detected, not asked (Session 147) ------------------------------
@@ -110,7 +112,7 @@ constexpr int kMaxTries = 64;
 std::atomic<int> g_detectTries{0};
 
 void DetectVariantOnce() {
-    if (g_variantDetected.exchange(true)) return;         // one attempt per process, whatever it finds
+    if (g_polishOverride.load(std::memory_order_relaxed) || g_variantDetected.exchange(true)) return;
 
     // The manager is created during boot; until it exists there is nothing to read and no honest
     // answer to give, so re-arm and let the next caller try again.
@@ -141,7 +143,6 @@ void DetectVariantOnce() {
         if (stock == polish) continue;                    // both or neither -- not the advance field
         const Variant v = polish ? Variant::PolishPatch : Variant::Standard;
         g_variant.store(v, std::memory_order_relaxed);
-        BuildGlyphTable(v);
         char b[160];
         snprintf(b, sizeof(b),
                  "font atlas DETECTED: %s (advance field at record+0x%02X, 10/10 slots matched)",
@@ -221,13 +222,17 @@ constexpr wchar_t kSpriteMark = 0xE000;
 inline bool IsSpriteMark(wchar_t ch) { return ch >= kSpriteMark && ch < kSpriteMark + 8; }
 
 // Copy up to maxBytes codec bytes (until a 0x00 terminator) out of a possibly-
-// transient game buffer. SEH-guarded and object-free so it can use __try.
+// transient game buffer. NUL ends the string only between complete codec tokens.
+// SEH-guarded and object-free so it can use __try.
 bool SafeCopy(const uint8_t* p, size_t maxBytes, uint8_t* out, size_t* outLen) {
     __try {
+        size_t tokenStart = 0;
         for (size_t i = 0; i < maxBytes; ++i) {
-            uint8_t b = p[i];
-            out[i] = b;
-            if (b == 0x00) { *outLen = i; return true; }
+            out[i] = p[i];
+            const int length = Codec::TokenLength(out + tokenStart, i + 1 - tokenStart);
+            if (length == 0) { *outLen = tokenStart; return true; }
+            if (length == Codec::kUnknown) { *outLen = i + 1; return true; }
+            if (length > 0) tokenStart = i + 1;
         }
         *outLen = maxBytes;
         return true;
@@ -256,66 +261,8 @@ bool SafeCopy(const uint8_t* p, size_t maxBytes, uint8_t* out, size_t* outLen) {
 // SELECTOR byte -- hence params = ret - 1.
 // ---------------------------------------------------------------------------------------------
 
-// Parameter-byte count for a 0x0f escape whose SELECTOR sits at buf[sel].
-// Returns -1 only for selectors outside the interpreter's range (treated as "stop").
-int EscapeParamCount(const uint8_t* buf, size_t n, size_t sel) {
-    const uint8_t s = buf[sel];
-    // Bounds-safe peek at the k'th byte after the selector.
-    auto at = [&](size_t k) -> uint8_t { return (sel + k < n) ? buf[sel + k] : 0; };
-
-    switch (s) {
-        // No case in FUN_002ac5f0 and no inner `default:` -- the 0x0f is consumed and the selector
-        // falls through to render as an ordinary glyph. Neither occurs in any shipped message.
-        // Confidence 0.97; deliberately left below the ship bar because nothing depends on it.
-        case 0x30: case 0x5F: return 0;
-
-        case 0x21: return 0;    // inline, no decoder
-        case 0x31: return 3;    // FUN_003fff10 -- the codec-sprintf STRING substitution slot
-        case 0x6C: return 3;    // FUN_003ffce0
-
-        // --- the three VARIABLE-LENGTH escapes -------------------------------------------------
-        case 0x29: {            // FUN_003ffbc0
-            const int k = at(1) & 7;
-            return (k == 0) ? 2 : 1 + k;
-        }
-        case 0x2A:              // FUN_003ffd70 -- ruby / annotation block
-            return 2 + (at(2) & 0x7F);
-        case 0x38: case 0x6F:   // FUN_003ffb00 -- 16-bit value reader
-            return ((at(1) & 7) == 0) ? 2 : 3;
-
-        default: break;
-    }
-
-    // Icon / glyph family: FUN_002aeb20 returns 2 on every path => ONE parameter byte, not a
-    // high-bit run. 0x56 has its own 2-param case and 0x5F is a hole, both handled above/below.
-    if (s >= 0x40 && s <= 0x6B && s != 0x56) return 1;
-
-    // Everything else the interpreter handles in 0x20..0x70 takes 2 parameter bytes
-    // (FUN_003ffab0 / 003ffc60 / 003ffda0 / 003ffee0 / 003ffb90, all returning 3).
-    if (s >= 0x20 && s <= 0x70) return 2;
-
-    return -1;
-}
-
-// Codec-buffer cap. Was 1024 with callers passing 512, which cut the 4-page hunt-tutorial message
-// off mid-sentence ("...Then you hunt it, "). A multi-page conversation arrives as ONE string, so
-// the cap has to cover the whole thing, not one screen.
+// A multi-page message arrives as one string; snapshot the whole conversation.
 constexpr size_t kMaxCodecBytes = 4096;
-
-// Bytes consumed by a sub-0x10 control code, INCLUDING the control byte itself.
-// 0 means "this terminates the string". -1 means "length unknown -- stop, do not guess".
-int ControlLength(uint8_t c) {
-    switch (c) {
-        case 0x00: case 0x0B: case 0x0C: case 0x0D:
-            return 0;           // hit `default:` in FUN_002ac5f0:355-358, which returns 0
-        case 0x08:
-            return 3;           // FUN_002ac5f0:277-279
-        case 0x0E:
-            return -1;          // FUN_003ffdf0, variable and NOT fully decoded -- never guessed
-        default:
-            return 1;           // 0x01-0x07, 0x09, 0x0A
-    }
-}
 
 // Space-equivalent controls. FUN_002ac5f0:115-118 lists them as ONE fall-through group:
 //     case '\x01': case '\x04': case '\x06': case '\a':
@@ -447,9 +394,10 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
     // Detect the font atlas before the first character is mapped. It lives HERE, at the one funnel
     // every decode in the mod passes through, rather than in an Init: the font manager does not
     // exist yet when the mod initialises, and the first string the mod ever decodes must already be
-    // using the right table. One relaxed load per decoded STRING (not per character), and once it
-    // succeeds this is a single predictable branch forever after.
-    if (!g_variantDetected.load(std::memory_order_relaxed)) DetectVariantOnce();
+    // using the right table. Check once per decoded string, never per character.
+    // A manual override stands detection down even if an older probe re-armed it.
+    if (!g_polishOverride.load(std::memory_order_relaxed) &&
+        !g_variantDetected.load(std::memory_order_relaxed)) DetectVariantOnce();
 
     pages.clear();
     g_bail = DecodeBail{};
@@ -469,15 +417,20 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
     std::wstring* cur = &pages.back();
     cur->reserve(n);
 
+    const wchar_t* glyphs = GlyphTable(GetVariant());
+    DecodeBail bail{};
     size_t i = 0;
     while (i < n) {
         const uint8_t c = buf[i];
+        const int length = Codec::TokenLength(buf + i, n - i);
+        if (length == Codec::kIncomplete) {
+            bail = { i, c, c == 0x0F ? "truncated escape" : "truncated token" };
+            break;
+        }
 
         if (c == 0x0F) {                                  // inline format escape
-            if (i + 1 >= n) { g_bail = { i, c, "truncated escape" }; break; }
-            const int params = EscapeParamCount(buf, n, i + 1);
-            if (params < 0) {                             // unknown selector: stop, never guess
-                g_bail = { i + 1, buf[i + 1], "unknown escape selector" };
+            if (length < 0) {                             // unknown selector: stop, never guess
+                bail = { i + 1, buf[i + 1], "unknown escape selector" };
                 break;
             }
             // Escapes that YIELD TEXT emit here; the advance below is unchanged for all of them.
@@ -537,7 +490,7 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                     // Width and pad come from the ESCAPE'S OWN format byte, which is the only
                     // thing that knows them; the scope's digit count is the fallback for a
                     // natural-width field. Nothing about the rendering is invented here.
-                    const uint8_t fmt = (i + 3 < n) ? buf[i + 3] : 0;
+                    const uint8_t fmt = buf[i + 3];
                     int width = fmt & 0x0F;
                     if (width == 0) width = g_fieldDigits;
                     if (width > kFieldMaxDigits) width = kFieldMaxDigits;
@@ -552,7 +505,7 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 // read before the stepper configured the field. Say nothing rather than a number
                 // the screen does not show.
             }
-            i += 2 + static_cast<size_t>(params);
+            i += static_cast<size_t>(length);
             continue;
         }
 
@@ -563,8 +516,8 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
                 pages.emplace_back();
                 cur = &pages.back();                      // re-seat: emplace_back may reallocate
             }
-            const int len = ControlLength(c);
-            if (len < 0) { g_bail = { i, c, "unknown control length" }; break; }
+            const int len = Codec::ControlLength(c);
+            if (len < 0) { bail = { i, c, "unknown control length" }; break; }
             if (len == 0) break;                          // genuine terminator, not a failure
             i += static_cast<size_t>(len);
             continue;
@@ -592,8 +545,7 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
         //
         // A ZERO ENTRY STILL MEANS DROP. The table is the atlas, so a slot the atlas does not
         // fill has no character to speak -- silence beats a guess, unchanged.
-        if (!g_glyphReady.load(std::memory_order_acquire)) BuildGlyphTable(g_variant.load());
-        wchar_t glyph = g_glyph[c];
+        wchar_t glyph = glyphs[c];
 
         // The two places the mod deliberately speaks something other than what the atlas draws.
         // Both predate this table, both were chosen for the screen reader rather than for
@@ -615,6 +567,8 @@ bool DecodeToPages(const uint8_t* p, size_t maxBytes, std::vector<std::wstring>&
     // One place, so Decode and DecodePages cannot diverge. Cheap: returns immediately unless the
     // page actually carried a sprite marker.
     for (auto& pg : pages) ResolveSprites(pg);
+    // A sprite resolver may perform a nested decode. Keep the OUTER string's diagnostic.
+    g_bail = bail;
     return true;
 }
 
@@ -690,14 +644,15 @@ void SetElementSpriteResolver(SpriteNameFn fn) {
 // never fire for anyone. Detection's own fallback is Standard anyway, so deferring costs nothing:
 // the only outcome that changes is the one where detection finds the Polish atlas and is right.
 void SetVariant(Variant v) {
-    g_variant.store(v, std::memory_order_relaxed);
-    BuildGlyphTable(v);
-
     if (v == Variant::PolishPatch) {
+        g_polishOverride.store(true, std::memory_order_relaxed);
         g_variantDetected.store(true, std::memory_order_relaxed);      // forced; detector stands down
         Log::Write("TEXT", "glyph variant FORCED: Polish fan patch (detection off)");
         return;
     }
+
+    g_variant.store(Variant::Standard, std::memory_order_relaxed);
+    g_polishOverride.store(false, std::memory_order_relaxed);
 
     // Re-arm. Clearing the try COUNT as well as the latch matters: a player who switched to Polish
     // and back is asking to be told again, and re-arming a detector that had already spent its 64
@@ -707,18 +662,26 @@ void SetVariant(Variant v) {
     Log::Write("TEXT", "glyph variant: standard, detection armed");
 }
 
-Variant GetVariant() { return g_variant.load(std::memory_order_relaxed); }
+Variant GetVariant() {
+    return g_polishOverride.load(std::memory_order_relaxed)
+        ? Variant::PolishPatch : g_variant.load(std::memory_order_relaxed);
+}
 
 DecodeBail LastDecodeBail() { return g_bail; }
 
 // Nested scopes are not a case that arises (one page, one field) but restoring rather than clearing
 // costs nothing and keeps a future nesting honest.
-NumericFieldScope::NumericFieldScope(int32_t value, int digits) {
+NumericFieldScope::NumericFieldScope(int32_t value, int digits)
+    : previousActive_(g_fieldActive), previousValue_(g_fieldValue), previousDigits_(g_fieldDigits) {
     g_fieldActive = true;
     g_fieldValue  = value;
     g_fieldDigits = digits;
 }
-NumericFieldScope::~NumericFieldScope() { g_fieldActive = false; }
+NumericFieldScope::~NumericFieldScope() {
+    g_fieldActive = previousActive_;
+    g_fieldValue = previousValue_;
+    g_fieldDigits = previousDigits_;
+}
 
 bool IsMostlyPrintable(const std::wstring& s) {
     if (s.empty()) return false;

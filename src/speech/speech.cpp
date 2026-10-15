@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <mutex>
 #include <atomic>
+#include <cstring>
 
 // Tolk function typedefs (loaded at runtime — Tolk is user-supplied)
 typedef void(__cdecl* PFN_Tolk_Load)();
@@ -20,6 +21,7 @@ typedef bool(__cdecl* PFN_Tolk_Silence)();
 static HMODULE g_tolkDll = nullptr;
 static std::atomic<bool> g_speechEnabled{true};
 static std::mutex g_tolkMutex;
+static std::atomic<uint64_t> g_utterances{0};
 
 static PFN_Tolk_Load                g_Tolk_Load = nullptr;
 static PFN_Tolk_IsLoaded            g_Tolk_IsLoaded = nullptr;
@@ -32,13 +34,12 @@ static PFN_Tolk_Speak               g_Tolk_Speak = nullptr;
 static PFN_Tolk_Silence             g_Tolk_Silence = nullptr;
 
 static std::string WideToUtf8(const std::wstring& wide) {
-    if (wide.empty()) return "";
-    int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(),
-                                   nullptr, 0, nullptr, nullptr);
-    if (len <= 0) return "(encoding error)";
-    std::string utf8(len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(),
-                         &utf8[0], len, nullptr, nullptr);
+    if (wide.empty()) return {};
+    // Three UTF-8 bytes per UTF-16 unit is sufficient even for surrogate pairs.
+    // Keep full speech diagnostics, using the logger's shared conversion path.
+    std::string utf8(wide.size() * 3 + 1, '\0');
+    Log::ToUtf8(wide, utf8.data(), utf8.size());
+    utf8.resize(std::strlen(utf8.c_str()));
     return utf8;
 }
 
@@ -60,9 +61,51 @@ static void LogSuppressed(const char* tag, const std::wstring& text, const char*
     Log::Write(tag, m.c_str());
 }
 
+// All access to DLL exports, including availability checks, shares this mutex.
+// Clear pointers before a later caller can reach an unloaded library.
+static void ReleaseTolk(bool unload) {
+    if (g_tolkDll) {
+        if (unload && g_Tolk_Unload) g_Tolk_Unload();
+        FreeLibrary(g_tolkDll);
+    }
+    g_tolkDll = nullptr;
+    g_Tolk_Load = nullptr;
+    g_Tolk_IsLoaded = nullptr;
+    g_Tolk_Unload = nullptr;
+    g_Tolk_TrySAPI = nullptr;
+    g_Tolk_DetectScreenReader = nullptr;
+    g_Tolk_HasSpeech = nullptr;
+    g_Tolk_Output = nullptr;
+    g_Tolk_Speak = nullptr;
+    g_Tolk_Silence = nullptr;
+}
+
+// One dispatch path preserves each caller's queue/mute policy and diagnostic tag.
+// No event or text deduplication. Count only output the Tolk backend accepted.
+static void Dispatch(const char* tag, const std::wstring& text, bool interrupt, bool bypassMute) {
+    if (!bypassMute && !g_speechEnabled.load(std::memory_order_relaxed)) {
+        LogSuppressed(tag, text, "muted");
+        return;
+    }
+    STALL_SCOPE("Speech::Output");
+    bool available = false, accepted = false;
+    {
+        std::lock_guard<std::mutex> lock(g_tolkMutex);
+        available = g_Tolk_Output != nullptr;
+        if (available) accepted = g_Tolk_Output(text.c_str(), interrupt);
+        if (accepted) g_utterances.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Logging stays outside the Tolk lock.
+    if (!available) LogSuppressed(tag, text, "Tolk unavailable");
+    else if (!accepted) LogSuppressed(tag, text, "Tolk rejected output");
+    else LogSpoken(tag, text);
+}
+
 namespace Speech {
 
 bool Init() {
+    std::lock_guard<std::mutex> lock(g_tolkMutex);
+    if (g_tolkDll) return true;
     // Tolk.dll is USER-SUPPLIED. Absence is non-fatal — the mod logs and
     // continues silently with all speak calls as no-ops.
     g_tolkDll = LoadLibraryA("Tolk.dll");
@@ -85,8 +128,7 @@ bool Init() {
 
     if (!g_Tolk_Load || !g_Tolk_Output) {
         Log::Write("SPEECH", "Failed to resolve Tolk function pointers (Tolk.dll loaded but exports missing)");
-        FreeLibrary(g_tolkDll);
-        g_tolkDll = nullptr;
+        ReleaseTolk(false);
         return false;
     }
 
@@ -109,27 +151,15 @@ bool Init() {
 }
 
 void Speak(const std::wstring& text, bool interrupt) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK", text, "muted"); return; }
-    if (!g_Tolk_Output) { LogSuppressed("SPEAK", text, "Tolk unavailable"); return; }
-    {
-        std::lock_guard<std::mutex> lock(g_tolkMutex);
-        g_Tolk_Output(text.c_str(), interrupt);
-    }
-    LogSpoken("SPEAK", text);
+    Dispatch("SPEAK", text, interrupt, false);
 }
 
 void SpeakQueued(const std::wstring& text) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-Q", text, "muted"); return; }
-    if (!g_Tolk_Output) { LogSuppressed("SPEAK-Q", text, "Tolk unavailable"); return; }
-    {
-        std::lock_guard<std::mutex> lock(g_tolkMutex);
-        g_Tolk_Output(text.c_str(), false);
-    }
-    LogSpoken("SPEAK-Q", text);
+    Dispatch("SPEAK-Q", text, false, false);
 }
 
 // ---- UTTERANCE COUNT (S192) ---------------------------------------------------------------------
-// A monotonic tick of "speech has actually gone out", so a caller can tell whether anything has been
+// A monotonic tick of accepted output, not completed playback, so a caller can tell whether anything has been
 // said since some earlier moment. It exists for AUTO DETAIL's ordering problem: a volunteered
 // description must never get ahead of the row line it belongs behind, and the readers that speak
 // that line are scattered across a dozen files and several deferral paths. Asking "has anything been
@@ -139,42 +169,27 @@ void SpeakQueued(const std::wstring& text) {
 // NOT a dedup and not a gate on speech: nothing consults it before speaking, and it can only ever
 // cause the mod to say LESS of its own volunteered extra, never to suppress something a player
 // asked for.
-std::atomic<uint64_t> g_utterances{0};
-
 uint64_t UtteranceCount() { return g_utterances.load(std::memory_order_relaxed); }
 
 void Output(const std::wstring& text, bool interrupt) {
-    if (!g_speechEnabled.load(std::memory_order_relaxed)) { LogSuppressed("SPEAK-OUT", text, "muted"); return; }
-    if (!g_Tolk_Output) { LogSuppressed("SPEAK-OUT", text, "Tolk unavailable"); return; }
-    // Tolk_Output is a synchronous IPC to the screen reader, called from GAME-THREAD hooks. Measured
-    // so "is speech blocking the game?" is answered by data and never re-argued.
-    STALL_SCOPE("Speech::Output");
-    {
-        // Scope the lock so the file write happens OUTSIDE it (matches Speak) — logging every Output call
-        // must not serialize behind the Tolk mutex.
-        std::lock_guard<std::mutex> lock(g_tolkMutex);
-        g_Tolk_Output(text.c_str(), interrupt);
-    }
-    g_utterances.fetch_add(1, std::memory_order_relaxed);   // AFTER it went out, not before
-    LogSpoken("SPEAK-OUT", text);
+    Dispatch("SPEAK-OUT", text, interrupt, false);
 }
 
 void Silence() {
-    if (!g_Tolk_Silence) return;
     std::lock_guard<std::mutex> lock(g_tolkMutex);
-    g_Tolk_Silence();
+    if (g_Tolk_Silence) g_Tolk_Silence();
 }
 
 bool IsAvailable() {
+    std::lock_guard<std::mutex> lock(g_tolkMutex);
     return g_Tolk_IsLoaded && g_Tolk_IsLoaded();
 }
 
 std::wstring GetScreenReaderName() {
-    if (!g_Tolk_DetectScreenReader) return L"";
     std::lock_guard<std::mutex> lock(g_tolkMutex);
+    if (!g_Tolk_DetectScreenReader) return L"";
     const wchar_t* name = g_Tolk_DetectScreenReader();
-    if (name) return std::wstring(name);
-    return L"";
+    return name ? std::wstring(name) : std::wstring();
 }
 
 void SetEnabled(bool enabled) {
@@ -194,23 +209,13 @@ void ToggleEnabled() {
 }
 
 void Raw(const std::wstring& text, bool interrupt) {
-    // Bypasses mute guard — always outputs (e.g., "Speech off" announcement)
-    if (!g_Tolk_Output) { LogSuppressed("SPEAK-RAW", text, "Tolk unavailable"); return; }
-    {
-        std::lock_guard<std::mutex> lock(g_tolkMutex);
-        g_Tolk_Output(text.c_str(), interrupt);
-    }
-    LogSpoken("SPEAK-RAW", text);
+    Dispatch("SPEAK-RAW", text, interrupt, true);
 }
 
 void Shutdown() {
-    std::lock_guard<std::mutex> lock(g_tolkMutex);
-    if (g_Tolk_Unload) {
-        g_Tolk_Unload();
-    }
-    if (g_tolkDll) {
-        FreeLibrary(g_tolkDll);
-        g_tolkDll = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_tolkMutex);
+        ReleaseTolk(true);
     }
     Log::Write("SPEECH", "Speech module shut down");
 }

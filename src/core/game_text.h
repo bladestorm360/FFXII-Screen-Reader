@@ -34,7 +34,7 @@ Variant GetVariant();
 
 // S130's setter, RESTORED S177 at the user's instruction after S147 deleted it. The row it belongs
 // to is `Diacritics override` in the mod menu -- the same two values it always had. Stores the
-// variant and rebuilds the glyph table, so a change takes effect on the next line spoken rather than
+// variant and selects its immutable glyph table, so a change takes effect on the next line spoken rather than
 // the next launch. Called from ModMenu (Init, and the one Adjust choke point) and nowhere else.
 //
 // IT ARBITRATES WITH THE DETECTOR, ASYMMETRICALLY: `PolishPatch` forces and stands detection down;
@@ -127,6 +127,10 @@ public:
     ~NumericFieldScope();
     NumericFieldScope(const NumericFieldScope&) = delete;
     NumericFieldScope& operator=(const NumericFieldScope&) = delete;
+private:
+    bool previousActive_;
+    int32_t previousValue_;
+    int previousDigits_;
 };
 
 // ---- decode diagnostics -------------------------------------------------------------------------

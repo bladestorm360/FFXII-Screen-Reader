@@ -2,6 +2,18 @@
 
 This file is structured for keyword searching. **Always grep before proposing solutions.**
 
+## Core review - 2026-10-04
+
+Source-backed fixes: codec snapshots previously stopped at zero bytes inside token payloads, dropping valid following text; incomplete numeric tokens could substitute values. Shared framing now covers snapshot and decode. Immutable stock/Polish tables are selected once per string, eliminating mutable-table races and per-character atomic checks. A separate manual override prevents an in-flight atlas probe from restarting detection or replacing forced Polish mode. Nested sprite decoding retains the parent diagnostic, and nested numeric scopes restore their previous state.
+
+Speech now shares dispatch without changing queue/interrupt/mute policies or adding text-content deduplication. Calls and unload use the same mutex; failed initialization clears exports; repeated initialization does not acquire another DLL reference. All accepted speech APIs contribute to the utterance count, while rejected output does not. Bounded UTF-8 conversion preserves a readable prefix and complete surrogate pairs, and speech logging reuses it.
+
+**Verified:** `cmd.exe /d /c tests\run_tests.bat` passed all three native regression executables (actual decoder/logger/speech code, guarded memory, nested fields, concurrent atlas selection, controlled in-flight override, private fake Tolk lifecycle). The full DLL built through `build_and_deploy.bat build`. This local ignored script now supports an explicit build-only argument; its no-argument deployment behavior is unchanged. Nothing was deployed and the game was not launched. Logs: `build/core-tests-results.log`, `build/core-review-mod-build.log`.
+
+**Environment:** MSBuild inherited duplicate PATH/Path entries in this session. Passing a case-normalized environment block through Python made the canonical build succeed; no persistent environment or shared tool configuration was modified. This does not explain the earlier stalled tool requests.
+
+**Remaining:** runtime menu/dialogue/accented-text and lifecycle checks; profiling before further efficiency changes. Cutscene clocks/identity, tutorial viewer/image identity, and glyph/device mapping need verified game evidence. The saved continuation draft is [codex/FFXII-accessibility-draft-2026-10-04.txt](../../../../codex/FFXII-accessibility-draft-2026-10-04.txt). Automatic descriptions and spoken control prompts are planned, not implemented here.
+
 ## S185 — "No path" on a walkable route: the S182 closed-floor cut fired on a map with no doors
 
 **Reported by the user (2026-09-17), with the log:** *"there is a clear 'no path' validation failure on a

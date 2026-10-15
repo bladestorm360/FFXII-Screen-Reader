@@ -2,6 +2,93 @@
 
 Status: `[ ]` pending | `[~]` in progress | `[x]` complete | `[!]` blocked
 
+## Current maintenance requests — 2026-10-15
+
+**Documentation only, requested by the user.** No implementation, build, deployment or runtime test
+is authorized by this entry. These items remain pending; the limited source inspection below is not
+a completed refactoring audit or proof of either fix's cause. Keep the existing October 4 core work
+and unrelated working-tree edits.
+
+### Refactoring audit
+
+- [ ] Audit the existing mod against the maintained [speech/architecture contract](../../../../codex/templates/accessibility-mod/references/speech-and-architecture.md)
+  and [offline refactoring contract](../../../../codex/templates/accessibility-mod/references/offline-discovery.md#offline-prototyping-and-refactoring).
+  Record findings and priorities in [PerformanceIssues.md](PerformanceIssues.md), using
+  [PerFrameAudit.md](PerFrameAudit.md) and [GameArchitecture.md](GameArchitecture.md) as evidence pointers.
+- Trace actual callback-to-consumer paths, thread/pointer ownership, waits/locks, synchronous
+  speech/audio/text/log/file work, scans/pathfinding, startup/shutdown and SDL ownership. Initial
+  source-backed review targets: `DialogueReader::HookedTextWalk` takes a mutex and calls `EmitPage`
+  for decode/log/speech; `nav_hooks.cpp` invokes `PathPlanner::OnGameFrame`, which calls
+  `RouteQuery::Search`. Audit their complete consumers before choosing safe snapshot boundaries.
+- Preserve native event/page guards, controls, speech order, working maps and approved input writes.
+  Centralize actual duplication and mixed responsibilities without a blanket rewrite or arbitrary
+  file splits. Workers must own copied data; game callbacks must never wait for mod processing.
+- Require behavior-preserving production-consumer checks, validated counts/work/backlog bounds,
+  overload/cancellation/retirement checks and comparable whole-pipeline performance evidence.
+  Record unmeasured callback/aggregate cost, usable/audible response, data age and tail delays;
+  worker placement alone proves none of these. Separate offline results from user-side gameplay.
+
+### Voiced dialogue speech suppression
+
+- [ ] Add a persistent, accessible mod-menu toggle to suppress automatic screen-reader speech for
+  dialogue with matching native voice playback, as requested for parity with BDFFHD and FFX.
+  Suppress the duplicate dialogue utterance, not choices, menus, tutorials or unrelated speech.
+  Unvoiced, disabled/muted, failed or uncertain voice must retain speech. Preserve the current line
+  for explicit `t` repeat; this is a voice policy, not text-content deduplication. Initial suppression
+  default is proposed Off to preserve behavior until deliberately enabled.
+- **Observed:** `ui/dialogue_reader.cpp::EmitPage` decodes the current page, notifies ChoiceReader,
+  updates MessageReader's repeat line and calls `Speech::Output`; no voice qualification is present
+  in that path. `ui/mod_menu.cpp` already supplies persistent settings. Existing script-native voice
+  references in GameArchitecture.md are leads, not an established dialogue-to-audible-voice binding.
+- **Reference semantics checked:** BDFFHD `src/settings.cpp` and `src/dialogue_state.h` match a line
+  to voice identity; FFX `src/native/settings.cpp` and `dialogue_voice.cpp` track voice state/ownership.
+  Both offer Suppress/Braille only/Speak anyway, fallback speech and explicit repeat. The request
+  here is a suppression toggle; do not silently expand it to a three-choice output redesign.
+- **Difficulty:** setting/output wiring is small; reliable per-line voice identity, start ordering,
+  page coverage, native volume/playback status and retirement are the uncertain work. Likely small
+  to moderate if existing native evidence exposes them; not yet established as a quick fix. First
+  inspect only the relevant existing voice/message producers offline. No audio-amplitude heuristic,
+  global "some sound is playing" mute, speculative capture or transplanted engine offsets.
+
+### Autowalk while riding chocobos
+
+- [ ] Make the existing default-off autowalk work when mounted. Start with chocobos; establish the
+  game's freely controlled transport scope before claiming they are the only vehicle. The private
+  airship destination map is already documented as a menu (`debug.md`, Session 176); that is separate
+  from field movement. Do not add generic vehicle machinery without evidence of another need.
+- **Observed:** `navigation/auto_walk.cpp` consumes the beacon's route, reads
+  `PlayerState::ReadPlayerPos`, steers relative to the camera and publishes bounded W/A/S/D intent
+  through `OnDevicePoll`. `player_state.cpp::PartyMovementClass` and `nav_rva.h` already recognize
+  mounted class 5 (250 ms cache); `nav_mesh.cpp::TerrainRefused` passes the live class to native
+  walkability. Mounted awareness exists, but successful mounted autowalk is unverified.
+- **Difficulty:** potentially a contained maintenance fix, with moderate uncertainty. Check the
+  controlled actor/position chain, field-safety gates, mounted input consumer, route/cache class
+  invalidation, body clearance, speed/corner overshoot and arrival/stuck handling. No root cause has
+  been demonstrated; do not promise a one-line fix or rebuild the pathfinder. Keep manual input
+  priority, all stop conditions and the approved native movement route; add no mount/dash automation.
+
+### Economical next pass and eventual acceptance
+
+Implement neither fix during this documentation-only task. When implementation is requested, start
+with bounded offline checks of the two unknown producer paths above; prioritize whichever yields a
+verified local fix. Keep a broad audit/refactor separate, except for safety corrections necessary to
+the touched path. If either needs substantial new RE, record the exact blocker and finish independent
+work rather than opening a broad investigation. No reliable time/usage estimate exists yet.
+
+After implementation and relevant offline checks, accumulate these short gameplay checks for the
+final handoff, earliest available dialogue/chocobo access first:
+
+1. Enable suppression; hear a voiced line once from the game, unvoiced text and choices normally,
+   and `t` repeat on request. Disable suppression; dialogue speech returns. Check muted/failed voice,
+   page/line changes and reload persistence. Missing text or suppression leaking to other UI fails.
+2. With autowalk enabled, route on foot, then on a chocobo; check straight travel, a corner and
+   stopping at the destination. Manual movement must take priority; menus, route loss, focus/map
+   changes and dismount must not leave stale movement. Check mounted-only access and normal/high
+   game speed where available. Spinning, overshoot, false arrival or stuck input fails.
+
+**Status:** all three requests documented; fixes unimplemented, offline functional validation and
+gameplay confirmation pending. Transport exclusivity and both fixes' root causes remain unresolved.
+
 ## Phase 0: Scaffolding (no game interaction)
 
 - [x] Project directory tree

@@ -1,5 +1,14 @@
 # File-size audit & centralization ledger
 
+## Current audit request — 2026-10-15
+
+The user requests a refactoring audit against the current template and persistent guidance.
+**Pending, documentation only:** this session did not perform the full audit or change source.
+The [current maintenance plan](plan.md#current-maintenance-requests--2026-10-15) records scope,
+source-backed starting points, ownership/nonblocking and whole-pipeline acceptance requirements,
+plus the separately requested voiced-dialogue suppression and mounted autowalk fixes.
+Retain the historical ledger below as dated evidence; it is not a current compliance certificate.
+
 `CLAUDE.md` has always named this file as the home for the file-size audit and centralization debt.
 It did not exist until Session 51; the debt it was meant to track accumulated unrecorded, which is
 how three `.cpp` files passed the 500-line rule and four copies of the actor-pool offsets appeared.
